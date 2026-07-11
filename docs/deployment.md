@@ -34,4 +34,8 @@ VITE_TELEGRAM_DASHBOARD_URL=https://your-render-service.onrender.com
 
 6. Redeploy the Netlify site.
 
-The Telegram service uses a persistent disk at `/app/data` so encrypted Telegram sessions survive redeploys.
+## Free Hosting Note
+
+The current `render.yaml` uses Render's free web service plan. This avoids the payment prompt, but the Telegram service stores encrypted sessions in local JSON files, and free hosting does not preserve local filesystem changes across sleeps, restarts, or redeploys.
+
+That means this is good for testing/demo use, but you may need to log in to Telegram again after the service resets. For production, use a paid service with a persistent disk or move the datastore to a hosted database.

@@ -3,12 +3,8 @@ services:
     name: agentic-that-telegram
     runtime: docker
     rootDir: integrations/telegram
-    plan: starter
+    plan: free
     healthCheckPath: /
-    disk:
-      name: telegram-data
-      mountPath: /app/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
