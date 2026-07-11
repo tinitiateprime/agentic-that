@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+
+.env
+.env.*
+!.env.example
+
+integrations/*/node_modules/
+integrations/*/.env
+integrations/*/.env.*
+!integrations/*/.env.example
+!integrations/*/.env.docker.example
+integrations/*/data/
+integrations/*/logs/
+integrations/*/*.session

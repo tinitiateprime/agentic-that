@@ -1,0 +1,26 @@
+{
+  "name": "agentic-that",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "integrations:telegram": "npm --prefix integrations/telegram run server",
+    "integrations:telegram:install": "npm --prefix integrations/telegram install",
+    "integrations:install": "npm run integrations:telegram:install",
+    "telegram:dashboard": "npm run integrations:telegram",
+    "dev:telegram": "concurrently -k -n site,telegram -c cyan,green \"npm run dev\" \"npm run telegram:dashboard\"",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vite": "^7.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}

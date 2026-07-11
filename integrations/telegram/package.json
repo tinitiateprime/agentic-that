@@ -1,0 +1,26 @@
+{
+  "name": "telegram-account-flow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "tsx src/login.ts",
+    "send": "tsx src/send-direct.ts",
+    "issue-token": "tsx src/issue-token.ts",
+    "listen": "tsx src/listen.ts",
+    "server": "tsx src/server.ts",
+    "build": "tsc --noEmit -p tsconfig.json",
+    "start": "tsx src/server.ts",
+    "bot": "tsx src/bot.ts",
+    "bot:start": "tsx src/bot.ts"
+  },
+  "dependencies": {
+    "big-integer": "^1.6.52",
+    "telegram": "^2.26.22",
+    "tsx": "^4.20.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
+  }
+}

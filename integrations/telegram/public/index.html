@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>Telegram workflow workspace</title>
+    <link rel="stylesheet" href="/styles.css?v=telegram-ui-2">
+  </head>
+  <body>
+    <main>
+      <section id="sign-in-view" class="auth-shell" aria-labelledby="sign-in-title">
+        <div class="auth-card">
+          <p class="eyebrow">Private workflow access</p>
+          <h1 id="sign-in-title">Telegram Workflow</h1>
+          <p class="lede">Sign in with the configured JSON user, then manage profiles, contacts, groups, posts, and manual sending from one workspace.</p>
+
+          <form id="password-sign-in-form" class="stack" novalidate>
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" value="admin" required>
+            <label for="login-password">Password</label>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" value="admin123" required>
+            <button class="button primary" type="submit">Sign in</button>
+          </form>
+
+          <details class="token-panel">
+            <summary>Access token sign-in</summary>
+            <form id="token-sign-in-form" class="stack compact" novalidate>
+              <label for="access-token">Access token</label>
+              <input id="access-token" name="accessToken" type="password" autocomplete="off" spellcheck="false">
+              <button class="button ghost" type="submit">Use token</button>
+            </form>
+          </details>
+          <p id="sign-in-status" class="status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="workspace" class="app-shell" hidden>
+        <aside class="sidebar" aria-label="Workflow navigation">
+          <div class="brand">
+            <span class="brand-mark">T</span>
+            <div>
+              <strong>Workflow</strong>
+              <span>Telegram active</span>
+            </div>
+          </div>
+
+          <nav class="nav-menu">
+            <button class="nav-item active" type="button" data-view="dashboard">Dashboard</button>
+            <button class="nav-item" type="button" data-view="add-number">Add Number</button>
+            <button class="nav-item" type="button" data-view="manage-numbers">Manage Numbers</button>
+            <button class="nav-item" type="button" data-view="profiles">Profiles</button>
+            <button class="nav-item" type="button" data-view="applications">Applications</button>
+            <button class="nav-item" type="button" data-view="contacts">Contacts</button>
+            <button class="nav-item" type="button" data-view="inbox">Message</button>
+            <button class="nav-item" type="button" data-view="groups">Groups</button>
+            <button class="nav-item" type="button" data-view="channels">Channels</button>
+            <button class="nav-item" type="button" data-view="posts">Post Manager</button>
+            <button class="nav-item" type="button" data-view="post-history">Post History</button>
+            <button class="nav-item" type="button" data-view="search">Search</button>
+            <button class="nav-item" type="button" data-view="configuration">Configuration</button>
+            <button class="nav-item" type="button" data-view="backup">Backup</button>
+          </nav>
+        </aside>
+
+        <div class="main-area">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow" id="view-kicker">Home</p>
+              <h1 id="view-title">Dashboard</h1>
+            </div>
+            <div class="top-actions">
+              <label class="select-shell" for="global-profile-select">
+                <span>Profile</span>
+                <select id="global-profile-select" disabled>
+                  <option value="">Connect a number first</option>
+                </select>
+              </label>
+              <button id="refresh-accounts" class="icon-button" type="button" title="Refresh account list" aria-label="Refresh account list">R</button>
+              <div id="identity" class="identity" hidden>
+                <span id="user-name"></span>
+                <button id="sign-out" class="button ghost" type="button">Logout</button>
+              </div>
+            </div>
+          </header>
+
+          <section id="view-dashboard" class="view active-view">
+            <div class="metric-grid">
+              <article class="metric-card"><span id="metric-accounts">0</span><small>Numbers</small></article>
+              <article class="metric-card"><span id="metric-contacts">0</span><small>Contacts</small></article>
+              <article class="metric-card"><span id="metric-groups">0</span><small>Groups</small></article>
+              <article class="metric-card"><span id="metric-posts">0</span><small>Posts</small></article>
+            </div>
+
+            <div class="dashboard-grid">
+              <section class="panel selected-profile-panel" aria-labelledby="selected-profile-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Selected profile</p>
+                    <h2 id="selected-profile-title">Ready account</h2>
+                  </div>
+                  <button class="mini-button" type="button" data-jump="profiles">Edit</button>
+                </div>
+                <div id="selected-profile-card" class="profile-summary"></div>
+              </section>
+
+              <section class="panel quick-send-panel" aria-labelledby="quick-send-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Manual posting</p>
+                    <h2 id="quick-send-title">Quick send</h2>
+                  </div>
+                </div>
+                <form id="quick-send-form" class="stack" novalidate>
+                  <label for="quick-recipient">Recipient</label>
+                  <input id="quick-recipient" name="recipient" type="text" autocomplete="off" placeholder="@username or existing chat" required>
+                  <label for="quick-message">Message</label>
+                  <textarea id="quick-message" name="message" rows="4" maxlength="4096" required></textarea>
+                  <button id="quick-send-button" class="button primary" type="submit" disabled>Send from selected profile</button>
+                </form>
+                <p id="message-status" class="status" role="status" aria-live="polite"></p>
+              </section>
+            </div>
+
+            <section class="panel" aria-labelledby="workflow-shortcuts-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Telegram workflow</p>
+                  <h2 id="workflow-shortcuts-title">Core modules</h2>
+                </div>
+              </div>
+              <div class="shortcut-grid">
+                <button type="button" data-jump="contacts">Contact Management</button>
+                <button type="button" data-jump="groups">Group Management</button>
+                <button type="button" data-jump="channels">Channel Management</button>
+                <button type="button" data-jump="posts">Posting Manager</button>
+              </div>
+            </section>
+          </section>
+
+          <section id="view-add-number" class="view" hidden>
+            <section class="panel connect-panel" aria-labelledby="connect-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Add new number</p>
+                  <h2 id="connect-title">Telegram login</h2>
+                </div>
+                <span id="connect-step" class="step-pill">1 of 3</span>
+              </div>
+              <p id="connect-copy" class="muted">Use the full phone number with country code. Telegram will deliver a verification code.</p>
+
+              <form id="phone-form" class="stack">
+                <label for="phone">Phone number</label>
+                <div class="phone-input-row">
+                  <select id="phone-country-code" name="countryCode" aria-label="Country code" autocomplete="tel-country-code">
+                    <option value="+91" selected>IN India (+91)</option>
+                    <option value="+1">US United States (+1)</option>
+                    <option value="+44">GB United Kingdom (+44)</option>
+                    <option value="+1">CA Canada (+1)</option>
+                    <option value="+61">AU Australia (+61)</option>
+                    <option value="+49">DE Germany (+49)</option>
+                    <option value="+33">FR France (+33)</option>
+                    <option value="+93">AF Afghanistan (+93)</option>
+                    <option value="+358">AX Aland Islands (+358)</option>
+                    <option value="+355">AL Albania (+355)</option>
+                    <option value="+213">DZ Algeria (+213)</option>
+                    <option value="+1">AS American Samoa (+1)</option>
+                    <option value="+376">AD Andorra (+376)</option>
+                    <option value="+244">AO Angola (+244)</option>
+                    <option value="+1">AI Anguilla (+1)</option>
+                    <option value="+1">AG Antigua and Barbuda (+1)</option>
+                    <option value="+54">AR Argentina (+54)</option>
+                    <option value="+374">AM Armenia (+374)</option>
+                    <option value="+297">AW Aruba (+297)</option>
+                    <option value="+43">AT Austria (+43)</option>
+                    <option value="+994">AZ Azerbaijan (+994)</option>
+                    <option value="+1">BS Bahamas (+1)</option>
+                    <option value="+973">BH Bahrain (+973)</option>
+                    <option value="+880">BD Bangladesh (+880)</option>
+                    <option value="+1">BB Barbados (+1)</option>
+                    <option value="+375">BY Belarus (+375)</option>
+                    <option value="+32">BE Belgium (+32)</option>
+                    <option value="+501">BZ Belize (+501)</option>
+                    <option value="+229">BJ Benin (+229)</option>
+                    <option value="+1">BM Bermuda (+1)</option>
+                    <option value="+975">BT Bhutan (+975)</option>
+                    <option value="+591">BO Bolivia (+591)</option>
+                    <option value="+599">BQ Bonaire, Sint Eustatius and Saba (+599)</option>
+                    <option value="+387">BA Bosnia and Herzegovina (+387)</option>
+                    <option value="+267">BW Botswana (+267)</option>
+                    <option value="+55">BR Brazil (+55)</option>
+                    <option value="+246">IO British Indian Ocean Territory (+246)</option>
+                    <option value="+1">VG British Virgin Islands (+1)</option>
+                    <option value="+673">BN Brunei (+673)</option>
+                    <option value="+359">BG Bulgaria (+359)</option>
+                    <option value="+226">BF Burkina Faso (+226)</option>
+                    <option value="+257">BI Burundi (+257)</option>
+                    <option value="+238">CV Cabo Verde (+238)</option>
+                    <option value="+855">KH Cambodia (+855)</option>
+                    <option value="+237">CM Cameroon (+237)</option>
+                    <option value="+1">KY Cayman Islands (+1)</option>
+                    <option value="+236">CF Central African Republic (+236)</option>
+                    <option value="+235">TD Chad (+235)</option>
+                    <option value="+56">CL Chile (+56)</option>
+                    <option value="+86">CN China (+86)</option>
+                    <option value="+61">CX Christmas Island (+61)</option>
+                    <option value="+61">CC Cocos (Keeling) Islands (+61)</option>
+                    <option value="+57">CO Colombia (+57)</option>
+                    <option value="+269">KM Comoros (+269)</option>
+                    <option value="+242">CG Congo (+242)</option>
+                    <option value="+243">CD Congo (DRC) (+243)</option>
+                    <option value="+682">CK Cook Islands (+682)</option>
+                    <option value="+506">CR Costa Rica (+506)</option>
+                    <option value="+225">CI Cote d'Ivoire (+225)</option>
+                    <option value="+385">HR Croatia (+385)</option>
+                    <option value="+53">CU Cuba (+53)</option>
+                    <option value="+599">CW Curacao (+599)</option>
+                    <option value="+357">CY Cyprus (+357)</option>
+                    <option value="+420">CZ Czechia (+420)</option>
+                    <option value="+45">DK Denmark (+45)</option>
+                    <option value="+253">DJ Djibouti (+253)</option>
+                    <option value="+1">DM Dominica (+1)</option>
+                    <option value="+1">DO Dominican Republic (+1)</option>
+                    <option value="+593">EC Ecuador (+593)</option>
+                    <option value="+20">EG Egypt (+20)</option>
+                    <option value="+503">SV El Salvador (+503)</option>
+                    <option value="+240">GQ Equatorial Guinea (+240)</option>
+                    <option value="+291">ER Eritrea (+291)</option>
+                    <option value="+372">EE Estonia (+372)</option>
+                    <option value="+268">SZ Eswatini (+268)</option>
+                    <option value="+251">ET Ethiopia (+251)</option>
+                    <option value="+500">FK Falkland Islands (+500)</option>
+                    <option value="+298">FO Faroe Islands (+298)</option>
+                    <option value="+679">FJ Fiji (+679)</option>
+                    <option value="+358">FI Finland (+358)</option>
+                    <option value="+594">GF French Guiana (+594)</option>
+                    <option value="+689">PF French Polynesia (+689)</option>
+                    <option value="+241">GA Gabon (+241)</option>
+                    <option value="+220">GM Gambia (+220)</option>
+                    <option value="+995">GE Georgia (+995)</option>
+                    <option value="+233">GH Ghana (+233)</option>
+                    <option value="+350">GI Gibraltar (+350)</option>
+                    <option value="+30">GR Greece (+30)</option>
+                    <option value="+299">GL Greenland (+299)</option>
+                    <option value="+1">GD Grenada (+1)</option>
+                    <option value="+590">GP Guadeloupe (+590)</option>
+                    <option value="+1">GU Guam (+1)</option>
+                    <option value="+502">GT Guatemala (+502)</option>
+                    <option value="+44">GG Guernsey (+44)</option>
+                    <option value="+224">GN Guinea (+224)</option>
+                    <option value="+245">GW Guinea-Bissau (+245)</option>
+                    <option value="+592">GY Guyana (+592)</option>
+                    <option value="+509">HT Haiti (+509)</option>
+                    <option value="+504">HN Honduras (+504)</option>
+                    <option value="+852">HK Hong Kong (+852)</option>
+                    <option value="+36">HU Hungary (+36)</option>
+                    <option value="+354">IS Iceland (+354)</option>
+                    <option value="+62">ID Indonesia (+62)</option>
+                    <option value="+98">IR Iran (+98)</option>
+                    <option value="+964">IQ Iraq (+964)</option>
+                    <option value="+353">IE Ireland (+353)</option>
+                    <option value="+44">IM Isle of Man (+44)</option>
+                    <option value="+972">IL Israel (+972)</option>
+                    <option value="+39">IT Italy (+39)</option>
+                    <option value="+1">JM Jamaica (+1)</option>
+                    <option value="+81">JP Japan (+81)</option>
+                    <option value="+44">JE Jersey (+44)</option>
+                    <option value="+962">JO Jordan (+962)</option>
+                    <option value="+7">KZ Kazakhstan (+7)</option>
+                    <option value="+254">KE Kenya (+254)</option>
+                    <option value="+686">KI Kiribati (+686)</option>
+                    <option value="+383">XK Kosovo (+383)</option>
+                    <option value="+965">KW Kuwait (+965)</option>
+                    <option value="+996">KG Kyrgyzstan (+996)</option>
+                    <option value="+856">LA Laos (+856)</option>
+                    <option value="+371">LV Latvia (+371)</option>
+                    <option value="+961">LB Lebanon (+961)</option>
+                    <option value="+266">LS Lesotho (+266)</option>
+                    <option value="+231">LR Liberia (+231)</option>
+                    <option value="+218">LY Libya (+218)</option>
+                    <option value="+423">LI Liechtenstein (+423)</option>
+                    <option value="+370">LT Lithuania (+370)</option>
+                    <option value="+352">LU Luxembourg (+352)</option>
+                    <option value="+853">MO Macau (+853)</option>
+                    <option value="+261">MG Madagascar (+261)</option>
+                    <option value="+265">MW Malawi (+265)</option>
+                    <option value="+60">MY Malaysia (+60)</option>
+                    <option value="+960">MV Maldives (+960)</option>
+                    <option value="+223">ML Mali (+223)</option>
+                    <option value="+356">MT Malta (+356)</option>
+                    <option value="+692">MH Marshall Islands (+692)</option>
+                    <option value="+596">MQ Martinique (+596)</option>
+                    <option value="+222">MR Mauritania (+222)</option>
+                    <option value="+230">MU Mauritius (+230)</option>
+                    <option value="+262">YT Mayotte (+262)</option>
+                    <option value="+52">MX Mexico (+52)</option>
+                    <option value="+691">FM Micronesia (+691)</option>
+                    <option value="+373">MD Moldova (+373)</option>
+                    <option value="+377">MC Monaco (+377)</option>
+                    <option value="+976">MN Mongolia (+976)</option>
+                    <option value="+382">ME Montenegro (+382)</option>
+                    <option value="+1">MS Montserrat (+1)</option>
+                    <option value="+212">MA Morocco (+212)</option>
+                    <option value="+258">MZ Mozambique (+258)</option>
+                    <option value="+95">MM Myanmar (+95)</option>
+                    <option value="+264">NA Namibia (+264)</option>
+                    <option value="+674">NR Nauru (+674)</option>
+                    <option value="+977">NP Nepal (+977)</option>
+                    <option value="+31">NL Netherlands (+31)</option>
+                    <option value="+687">NC New Caledonia (+687)</option>
+                    <option value="+64">NZ New Zealand (+64)</option>
+                    <option value="+505">NI Nicaragua (+505)</option>
+                    <option value="+227">NE Niger (+227)</option>
+                    <option value="+234">NG Nigeria (+234)</option>
+                    <option value="+683">NU Niue (+683)</option>
+                    <option value="+672">NF Norfolk Island (+672)</option>
+                    <option value="+850">KP North Korea (+850)</option>
+                    <option value="+389">MK North Macedonia (+389)</option>
+                    <option value="+1">MP Northern Mariana Islands (+1)</option>
+                    <option value="+47">NO Norway (+47)</option>
+                    <option value="+968">OM Oman (+968)</option>
+                    <option value="+92">PK Pakistan (+92)</option>
+                    <option value="+680">PW Palau (+680)</option>
+                    <option value="+970">PS Palestine (+970)</option>
+                    <option value="+507">PA Panama (+507)</option>
+                    <option value="+675">PG Papua New Guinea (+675)</option>
+                    <option value="+595">PY Paraguay (+595)</option>
+                    <option value="+51">PE Peru (+51)</option>
+                    <option value="+63">PH Philippines (+63)</option>
+                    <option value="+64">PN Pitcairn Islands (+64)</option>
+                    <option value="+48">PL Poland (+48)</option>
+                    <option value="+351">PT Portugal (+351)</option>
+                    <option value="+1">PR Puerto Rico (+1)</option>
+                    <option value="+974">QA Qatar (+974)</option>
+                    <option value="+262">RE Reunion (+262)</option>
+                    <option value="+40">RO Romania (+40)</option>
+                    <option value="+7">RU Russia (+7)</option>
+                    <option value="+250">RW Rwanda (+250)</option>
+                    <option value="+590">BL Saint Barthelemy (+590)</option>
+                    <option value="+290">SH Saint Helena (+290)</option>
+                    <option value="+1">KN Saint Kitts and Nevis (+1)</option>
+                    <option value="+1">LC Saint Lucia (+1)</option>
+                    <option value="+590">MF Saint Martin (+590)</option>
+                    <option value="+508">PM Saint Pierre and Miquelon (+508)</option>
+                    <option value="+1">VC Saint Vincent and the Grenadines (+1)</option>
+                    <option value="+685">WS Samoa (+685)</option>
+                    <option value="+378">SM San Marino (+378)</option>
+                    <option value="+239">ST Sao Tome and Principe (+239)</option>
+                    <option value="+966">SA Saudi Arabia (+966)</option>
+                    <option value="+221">SN Senegal (+221)</option>
+                    <option value="+381">RS Serbia (+381)</option>
+                    <option value="+248">SC Seychelles (+248)</option>
+                    <option value="+232">SL Sierra Leone (+232)</option>
+                    <option value="+65">SG Singapore (+65)</option>
+                    <option value="+1">SX Sint Maarten (+1)</option>
+                    <option value="+421">SK Slovakia (+421)</option>
+                    <option value="+386">SI Slovenia (+386)</option>
+                    <option value="+677">SB Solomon Islands (+677)</option>
+                    <option value="+252">SO Somalia (+252)</option>
+                    <option value="+27">ZA South Africa (+27)</option>
+                    <option value="+82">KR South Korea (+82)</option>
+                    <option value="+211">SS South Sudan (+211)</option>
+                    <option value="+34">ES Spain (+34)</option>
+                    <option value="+94">LK Sri Lanka (+94)</option>
+                    <option value="+249">SD Sudan (+249)</option>
+                    <option value="+597">SR Suriname (+597)</option>
+                    <option value="+47">SJ Svalbard and Jan Mayen (+47)</option>
+                    <option value="+46">SE Sweden (+46)</option>
+                    <option value="+41">CH Switzerland (+41)</option>
+                    <option value="+963">SY Syria (+963)</option>
+                    <option value="+886">TW Taiwan (+886)</option>
+                    <option value="+992">TJ Tajikistan (+992)</option>
+                    <option value="+255">TZ Tanzania (+255)</option>
+                    <option value="+66">TH Thailand (+66)</option>
+                    <option value="+670">TL Timor-Leste (+670)</option>
+                    <option value="+228">TG Togo (+228)</option>
+                    <option value="+690">TK Tokelau (+690)</option>
+                    <option value="+676">TO Tonga (+676)</option>
+                    <option value="+1">TT Trinidad and Tobago (+1)</option>
+                    <option value="+216">TN Tunisia (+216)</option>
+                    <option value="+90">TR Turkey (+90)</option>
+                    <option value="+993">TM Turkmenistan (+993)</option>
+                    <option value="+1">TC Turks and Caicos Islands (+1)</option>
+                    <option value="+688">TV Tuvalu (+688)</option>
+                    <option value="+256">UG Uganda (+256)</option>
+                    <option value="+380">UA Ukraine (+380)</option>
+                    <option value="+971">AE United Arab Emirates (+971)</option>
+                    <option value="+1">VI United States Virgin Islands (+1)</option>
+                    <option value="+598">UY Uruguay (+598)</option>
+                    <option value="+998">UZ Uzbekistan (+998)</option>
+                    <option value="+678">VU Vanuatu (+678)</option>
+                    <option value="+39">VA Vatican City (+39)</option>
+                    <option value="+58">VE Venezuela (+58)</option>
+                    <option value="+84">VN Vietnam (+84)</option>
+                    <option value="+681">WF Wallis and Futuna (+681)</option>
+                    <option value="+212">EH Western Sahara (+212)</option>
+                    <option value="+967">YE Yemen (+967)</option>
+                    <option value="+260">ZM Zambia (+260)</option>
+                    <option value="+263">ZW Zimbabwe (+263)</option>
+                  </select>
+                  <input id="phone" name="phone" type="tel" autocomplete="tel-national" inputmode="tel" placeholder="9876543210" required>
+                </div>
+                <button class="button primary" type="submit">Send verification code</button>
+              </form>
+
+              <form id="code-form" class="stack" hidden>
+                <label for="code">Verification code</label>
+                <input id="code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="16" required>
+                <button class="button primary" type="submit">Verify code</button>
+                <button class="button text" type="button" data-reset-login>Start over</button>
+              </form>
+
+              <form id="password-form" class="stack" hidden>
+                <label for="telegram-password">Two-factor password</label>
+                <input id="telegram-password" name="password" type="password" autocomplete="current-password" required>
+                <button class="button primary" type="submit">Connect account</button>
+                <button class="button text" type="button" data-reset-login>Start over</button>
+              </form>
+              <p id="connect-status" class="status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+
+          <section id="view-manage-numbers" class="view" hidden>
+            <section class="panel" aria-labelledby="manage-numbers-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Manage numbers</p>
+                  <h2 id="manage-numbers-title">Connected profiles</h2>
+                </div>
+                <button class="button ghost" type="button" data-jump="add-number">Add number</button>
+              </div>
+              <div class="toolbar">
+                <input id="number-search" type="search" placeholder="Search numbers, names, usernames">
+                <select id="number-status-filter">
+                  <option value="">All statuses</option>
+                  <option value="Active">Active</option>
+                  <option value="Paused">Paused</option>
+                  <option value="Archived">Archived</option>
+                </select>
+              </div>
+              <div id="account-list" class="account-list" aria-live="polite"></div>
+            </section>
+          </section>
+
+          <section id="view-profiles" class="view" hidden>
+            <div class="two-column">
+              <section class="panel" aria-labelledby="profile-editor-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Profile management</p>
+                    <h2 id="profile-editor-title">Profile details</h2>
+                  </div>
+                </div>
+                <form id="profile-form" class="stack" novalidate>
+                  <label for="profile-name">Profile name</label>
+                  <input id="profile-name" name="profileName" type="text" required>
+                  <label for="profile-display-name">Display name</label>
+                  <input id="profile-display-name" name="displayName" type="text">
+                  <label for="profile-username">Username</label>
+                  <input id="profile-username" name="username" type="text">
+                  <label for="profile-phone">Phone number</label>
+                  <input id="profile-phone" name="phone" type="tel" inputmode="tel">
+                  <label for="profile-status">Status</label>
+                  <select id="profile-status" name="status">
+                    <option>Active</option>
+                    <option>Paused</option>
+                    <option>Archived</option>
+                  </select>
+                  <label for="profile-avatar">Avatar/Image URL</label>
+                  <input id="profile-avatar" name="avatar" type="url" placeholder="https://example.com/avatar.png">
+                  <label for="profile-config-numbers">Config number(s)</label>
+                  <textarea id="profile-config-numbers" name="configNumbers" rows="3" placeholder="One number per line"></textarea>
+                  <label for="profile-description">Description</label>
+                  <textarea id="profile-description" name="description" rows="4"></textarea>
+                  <button class="button primary" type="submit">Save profile</button>
+                </form>
+                <p id="profile-status-message" class="status" role="status" aria-live="polite"></p>
+              </section>
+              <section class="panel" aria-labelledby="profile-list-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Select a profile</p>
+                    <h2 id="profile-list-title">Available profiles</h2>
+                  </div>
+                </div>
+                <div id="profile-list" class="profile-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="view-applications" class="view" hidden>
+            <section class="panel" aria-labelledby="applications-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Multi-application support</p>
+                  <h2 id="applications-title">Workflow applications</h2>
+                </div>
+              </div>
+              <div id="application-list" class="application-grid"></div>
+            </section>
+          </section>
+
+          <section id="view-contacts" class="view" hidden>
+            <section class="panel" aria-labelledby="contacts-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Contact management</p>
+                  <h2 id="contacts-title">Contacts and groups</h2>
+                </div>
+              </div>
+              <div class="module-grid">
+                <form id="contact-form" class="stack" novalidate>
+                  <input id="contact-id" type="hidden">
+                  <label for="contact-name">Name</label>
+                  <input id="contact-name" type="text" required>
+                  <label for="contact-handle">Username</label>
+                  <input id="contact-handle" type="text" placeholder="@username">
+                  <label for="contact-phone">Phone</label>
+                  <div class="phone-input-row">
+                    <select id="contact-country-code" name="countryCode" aria-label="Country code" autocomplete="tel-country-code">
+                      <option value="+91" selected>IN India (+91)</option>
+                      <option value="+1">US United States (+1)</option>
+                      <option value="+44">GB United Kingdom (+44)</option>
+                      <option value="+1">CA Canada (+1)</option>
+                      <option value="+61">AU Australia (+61)</option>
+                      <option value="+49">DE Germany (+49)</option>
+                      <option value="+33">FR France (+33)</option>
+                      <option value="+93">AF Afghanistan (+93)</option>
+                      <option value="+358">AX Aland Islands (+358)</option>
+                      <option value="+355">AL Albania (+355)</option>
+                      <option value="+213">DZ Algeria (+213)</option>
+                      <option value="+1">AS American Samoa (+1)</option>
+                      <option value="+376">AD Andorra (+376)</option>
+                      <option value="+244">AO Angola (+244)</option>
+                      <option value="+1">AI Anguilla (+1)</option>
+                      <option value="+1">AG Antigua and Barbuda (+1)</option>
+                      <option value="+54">AR Argentina (+54)</option>
+                      <option value="+374">AM Armenia (+374)</option>
+                      <option value="+297">AW Aruba (+297)</option>
+                      <option value="+43">AT Austria (+43)</option>
+                      <option value="+994">AZ Azerbaijan (+994)</option>
+                      <option value="+1">BS Bahamas (+1)</option>
+                      <option value="+973">BH Bahrain (+973)</option>
+                      <option value="+880">BD Bangladesh (+880)</option>
+                      <option value="+1">BB Barbados (+1)</option>
+                      <option value="+375">BY Belarus (+375)</option>
+                      <option value="+32">BE Belgium (+32)</option>
+                      <option value="+501">BZ Belize (+501)</option>
+                      <option value="+229">BJ Benin (+229)</option>
+                      <option value="+1">BM Bermuda (+1)</option>
+                      <option value="+975">BT Bhutan (+975)</option>
+                      <option value="+591">BO Bolivia (+591)</option>
+                      <option value="+599">BQ Bonaire, Sint Eustatius and Saba (+599)</option>
+                      <option value="+387">BA Bosnia and Herzegovina (+387)</option>
+                      <option value="+267">BW Botswana (+267)</option>
+                      <option value="+55">BR Brazil (+55)</option>
+                      <option value="+246">IO British Indian Ocean Territory (+246)</option>
+                      <option value="+1">VG British Virgin Islands (+1)</option>
+                      <option value="+673">BN Brunei (+673)</option>
+                      <option value="+359">BG Bulgaria (+359)</option>
+                      <option value="+226">BF Burkina Faso (+226)</option>
+                      <option value="+257">BI Burundi (+257)</option>
+                      <option value="+238">CV Cabo Verde (+238)</option>
+                      <option value="+855">KH Cambodia (+855)</option>
+                      <option value="+237">CM Cameroon (+237)</option>
+                      <option value="+1">KY Cayman Islands (+1)</option>
+                      <option value="+236">CF Central African Republic (+236)</option>
+                      <option value="+235">TD Chad (+235)</option>
+                      <option value="+56">CL Chile (+56)</option>
+                      <option value="+86">CN China (+86)</option>
+                      <option value="+61">CX Christmas Island (+61)</option>
+                      <option value="+61">CC Cocos (Keeling) Islands (+61)</option>
+                      <option value="+57">CO Colombia (+57)</option>
+                      <option value="+269">KM Comoros (+269)</option>
+                      <option value="+242">CG Congo (+242)</option>
+                      <option value="+243">CD Congo (DRC) (+243)</option>
+                      <option value="+682">CK Cook Islands (+682)</option>
+                      <option value="+506">CR Costa Rica (+506)</option>
+                      <option value="+225">CI Cote d'Ivoire (+225)</option>
+                      <option value="+385">HR Croatia (+385)</option>
+                      <option value="+53">CU Cuba (+53)</option>
+                      <option value="+599">CW Curacao (+599)</option>
+                      <option value="+357">CY Cyprus (+357)</option>
+                      <option value="+420">CZ Czechia (+420)</option>
+                      <option value="+45">DK Denmark (+45)</option>
+                      <option value="+253">DJ Djibouti (+253)</option>
+                      <option value="+1">DM Dominica (+1)</option>
+                      <option value="+1">DO Dominican Republic (+1)</option>
+                      <option value="+593">EC Ecuador (+593)</option>
+                      <option value="+20">EG Egypt (+20)</option>
+                      <option value="+503">SV El Salvador (+503)</option>
+                      <option value="+240">GQ Equatorial Guinea (+240)</option>
+                      <option value="+291">ER Eritrea (+291)</option>
+                      <option value="+372">EE Estonia (+372)</option>
+                      <option value="+268">SZ Eswatini (+268)</option>
+                      <option value="+251">ET Ethiopia (+251)</option>
+                      <option value="+500">FK Falkland Islands (+500)</option>
+                      <option value="+298">FO Faroe Islands (+298)</option>
+                      <option value="+679">FJ Fiji (+679)</option>
+                      <option value="+358">FI Finland (+358)</option>
+                      <option value="+594">GF French Guiana (+594)</option>
+                      <option value="+689">PF French Polynesia (+689)</option>
+                      <option value="+241">GA Gabon (+241)</option>
+                      <option value="+220">GM Gambia (+220)</option>
+                      <option value="+995">GE Georgia (+995)</option>
+                      <option value="+233">GH Ghana (+233)</option>
+                      <option value="+350">GI Gibraltar (+350)</option>
+                      <option value="+30">GR Greece (+30)</option>
+                      <option value="+299">GL Greenland (+299)</option>
+                      <option value="+1">GD Grenada (+1)</option>
+                      <option value="+590">GP Guadeloupe (+590)</option>
+                      <option value="+1">GU Guam (+1)</option>
+                      <option value="+502">GT Guatemala (+502)</option>
+                      <option value="+44">GG Guernsey (+44)</option>
+                      <option value="+224">GN Guinea (+224)</option>
+                      <option value="+245">GW Guinea-Bissau (+245)</option>
+                      <option value="+592">GY Guyana (+592)</option>
+                      <option value="+509">HT Haiti (+509)</option>
+                      <option value="+504">HN Honduras (+504)</option>
+                      <option value="+852">HK Hong Kong (+852)</option>
+                      <option value="+36">HU Hungary (+36)</option>
+                      <option value="+354">IS Iceland (+354)</option>
+                      <option value="+62">ID Indonesia (+62)</option>
+                      <option value="+98">IR Iran (+98)</option>
+                      <option value="+964">IQ Iraq (+964)</option>
+                      <option value="+353">IE Ireland (+353)</option>
+                      <option value="+44">IM Isle of Man (+44)</option>
+                      <option value="+972">IL Israel (+972)</option>
+                      <option value="+39">IT Italy (+39)</option>
+                      <option value="+1">JM Jamaica (+1)</option>
+                      <option value="+81">JP Japan (+81)</option>
+                      <option value="+44">JE Jersey (+44)</option>
+                      <option value="+962">JO Jordan (+962)</option>
+                      <option value="+7">KZ Kazakhstan (+7)</option>
+                      <option value="+254">KE Kenya (+254)</option>
+                      <option value="+686">KI Kiribati (+686)</option>
+                      <option value="+383">XK Kosovo (+383)</option>
+                      <option value="+965">KW Kuwait (+965)</option>
+                      <option value="+996">KG Kyrgyzstan (+996)</option>
+                      <option value="+856">LA Laos (+856)</option>
+                      <option value="+371">LV Latvia (+371)</option>
+                      <option value="+961">LB Lebanon (+961)</option>
+                      <option value="+266">LS Lesotho (+266)</option>
+                      <option value="+231">LR Liberia (+231)</option>
+                      <option value="+218">LY Libya (+218)</option>
+                      <option value="+423">LI Liechtenstein (+423)</option>
+                      <option value="+370">LT Lithuania (+370)</option>
+                      <option value="+352">LU Luxembourg (+352)</option>
+                      <option value="+853">MO Macau (+853)</option>
+                      <option value="+261">MG Madagascar (+261)</option>
+                      <option value="+265">MW Malawi (+265)</option>
+                      <option value="+60">MY Malaysia (+60)</option>
+                      <option value="+960">MV Maldives (+960)</option>
+                      <option value="+223">ML Mali (+223)</option>
+                      <option value="+356">MT Malta (+356)</option>
+                      <option value="+692">MH Marshall Islands (+692)</option>
+                      <option value="+596">MQ Martinique (+596)</option>
+                      <option value="+222">MR Mauritania (+222)</option>
+                      <option value="+230">MU Mauritius (+230)</option>
+                      <option value="+262">YT Mayotte (+262)</option>
+                      <option value="+52">MX Mexico (+52)</option>
+                      <option value="+691">FM Micronesia (+691)</option>
+                      <option value="+373">MD Moldova (+373)</option>
+                      <option value="+377">MC Monaco (+377)</option>
+                      <option value="+976">MN Mongolia (+976)</option>
+                      <option value="+382">ME Montenegro (+382)</option>
+                      <option value="+1">MS Montserrat (+1)</option>
+                      <option value="+212">MA Morocco (+212)</option>
+                      <option value="+258">MZ Mozambique (+258)</option>
+                      <option value="+95">MM Myanmar (+95)</option>
+                      <option value="+264">NA Namibia (+264)</option>
+                      <option value="+674">NR Nauru (+674)</option>
+                      <option value="+977">NP Nepal (+977)</option>
+                      <option value="+31">NL Netherlands (+31)</option>
+                      <option value="+687">NC New Caledonia (+687)</option>
+                      <option value="+64">NZ New Zealand (+64)</option>
+                      <option value="+505">NI Nicaragua (+505)</option>
+                      <option value="+227">NE Niger (+227)</option>
+                      <option value="+234">NG Nigeria (+234)</option>
+                      <option value="+683">NU Niue (+683)</option>
+                      <option value="+672">NF Norfolk Island (+672)</option>
+                      <option value="+850">KP North Korea (+850)</option>
+                      <option value="+389">MK North Macedonia (+389)</option>
+                      <option value="+1">MP Northern Mariana Islands (+1)</option>
+                      <option value="+47">NO Norway (+47)</option>
+                      <option value="+968">OM Oman (+968)</option>
+                      <option value="+92">PK Pakistan (+92)</option>
+                      <option value="+680">PW Palau (+680)</option>
+                      <option value="+970">PS Palestine (+970)</option>
+                      <option value="+507">PA Panama (+507)</option>
+                      <option value="+675">PG Papua New Guinea (+675)</option>
+                      <option value="+595">PY Paraguay (+595)</option>
+                      <option value="+51">PE Peru (+51)</option>
+                      <option value="+63">PH Philippines (+63)</option>
+                      <option value="+64">PN Pitcairn Islands (+64)</option>
+                      <option value="+48">PL Poland (+48)</option>
+                      <option value="+351">PT Portugal (+351)</option>
+                      <option value="+1">PR Puerto Rico (+1)</option>
+                      <option value="+974">QA Qatar (+974)</option>
+                      <option value="+262">RE Reunion (+262)</option>
+                      <option value="+40">RO Romania (+40)</option>
+                      <option value="+7">RU Russia (+7)</option>
+                      <option value="+250">RW Rwanda (+250)</option>
+                      <option value="+590">BL Saint Barthelemy (+590)</option>
+                      <option value="+290">SH Saint Helena (+290)</option>
+                      <option value="+1">KN Saint Kitts and Nevis (+1)</option>
+                      <option value="+1">LC Saint Lucia (+1)</option>
+                      <option value="+590">MF Saint Martin (+590)</option>
+                      <option value="+508">PM Saint Pierre and Miquelon (+508)</option>
+                      <option value="+1">VC Saint Vincent and the Grenadines (+1)</option>
+                      <option value="+685">WS Samoa (+685)</option>
+                      <option value="+378">SM San Marino (+378)</option>
+                      <option value="+239">ST Sao Tome and Principe (+239)</option>
+                      <option value="+966">SA Saudi Arabia (+966)</option>
+                      <option value="+221">SN Senegal (+221)</option>
+                      <option value="+381">RS Serbia (+381)</option>
+                      <option value="+248">SC Seychelles (+248)</option>
+                      <option value="+232">SL Sierra Leone (+232)</option>
+                      <option value="+65">SG Singapore (+65)</option>
+                      <option value="+1">SX Sint Maarten (+1)</option>
+                      <option value="+421">SK Slovakia (+421)</option>
+                      <option value="+386">SI Slovenia (+386)</option>
+                      <option value="+677">SB Solomon Islands (+677)</option>
+                      <option value="+252">SO Somalia (+252)</option>
+                      <option value="+27">ZA South Africa (+27)</option>
+                      <option value="+82">KR South Korea (+82)</option>
+                      <option value="+211">SS South Sudan (+211)</option>
+                      <option value="+34">ES Spain (+34)</option>
+                      <option value="+94">LK Sri Lanka (+94)</option>
+                      <option value="+249">SD Sudan (+249)</option>
+                      <option value="+597">SR Suriname (+597)</option>
+                      <option value="+47">SJ Svalbard and Jan Mayen (+47)</option>
+                      <option value="+46">SE Sweden (+46)</option>
+                      <option value="+41">CH Switzerland (+41)</option>
+                      <option value="+963">SY Syria (+963)</option>
+                      <option value="+886">TW Taiwan (+886)</option>
+                      <option value="+992">TJ Tajikistan (+992)</option>
+                      <option value="+255">TZ Tanzania (+255)</option>
+                      <option value="+66">TH Thailand (+66)</option>
+                      <option value="+670">TL Timor-Leste (+670)</option>
+                      <option value="+228">TG Togo (+228)</option>
+                      <option value="+690">TK Tokelau (+690)</option>
+                      <option value="+676">TO Tonga (+676)</option>
+                      <option value="+1">TT Trinidad and Tobago (+1)</option>
+                      <option value="+216">TN Tunisia (+216)</option>
+                      <option value="+90">TR Turkey (+90)</option>
+                      <option value="+993">TM Turkmenistan (+993)</option>
+                      <option value="+1">TC Turks and Caicos Islands (+1)</option>
+                      <option value="+688">TV Tuvalu (+688)</option>
+                      <option value="+256">UG Uganda (+256)</option>
+                      <option value="+380">UA Ukraine (+380)</option>
+                      <option value="+971">AE United Arab Emirates (+971)</option>
+                      <option value="+1">VI United States Virgin Islands (+1)</option>
+                      <option value="+598">UY Uruguay (+598)</option>
+                      <option value="+998">UZ Uzbekistan (+998)</option>
+                      <option value="+678">VU Vanuatu (+678)</option>
+                      <option value="+39">VA Vatican City (+39)</option>
+                      <option value="+58">VE Venezuela (+58)</option>
+                      <option value="+84">VN Vietnam (+84)</option>
+                      <option value="+681">WF Wallis and Futuna (+681)</option>
+                      <option value="+212">EH Western Sahara (+212)</option>
+                      <option value="+967">YE Yemen (+967)</option>
+                      <option value="+260">ZM Zambia (+260)</option>
+                      <option value="+263">ZW Zimbabwe (+263)</option>
+                    </select>
+                    <input id="contact-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national" placeholder="9876543210">
+                  </div>
+                  <label for="contact-group">Contact group</label>
+                  <input id="contact-group" type="text" placeholder="Marketing">
+                  <label for="contact-notes">Notes</label>
+                  <textarea id="contact-notes" rows="3"></textarea>
+                  <div class="button-row">
+                    <button class="button primary" type="submit">Save contact</button>
+                    <button id="contact-clear" class="button ghost" type="button">Clear</button>
+                  </div>
+                </form>
+                <div>
+                  <div class="toolbar">
+                    <input id="contact-search" type="search" placeholder="Search contacts">
+                    <button id="export-contacts" class="mini-button" type="button">Export</button>
+                  </div>
+                  <textarea id="contact-import-json" class="code-box" rows="4" placeholder="Contact JSON"></textarea>
+                  <button id="import-contacts" class="mini-button" type="button">Import contacts</button>
+                  <div id="contact-list" class="record-list"></div>
+                </div>
+              </div>
+              <p id="contact-status" class="status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+
+
+          <section id="view-inbox" class="view" hidden>
+            <section class="panel" aria-labelledby="inbox-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Messages</p>
+                  <h2 id="inbox-title">Message</h2>
+                </div>
+                <div class="inbox-actions">
+                  <div class="segmented-control inbox-view-control" role="group" aria-label="Message view styles">
+                    <span class="segmented-label">Views</span>
+                    <button class="view-choice active" type="button" data-inbox-view="split" aria-pressed="true" title="Split view">Split</button>
+                    <button class="view-choice" type="button" data-inbox-view="compact" aria-pressed="false" title="Compact view">Compact</button>
+                    <button class="view-choice" type="button" data-inbox-view="focus" aria-pressed="false" title="Focus view">Focus</button>
+                    <button class="view-choice" type="button" data-inbox-view="multi" aria-pressed="false" title="Multi chat view">Multi</button>
+                  </div>
+                  <button id="inbox-refresh" class="button ghost" type="button">Refresh</button>
+                </div>
+              </div>
+              <div id="inbox-shell" class="chat-shell" data-view="split">
+                <aside class="chat-list-panel" aria-label="Message threads">
+                  <input id="inbox-search" type="search" placeholder="Search messages or chats">
+                  <div id="inbox-thread-list" class="chat-list"></div>
+                </aside>
+                <section class="chat-panel" aria-label="Selected conversation">
+                  <div id="inbox-active-heading" class="chat-heading"></div>
+                  <div id="inbox-thread" class="chat-thread"></div>
+                  <form id="inbox-form" class="chat-composer" novalidate>
+                    <textarea id="inbox-message" rows="2" maxlength="4096" placeholder="Type a message"></textarea>
+                    <button id="inbox-send-button" class="button primary" type="submit">Send</button>
+                  </form>
+                </section>
+                <section id="inbox-multi-board" class="multi-chat-board" aria-label="Multiple conversations"></section>
+              </div>
+              <p id="inbox-status" class="status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+          <section id="view-groups" class="view" hidden>
+            <section class="panel" aria-labelledby="groups-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Group management</p>
+                  <h2 id="groups-title">Groups and members</h2>
+                </div>
+              </div>
+              <div class="module-grid">
+                <form id="group-form" class="stack" novalidate>
+                  <input id="group-id" type="hidden">
+                  <label for="group-name">Group name</label>
+                  <input id="group-name" type="text" required>
+                  <label for="group-type">Type</label>
+                  <select id="group-type"><option>Private</option><option>Public</option></select>
+                  <label for="group-status">Action status</label>
+                  <select id="group-status"><option>Created</option><option>Joined</option><option>Left</option><option>Archived</option></select>
+                  <label for="group-members">Members</label>
+                  <textarea id="group-members" rows="3" placeholder="One @username or +91 number per line"></textarea>
+                  <label for="group-notes">Settings</label>
+                  <textarea id="group-notes" rows="3"></textarea>
+                  <div class="button-row">
+                    <button class="button primary" type="submit">Save group</button>
+                    <button id="group-clear" class="button ghost" type="button">Clear</button>
+                  </div>
+                </form>
+                <div id="group-list" class="record-list"></div>
+              </div>
+            </section>
+          </section>
+
+          <section id="view-channels" class="view" hidden>
+            <section class="panel" aria-labelledby="channels-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Channel management</p>
+                  <h2 id="channels-title">Channels and invites</h2>
+                </div>
+              </div>
+              <div class="module-grid">
+                <form id="channel-form" class="stack" novalidate>
+                  <input id="channel-id" type="hidden">
+                  <label for="channel-name">Channel name</label>
+                  <input id="channel-name" type="text" required>
+                  <label for="channel-privacy">Privacy</label>
+                  <select id="channel-privacy"><option>Private</option><option>Public</option></select>
+                  <label for="channel-invites">Invite members</label>
+                  <textarea id="channel-invites" rows="3" placeholder="One username per line"></textarea>
+                  <label for="channel-notes">Settings</label>
+                  <textarea id="channel-notes" rows="3"></textarea>
+                  <div class="button-row">
+                    <button class="button primary" type="submit">Save channel</button>
+                    <button id="channel-clear" class="button ghost" type="button">Clear</button>
+                  </div>
+                </form>
+                <div id="channel-list" class="record-list"></div>
+              </div>
+            </section>
+          </section>
+
+          <section id="view-posts" class="view" hidden>
+            <div class="post-layout">
+              <section class="panel" aria-labelledby="post-editor-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Posting manager</p>
+                    <h2 id="post-editor-title">Create post</h2>
+                  </div>
+                </div>
+                <form id="post-form" class="stack" novalidate>
+                  <input id="post-id" type="hidden">
+                  <label for="post-title">Post title</label>
+                  <input id="post-title" type="text" required>
+                  <div class="form-grid">
+                    <label>Type<select id="post-type"><option value="text">Text only</option><option value="image">Image + text</option><option value="video">Video + text</option><option value="document">Document</option><option value="audio">Audio</option><option value="voice">Voice message</option><option value="poll">Poll</option><option value="quiz">Quiz</option><option value="forwarded">Forwarded message</option></select></label>
+                    <label>Category<input id="post-category" type="text" placeholder="Marketing"></label>
+                    <label>Tags<input id="post-tags" type="text" placeholder="date, offer, news"></label>
+                    <label>Status<select id="post-status"><option>Draft</option><option>Ready</option><option>Scheduled</option><option>Posted</option></select></label>
+                  </div>
+                  <label for="post-scheduled-at">Scheduled date</label>
+                  <input id="post-scheduled-at" type="datetime-local">
+                  <label for="post-media-url">Media URL</label>
+                  <input id="post-media-url" type="url" placeholder="https://example.com/media.jpg">
+                  <label for="post-body">Text or caption</label>
+                  <textarea id="post-body" rows="6"></textarea>
+                  <label for="post-recipient">Manual posting target</label>
+                  <input id="post-recipient" type="text" placeholder="@channel, @username, or chat">
+                  <label>Saved contacts</label>
+                  <div id="post-contact-targets" class="recipient-list"></div>
+                  <label>Saved groups</label>
+                  <div id="post-group-targets" class="recipient-list"></div>
+                  <div class="button-row">
+                    <button class="button primary" type="submit">Save post</button>
+                    <button id="post-send-now" class="button ghost" type="button">Post now</button>
+                    <button id="post-schedule" class="button ghost" type="button">Schedule</button>
+                    <button id="post-clear" class="button text" type="button">Clear</button>
+                  </div>
+                </form>
+                <p id="post-status-message" class="status" role="status" aria-live="polite"></p>
+              </section>
+
+              <section class="panel" aria-labelledby="post-preview-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Preview</p>
+                    <h2 id="post-preview-title">Post preview</h2>
+                  </div>
+                </div>
+                <div id="post-preview" class="post-preview"></div>
+              </section>
+
+              <section class="panel post-list-panel" aria-labelledby="post-list-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Post lists</p>
+                    <h2 id="post-list-title">Categories and tags</h2>
+                  </div>
+                </div>
+                <div class="toolbar">
+                  <input id="post-search" type="search" placeholder="Search posts">
+                  <select id="post-filter-type"><option value="">All types</option><option value="text">Text</option><option value="image">Image</option><option value="video">Video</option><option value="poll">Poll</option><option value="quiz">Quiz</option></select>
+                  <select id="post-sort"><option value="created-desc">Newest</option><option value="created-asc">Oldest</option><option value="category">Category</option><option value="scheduled">Scheduled date</option></select>
+                </div>
+                <div id="post-list" class="record-list"></div>
+              </section>
+            </div>
+          </section>
+
+
+          <section id="view-post-history" class="view" hidden>
+            <div class="two-column">
+              <section class="panel" aria-labelledby="sent-post-history-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Sharing details</p>
+                    <h2 id="sent-post-history-title">Sent Posts</h2>
+                  </div>
+                </div>
+                <div id="post-history-sent" class="record-list"></div>
+              </section>
+
+              <section class="panel" aria-labelledby="pending-post-history-title">
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Post status</p>
+                    <h2 id="pending-post-history-title">Pending / Not Yet Sent Posts</h2>
+                  </div>
+                </div>
+                <div id="post-history-pending" class="record-list"></div>
+              </section>
+            </div>
+          </section>
+          <section id="view-search" class="view" hidden>
+            <section class="panel" aria-labelledby="search-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Search</p>
+                  <h2 id="search-title">Workspace search</h2>
+                </div>
+              </div>
+              <input id="global-search" type="search" placeholder="Search numbers, profiles, contacts, groups, channels, posts">
+              <div id="global-results" class="record-list search-results"></div>
+            </section>
+          </section>
+
+          <section id="view-configuration" class="view" hidden>
+            <section class="panel" aria-labelledby="configuration-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Configuration</p>
+                  <h2 id="configuration-title">Application settings</h2>
+                </div>
+              </div>
+              <form id="settings-form" class="stack settings-grid" novalidate>
+                <label>API settings<input id="setting-api" type="text" placeholder="Server API"></label>
+                <label>Telegram configuration<input id="setting-telegram" type="text" placeholder="Default Telegram workflow"></label>
+                <label>Session management<select id="setting-session"><option>Browser session</option><option>Short session</option><option>Manual logout only</option></select></label>
+                <label>Proxy settings<input id="setting-proxy" type="text" placeholder="Proxy URL"></label>
+                <label>Storage settings<select id="setting-storage"><option>Browser local workspace</option><option>JSON files</option><option>Markdown files</option><option>Database later</option></select></label>
+                <label>General settings<select id="setting-theme"><option>Dark mode</option><option>Light mode</option></select></label>
+                <button class="button primary" type="submit">Save settings</button>
+              </form>
+              <p id="settings-status" class="status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+
+          <section id="view-backup" class="view" hidden>
+            <section class="panel" aria-labelledby="backup-title">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Backup and restore</p>
+                  <h2 id="backup-title">Workspace JSON</h2>
+                </div>
+              </div>
+              <div class="button-row">
+                <button id="backup-export" class="button primary" type="button">Export backup</button>
+                <button id="backup-import" class="button ghost" type="button">Restore backup</button>
+              </div>
+              <textarea id="backup-json" class="code-box large" rows="16" spellcheck="false"></textarea>
+              <p id="backup-status" class="status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js?v=telegram-ui-1" defer></script>
+  </body>
+</html>

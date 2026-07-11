@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    env_file:
+      - .env.docker
+    environment:
+      DATA_DIR: /app/data
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: 8787
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
