@@ -122,6 +122,7 @@ async function api(path, options = {}) {
 function status(node, message = "", tone = "") { node.textContent = message; tone ? node.dataset.tone = tone : delete node.dataset.tone; }
 function busy(form, isBusy) { const button = form.querySelector("button[type='submit']"); if (button) button.disabled = isBusy; }
 function onError(error, node) { if (error instanceof ApiError && error.status === 401) return signedOut("Your session has ended. Please sign in again."); status(node, error instanceof Error ? error.message : "Something went wrong.", "error"); }
+function showAuthError(error) { status(el.signInStatus, error instanceof Error ? error.message : "Sign in failed.", "error"); }
 function clearLocalWorkspace() {
   [keys.selected, keys.inboxView, keys.profiles, keys.contacts, keys.groups, keys.channels, keys.posts, keys.postHistory].forEach((key) => localStorage.removeItem(key));
   state.accounts = [];
@@ -858,7 +859,7 @@ el.passwordSignInForm.addEventListener("submit", async (event) => {
   if (!username || !password) return status(el.signInStatus, "Enter username and password.", "error");
   busy(el.passwordSignInForm, true); status(el.signInStatus, "Opening workspace...");
   try { const data = await api("/v1/auth/password", { method: "POST", body: { username, password } }); signedIn(data.user); await loadAccounts(); }
-  catch (error) { onError(error, el.signInStatus); }
+  catch (error) { showAuthError(error); }
   finally { busy(el.passwordSignInForm, false); }
 });
 el.createAccount.addEventListener("click", async () => {
@@ -866,7 +867,7 @@ el.createAccount.addEventListener("click", async () => {
   if (!username || !password) return status(el.signInStatus, "Choose a username and password.", "error");
   el.createAccount.disabled = true; busy(el.passwordSignInForm, true); status(el.signInStatus, "Creating your workspace...");
   try { const data = await api("/v1/auth/register", { method: "POST", body: { username, password, displayName } }); el.loginPassword.value = ""; el.displayName.value = ""; signedIn(data.user); await loadAccounts(); }
-  catch (error) { onError(error, el.signInStatus); }
+  catch (error) { showAuthError(error); }
   finally { el.createAccount.disabled = false; busy(el.passwordSignInForm, false); }
 });
 el.tokenSignInForm.addEventListener("submit", async (event) => {
@@ -875,7 +876,7 @@ el.tokenSignInForm.addEventListener("submit", async (event) => {
   if (!accessToken) return status(el.signInStatus, "Enter your access token.", "error");
   busy(el.tokenSignInForm, true); status(el.signInStatus, "Opening workspace...");
   try { const data = await api("/v1/auth/session", { method: "POST", body: { accessToken } }); el.accessToken.value = ""; signedIn(data.user); await loadAccounts(); }
-  catch (error) { onError(error, el.signInStatus); }
+  catch (error) { showAuthError(error); }
   finally { busy(el.tokenSignInForm, false); }
 });
 el.signOut.addEventListener("click", async () => { try { await api("/v1/auth/session", { method: "DELETE" }); } catch {} signedOut("", true); });
