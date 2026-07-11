@@ -16,11 +16,7 @@ services:
         value: "true"
       - key: CORS_ORIGIN
         value: https://deluxe-klepon-926448.netlify.app
-      - key: TELEGRAM_API_ID
-        sync: false
-      - key: TELEGRAM_API_HASH
-        sync: false
       - key: SESSION_ENCRYPTION_KEY
-        sync: false
+        generateValue: true
       - key: USER_PROVISIONING_KEY
-        sync: false
+        generateValue: true

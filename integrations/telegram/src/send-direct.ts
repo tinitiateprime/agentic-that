@@ -26,7 +26,7 @@ async function main() {
     if (!user) throw new Error("Invalid access token.");
     const account = await store.getAccountWithSession(user.id, accountId);
     if (!account) throw new Error("Telegram account was not found.");
-    const sent = await sendTelegramMessage(account.sessionString, { recipient, message });
+    const sent = await sendTelegramMessage({ apiId: account.telegramApiId, apiHash: account.telegramApiHash }, account.sessionString, { recipient, message });
     const recorded = await store.recordMessage({
       accountId: account.id,
       direction: "outbound",
@@ -44,5 +44,4 @@ main().catch((error) => {
   console.error("Command failed without logging sensitive input.");
   process.exitCode = 1;
 });
-
 

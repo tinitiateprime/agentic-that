@@ -15,10 +15,16 @@ export type TelegramAccount = {
   updatedAt: string;
 };
 
-export type TelegramAccountWithSession = TelegramAccount & { sessionString: string };
+export type TelegramAccountWithSession = TelegramAccount & {
+  telegramApiId: number;
+  telegramApiHash: string;
+  sessionString: string;
+};
 
 export type LoginChallenge = {
   id: string;
+  telegramApiId: number;
+  telegramApiHash: string;
   phone: string;
   phoneCodeHash: string;
   sessionString: string;
@@ -60,6 +66,8 @@ type TelegramAccountRow = {
   telegramUserId: string;
   displayName: string;
   username: string;
+  telegramApiIdCiphertext?: string;
+  telegramApiHashCiphertext?: string;
   sessionCiphertext: string;
   createdAt: string;
   updatedAt: string;
@@ -68,6 +76,8 @@ type TelegramAccountRow = {
 type LoginChallengeRow = {
   id: string;
   userId: string;
+  telegramApiIdCiphertext?: string;
+  telegramApiHashCiphertext?: string;
   phoneCiphertext: string;
   phoneCodeHashCiphertext: string;
   sessionCiphertext: string;
@@ -252,6 +262,8 @@ export class MultiUserStore {
 
   async createLoginChallenge(
     userId: string,
+    telegramApiId: number,
+    telegramApiHash: string,
     phone: string,
     phoneCodeHash: string,
     sessionString: string,
@@ -266,6 +278,8 @@ export class MultiUserStore {
       database.telegramLoginChallenges.push({
         id,
         userId,
+        telegramApiIdCiphertext: this.cipher.encrypt(String(telegramApiId)),
+        telegramApiHashCiphertext: this.cipher.encrypt(telegramApiHash),
         phoneCiphertext: this.cipher.encrypt(phone),
         phoneCodeHashCiphertext: this.cipher.encrypt(phoneCodeHash),
         sessionCiphertext: this.cipher.encrypt(sessionString),
@@ -290,6 +304,8 @@ export class MultiUserStore {
       }
       return {
         id: row.id,
+        telegramApiId: this.decryptTelegramApiId(row),
+        telegramApiHash: this.decryptTelegramApiHash(row),
         phone: this.cipher.decrypt(row.phoneCiphertext),
         phoneCodeHash: this.cipher.decrypt(row.phoneCodeHashCiphertext),
         sessionString: this.cipher.decrypt(row.sessionCiphertext),
@@ -321,7 +337,7 @@ export class MultiUserStore {
 
   async saveTelegramAccount(
     userId: string,
-    input: { telegramUserId: string; displayName: string; username: string; sessionString: string }
+    input: { telegramApiId: number; telegramApiHash: string; telegramUserId: string; displayName: string; username: string; sessionString: string }
   ): Promise<TelegramAccount> {
     return this.updateDatabase((database) => {
       const existing = database.telegramAccounts.find((account) => account.telegramUserId === input.telegramUserId);
@@ -332,6 +348,8 @@ export class MultiUserStore {
       if (existing) {
         existing.displayName = input.displayName;
         existing.username = input.username || "";
+        existing.telegramApiIdCiphertext = this.cipher.encrypt(String(input.telegramApiId));
+        existing.telegramApiHashCiphertext = this.cipher.encrypt(input.telegramApiHash);
         existing.sessionCiphertext = this.cipher.encrypt(input.sessionString);
         existing.updatedAt = nowIso();
         return this.toAccount(existing);
@@ -344,6 +362,8 @@ export class MultiUserStore {
         telegramUserId: input.telegramUserId,
         displayName: input.displayName,
         username: input.username || "",
+        telegramApiIdCiphertext: this.cipher.encrypt(String(input.telegramApiId)),
+        telegramApiHashCiphertext: this.cipher.encrypt(input.telegramApiHash),
         sessionCiphertext: this.cipher.encrypt(input.sessionString),
         createdAt,
         updatedAt: createdAt
@@ -516,7 +536,22 @@ export class MultiUserStore {
   }
 
   private toAccountWithSession(row: TelegramAccountRow): TelegramAccountWithSession {
-    return { ...this.toAccount(row), sessionString: this.cipher.decrypt(row.sessionCiphertext) };
+    return {
+      ...this.toAccount(row),
+      telegramApiId: this.decryptTelegramApiId(row),
+      telegramApiHash: this.decryptTelegramApiHash(row),
+      sessionString: this.cipher.decrypt(row.sessionCiphertext)
+    };
+  }
+
+  private decryptTelegramApiId(row: Pick<TelegramAccountRow | LoginChallengeRow, "telegramApiIdCiphertext">) {
+    if (!row.telegramApiIdCiphertext) return 0;
+    const value = Number(this.cipher.decrypt(row.telegramApiIdCiphertext));
+    return Number.isInteger(value) && value > 0 ? value : 0;
+  }
+
+  private decryptTelegramApiHash(row: Pick<TelegramAccountRow | LoginChallengeRow, "telegramApiHashCiphertext">) {
+    return row.telegramApiHashCiphertext ? this.cipher.decrypt(row.telegramApiHashCiphertext) : "";
   }
 
   private toMessageRecord(row: MessageRow): MessageRecord {
@@ -531,4 +566,3 @@ export class MultiUserStore {
     };
   }
 }
-

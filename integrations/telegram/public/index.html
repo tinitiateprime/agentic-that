@@ -150,6 +150,14 @@
               <p id="connect-copy" class="muted">Use the full phone number with country code. Telegram will deliver a verification code.</p>
 
               <form id="phone-form" class="stack">
+                <div class="form-grid">
+                  <label for="telegram-api-id">Telegram API ID
+                    <input id="telegram-api-id" name="telegramApiId" type="text" inputmode="numeric" autocomplete="off" required>
+                  </label>
+                  <label for="telegram-api-hash">Telegram API hash
+                    <input id="telegram-api-hash" name="telegramApiHash" type="password" autocomplete="off" required>
+                  </label>
+                </div>
                 <label for="phone">Phone number</label>
                 <div class="phone-input-row">
                   <select id="phone-country-code" name="countryCode" aria-label="Country code" autocomplete="tel-country-code">
@@ -1030,6 +1038,6 @@
         </div>
       </section>
     </main>
-    <script src="/app.js?v=telegram-ui-1" defer></script>
+    <script src="/app.js?v=telegram-ui-3" defer></script>
   </body>
 </html>

@@ -49,8 +49,6 @@ function booleanEnv(name: string, fallback: boolean) {
 }
 
 export type AppConfig = {
-  telegramApiId: number;
-  telegramApiHash: string;
   dataDir: string;
   sessionEncryptionKey: string;
   userProvisioningKey: string;
@@ -77,17 +75,11 @@ export type BotConfig = {
 };
 
 export function readConfig(): AppConfig {
-  const telegramApiId = Number(requiredEnv("TELEGRAM_API_ID"));
-  if (!Number.isInteger(telegramApiId) || telegramApiId <= 0) {
-    throw new Error("TELEGRAM_API_ID must be a positive integer.");
-  }
   const servicePort = process.env.SERVICE_PORT?.trim()
     ? positiveInteger("SERVICE_PORT", 8787)
     : positiveInteger("PORT", 8787);
 
   return {
-    telegramApiId,
-    telegramApiHash: requiredEnv("TELEGRAM_API_HASH"),
     dataDir: optionalEnv("DATA_DIR", "data"),
     sessionEncryptionKey: requiredEnv("SESSION_ENCRYPTION_KEY"),
     userProvisioningKey: requiredEnv("USER_PROVISIONING_KEY"),

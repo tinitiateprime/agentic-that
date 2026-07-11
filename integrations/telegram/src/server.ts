@@ -10,7 +10,8 @@ import {
   sendTelegramMessage,
   listenForAccount,
   fetchRecentTelegramMessages,
-  normalizePhone
+  normalizePhone,
+  type TelegramApiCredentials
 } from "./account-client.ts";
 import { readConfig, type AppConfig } from "./config.ts";
 import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, type ConfiguredLoginUser } from "./login-config.ts";
@@ -44,7 +45,6 @@ const recentHistorySyncStartedAt = new Map<string, number>();
 const recentHistorySyncIntervalMs = 45_000;
 const recentHistorySyncTargetLimit = 50;
 const secretEnvironmentNames = [
-  "TELEGRAM_API_HASH",
   "SESSION_ENCRYPTION_KEY",
   "USER_PROVISIONING_KEY",
   "TELEGRAM_BOT_TOKEN"
@@ -294,7 +294,7 @@ async function syncRecentTelegramHistory(account: TelegramAccountWithSession, re
 
   const sync = (async () => {
     try {
-      const messages = await fetchRecentTelegramMessages(account.sessionString, 100, recipients);
+      const messages = await fetchRecentTelegramMessages(telegramApiCredentialsFromAccount(account), account.sessionString, 100, recipients);
       for (const message of messages) {
         await store.recordMessage({
           accountId: account.id,
@@ -320,7 +320,7 @@ async function startTelegramListener(account: TelegramAccountWithSession) {
   if (telegramListeners.has(account.id) || startingTelegramListeners.has(account.id)) return;
   const startup = (async () => {
     try {
-      const client = await listenForAccount(account.sessionString, (message) => recordIncomingMessage(account.id, message));
+      const client = await listenForAccount(telegramApiCredentialsFromAccount(account), account.sessionString, (message) => recordIncomingMessage(account.id, message));
       telegramListeners.set(account.id, client);
       console.log(`Incoming Telegram listener started for account ${account.id}.`);
     } catch {
@@ -367,6 +367,28 @@ function normalizePhoneFromBody(body: JsonBody) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, error instanceof Error ? error.message : "Phone number is invalid.");
   }
+}
+
+function telegramApiCredentialsFromBody(body: JsonBody): TelegramApiCredentials {
+  const rawApiId = requiredString(body, "telegramApiId", 20);
+  const apiId = Number(rawApiId);
+  if (!Number.isInteger(apiId) || apiId <= 0) {
+    throw new HttpError(400, "Telegram API ID must be a positive number from my.telegram.org.");
+  }
+
+  const apiHash = requiredString(body, "telegramApiHash", 128);
+  if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
+    throw new HttpError(400, "Telegram API hash must be the 32-character hash from my.telegram.org.");
+  }
+
+  return { apiId, apiHash };
+}
+
+function telegramApiCredentialsFromAccount(account: TelegramAccountWithSession): TelegramApiCredentials {
+  if (!account.telegramApiId || !account.telegramApiHash) {
+    throw new HttpError(400, "This Telegram account was connected before per-user API credentials were enabled. Delete it and connect it again.");
+  }
+  return { apiId: account.telegramApiId, apiHash: account.telegramApiHash };
 }
 
 function operationalTelegramError(error: unknown) {
@@ -531,15 +553,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (request.method === "POST" && url.pathname === "/v1/telegram/login/start") {
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
+    const credentials = telegramApiCredentialsFromBody(body);
     const phone = normalizePhoneFromBody(body);
     let start;
     try {
-      start = await beginTelegramLogin(phone);
+      start = await beginTelegramLogin(credentials, phone);
     } catch (error) {
       throw telegramLoginError(error);
     }
     const challenge = await store.createLoginChallenge(
       user.id,
+      credentials.apiId,
+      credentials.apiHash,
       phone,
       start.phoneCodeHash,
       start.sessionString,
@@ -559,9 +584,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, codeChallengeId);
     if (!challenge || challenge.status !== "code_sent") throw new HttpError(404, "Active login challenge was not found.");
+    const credentials = { apiId: challenge.telegramApiId, apiHash: challenge.telegramApiHash };
     let result;
     try {
-      result = await completeTelegramLoginWithCode({
+      result = await completeTelegramLoginWithCode(credentials, {
         sessionString: challenge.sessionString,
         phone: challenge.phone,
         phoneCodeHash: challenge.phoneCodeHash,
@@ -575,8 +601,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       sendJson(request, response, 202, { ok: true, status: "password_required", challengeId: challenge.id });
       return;
     }
-    const account = await store.saveTelegramAccount(user.id, { ...result.profile, sessionString: result.sessionString });
-        void startTelegramListener({ ...account, sessionString: result.sessionString });
+    const account = await store.saveTelegramAccount(user.id, {
+      telegramApiId: credentials.apiId,
+      telegramApiHash: credentials.apiHash,
+      ...result.profile,
+      sessionString: result.sessionString
+    });
+    void startTelegramListener({
+      ...account,
+      telegramApiId: credentials.apiId,
+      telegramApiHash: credentials.apiHash,
+      sessionString: result.sessionString
+    });
     await store.deleteLoginChallenge(user.id, challenge.id);
     sendJson(request, response, 201, { ok: true, status: "connected", account });
     return;
@@ -587,17 +623,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, passwordChallengeId);
     if (!challenge || challenge.status !== "password_required") throw new HttpError(404, "Password login challenge was not found.");
+    const credentials = { apiId: challenge.telegramApiId, apiHash: challenge.telegramApiHash };
     let result;
     try {
       result = await completeTelegramLoginWithPassword(
+        credentials,
         challenge.sessionString,
         requiredString(body, "password", 1000)
       );
     } catch (error) {
       throw telegramLoginError(error);
     }
-    const account = await store.saveTelegramAccount(user.id, { ...result.profile, sessionString: result.sessionString });
-        void startTelegramListener({ ...account, sessionString: result.sessionString });
+    const account = await store.saveTelegramAccount(user.id, {
+      telegramApiId: credentials.apiId,
+      telegramApiHash: credentials.apiHash,
+      ...result.profile,
+      sessionString: result.sessionString
+    });
+    void startTelegramListener({
+      ...account,
+      telegramApiId: credentials.apiId,
+      telegramApiHash: credentials.apiHash,
+      sessionString: result.sessionString
+    });
     await store.deleteLoginChallenge(user.id, challenge.id);
     sendJson(request, response, 201, { ok: true, status: "connected", account });
     return;
@@ -614,7 +662,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     if (!account) throw new HttpError(404, "Telegram account was not found.");
     await stopTelegramListener(account.id);
     try {
-      await revokeTelegramSession(account.sessionString);
+      await revokeTelegramSession(telegramApiCredentialsFromAccount(account), account.sessionString);
     } catch {
       // Local ownership is removed even if Telegram is temporarily unavailable.
     }
@@ -633,7 +681,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const mediaType = optionalString(body, "mediaType", 32);
     let sent;
     try {
-      sent = await sendTelegramMessage(account.sessionString, {
+      sent = await sendTelegramMessage(telegramApiCredentialsFromAccount(account), account.sessionString, {
         recipient,
         message: text,
         mediaUrl,
@@ -720,5 +768,3 @@ main().catch((error: unknown) => {
   console.error(`Server startup failed: ${redactedErrorMessage(error)}`);
   process.exitCode = 1;
 });
-
-

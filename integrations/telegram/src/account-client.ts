@@ -3,7 +3,11 @@ import { Api, TelegramClient } from "telegram";
 import { NewMessage } from "telegram/events/index.js";
 import { StringSession } from "telegram/sessions/index.js";
 import { CustomFile } from "telegram/client/uploads.js";
-import { readConfig } from "./config.ts";
+
+export type TelegramApiCredentials = {
+  apiId: number;
+  apiHash: string;
+};
 
 export type TelegramProfile = {
   telegramUserId: string;
@@ -63,9 +67,8 @@ export function normalizePhone(phone: string) {
   return normalized;
 }
 
-function createClient(sessionString = "") {
-  const config = readConfig();
-  return new TelegramClient(new StringSession(sessionString), config.telegramApiId, config.telegramApiHash, {
+function createClient(credentials: TelegramApiCredentials, sessionString = "") {
+  return new TelegramClient(new StringSession(sessionString), credentials.apiId, credentials.apiHash, {
     connectionRetries: 5
   });
 }
@@ -90,15 +93,14 @@ function profileFromUser(user: Api.User): TelegramProfile {
   };
 }
 
-export async function beginTelegramLogin(phoneInput: string): Promise<LoginStartResult> {
+export async function beginTelegramLogin(credentials: TelegramApiCredentials, phoneInput: string): Promise<LoginStartResult> {
   const phone = normalizePhone(phoneInput);
-  const config = readConfig();
-  const client = createClient();
+  const client = createClient(credentials);
 
   try {
     await client.connect();
     const result = await client.sendCode(
-      { apiId: config.telegramApiId, apiHash: config.telegramApiHash },
+      { apiId: credentials.apiId, apiHash: credentials.apiHash },
       phone
     );
     return {
@@ -111,13 +113,13 @@ export async function beginTelegramLogin(phoneInput: string): Promise<LoginStart
   }
 }
 
-export async function completeTelegramLoginWithCode(input: {
+export async function completeTelegramLoginWithCode(credentials: TelegramApiCredentials, input: {
   sessionString: string;
   phone: string;
   phoneCodeHash: string;
   code: string;
 }): Promise<LoginCodeResult> {
-  const client = createClient(input.sessionString);
+  const client = createClient(credentials, input.sessionString);
 
   try {
     await client.connect();
@@ -139,14 +141,13 @@ export async function completeTelegramLoginWithCode(input: {
   }
 }
 
-export async function completeTelegramLoginWithPassword(sessionString: string, password: string) {
-  const config = readConfig();
-  const client = createClient(sessionString);
+export async function completeTelegramLoginWithPassword(credentials: TelegramApiCredentials, sessionString: string, password: string) {
+  const client = createClient(credentials, sessionString);
 
   try {
     await client.connect();
     await client.signInWithPassword(
-      { apiId: config.telegramApiId, apiHash: config.telegramApiHash },
+      { apiId: credentials.apiId, apiHash: credentials.apiHash },
       {
         password: async () => password,
         onError: async (error) => {
@@ -309,14 +310,14 @@ async function resolveMessagePeer(client: TelegramClient, input: SendMessageInpu
   return importPhoneContact(client, input);
 }
 
-export async function sendTelegramMessage(sessionString: string, input: SendMessageInput): Promise<SentMessage> {
+export async function sendTelegramMessage(credentials: TelegramApiCredentials, sessionString: string, input: SendMessageInput): Promise<SentMessage> {
   const recipient = input.recipient.trim();
   const message = input.message.trim();
   const mediaFile = mediaFileFromUrl(input.mediaUrl || "", input.mediaType || "");
   if (!recipient) throw new Error("Recipient is required.");
   if (!message && !mediaFile) throw new Error("Message or media is required.");
 
-  const client = createClient(sessionString);
+  const client = createClient(credentials, sessionString);
   try {
     await client.connect();
     await client.getMe();
@@ -344,8 +345,8 @@ export async function sendTelegramMessage(sessionString: string, input: SendMess
   }
 }
 
-export async function revokeTelegramSession(sessionString: string) {
-  const client = createClient(sessionString);
+export async function revokeTelegramSession(credentials: TelegramApiCredentials, sessionString: string) {
+  const client = createClient(credentials, sessionString);
   try {
     await client.connect();
     await client.invoke(new Api.auth.LogOut());
@@ -383,10 +384,11 @@ function telegramMessageText(message: Api.Message) {
 }
 
 export async function listenForAccount(
+  credentials: TelegramApiCredentials,
   sessionString: string,
   onIncomingMessage: (input: IncomingTelegramMessage) => Promise<void>
 ) {
-  const client = createClient(sessionString);
+  const client = createClient(credentials, sessionString);
   await client.connect();
   await client.getMe();
   client.addEventHandler(async (event: unknown) => {
@@ -431,12 +433,12 @@ async function resolveUserMessagePeer(client: TelegramClient, recipient: string)
   }
 }
 
-export async function fetchRecentTelegramMessages(sessionString: string, limit = 100, recipients: string[] = []): Promise<SyncedTelegramMessage[]> {
+export async function fetchRecentTelegramMessages(credentials: TelegramApiCredentials, sessionString: string, limit = 100, recipients: string[] = []): Promise<SyncedTelegramMessage[]> {
   const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 100);
   const targets = [...new Set(recipients.map((recipient) => recipient.trim()).filter(Boolean))];
   if (!targets.length) return [];
   const perTargetLimit = Math.min(50, Math.max(10, Math.ceil(safeLimit / Math.max(targets.length, 1))));
-  const client = createClient(sessionString);
+  const client = createClient(credentials, sessionString);
 
   try {
     await client.connect();

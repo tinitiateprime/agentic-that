@@ -9,7 +9,7 @@ async function main() {
   const accounts = await store.getAllAccountsWithSessions();
   const clients = await Promise.all(
     accounts.map(async (account) => {
-      const client = await listenForAccount(account.sessionString, async (message) => {
+      const client = await listenForAccount({ apiId: account.telegramApiId, apiHash: account.telegramApiHash }, account.sessionString, async (message) => {
         await store.recordMessage({
           accountId: account.id,
           direction: "inbound",
@@ -43,4 +43,3 @@ main().catch((error) => {
   console.error("Command failed without logging sensitive input.");
   process.exitCode = 1;
 });
-

@@ -98,7 +98,7 @@ const el = {
   signInView: $("sign-in-view"), workspace: $("workspace"), identity: $("identity"), userName: $("user-name"), signOut: $("sign-out"),
   passwordSignInForm: $("password-sign-in-form"), tokenSignInForm: $("token-sign-in-form"), username: $("username"), loginPassword: $("login-password"), accessToken: $("access-token"), signInStatus: $("sign-in-status"),
   viewKicker: $("view-kicker"), viewTitle: $("view-title"), profileSelect: $("global-profile-select"), refreshAccounts: $("refresh-accounts"),
-  phoneForm: $("phone-form"), phone: $("phone"), phoneCountryCode: $("phone-country-code"), codeForm: $("code-form"), code: $("code"), passwordForm: $("password-form"), telegramPassword: $("telegram-password"), connectStep: $("connect-step"), connectCopy: $("connect-copy"), connectStatus: $("connect-status"),
+  phoneForm: $("phone-form"), telegramApiId: $("telegram-api-id"), telegramApiHash: $("telegram-api-hash"), phone: $("phone"), phoneCountryCode: $("phone-country-code"), codeForm: $("code-form"), code: $("code"), passwordForm: $("password-form"), telegramPassword: $("telegram-password"), connectStep: $("connect-step"), connectCopy: $("connect-copy"), connectStatus: $("connect-status"),
   accountList: $("account-list"), numberSearch: $("number-search"), numberStatusFilter: $("number-status-filter"), selectedProfileCard: $("selected-profile-card"),
   metricAccounts: $("metric-accounts"), metricContacts: $("metric-contacts"), metricGroups: $("metric-groups"), metricPosts: $("metric-posts"),
   quickSendForm: $("quick-send-form"), quickRecipient: $("quick-recipient"), quickMessage: $("quick-message"), quickSendButton: $("quick-send-button"), messageStatus: $("message-status"),
@@ -838,7 +838,7 @@ function setLoginStage(stage) {
   el.connectCopy.textContent = isPhone ? "Use the full phone number with country code. Telegram will deliver a verification code." : isCode ? "Enter the code Telegram sent. It is used once and is not saved by this page." : "This Telegram account uses two-factor authentication. Enter its password to finish connecting.";
   if (isCode) el.code.focus(); if (isPassword) el.telegramPassword.focus();
 }
-async function completeConnection(data) { resetLogin(); el.phone.value = ""; if (el.phoneCountryCode) el.phoneCountryCode.value = "+91"; await loadAccounts(); selectAccount(data.account.id); status(el.connectStatus, `${data.account.displayName} is connected and ready to use.`, "success"); }
+async function completeConnection(data) { resetLogin(); el.phone.value = ""; if (el.telegramApiHash) el.telegramApiHash.value = ""; if (el.phoneCountryCode) el.phoneCountryCode.value = "+91"; await loadAccounts(); selectAccount(data.account.id); status(el.connectStatus, `${data.account.displayName} is connected and ready to use.`, "success"); }
 
 el.passwordSignInForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -864,10 +864,13 @@ el.profileSelect.addEventListener("change", () => selectAccount(el.profileSelect
 
 el.phoneForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const telegramApiId = el.telegramApiId.value.trim();
+  const telegramApiHash = el.telegramApiHash.value.trim();
   const phone = loginPhoneFromForm();
+  if (!telegramApiId || !telegramApiHash) return status(el.connectStatus, "Enter Telegram API ID and API hash.", "error");
   if (!phone) return status(el.connectStatus, "Enter a phone number.", "error");
   busy(el.phoneForm, true); status(el.connectStatus, "Asking Telegram to send a verification code...");
-  try { const data = await api("/v1/telegram/login/start", { method: "POST", body: { phone } }); state.login.challengeId = data.challengeId; setLoginStage("code"); status(el.connectStatus, `A code was sent through ${data.codeDelivery === "sms" ? "SMS" : "the Telegram app"}.`, "success"); }
+  try { const data = await api("/v1/telegram/login/start", { method: "POST", body: { telegramApiId, telegramApiHash, phone } }); state.login.challengeId = data.challengeId; setLoginStage("code"); status(el.connectStatus, `A code was sent through ${data.codeDelivery === "sms" ? "SMS" : "the Telegram app"}.`, "success"); }
   catch (error) { onError(error, el.connectStatus); }
   finally { busy(el.phoneForm, false); }
 });

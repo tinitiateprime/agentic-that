@@ -16,7 +16,7 @@ Developer runs npm run server
 -> Future sends use the selected saved Telegram account/session
 ```
 
-The Telegram API ID and API Hash belong to the server application. They stay in `.env`. Each connected phone number creates its own encrypted Telegram session in `data/store.json`, so one phone number is never reused as another sender.
+Each user enters their own Telegram API ID and API Hash when connecting a number. Those credentials and the Telegram session are encrypted in `data/store.json`, so one phone number is never reused as another sender.
 
 No PostgreSQL, Supabase, pgAdmin, or separate database server is required. Backend data is stored in the local encrypted JSON datastore at `data/store.json`. The application UI opens in the browser, while VS Code is only used for editing/running the project.
 
@@ -69,10 +69,10 @@ contact-telegram/
 - Node.js 20 or newer.
 - npm.
 
-- A Telegram API ID and API Hash from `https://my.telegram.org`.
+- Each user needs their own Telegram API ID and API Hash from `https://my.telegram.org` when connecting a number.
 - A real Telegram phone number for each account you want to connect.
 - For production use: HTTPS, a real auth system, secret manager, backups, monitoring, and network restrictions.
-- Go to `https://my.telegram.org` site there give your mobile number then you will get a code from telegram paste that code in website placeholder, after that click on API development then give a username, short title, give dummy url(htpp://example.com), fill the description(anything in it) after doing these steps you will get API and API hash.
+- Go to `https://my.telegram.org`, enter your mobile number, paste the Telegram code, open API development, create an app, and copy the API ID and API hash. Enter those values on the dashboard Add Number screen.
 - For SESSION_ENCRYPTION_KEY and USER_PROVISIONING_KEY, run this `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` 2 times a random key will be generated paste them in their respective places
 
 ## First-Time Local Setup
@@ -115,8 +115,6 @@ Run the command twice. Put the first value in `SESSION_ENCRYPTION_KEY` and the s
 Fill `.env` like this:
 
 ```env
-TELEGRAM_API_ID=123456
-TELEGRAM_API_HASH=your_telegram_api_hash
 DATA_DIR=data
 SESSION_ENCRYPTION_KEY=generated_key_1
 USER_PROVISIONING_KEY=generated_key_2
@@ -124,7 +122,7 @@ SERVICE_HOST=127.0.0.1
 SERVICE_PORT=8787
 ```
 
-Never commit or share `.env`, Telegram API Hashes, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys.
+Never commit or share `.env`, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys. Users should keep their own Telegram API hash private.
 
 ### 4. Start the API and Browser UI
 
@@ -217,7 +215,7 @@ On Windows PowerShell:
 Copy-Item .env.docker.example .env.docker
 ```
 
-2. Fill `.env.docker` with `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `SESSION_ENCRYPTION_KEY`, and `USER_PROVISIONING_KEY`.
+2. Fill `.env.docker` with `SESSION_ENCRYPTION_KEY` and `USER_PROVISIONING_KEY`.
 
 Generate the two private keys with:
 
@@ -441,8 +439,6 @@ Main app variables:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `TELEGRAM_API_ID` | Yes | None | Server app API ID from `my.telegram.org`. |
-| `TELEGRAM_API_HASH` | Yes | None | Server app API Hash from `my.telegram.org`. |
 | `DATA_DIR` | No | `data` | Directory for backend JSON datastore files. |
 | `SESSION_ENCRYPTION_KEY` | Yes | None | Base64url 32-byte key for encrypted sessions/messages. |
 | `USER_PROVISIONING_KEY` | Yes | None | Admin secret for `POST /v1/users`. |
@@ -799,8 +795,5 @@ Change `SERVICE_PORT` in `.env`, then restart `npm run server`.
 - Add backups for `data/store.json` and exported workspace JSON where needed.
 - Add monitoring, structured logs, retries, abuse controls, and alerting.
 - Respect Telegram rate limits, user consent, privacy rules, and data-retention obligations.
-
-
-
 
 
