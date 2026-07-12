@@ -56,6 +56,13 @@ type ProfileInfo = {
   followerCount: number | null;
 };
 
+type DirectProfileInfo = {
+  username: string;
+  profileId: string | null;
+  displayName: string | null;
+  followerCount: number | null;
+};
+
 type PageSnapshot = {
   title: string;
   description: string;
@@ -539,7 +546,7 @@ async function collectDirectHashtagApiPosts(session: InstagramSession, tag: stri
   return posts;
 }
 
-function profileInfoFromApiUser(user: Record<string, unknown> | undefined, username: string) {
+function profileInfoFromApiUser(user: Record<string, unknown> | undefined, username: string): DirectProfileInfo | null {
   if (!user) return null;
   const followedBy = user.edge_followed_by && typeof user.edge_followed_by === "object"
     ? user.edge_followed_by as Record<string, unknown>
@@ -547,6 +554,8 @@ function profileInfoFromApiUser(user: Record<string, unknown> | undefined, usern
   const directFollowerCount = Number(user.follower_count);
   const edgeFollowerCount = Number(followedBy.count);
   return {
+    username: cleanText(user.username) || username,
+    profileId: cleanText(user.pk_id || user.pk || user.id) || null,
     followerCount: Number.isFinite(directFollowerCount)
       ? directFollowerCount
       : Number.isFinite(edgeFollowerCount)
@@ -565,7 +574,7 @@ async function fetchDirectProfileInfo(session: InstagramSession, username: strin
         { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
       );
       const info = profileInfoFromApiUser(payload.user, username);
-      if (info?.followerCount !== null) return info;
+      if (info && info.followerCount !== null) return info;
     } catch {
       // Fall through to username lookup.
     }
@@ -576,7 +585,12 @@ async function fetchDirectProfileInfo(session: InstagramSession, username: strin
     `${instagramHost}/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
     { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
   );
-  return profileInfoFromApiUser(payload.data?.user, username) || { followerCount: null, displayName: username };
+  return profileInfoFromApiUser(payload.data?.user, username) || {
+    username,
+    profileId: null,
+    followerCount: null,
+    displayName: username
+  };
 }
 
 function stripDirectFields(post: DirectInstagramPost): InstagramPost {
@@ -622,6 +636,77 @@ async function scrapeHashtagDirect(
   const sorted = posts.sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
   const selected = selectAutoExpandedResults(sorted, maxResults, preferredCutoff, oldestAllowed);
   return { query: normalized.label, results: await enrichDirectProfiles(session, selected) };
+}
+
+async function collectDirectProfileApiPosts(session: InstagramSession, profile: DirectProfileInfo, limit: number, cutoff: Date) {
+  if (!profile.profileId) return [];
+
+  const posts: DirectInstagramPost[] = [];
+  const seen = new Set<string>();
+  let maxId = "";
+
+  for (let pageIndex = 0; pageIndex < 4 && posts.length < limit; pageIndex += 1) {
+    const params = new URLSearchParams({ count: String(Math.min(24, Math.max(6, limit))) });
+    if (maxId) params.set("max_id", maxId);
+
+    const payload = await instagramApiJson<{
+      items?: Record<string, unknown>[];
+      feed_items?: { media_or_ad?: Record<string, unknown> }[];
+      more_available?: boolean;
+      next_max_id?: string;
+    }>(
+      session,
+      `${instagramHost}/api/v1/feed/user/${encodeURIComponent(profile.profileId)}/?${params}`,
+      { headers: { "referer": `${instagramHost}/${encodeURIComponent(profile.username)}/` } }
+    );
+
+    const medias = [
+      ...(Array.isArray(payload.items) ? payload.items : []),
+      ...(Array.isArray(payload.feed_items)
+        ? payload.feed_items.map((item) => item.media_or_ad).filter(Boolean) as Record<string, unknown>[]
+        : [])
+    ];
+    if (!medias.length) break;
+
+    for (const media of medias) {
+      const post = apiMediaToPost(media);
+      if (!post || seen.has(post.post_url)) continue;
+      if (post.timestamp && timestampValue(post.timestamp) < cutoff.getTime()) continue;
+      seen.add(post.post_url);
+      posts.push({
+        ...post,
+        username: post.username || profile.username,
+        display_name: profile.displayName || post.display_name || profile.username,
+        follower_count: profile.followerCount ?? post.follower_count,
+        profile_url: `${instagramHost}/${profile.username}/`,
+        _profileId: profile.profileId
+      });
+      if (posts.length >= limit) break;
+    }
+
+    maxId = cleanText(payload.next_max_id);
+    if (!payload.more_available || !maxId) break;
+  }
+
+  return posts;
+}
+
+async function scrapeProfileDirect(
+  session: InstagramSession,
+  normalized: NormalizedQuery,
+  maxResults: number,
+  candidateCount: number,
+  preferredCutoff: Date,
+  oldestAllowed: Date
+): Promise<ScrapeResult> {
+  const username = profileUsernameFromNormalized(normalized);
+  if (!username) return { query: normalized.label, results: [] };
+  const profile = await fetchDirectProfileInfo(session, username);
+  const directCandidateCount = Math.min(candidateCount, Math.max(maxResults * 3, 12), 36);
+  const posts = await collectDirectProfileApiPosts(session, profile, directCandidateCount, oldestAllowed);
+  const sorted = posts.sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
+  const selected = selectAutoExpandedResults(sorted, maxResults, preferredCutoff, oldestAllowed);
+  return { query: normalized.label, results: selected.map(stripDirectFields) };
 }
 
 async function collectHashtagApiPosts(page: Page, tag: string, limit: number, cutoff: Date) {
@@ -760,6 +845,14 @@ function normalizeProfileUrl(value?: string | null) {
 
   if (/^[A-Za-z0-9._]{1,30}$/.test(text) && !reservedPaths.has(text.toLowerCase())) return `${instagramHost}/${text}/`;
   return null;
+}
+
+function profileUsernameFromNormalized(normalized: NormalizedQuery) {
+  try {
+    return new URL(normalized.startUrl).pathname.split("/").filter(Boolean)[0] || "";
+  } catch {
+    return normalized.label.replace(/^@+/, "").trim();
+  }
 }
 
 function normalizePostUrl(href?: string | null) {
@@ -1561,12 +1654,22 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
   const oldestAllowed = oldestAllowedCutoff(input, preferredCutoff);
   const sessions = orderedSessions(await loadStorageSessions());
 
-  if (normalized.mode === "hashtag") {
+  if (normalized.mode === "hashtag" || normalized.mode === "profile") {
     let lastError: unknown = null;
     for (const session of sessions) {
       if (!instagramCookieHeader(session)) continue;
       try {
-        return await scrapeHashtagDirect(
+        if (normalized.mode === "hashtag") {
+          return await scrapeHashtagDirect(
+            session,
+            normalized,
+            maxResults,
+            candidateCount,
+            preferredCutoff,
+            oldestAllowed
+          );
+        }
+        return await scrapeProfileDirect(
           session,
           normalized,
           maxResults,
