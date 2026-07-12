@@ -92,6 +92,7 @@ const shortcodeAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 const sessionExpiryBufferDays = Math.max(1, Number(process.env.INSTAGRAM_SESSION_EXPIRY_BUFFER_DAYS) || 7);
 let sessionCursor = 0;
+const sessionCooldowns = new Map<string, number>();
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const isServerlessRuntime = () => process.env.NETLIFY === "true" || process.env.SERVERLESS === "true";
@@ -363,14 +364,24 @@ async function loadStorageSessions() {
 }
 
 function orderedSessions(sessions: InstagramSession[]) {
-  const active = sessions.filter((session) => !session.nearExpiry);
-  const nearExpiry = sessions.filter((session) => session.nearExpiry);
-  const pool = [...active, ...nearExpiry];
+  const now = Date.now();
+  const ready = sessions.filter((session) => (sessionCooldowns.get(session.name) || 0) <= now);
+  const cooling = sessions.filter((session) => (sessionCooldowns.get(session.name) || 0) > now);
+  const active = ready.filter((session) => !session.nearExpiry);
+  const nearExpiry = ready.filter((session) => session.nearExpiry);
+  const pool = [...active, ...nearExpiry, ...cooling];
   if (pool.length === 0) return [{ name: "public", expiresAt: 0, nearExpiry: false } satisfies InstagramSession];
 
   const start = sessionCursor % pool.length;
   sessionCursor = (sessionCursor + 1) % pool.length;
   return [...pool.slice(start), ...pool.slice(0, start)];
+}
+
+function markSessionProblem(session: InstagramSession, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/Instagram API returned 429|Instagram API returned 401|Instagram API returned 403|fetch failed|timeout|aborted/i.test(message)) {
+    sessionCooldowns.set(session.name, Date.now() + 10 * 60 * 1000);
+  }
 }
 
 export async function getInstagramSessionPoolInfo() {
@@ -1773,6 +1784,7 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
           oldestAllowed
         );
       } catch (error) {
+        markSessionProblem(session, error);
         lastError = error;
       }
     }

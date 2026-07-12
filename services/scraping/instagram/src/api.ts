@@ -24,42 +24,10 @@ async function readBody(request: Request) {
   }
 }
 
-function queryKey(value: string) {
-  return value.trim().toLowerCase().replace(/^#+/, "#").replace(/^@+/, "@");
-}
-
-function searchableTerms(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/^https?:\/\/(www\.)?instagram\.com\//, "")
-    .split(/[^a-z0-9_]+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 2);
-}
-
-function runSearchScore(requestedQuery: string, run: Awaited<ReturnType<InstagramRunStore["listRuns"]>>[number]) {
-  const requestedKey = queryKey(requestedQuery);
-  if (queryKey(run.requestedQuery) === requestedKey) return 1000;
-
-  const terms = searchableTerms(requestedQuery);
-  if (!terms.length) return 0;
-  const haystack = [
-    run.requestedQuery,
-    run.query,
-    ...run.results.flatMap((result) => [
-      result.username || "",
-      result.display_name || "",
-      result.caption || ""
-    ])
-  ].join(" ").toLowerCase();
-
-  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
-}
-
 function friendlyScrapeMessage(error: unknown) {
   let message = error instanceof Error ? error.message : "Instagram scrape failed.";
   if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
-    message = "Instagram scrape failed before the browser fallback could run. Try again or refresh the Instagram sessions.";
+    message = "Instagram browser scraping is disabled on Netlify. Refresh the Instagram sessions and try again.";
   } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
     message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
   } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
@@ -112,55 +80,14 @@ export async function handleInstagramRequest(request: Request) {
           : true;
       const maxAutoExpandDays = Math.max(1, Number(body.max_auto_expand_days || body.maxAutoExpandDays) || 365);
 
-      let scrape;
-      let warning: string | undefined;
-      try {
-        scrape = await runInstagramScrape({
-          query: requestedQuery,
-          maxResults,
-          recentDays,
-          onlyPostsNewerThan,
-          autoExpandDays,
-          maxAutoExpandDays
-        });
-      } catch (error) {
-        warning = friendlyScrapeMessage(error);
-        const savedRuns = (await store.listRuns()).filter((run) => (
-          Array.isArray(run.results) &&
-          run.results.length > 0
-        ));
-        const exactRuns = savedRuns.filter((run) => queryKey(run.requestedQuery) === queryKey(requestedQuery));
-        const fallbackRuns = exactRuns.length
-          ? exactRuns
-          : savedRuns
-            .map((run) => ({ run, score: runSearchScore(requestedQuery, run) }))
-            .sort((a, b) => b.score - a.score || b.run.createdAt.localeCompare(a.run.createdAt))
-            .map((item) => item.run);
-        const fallback = fallbackRuns[0];
-        if (!fallback) throw error;
-
-        const seen = new Set<string>();
-        const mergedResults = [];
-        for (const run of fallbackRuns) {
-          for (const result of run.results) {
-            const key = result.post_url || JSON.stringify(result);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            mergedResults.push(result);
-            if (mergedResults.length >= maxResults) break;
-          }
-          if (mergedResults.length >= maxResults) break;
-        }
-
-        return json({
-          run: { ...fallback, results: mergedResults },
-          results: mergedResults,
-          message: exactRuns.length
-            ? "Showing latest saved results because Instagram blocked the live scrape."
-            : "Showing recent saved results because Instagram blocked this new live scrape.",
-          warning
-        });
-      }
+      const scrape = await runInstagramScrape({
+        query: requestedQuery,
+        maxResults,
+        recentDays,
+        onlyPostsNewerThan,
+        autoExpandDays,
+        maxAutoExpandDays
+      });
       const run = await store.saveRun({
         query: scrape.query,
         requestedQuery,
