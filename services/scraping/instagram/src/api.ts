@@ -24,6 +24,22 @@ async function readBody(request: Request) {
   }
 }
 
+function queryKey(value: string) {
+  return value.trim().toLowerCase().replace(/^#+/, "#").replace(/^@+/, "@");
+}
+
+function friendlyScrapeMessage(error: unknown) {
+  let message = error instanceof Error ? error.message : "Instagram scrape failed.";
+  if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
+    message = "Instagram scrape failed before the browser fallback could run. Try again or refresh the Instagram sessions.";
+  } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
+    message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
+  } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
+    message = "Instagram request failed from Netlify. Try again in a minute; if it repeats, refresh the Instagram sessions.";
+  }
+  return message.length > 280 ? `${message.slice(0, 277)}...` : message;
+}
+
 export async function handleInstagramRequest(request: Request) {
   if (request.method === "OPTIONS") return new Response(null, { headers: jsonHeaders, status: 204 });
 
@@ -68,14 +84,33 @@ export async function handleInstagramRequest(request: Request) {
           : true;
       const maxAutoExpandDays = Math.max(1, Number(body.max_auto_expand_days || body.maxAutoExpandDays) || 365);
 
-      const scrape = await runInstagramScrape({
-        query: requestedQuery,
-        maxResults,
-        recentDays,
-        onlyPostsNewerThan,
-        autoExpandDays,
-        maxAutoExpandDays
-      });
+      let scrape;
+      let warning: string | undefined;
+      try {
+        scrape = await runInstagramScrape({
+          query: requestedQuery,
+          maxResults,
+          recentDays,
+          onlyPostsNewerThan,
+          autoExpandDays,
+          maxAutoExpandDays
+        });
+      } catch (error) {
+        warning = friendlyScrapeMessage(error);
+        const requestedKey = queryKey(requestedQuery);
+        const fallback = (await store.listRuns()).find((run) => (
+          queryKey(run.requestedQuery) === requestedKey &&
+          Array.isArray(run.results) &&
+          run.results.length > 0
+        ));
+        if (!fallback) throw error;
+        return json({
+          run: fallback,
+          results: fallback.results.slice(0, maxResults),
+          message: "Showing latest saved results because Instagram blocked the live scrape.",
+          warning
+        });
+      }
       const run = await store.saveRun({
         query: scrape.query,
         requestedQuery,
@@ -89,15 +124,6 @@ export async function handleInstagramRequest(request: Request) {
 
     return json({ message: "Not found" }, 404);
   } catch (error) {
-    let message = error instanceof Error ? error.message : "Instagram scrape failed.";
-    if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
-      message = "Instagram scrape failed before the browser fallback could run. Try again or refresh the Instagram sessions.";
-    } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
-      message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
-    } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
-      message = "Instagram request failed from Netlify. Try again in a minute; if it repeats, refresh the Instagram sessions.";
-    }
-    if (message.length > 280) message = `${message.slice(0, 277)}...`;
-    return json({ message }, 500);
+    return json({ message: friendlyScrapeMessage(error) }, 500);
   }
 }
