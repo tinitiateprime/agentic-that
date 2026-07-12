@@ -61,8 +61,7 @@ button {
 
 .ghost-button,
 .solid-button,
-.search-row button,
-.telegram-nav-button {
+.search-row button {
   height: 40px;
   border-radius: 8px;
   font-size: 14px;
@@ -83,19 +82,10 @@ button {
   background: #f4f4f4;
 }
 
-.telegram-nav-button {
-  width: 40px;
-  justify-content: center;
-  border: 1px solid #232323;
-  color: #d8d8d8;
-  background: #050505;
-}
-
 .ghost-button:hover,
 .solid-button:hover,
 .search-row button:hover,
-.service-card:hover,
-.telegram-nav-button:hover,
+.wide-service-card:hover,
 .work-panel:hover {
   border-color: #4a4a4a;
 }
@@ -311,155 +301,112 @@ h1 {
   font-weight: 800;
 }
 
-.service-grid {
+.wide-service-stack {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
-.service-card {
-  min-height: 142px;
-  padding: 17px;
+.wide-service-card {
+  width: 100%;
+  min-height: 164px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 22px;
+  padding: 22px;
   border: 1px solid #202020;
   border-radius: 8px;
+  color: #ffffff;
   background: #050505;
+  text-align: left;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
-.service-card:hover {
+.wide-service-card:hover {
   background: #090909;
   transform: translateY(-2px);
 }
 
-.scrape-intelligence-card {
-  position: relative;
-  min-height: 224px;
-  overflow: hidden;
-  border-color: #202020;
+.telegram-service-card {
+  border-color: rgba(34, 158, 217, 0.42);
+}
+
+.scraper-service-card {
+  border-color: rgba(245, 96, 64, 0.38);
+}
+
+.service-logo-shell {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #242424;
   border-radius: 8px;
-  background: #050505;
-  color: #ffffff;
-  padding: 20px 18px;
-}
-
-.scrape-intelligence-card:hover {
-  border-color: #202020;
-  background: #050505;
-  transform: none;
-}
-
-.scrape-card-head {
-  display: flex;
-  align-items: center;
-  position: relative;
-  z-index: 2;
-}
-
-.scrape-card-head h3 {
-  margin: 0;
-  color: #ffffff;
-  font-size: 19px;
-  font-weight: 850;
-  line-height: 1.1;
-}
-
-.scrape-card-body {
-  position: relative;
-  min-height: 164px;
-  margin-top: 13px;
-}
-
-.scrape-card-copy {
-  position: relative;
-  z-index: 2;
-  max-width: 236px;
-  min-width: 0;
-}
-
-.scrape-card-copy p {
-  margin: 0;
-  color: #cfcfcf;
-  font-size: 12.5px;
-  font-weight: 520;
-  line-height: 1.42;
-}
-
-.brand-icon-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 17px;
-}
-
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  display: block;
-  object-fit: contain;
-  border-radius: 7px;
   background: #000000;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 2px 8px rgba(0, 0, 0, 0.38);
 }
 
-.scrape-device-art {
-  position: absolute;
-  right: -3px;
-  top: -18px;
-  z-index: 1;
-  width: 160px;
-  height: 160px;
+.service-logo-shell img {
+  width: 48px;
+  height: 48px;
   display: block;
   object-fit: contain;
-  object-position: center;
-  background: url("./public/scrape-globe-device-poster.png") center / contain no-repeat;
-  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.52));
-  pointer-events: none;
 }
 
-.scrape-device-art::-webkit-media-controls,
-.scrape-device-art::-webkit-media-controls-enclosure,
-.scrape-device-art::-webkit-media-controls-panel {
-  display: none !important;
+.wide-service-copy {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
 }
 
-.service-top {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.service-card h3 {
-  margin: 0;
-  color: #ffffff;
-  font-size: 17px;
-  font-weight: 800;
-  line-height: 1.15;
-}
-
-.scrape-intelligence-card .scrape-card-head h3 {
-  color: #ffffff;
-  font-size: 19px;
-  font-weight: 850;
-}
-
-.service-top span {
-  flex: 0 0 auto;
-  color: #a7a7a7;
+.service-kicker {
+  color: #35b7ff;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-.repo {
-  margin: 8px 0 0;
+.scraper-service-card .service-kicker {
+  color: #f77737;
 }
 
-.service-text {
-  margin: 15px 0 0;
-  color: #c1c1c1;
+.wide-service-title {
+  color: #ffffff;
+  font-size: clamp(22px, 2.2vw, 32px);
+  font-weight: 850;
+  line-height: 1.05;
+}
+
+.wide-service-description {
+  max-width: 780px;
+  color: #c5c5c5;
+  font-size: 15px;
+  line-height: 1.48;
+}
+
+.wide-service-action,
+.wide-service-status {
+  min-width: 122px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #101010;
   font-size: 14px;
-  font-weight: 400;
-  line-height: 1.42;
+  font-weight: 800;
+}
+
+.wide-service-action {
+  border-color: rgba(34, 158, 217, 0.52);
+  background: #082033;
+}
+
+.wide-service-status {
+  color: #d8d8d8;
 }
 
 @media (max-width: 1040px) {
@@ -471,13 +418,8 @@ h1 {
     display: none;
   }
 
-  .hero-grid,
-  .service-grid {
+  .hero-grid {
     grid-template-columns: 1fr;
-  }
-
-  .scrape-card-copy {
-    max-width: min(285px, calc(100% - 165px));
   }
 }
 
@@ -519,44 +461,26 @@ h1 {
     flex-direction: column;
   }
 
-  .scrape-intelligence-card {
-    min-height: 216px;
-    padding: 15px;
+  .wide-service-card {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    min-height: 0;
+    padding: 18px;
   }
 
-  .scrape-card-head h3 {
-    font-size: 18px;
+  .service-logo-shell {
+    width: 62px;
+    height: 62px;
   }
 
-  .scrape-card-body {
-    min-height: 158px;
-    margin-top: 12px;
+  .service-logo-shell img {
+    width: 42px;
+    height: 42px;
   }
 
-  .scrape-card-copy {
-    max-width: calc(100% - 118px);
-  }
-
-  .scrape-card-copy p {
-    font-size: 12px;
-    line-height: 1.34;
-  }
-
-  .brand-icon-row {
-    gap: 8px;
-    margin-top: 13px;
-  }
-
-  .brand-icon {
-    width: 29px;
-    height: 29px;
-  }
-
-  .scrape-device-art {
-    top: -8px;
-    right: -10px;
-    width: 128px;
-    height: 128px;
+  .wide-service-action,
+  .wide-service-status {
+    width: 100%;
   }
 }
 
