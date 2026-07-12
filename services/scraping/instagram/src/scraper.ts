@@ -41,6 +41,10 @@ type Candidate = Partial<InstagramPost> & {
   _handle?: string | null;
 };
 
+type DirectInstagramPost = InstagramPost & {
+  _profileId?: string | null;
+};
+
 type ScrapeResult = {
   query: string;
   results: InstagramPost[];
@@ -444,13 +448,14 @@ function apiTopComments(media: Record<string, unknown>) {
   }));
 }
 
-function apiMediaToPost(media: Record<string, unknown>): InstagramPost | null {
+function apiMediaToPost(media: Record<string, unknown>): DirectInstagramPost | null {
   const code = cleanText(media.code);
   const takenAt = Number(media.taken_at);
   if (!code || !Number.isFinite(takenAt)) return null;
 
   const user = media.user && typeof media.user === "object" ? media.user as Record<string, unknown> : {};
   const username = cleanText(user.username) || null;
+  const profileId = cleanText(user.pk_id || user.pk || user.id) || null;
   const mediaType = Number(media.media_type);
   const productType = cleanText(media.product_type);
   const pathType = mediaType === 2 || productType === "clips" ? "reel" : "p";
@@ -465,7 +470,8 @@ function apiMediaToPost(media: Record<string, unknown>): InstagramPost | null {
     follower_count: Number.isFinite(Number(user.follower_count)) ? Number(user.follower_count) : null,
     top_comments: apiTopComments(media),
     timestamp: new Date(takenAt * 1000).toISOString(),
-    caption: cleanText((media.caption as Record<string, unknown> | undefined)?.text) || null
+    caption: cleanText((media.caption as Record<string, unknown> | undefined)?.text) || null,
+    _profileId: profileId
   };
 }
 
@@ -488,7 +494,7 @@ function apiMediasFromPayload(payload: unknown) {
 }
 
 async function collectDirectHashtagApiPosts(session: InstagramSession, tag: string, limit: number, cutoff: Date) {
-  const posts: InstagramPost[] = [];
+  const posts: DirectInstagramPost[] = [];
   const seen = new Set<string>();
   let maxId = "";
 
@@ -533,30 +539,57 @@ async function collectDirectHashtagApiPosts(session: InstagramSession, tag: stri
   return posts;
 }
 
-async function fetchDirectProfileInfo(session: InstagramSession, username: string) {
+function profileInfoFromApiUser(user: Record<string, unknown> | undefined, username: string) {
+  if (!user) return null;
+  const followedBy = user.edge_followed_by && typeof user.edge_followed_by === "object"
+    ? user.edge_followed_by as Record<string, unknown>
+    : {};
+  const directFollowerCount = Number(user.follower_count);
+  const edgeFollowerCount = Number(followedBy.count);
+  return {
+    followerCount: Number.isFinite(directFollowerCount)
+      ? directFollowerCount
+      : Number.isFinite(edgeFollowerCount)
+        ? edgeFollowerCount
+        : null,
+    displayName: cleanText(user.full_name) || username
+  };
+}
+
+async function fetchDirectProfileInfo(session: InstagramSession, username: string, profileId?: string | null) {
+  if (profileId) {
+    try {
+      const payload = await instagramApiJson<{ user?: Record<string, unknown> }>(
+        session,
+        `${instagramHost}/api/v1/users/${encodeURIComponent(profileId)}/info/`,
+        { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
+      );
+      const info = profileInfoFromApiUser(payload.user, username);
+      if (info?.followerCount !== null) return info;
+    } catch {
+      // Fall through to username lookup.
+    }
+  }
+
   const payload = await instagramApiJson<{ data?: { user?: Record<string, unknown> } }>(
     session,
     `${instagramHost}/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
     { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
   );
-  const user = payload.data?.user;
-  if (!user) return { followerCount: null, displayName: username };
-
-  const followedBy = user.edge_followed_by && typeof user.edge_followed_by === "object"
-    ? user.edge_followed_by as Record<string, unknown>
-    : {};
-  const followerCount = Number(followedBy.count);
-  return {
-    followerCount: Number.isFinite(followerCount) ? followerCount : null,
-    displayName: cleanText(user.full_name) || username
-  };
+  return profileInfoFromApiUser(payload.data?.user, username) || { followerCount: null, displayName: username };
 }
 
-async function enrichDirectProfiles(session: InstagramSession, posts: InstagramPost[]) {
+function stripDirectFields(post: DirectInstagramPost): InstagramPost {
+  const { _profileId, ...cleanPost } = post;
+  return cleanPost;
+}
+
+async function enrichDirectProfiles(session: InstagramSession, posts: DirectInstagramPost[]) {
   const handles = [...new Set(posts.map((post) => post.username).filter(Boolean) as string[])].slice(0, 12);
+  const profileIds = new Map(posts.map((post) => [post.username, post._profileId || null]));
   const profileEntries = await Promise.all(handles.map(async (handle) => {
     try {
-      return [handle, await fetchDirectProfileInfo(session, handle)] as const;
+      return [handle, await fetchDirectProfileInfo(session, handle, profileIds.get(handle))] as const;
     } catch {
       return [handle, null] as const;
     }
@@ -564,11 +597,11 @@ async function enrichDirectProfiles(session: InstagramSession, posts: InstagramP
   const profiles = new Map(profileEntries);
 
   return posts.map((post) => {
-    if (!post.username) return post;
+    if (!post.username) return stripDirectFields(post);
     const profile = profiles.get(post.username);
-    if (!profile) return post;
+    if (!profile) return stripDirectFields(post);
     return {
-      ...post,
+      ...stripDirectFields(post),
       display_name: profile.displayName || post.display_name,
       follower_count: profile.followerCount ?? post.follower_count,
       profile_url: `${instagramHost}/${post.username}/`
