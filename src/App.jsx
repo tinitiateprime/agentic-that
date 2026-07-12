@@ -8,6 +8,9 @@ import LinkedInLogo from "./public/linkedin-logo.png";
 import ScrapeGlobeDevicePoster from "./public/scrape-globe-device-poster.png";
 import ScrapeGlobeDeviceVideo from "./public/scrape-globe-device.mp4";
 import TelegramLogo from "./public/telegram-logo.svg";
+import WhatsAppLogo from "./public/whatsapp-logo.svg";
+import XLogo from "./public/x-logo.svg";
+import YouTubeLogo from "./public/youtube-logo.svg";
 import { integrations } from "./integrations";
 import "./App.css";
 
@@ -30,6 +33,28 @@ const services = [
     description: "Run monitored browser sessions with queued actions and verification handling.",
     meta: "Execution agent",
   },
+];
+
+const automationPlatforms = [
+  { name: "Telegram", logo: TelegramLogo, action: "Console", enabled: true },
+  { name: "WhatsApp", logo: WhatsAppLogo, action: "Coming soon" },
+];
+
+const scraperPlatforms = [
+  { name: "Instagram", logo: InstagramLogo },
+  { name: "Facebook", logo: FacebookLogo },
+  { name: "X", logo: XLogo },
+  { name: "Google", logo: GoogleLogo },
+  { name: "Google Maps", logo: GoogleMapsLogo },
+  { name: "LinkedIn", logo: LinkedInLogo },
+];
+
+const socialPublishingPlatforms = [
+  { name: "Instagram", logo: InstagramLogo },
+  { name: "Facebook", logo: FacebookLogo },
+  { name: "X", logo: XLogo },
+  { name: "YouTube", logo: YouTubeLogo },
+  { name: "LinkedIn", logo: LinkedInLogo },
 ];
 
 const keepVideoSilent = (event) => {
@@ -75,6 +100,53 @@ function ScrapeIntelligenceCard({ service }) {
         >
           <source src={ScrapeGlobeDeviceVideo} type="video/mp4" />
         </video>
+      </div>
+    </article>
+  );
+}
+
+function PlatformTile({ platform, onOpen }) {
+  const isEnabled = Boolean(platform.enabled);
+  const content = (
+    <>
+      <span className="platform-icon-shell">
+        <img src={platform.logo} alt={platform.name} />
+      </span>
+      <span className="platform-name">{platform.name}</span>
+      <span className={isEnabled ? "platform-action" : "platform-status"}>
+        {platform.action || "Coming soon"}
+      </span>
+    </>
+  );
+
+  return isEnabled ? (
+    <button className="platform-tile enabled" type="button" onClick={onOpen}>
+      {content}
+    </button>
+  ) : (
+    <article className="platform-tile">
+      {content}
+    </article>
+  );
+}
+
+function IntegrationServiceSection({ kicker, title, description, platforms, onOpen }) {
+  return (
+    <article className="integration-service-section">
+      <div className="integration-service-copy">
+        <span className="integration-kicker">{kicker}</span>
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+
+      <div className="platform-grid">
+        {platforms.map((platform) => (
+          <PlatformTile
+            key={platform.name}
+            platform={platform}
+            onOpen={onOpen}
+          />
+        ))}
       </div>
     </article>
   );
@@ -219,38 +291,35 @@ function App() {
             ))}
           </div>
 
-          <div className="wide-service-stack">
-            <button
-              className="wide-service-card telegram-service-card"
-              type="button"
-              onClick={openTelegramDashboard}
-            >
-              <span className="service-logo-shell">
-                <img src={TelegramLogo} alt="Telegram" />
-              </span>
-              <span className="wide-service-copy">
-                <span className="service-kicker">Telegram Automation</span>
-                <span className="wide-service-title">Telegram Workflow Console</span>
-                <span className="wide-service-description">
-                  Connect Telegram accounts, manage profiles, contacts, posts, and send messages from one workspace.
-                </span>
-              </span>
-              <span className="wide-service-action">Open console</span>
-            </button>
+          <div className="integration-service-stack">
+            <IntegrationServiceSection
+              kicker="Messaging Automation"
+              title="Chat Workflow Automation"
+              description="Automate account workflows, contacts, campaigns, and outbound messages across chat channels. Telegram is live now, and WhatsApp is reserved for the next integration."
+              platforms={automationPlatforms}
+              onOpen={openTelegramDashboard}
+            />
 
-            <article className="wide-service-card scraper-service-card">
-              <span className="service-logo-shell">
-                <img src={InstagramLogo} alt="Instagram" />
-              </span>
-              <span className="wide-service-copy">
-                <span className="service-kicker">Scraping Service</span>
-                <span className="wide-service-title">Instagram Scraper</span>
-                <span className="wide-service-description">
-                  Instagram scraping workflow will be connected here in the next step.
-                </span>
-              </span>
-              <span className="wide-service-status">Coming next</span>
-            </article>
+            <IntegrationServiceSection
+              kicker="Scraping Service"
+              title="Social and Search Scrapers"
+              description="Placeholders for scraping workflows across social profiles, public pages, search results, maps listings, and professional profiles."
+              platforms={scraperPlatforms}
+            />
+
+            <IntegrationServiceSection
+              kicker="Publishing Service"
+              title="Publish Queue Runner"
+              description="Queue, schedule, and track publishing workflows across major social channels once each platform connector is added."
+              platforms={socialPublishingPlatforms}
+            />
+
+            <IntegrationServiceSection
+              kicker="Engagement Service"
+              title="Post Engagement Agent"
+              description="Prepare monitored engagement workflows for posts, replies, interactions, and verification-driven actions across social channels."
+              platforms={socialPublishingPlatforms}
+            />
           </div>
         </div>
       </section>
