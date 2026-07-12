@@ -94,6 +94,7 @@ const sessionExpiryBufferDays = Math.max(1, Number(process.env.INSTAGRAM_SESSION
 let sessionCursor = 0;
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const isServerlessRuntime = () => process.env.NETLIFY === "true" || process.env.SERVERLESS === "true";
 
 function cleanText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -275,7 +276,7 @@ async function instagramApiJson<T>(session: InstagramSession, url: string, init:
   const response = await fetch(url, {
     ...init,
     headers,
-    signal: init.signal || AbortSignal.timeout(12_000)
+    signal: init.signal || AbortSignal.timeout(8_000)
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`Instagram API returned ${response.status}.`);
@@ -565,13 +566,26 @@ function profileInfoFromApiUser(user: Record<string, unknown> | undefined, usern
   };
 }
 
+async function fetchDirectProfileSearchInfo(session: InstagramSession, username: string) {
+  const payload = await instagramApiJson<{ users?: { user?: Record<string, unknown> }[] }>(
+    session,
+    `${instagramHost}/api/v1/web/search/topsearch/?query=${encodeURIComponent(username)}`,
+    { headers: { "referer": `${instagramHost}/` }, signal: AbortSignal.timeout(6_000) }
+  );
+  const users = Array.isArray(payload.users) ? payload.users : [];
+  const exact = users
+    .map((item) => item.user)
+    .find((user) => cleanText(user?.username).toLowerCase() === username.toLowerCase());
+  return profileInfoFromApiUser(exact, username);
+}
+
 async function fetchDirectProfileInfo(session: InstagramSession, username: string, profileId?: string | null) {
   if (profileId) {
     try {
       const payload = await instagramApiJson<{ user?: Record<string, unknown> }>(
         session,
         `${instagramHost}/api/v1/users/${encodeURIComponent(profileId)}/info/`,
-        { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
+        { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` }, signal: AbortSignal.timeout(6_000) }
       );
       const info = profileInfoFromApiUser(payload.user, username);
       if (info && info.followerCount !== null) return info;
@@ -580,10 +594,25 @@ async function fetchDirectProfileInfo(session: InstagramSession, username: strin
     }
   }
 
+  if (!profileId) {
+    try {
+      const searchInfo = await fetchDirectProfileSearchInfo(session, username);
+      if (searchInfo?.profileId) {
+        try {
+          return await fetchDirectProfileInfo(session, searchInfo.username, searchInfo.profileId);
+        } catch {
+          return searchInfo;
+        }
+      }
+    } catch {
+      // Fall through to web profile lookup.
+    }
+  }
+
   const payload = await instagramApiJson<{ data?: { user?: Record<string, unknown> } }>(
     session,
     `${instagramHost}/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
-    { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` } }
+    { headers: { "referer": `${instagramHost}/${encodeURIComponent(username)}/` }, signal: AbortSignal.timeout(6_000) }
   );
   return profileInfoFromApiUser(payload.data?.user, username) || {
     username,
@@ -1656,8 +1685,9 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
 
   if (normalized.mode === "hashtag" || normalized.mode === "profile") {
     let lastError: unknown = null;
-    for (const session of sessions) {
-      if (!instagramCookieHeader(session)) continue;
+    const sessionsWithCookies = sessions.filter((session) => instagramCookieHeader(session));
+    const directSessions = isServerlessRuntime() ? sessionsWithCookies.slice(0, 1) : sessionsWithCookies;
+    for (const session of directSessions) {
       try {
         if (normalized.mode === "hashtag") {
           return await scrapeHashtagDirect(
@@ -1681,7 +1711,8 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
         lastError = error;
       }
     }
-    if (lastError && (process.env.NETLIFY === "true" || process.env.SERVERLESS === "true")) throw lastError;
+    if (!directSessions.length && isServerlessRuntime()) throw new Error("Instagram session cookie is missing.");
+    if (lastError && isServerlessRuntime()) throw lastError;
   }
 
   const browser = await launchBrowser();
