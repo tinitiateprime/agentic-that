@@ -104,6 +104,22 @@ function InstagramScraper() {
   const activeInputMode = inputModes.find((item) => item.id === inputMode);
 
   useEffect(() => {
+    const htmlBackground = document.documentElement.style.background;
+    const htmlColor = document.documentElement.style.color;
+    const bodyBackground = document.body.style.background;
+
+    document.documentElement.style.background = "#f4f6f8";
+    document.documentElement.style.color = "#17202a";
+    document.body.style.background = "#f4f6f8";
+
+    return () => {
+      document.documentElement.style.background = htmlBackground;
+      document.documentElement.style.color = htmlColor;
+      document.body.style.background = bodyBackground;
+    };
+  }, []);
+
+  useEffect(() => {
     apiGet("/runs/keywords")
       .then((data) => setKeywords(data.keywords || []))
       .catch(() => {});
