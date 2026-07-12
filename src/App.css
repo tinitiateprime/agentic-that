@@ -85,6 +85,7 @@ button {
 .ghost-button:hover,
 .solid-button:hover,
 .search-row button:hover,
+.service-card:hover,
 .wide-service-card:hover,
 .work-panel:hover {
   border-color: #4a4a4a;
@@ -301,7 +302,159 @@ h1 {
   font-weight: 800;
 }
 
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.service-card {
+  min-height: 142px;
+  padding: 17px;
+  border: 1px solid #202020;
+  border-radius: 8px;
+  background: #050505;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.service-card:hover {
+  background: #090909;
+  transform: translateY(-2px);
+}
+
+.scrape-intelligence-card {
+  position: relative;
+  min-height: 224px;
+  overflow: hidden;
+  border-color: #202020;
+  border-radius: 8px;
+  background: #050505;
+  color: #ffffff;
+  padding: 20px 18px;
+}
+
+.scrape-intelligence-card:hover {
+  border-color: #202020;
+  background: #050505;
+  transform: none;
+}
+
+.scrape-card-head {
+  display: flex;
+  align-items: center;
+  position: relative;
+  z-index: 2;
+}
+
+.scrape-card-head h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 19px;
+  font-weight: 850;
+  line-height: 1.1;
+}
+
+.scrape-card-body {
+  position: relative;
+  min-height: 164px;
+  margin-top: 13px;
+}
+
+.scrape-card-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 236px;
+  min-width: 0;
+}
+
+.scrape-card-copy p {
+  margin: 0;
+  color: #cfcfcf;
+  font-size: 12.5px;
+  font-weight: 520;
+  line-height: 1.42;
+}
+
+.brand-icon-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 17px;
+}
+
+.brand-icon {
+  width: 32px;
+  height: 32px;
+  display: block;
+  object-fit: contain;
+  border-radius: 7px;
+  background: #000000;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 8px rgba(0, 0, 0, 0.38);
+}
+
+.scrape-device-art {
+  position: absolute;
+  right: -3px;
+  top: -18px;
+  z-index: 1;
+  width: 160px;
+  height: 160px;
+  display: block;
+  object-fit: contain;
+  object-position: center;
+  background: url("./public/scrape-globe-device-poster.png") center / contain no-repeat;
+  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.52));
+  pointer-events: none;
+}
+
+.scrape-device-art::-webkit-media-controls,
+.scrape-device-art::-webkit-media-controls-enclosure,
+.scrape-device-art::-webkit-media-controls-panel {
+  display: none !important;
+}
+
+.service-top {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.service-card h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.scrape-intelligence-card .scrape-card-head h3 {
+  color: #ffffff;
+  font-size: 19px;
+  font-weight: 850;
+}
+
+.service-top span {
+  flex: 0 0 auto;
+  color: #a7a7a7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.repo {
+  margin: 8px 0 0;
+}
+
+.service-text {
+  margin: 15px 0 0;
+  color: #c1c1c1;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.42;
+}
+
 .wide-service-stack {
+  margin-top: 14px;
   display: grid;
   gap: 14px;
 }
@@ -418,8 +571,13 @@ h1 {
     display: none;
   }
 
-  .hero-grid {
+  .hero-grid,
+  .service-grid {
     grid-template-columns: 1fr;
+  }
+
+  .scrape-card-copy {
+    max-width: min(285px, calc(100% - 165px));
   }
 }
 
@@ -459,6 +617,46 @@ h1 {
   .section-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .scrape-intelligence-card {
+    min-height: 216px;
+    padding: 15px;
+  }
+
+  .scrape-card-head h3 {
+    font-size: 18px;
+  }
+
+  .scrape-card-body {
+    min-height: 158px;
+    margin-top: 12px;
+  }
+
+  .scrape-card-copy {
+    max-width: calc(100% - 118px);
+  }
+
+  .scrape-card-copy p {
+    font-size: 12px;
+    line-height: 1.34;
+  }
+
+  .brand-icon-row {
+    gap: 8px;
+    margin-top: 13px;
+  }
+
+  .brand-icon {
+    width: 29px;
+    height: 29px;
+  }
+
+  .scrape-device-art {
+    top: -8px;
+    right: -10px;
+    width: 128px;
+    height: 128px;
   }
 
   .wide-service-card {
