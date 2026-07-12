@@ -661,7 +661,8 @@ async function scrapeHashtagDirect(
   oldestAllowed: Date
 ): Promise<ScrapeResult> {
   if (!normalized.tag) return { query: normalized.label, results: [] };
-  const posts = await collectDirectHashtagApiPosts(session, normalized.tag, candidateCount, oldestAllowed);
+  const directCandidateCount = Math.min(candidateCount, Math.max(maxResults * 3, 20), 40);
+  const posts = await collectDirectHashtagApiPosts(session, normalized.tag, directCandidateCount, oldestAllowed);
   const sorted = posts.sort((a, b) => timestampValue(b.timestamp) - timestampValue(a.timestamp));
   const selected = selectAutoExpandedResults(sorted, maxResults, preferredCutoff, oldestAllowed);
   return { query: normalized.label, results: await enrichDirectProfiles(session, selected) };
@@ -1708,12 +1709,23 @@ async function scrapeWithSession(
 }
 
 export async function runInstagramScrape(input: InstagramScrapeInput) {
-  const normalized = normalizeQuery(input.query);
+  let normalized = normalizeQuery(input.query);
   const maxResults = Math.max(1, Math.min(50, Number(input.maxResults) || 10));
   const candidateCount = normalized.mode === "post" ? 1 : Math.min(Math.max(maxResults * 6, maxResults, 20), 150);
   const preferredCutoff = newerThanCutoff(input);
   const oldestAllowed = oldestAllowedCutoff(input, preferredCutoff);
   const sessions = orderedSessions(await loadStorageSessions());
+
+  if (normalized.mode === "keyword") {
+    const tag = input.query.replace(/^#+/, "").replace(/[^A-Za-z0-9_]/g, "");
+    if (!tag) throw new Error("Enter a profile, hashtag, or Instagram URL.");
+    normalized = {
+      mode: "hashtag",
+      label: `#${tag}`,
+      startUrl: `${instagramHost}/explore/tags/${encodeURIComponent(tag)}/`,
+      tag
+    };
+  }
 
   if (normalized.mode === "post") {
     return scrapePostDirect(normalized);
@@ -1722,8 +1734,9 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
   if (normalized.mode === "hashtag" || normalized.mode === "profile") {
     let lastError: unknown = null;
     const sessionsWithCookies = sessions.filter((session) => instagramCookieHeader(session));
-    const serverlessSessionLimit = normalized.mode === "profile" ? 1 : 2;
-    const directSessions = isServerlessRuntime() ? sessionsWithCookies.slice(0, serverlessSessionLimit) : sessionsWithCookies;
+    const directSessions = sessionsWithCookies.slice(0, 2);
+    if (!directSessions.length) throw new Error("Instagram session cookie is missing.");
+
     for (const session of directSessions) {
       try {
         if (normalized.mode === "hashtag") {
@@ -1748,8 +1761,9 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
         lastError = error;
       }
     }
-    if (!directSessions.length && isServerlessRuntime()) throw new Error("Instagram session cookie is missing.");
-    if (lastError && isServerlessRuntime()) throw lastError;
+
+    if (lastError) throw lastError;
+    return { query: normalized.label, results: [] };
   }
 
   const browser = await launchBrowser();

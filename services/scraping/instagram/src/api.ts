@@ -89,7 +89,11 @@ export async function handleInstagramRequest(request: Request) {
 
     return json({ message: "Not found" }, 404);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Instagram scrape failed.";
+    let message = error instanceof Error ? error.message : "Instagram scrape failed.";
+    if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
+      message = "Instagram scrape failed before the browser fallback could run. Try again or refresh the Instagram sessions.";
+    }
+    if (message.length > 280) message = `${message.slice(0, 277)}...`;
     return json({ message }, 500);
   }
 }

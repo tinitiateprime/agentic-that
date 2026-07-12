@@ -2,6 +2,7 @@ import type { Config } from "@netlify/functions";
 import { handleInstagramRequest } from "../../services/scraping/instagram/src/api.ts";
 
 export default async function handler(request: Request) {
+  process.env.SERVERLESS = "true";
   return handleInstagramRequest(request);
 }
 
