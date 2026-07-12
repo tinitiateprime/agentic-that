@@ -284,9 +284,17 @@ async function instagramApiJson<T>(session: InstagramSession, url: string, init:
       const response = await fetch(url, {
         ...init,
         headers,
+        redirect: "manual",
         signal: init.signal || AbortSignal.timeout(8_000)
       });
       const text = await response.text();
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location") || "";
+        if (/challenge|login|checkpoint|update_risky_contactpoint/i.test(location)) {
+          throw new Error("Instagram session was redirected to a checkpoint. Refresh this saved Instagram session.");
+        }
+        throw new Error(`Instagram API redirected with ${response.status}. Refresh this saved Instagram session.`);
+      }
       if (!response.ok) throw new Error(`Instagram API returned ${response.status}.`);
 
       try {
@@ -296,7 +304,7 @@ async function instagramApiJson<T>(session: InstagramSession, url: string, init:
       }
     } catch (error) {
       lastError = error;
-      if (error instanceof Error && /Instagram API returned (400|401|403|404|429)/.test(error.message)) break;
+      if (error instanceof Error && /Instagram API returned (400|401|403|404|429)|checkpoint|redirected/i.test(error.message)) break;
       await sleep(500);
     }
   }
@@ -379,7 +387,7 @@ function orderedSessions(sessions: InstagramSession[]) {
 
 function markSessionProblem(session: InstagramSession, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/Instagram API returned 429|Instagram API returned 401|Instagram API returned 403|fetch failed|timeout|aborted/i.test(message)) {
+  if (/Instagram API returned 429|Instagram API returned 401|Instagram API returned 403|checkpoint|redirected|fetch failed|timeout|aborted/i.test(message)) {
     sessionCooldowns.set(session.name, Date.now() + 10 * 60 * 1000);
   }
 }
@@ -1760,7 +1768,8 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
   if (normalized.mode === "hashtag" || normalized.mode === "profile") {
     let lastError: unknown = null;
     const sessionsWithCookies = sessions.filter((session) => instagramCookieHeader(session));
-    const directSessions = sessionsWithCookies.slice(0, 2);
+    const maxSessionAttempts = Math.max(1, Math.min(5, Number(process.env.INSTAGRAM_MAX_SESSION_ATTEMPTS) || 3));
+    const directSessions = sessionsWithCookies.slice(0, maxSessionAttempts);
     if (!directSessions.length) throw new Error("Instagram session cookie is missing.");
 
     for (const session of directSessions) {

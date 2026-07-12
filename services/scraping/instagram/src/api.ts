@@ -28,6 +28,8 @@ function friendlyScrapeMessage(error: unknown) {
   let message = error instanceof Error ? error.message : "Instagram scrape failed.";
   if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
     message = "Instagram browser scraping is disabled on Netlify. Refresh the Instagram sessions and try again.";
+  } else if (/checkpoint|redirected|update_risky_contactpoint/i.test(message)) {
+    message = "Instagram rejected the saved scraper sessions with a checkpoint. Refresh the Instagram sessions, then redeploy.";
   } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
     message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
   } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
