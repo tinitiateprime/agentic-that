@@ -28,10 +28,16 @@ class HttpError extends Error {
   }
 }
 
+type ServerStartupOptions = {
+  startListeners?: boolean;
+};
+
 let config: AppConfig;
 let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
 let limiter: RequestRateLimiter;
+let initialized = false;
+let initializing: Promise<void> | null = null;
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const telegramRoot = path.resolve(moduleDir, "..");
 const telegramPublicDir = path.join(telegramRoot, "public");
@@ -58,6 +64,10 @@ const secretEnvironmentNames = [
   "USER_PROVISIONING_KEY",
   "TELEGRAM_BOT_TOKEN"
 ];
+
+function shouldRunBackgroundListeners() {
+  return process.env.SERVERLESS !== "true" && process.env.NETLIFY !== "true";
+}
 
 function redactedErrorMessage(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
@@ -275,8 +285,15 @@ function ensureTrustedOrigin(request: IncomingMessage) {
   const origin = request.headers.origin;
   if (!origin) return;
   if (config.corsOrigin && origin === config.corsOrigin) return;
-  const protocol = config.sessionCookieSecure ? "https" : "http";
-  const sameHostOrigin = `${protocol}://${request.headers.host ?? "localhost"}`;
+  const forwardedProto = Array.isArray(request.headers["x-forwarded-proto"])
+    ? request.headers["x-forwarded-proto"][0]
+    : request.headers["x-forwarded-proto"];
+  const forwardedHost = Array.isArray(request.headers["x-forwarded-host"])
+    ? request.headers["x-forwarded-host"][0]
+    : request.headers["x-forwarded-host"];
+  const protocol = forwardedProto || (config.sessionCookieSecure ? "https" : "http");
+  const host = forwardedHost || request.headers.host || "localhost";
+  const sameHostOrigin = `${protocol}://${host}`;
   if (origin === sameHostOrigin) return;
   throw new HttpError(403, "This browser origin is not allowed.");
 }
@@ -722,12 +739,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ...result.profile,
       sessionString: result.sessionString
     });
-    void startTelegramListener({
-      ...account,
-      telegramApiId: credentials.apiId,
-      telegramApiHash: credentials.apiHash,
-      sessionString: result.sessionString
-    });
+    if (shouldRunBackgroundListeners()) {
+      void startTelegramListener({
+        ...account,
+        telegramApiId: credentials.apiId,
+        telegramApiHash: credentials.apiHash,
+        sessionString: result.sessionString
+      });
+    }
     await store.deleteLoginChallenge(user.id, challenge.id);
     sendJson(request, response, 201, { ok: true, status: "connected", account });
     return;
@@ -755,12 +774,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ...result.profile,
       sessionString: result.sessionString
     });
-    void startTelegramListener({
-      ...account,
-      telegramApiId: credentials.apiId,
-      telegramApiHash: credentials.apiHash,
-      sessionString: result.sessionString
-    });
+    if (shouldRunBackgroundListeners()) {
+      void startTelegramListener({
+        ...account,
+        telegramApiId: credentials.apiId,
+        telegramApiHash: credentials.apiHash,
+        sessionString: result.sessionString
+      });
+    }
     await store.deleteLoginChallenge(user.id, challenge.id);
     sendJson(request, response, 201, { ok: true, status: "connected", account });
     return;
@@ -807,7 +828,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } catch (error) {
       throw telegramSendError(error);
     }
-    void startTelegramListener(account);
+    if (shouldRunBackgroundListeners()) void startTelegramListener(account);
     const message = await store.recordMessage({
       accountId: account.id,
       direction: "outbound",
@@ -826,7 +847,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const limit = Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 50;
     const account = await store.getAccountWithSession(user.id, accountId);
     if (!account) throw new HttpError(404, "Telegram account was not found.");
-    void startTelegramListener(account);
+    if (shouldRunBackgroundListeners()) void startTelegramListener(account);
 
     const existingMessages = await store.listMessages(user.id, accountId, limit);
     const syncMode = url.searchParams.get("sync") ?? "";
@@ -842,28 +863,47 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   throw new HttpError(404, "Route not found.");
 }
 
-async function main() {
-  config = readConfig();
-  configuredLoginUsers = readConfiguredLoginUsers();
-  store = new MultiUserStore(config.dataDir, config.sessionEncryptionKey);
-  limiter = new RequestRateLimiter(config.rateLimitWindowSeconds * 1_000);
+export async function initializeTelegramApp() {
+  if (initialized) return;
+  initializing ??= (async () => {
+    config = readConfig();
+    configuredLoginUsers = readConfiguredLoginUsers();
+    store = new MultiUserStore(config.dataDir, config.sessionEncryptionKey);
+    limiter = new RequestRateLimiter(config.rateLimitWindowSeconds * 1_000);
 
-  await store.initialize();
-  const server = createServer((request, response) => {
-    void handleRequest(request, response).catch((error: unknown) => {
-      const operational = operationalTelegramError(error);
-      const known = error instanceof HttpError;
-      const linkedElsewhere = error instanceof AccountAlreadyLinkedError;
-      if (!known && !linkedElsewhere && !operational) console.error("Request failed without logging request data.");
-      sendJson(request, response, known ? error.status : linkedElsewhere ? 409 : operational ? operational.status : 500, {
-        ok: false,
-        error: known || linkedElsewhere ? error.message : operational ? operational.message : "Internal server error."
-      });
+    await store.initialize();
+    initialized = true;
+  })();
+  await initializing;
+}
+
+export async function handleRequestWithErrors(request: IncomingMessage, response: ServerResponse) {
+  await initializeTelegramApp();
+  await handleRequest(request, response).catch((error: unknown) => {
+    const operational = operationalTelegramError(error);
+    const known = error instanceof HttpError;
+    const linkedElsewhere = error instanceof AccountAlreadyLinkedError;
+    if (!known && !linkedElsewhere && !operational) console.error("Request failed without logging request data.");
+    sendJson(request, response, known ? error.status : linkedElsewhere ? 409 : operational ? operational.status : 500, {
+      ok: false,
+      error: known || linkedElsewhere ? error.message : operational ? operational.message : "Internal server error."
     });
   });
+}
+
+export async function createTelegramHttpServer(_options: ServerStartupOptions = {}) {
+  await initializeTelegramApp();
+  return createServer((request, response) => {
+    void handleRequestWithErrors(request, response);
+  });
+}
+
+async function main() {
+  await initializeTelegramApp();
+  const server = await createTelegramHttpServer();
   server.listen(config.servicePort, config.serviceHost, () => {
     console.log(`Telegram multi-user API listening on http://${config.serviceHost}:${config.servicePort}`);
-    void startStoredTelegramListeners();
+    if (shouldRunBackgroundListeners()) void startStoredTelegramListeners();
   });
 
   let stopping = false;
@@ -879,7 +919,9 @@ async function main() {
   process.once("SIGTERM", () => void shutdown());
 }
 
-main().catch((error: unknown) => {
-  console.error(`Server startup failed: ${redactedErrorMessage(error)}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(`Server startup failed: ${redactedErrorMessage(error)}`);
+    process.exitCode = 1;
+  });
+}

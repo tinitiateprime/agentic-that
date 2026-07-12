@@ -88,7 +88,7 @@ export function readConfig(): AppConfig {
     corsOrigin: optionalEnv("CORS_ORIGIN"),
     loginChallengeTtlMinutes: positiveInteger("LOGIN_CHALLENGE_TTL_MINUTES", 10),
     appSessionTtlHours: positiveInteger("APP_SESSION_TTL_HOURS", 24),
-    sessionCookieSecure: booleanEnv("SESSION_COOKIE_SECURE", false),
+    sessionCookieSecure: booleanEnv("SESSION_COOKIE_SECURE", process.env.NETLIFY === "true"),
     rateLimitWindowSeconds: positiveInteger("RATE_LIMIT_WINDOW_SECONDS", 60),
     rateLimitMaxRequests: positiveInteger("RATE_LIMIT_MAX_REQUESTS", 120),
     loginStartRateLimitMax: positiveInteger("LOGIN_START_RATE_LIMIT_MAX", 5),

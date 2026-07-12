@@ -15,6 +15,7 @@
     "bot:start": "tsx src/bot.ts"
   },
   "dependencies": {
+    "@netlify/blobs": "^10.7.9",
     "big-integer": "^1.6.52",
     "telegram": "^2.26.22",
     "tsx": "^4.20.6"

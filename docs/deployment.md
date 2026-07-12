@@ -1,70 +1,47 @@
-# Deployment
+# Netlify Deployment
 
-This project is set up for one Node deployment:
+This repo is configured for one Netlify deploy:
 
 ```text
-/          React website from dist/
-/console   Telegram dashboard
-/v1/*      Telegram backend API
+/          React website
+/console   Telegram console
+/v1/*      Netlify Functions backend API
+/health    Netlify Functions health check
 ```
 
-## Northflank
+## Build Settings
 
-Create a Northflank **combined service** from this Git repository and choose **buildpack** as the build type.
-
-Use these commands:
+Netlify reads [netlify.toml](../netlify.toml):
 
 ```text
-Build command: npm run northflank:build
-Start command: npm start
-Health check: /health
+Build command: npm run build
+Publish directory: dist
+Functions directory: netlify/functions
 ```
 
-Expose the public HTTP port that Northflank assigns through `PORT`. The server already reads `PORT` and binds to `0.0.0.0` in production.
+## Required Environment Variables
 
-Required runtime environment variables:
+Add these in Netlify site settings:
 
 ```text
-NODE_ENV=production
-SESSION_COOKIE_SECURE=true
 SESSION_ENCRYPTION_KEY=<generated secret>
 USER_PROVISIONING_KEY=<generated secret>
+SESSION_COOKIE_SECURE=true
+DATA_STORE=netlify-blobs
 ```
 
-Generate each secret with:
+Generate the two secrets locally:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Keep `CORS_ORIGIN` blank because the website and API are same-origin.
+Run it twice and use different values.
 
-## Data Note
+## Storage
 
-The backend stores encrypted sessions and messages in `data/store.json` by default. If Northflank offers persistent storage in your plan, mount it and set:
+On Netlify, backend users, Telegram sessions, login challenges, and message history are stored in Netlify Blobs.
 
-```text
-DATA_DIR=/data
-```
+## Important Netlify Limitation
 
-Without persistent storage, the app can still run, but users may need to sign in/connect Telegram again after a service reset.
-
-## Free Plan Note
-
-Northflank's free Sandbox is good for testing and hobby use, but it is limited and not meant as production hosting.
-
-## Local Check
-
-Build and run the same shape locally:
-
-```bash
-npm run northflank:build
-npm start
-```
-
-Open:
-
-```text
-http://127.0.0.1:8787/
-http://127.0.0.1:8787/console
-```
+Netlify Functions are request-based. They can handle login, account listing, and sending messages, but they do not keep a permanent Telegram listener running in the background.

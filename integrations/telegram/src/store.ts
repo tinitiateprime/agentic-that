@@ -108,11 +108,21 @@ type JsonDatabase = {
 
 export class AccountAlreadyLinkedError extends Error {}
 
+type BlobStore = {
+  get: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<unknown>;
+  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean }) => Promise<unknown>;
+};
+
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 const passwordKey = (username: string) => `password:${username.trim().toLowerCase()}`;
 const asIso = (value: Date) => value.toISOString();
 const nowIso = () => new Date().toISOString();
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const shouldUseNetlifyBlobs = () => (
+  process.env.DATA_STORE === "netlify-blobs" ||
+  process.env.NETLIFY === "true" ||
+  Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
+);
 
 function hashPassword(password: string) {
   const salt = randomBytes(16).toString("base64url");
@@ -170,6 +180,8 @@ export class MultiUserStore {
   private readonly dataFile: string;
   private readonly lockFile: string;
   private readonly cipher: SecretCipher;
+  private readonly useNetlifyBlobs: boolean;
+  private blobStorePromise: Promise<BlobStore> | null = null;
   private queue = Promise.resolve();
 
   constructor(dataDir: string, sessionEncryptionKey: string) {
@@ -177,9 +189,16 @@ export class MultiUserStore {
     this.dataFile = path.join(this.dataDir, "store.json");
     this.lockFile = path.join(this.dataDir, "store.lock");
     this.cipher = new SecretCipher(sessionEncryptionKey);
+    this.useNetlifyBlobs = shouldUseNetlifyBlobs();
   }
 
   async initialize() {
+    if (this.useNetlifyBlobs) {
+      const store = await this.getBlobStore();
+      const existing = await store.get("store", { type: "json", consistency: "strong" });
+      if (!existing) await store.setJSON("store", emptyDatabase(), { onlyIfNew: true });
+      return;
+    }
     await mkdir(this.dataDir, { recursive: true });
     try {
       await access(this.dataFile, fsConstants.F_OK);
@@ -519,6 +538,12 @@ export class MultiUserStore {
   }
 
   private async readDatabase(): Promise<JsonDatabase> {
+    if (this.useNetlifyBlobs) {
+      const store = await this.getBlobStore();
+      const database = await store.get("store", { type: "json", consistency: "strong" });
+      return coerceDatabase(database);
+    }
+
     await mkdir(this.dataDir, { recursive: true });
     try {
       const raw = await readFile(this.dataFile, "utf8");
@@ -532,6 +557,12 @@ export class MultiUserStore {
   }
 
   private async writeDatabase(database: JsonDatabase) {
+    if (this.useNetlifyBlobs) {
+      const store = await this.getBlobStore();
+      await store.setJSON("store", database);
+      return;
+    }
+
     await mkdir(this.dataDir, { recursive: true });
     const tempFile = path.join(this.dataDir, `store.${process.pid}.${Date.now()}.tmp`);
     await writeFile(tempFile, `${JSON.stringify(database, null, 2)}\n`, "utf8");
@@ -539,6 +570,8 @@ export class MultiUserStore {
   }
 
   private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.useNetlifyBlobs) return operation();
+
     let handle: FileHandle | null = null;
     const startedAt = Date.now();
     while (!handle) {
@@ -570,6 +603,11 @@ export class MultiUserStore {
     } catch {
       // Another process may have released the lock.
     }
+  }
+
+  private async getBlobStore(): Promise<BlobStore> {
+    this.blobStorePromise ??= import("@netlify/blobs").then(({ getStore }) => getStore("agentic-that-telegram") as BlobStore);
+    return this.blobStorePromise;
   }
 
   private toAccount(row: TelegramAccountRow): TelegramAccount {
