@@ -263,29 +263,44 @@ async function instagramApiJson<T>(session: InstagramSession, url: string, init:
   const cookie = instagramCookieHeader(session);
   if (!cookie) throw new Error("Instagram session cookie is missing.");
 
-  const headers = new Headers(init.headers);
-  headers.set("user-agent", defaultUserAgent);
-  headers.set("accept", "*/*");
-  headers.set("accept-language", "en-US,en;q=0.9");
-  headers.set("cookie", cookie);
-  headers.set("x-ig-app-id", "936619743392459");
-  headers.set("x-requested-with", "XMLHttpRequest");
-  const csrf = instagramCsrfToken(session);
-  if (csrf) headers.set("x-csrftoken", csrf);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const headers = new Headers(init.headers);
+    headers.set("user-agent", defaultUserAgent);
+    headers.set("accept", "*/*");
+    headers.set("accept-language", "en-US,en;q=0.9");
+    headers.set("cache-control", "no-cache");
+    headers.set("pragma", "no-cache");
+    headers.set("cookie", cookie);
+    headers.set("x-asbd-id", "129477");
+    headers.set("x-ig-app-id", "936619743392459");
+    headers.set("x-requested-with", "XMLHttpRequest");
+    const csrf = instagramCsrfToken(session);
+    if (csrf) headers.set("x-csrftoken", csrf);
+    if (init.method && init.method !== "GET") headers.set("origin", instagramHost);
 
-  const response = await fetch(url, {
-    ...init,
-    headers,
-    signal: init.signal || AbortSignal.timeout(8_000)
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Instagram API returned ${response.status}.`);
+    try {
+      const response = await fetch(url, {
+        ...init,
+        headers,
+        signal: init.signal || AbortSignal.timeout(8_000)
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`Instagram API returned ${response.status}.`);
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Instagram API returned an unreadable response.");
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        throw new Error("Instagram API returned an unreadable response.");
+      }
+    } catch (error) {
+      lastError = error;
+      if (error instanceof Error && /Instagram API returned (400|401|403|404|429)/.test(error.message)) break;
+      await sleep(500);
+    }
   }
+
+  throw lastError instanceof Error ? lastError : new Error("Instagram API request failed.");
 }
 
 async function loadLocalSessions() {

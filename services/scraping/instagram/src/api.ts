@@ -92,6 +92,10 @@ export async function handleInstagramRequest(request: Request) {
     let message = error instanceof Error ? error.message : "Instagram scrape failed.";
     if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
       message = "Instagram scrape failed before the browser fallback could run. Try again or refresh the Instagram sessions.";
+    } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
+      message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
+    } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
+      message = "Instagram request failed from Netlify. Try again in a minute; if it repeats, refresh the Instagram sessions.";
     }
     if (message.length > 280) message = `${message.slice(0, 277)}...`;
     return json({ message }, 500);
