@@ -128,7 +128,7 @@ function App() {
   const openTelegramDashboard = () => {
     if (!integrations.telegram.dashboardUrl) {
       window.alert(
-        "Telegram needs its backend deployed separately. Deploy integrations/telegram, then set VITE_TELEGRAM_DASHBOARD_URL in Netlify."
+        "Telegram console is not configured. Set VITE_TELEGRAM_DASHBOARD_URL or use the same-origin /console route."
       );
       return;
     }

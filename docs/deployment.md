@@ -1,41 +1,70 @@
 # Deployment
 
-The React website is deployed on Netlify. The Telegram console is a separate Node.js service and must be deployed as a web service.
-
-## Netlify Website
-
-Netlify uses `netlify.toml`:
-
-```toml
-[build]
-  command = "npm run build"
-  publish = "dist"
-```
-
-## Telegram Backend
-
-Deploy the Telegram backend as a long-running web service from `integrations/telegram`.
-
-The repo includes `render.yaml` for Render:
-
-1. Open Render and create a new Blueprint from this GitHub repo.
-2. Render will use `integrations/telegram/Dockerfile`.
-3. Render generates the backend encryption/provisioning secrets automatically.
-4. After the Render service is live, copy its public URL.
-5. In Netlify, add this environment variable:
+This project is set up for one Node deployment:
 
 ```text
-VITE_TELEGRAM_DASHBOARD_URL=https://your-render-service.onrender.com
+/          React website from dist/
+/console   Telegram dashboard
+/v1/*      Telegram backend API
 ```
 
-6. Redeploy the Netlify site.
+## Northflank
 
-## Free Hosting Note
+Create a Northflank **combined service** from this Git repository and choose **buildpack** as the build type.
 
-The current `render.yaml` uses Render's free web service plan. This avoids the payment prompt, but the Telegram service stores encrypted sessions in local JSON files, and free hosting does not preserve local filesystem changes across sleeps, restarts, or redeploys.
+Use these commands:
 
-That means this is good for testing/demo use, but you may need to log in to Telegram again after the service resets. For production, use a paid service with a persistent disk or move the datastore to a hosted database.
+```text
+Build command: npm run northflank:build
+Start command: npm start
+Health check: /health
+```
 
-## User Telegram Credentials
+Expose the public HTTP port that Northflank assigns through `PORT`. The server already reads `PORT` and binds to `0.0.0.0` in production.
 
-The backend no longer needs the site owner's Telegram API ID or API hash. Each user enters their own Telegram API ID and API hash on the Add Number screen before receiving the Telegram verification code.
+Required runtime environment variables:
+
+```text
+NODE_ENV=production
+SESSION_COOKIE_SECURE=true
+SESSION_ENCRYPTION_KEY=<generated secret>
+USER_PROVISIONING_KEY=<generated secret>
+```
+
+Generate each secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+Keep `CORS_ORIGIN` blank because the website and API are same-origin.
+
+## Data Note
+
+The backend stores encrypted sessions and messages in `data/store.json` by default. If Northflank offers persistent storage in your plan, mount it and set:
+
+```text
+DATA_DIR=/data
+```
+
+Without persistent storage, the app can still run, but users may need to sign in/connect Telegram again after a service reset.
+
+## Free Plan Note
+
+Northflank's free Sandbox is good for testing and hobby use, but it is limited and not meant as production hosting.
+
+## Local Check
+
+Build and run the same shape locally:
+
+```bash
+npm run northflank:build
+npm start
+```
+
+Open:
+
+```text
+http://127.0.0.1:8787/
+http://127.0.0.1:8787/console
+```

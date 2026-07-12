@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   beginTelegramLogin,
   completeTelegramLoginWithCode,
@@ -31,10 +32,18 @@ let config: AppConfig;
 let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
 let limiter: RequestRateLimiter;
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const telegramRoot = path.resolve(moduleDir, "..");
+const telegramPublicDir = path.join(telegramRoot, "public");
+const frontendDistDirs = [
+  path.resolve(process.cwd(), "dist"),
+  path.resolve(telegramRoot, "..", "..", "dist")
+];
 const publicFiles = new Map([
-  ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
-  ["/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
-  ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }]
+  ["/console", { file: "index.html", type: "text/html; charset=utf-8" }],
+  ["/console/", { file: "index.html", type: "text/html; charset=utf-8" }],
+  ["/console/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
+  ["/console/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }]
 ]);
 type TelegramListenerClient = Awaited<ReturnType<typeof listenForAccount>>;
 
@@ -104,12 +113,83 @@ async function servePublicAsset(request: IncomingMessage, response: ServerRespon
   const asset = publicFiles.get(pathname);
   if (!asset) return false;
   try {
-    const body = await readFile(path.join(process.cwd(), "public", asset.file));
+    const body = await readFile(path.join(telegramPublicDir, asset.file));
     sendBytes(request, response, 200, body, asset.type);
   } catch {
     sendJson(request, response, 404, { ok: false, error: "UI asset was not found." });
   }
   return true;
+}
+
+function contentTypeFor(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "text/javascript; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".svg") return "image/svg+xml";
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".ico") return "image/x-icon";
+  if (extension === ".mp4") return "video/mp4";
+  if (extension === ".webm") return "video/webm";
+  return "application/octet-stream";
+}
+
+function safeStaticPath(root: string, pathname: string) {
+  try {
+    const decoded = decodeURIComponent(pathname);
+    if (decoded.includes("\0")) return null;
+    const relativePath = decoded.replace(/^\/+/, "");
+    const resolved = path.resolve(root, relativePath || "index.html");
+    const rootWithSeparator = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+    if (resolved !== root && !resolved.startsWith(rootWithSeparator)) return null;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+async function findFrontendDistDir() {
+  for (const dir of frontendDistDirs) {
+    try {
+      const details = await stat(dir);
+      if (details.isDirectory()) return dir;
+    } catch {
+      // Try the next common project layout.
+    }
+  }
+  return "";
+}
+
+async function serveFrontendAsset(request: IncomingMessage, response: ServerResponse, pathname: string) {
+  if (request.method !== "GET") return false;
+  if (pathname === "/health" || pathname.startsWith("/v1/") || pathname.startsWith("/console")) return false;
+
+  const distDir = await findFrontendDistDir();
+  if (!distDir) return false;
+
+  const requestedPath = pathname === "/" ? path.join(distDir, "index.html") : safeStaticPath(distDir, pathname);
+  if (requestedPath) {
+    try {
+      const details = await stat(requestedPath);
+      if (details.isFile()) {
+        sendBytes(request, response, 200, await readFile(requestedPath), contentTypeFor(requestedPath));
+        return true;
+      }
+    } catch {
+      // Fall through to the SPA index file.
+    }
+  }
+
+  const indexPath = path.join(distDir, "index.html");
+  try {
+    sendBytes(request, response, 200, await readFile(indexPath), "text/html; charset=utf-8");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<JsonBody> {
@@ -573,6 +653,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     sendJson(request, response, 200, { ok: true }, { "set-cookie": sessionCookie("", 0) });
     return;
   }
+
+  if (await serveFrontendAsset(request, response, url.pathname)) return;
 
   const user = await requireUser(request);
   enforceRateLimit(`api:${user.id}:${clientAddress(request)}`, config.rateLimitMaxRequests);
