@@ -12,6 +12,7 @@
     "dev:telegram": "concurrently -k -n site,telegram -c cyan,green \"npm run dev\" \"npm run telegram:dashboard\"",
     "deploy:build": "npm --prefix integrations/telegram ci --include=dev && npm run build && npm --prefix integrations/telegram run build",
     "northflank:build": "npm run deploy:build",
+    "heroku-postbuild": "npm run deploy:build",
     "start": "npm --prefix integrations/telegram start",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
