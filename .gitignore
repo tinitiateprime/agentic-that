@@ -15,3 +15,6 @@ services/**/.env.*
 services/**/data/
 services/**/logs/
 services/**/*.session
+services/**/output/
+services/**/sessions/
+services/**/account_config/sessions/

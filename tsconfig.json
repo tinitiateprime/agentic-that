@@ -13,6 +13,7 @@
   },
   "include": [
     "netlify/functions/**/*.mts",
-    "services/messaging/telegram/src/**/*.ts"
+    "services/messaging/telegram/src/**/*.ts",
+    "services/scraping/instagram/src/**/*.ts"
   ]
 }

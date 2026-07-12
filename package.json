@@ -7,18 +7,22 @@
     "dev": "vite --host 127.0.0.1",
     "services:telegram": "npm --prefix services/messaging/telegram run server",
     "services:telegram:install": "npm --prefix services/messaging/telegram install",
+    "services:instagram": "tsx services/scraping/instagram/src/server.ts",
     "services:install": "npm run services:telegram:install",
     "telegram:dashboard": "npm run services:telegram",
     "dev:telegram": "concurrently -k -n site,telegram -c cyan,green \"npm run dev\" \"npm run telegram:dashboard\"",
+    "dev:instagram": "concurrently -k -n site,instagram -c cyan,magenta \"npm run dev\" \"npm run services:instagram\"",
     "build": "vite build && node scripts/copy-telegram-console.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
     "@netlify/blobs": "^10.7.9",
     "@netlify/functions": "^5.3.0",
+    "@sparticuz/chromium": "^149.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "big-integer": "^1.6.52",
     "lucide-react": "^0.468.0",
+    "playwright-core": "^1.61.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "telegram": "^2.26.22",
@@ -27,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "concurrently": "^10.0.3",
+    "tsx": "^4.23.0",
     "typescript": "^7.0.2"
   }
 }

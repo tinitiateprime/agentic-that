@@ -12,6 +12,7 @@ import WhatsAppLogo from "./public/whatsapp-logo.svg";
 import XLogo from "./public/x-logo.svg";
 import YouTubeLogo from "./public/youtube-logo.svg";
 import { serviceEndpoints } from "./services";
+import InstagramScraper from "./InstagramScraper";
 import "./App.css";
 
 const navItems = ["Marketplace", "Services", "Solutions", "Docs", "Company"];
@@ -41,7 +42,7 @@ const automationPlatforms = [
 ];
 
 const scraperPlatforms = [
-  { name: "Instagram", logo: InstagramLogo },
+  { name: "Instagram", logo: InstagramLogo, action: "Console", enabled: true },
   { name: "Facebook", logo: FacebookLogo },
   { name: "X", logo: XLogo },
   { name: "Google", logo: GoogleLogo },
@@ -153,6 +154,9 @@ function IntegrationServiceSection({ kicker, title, description, platforms, onOp
 }
 
 function App() {
+  if (window.location.pathname.startsWith("/scraper/instagram")) {
+    return <InstagramScraper />;
+  }
 
   const [title, setTitle] = useState("");
   const [showCursor, setShowCursor] = useState(true);
@@ -205,6 +209,10 @@ function App() {
     }
 
     window.location.href = serviceEndpoints.telegram.dashboardUrl;
+  };
+
+  const openInstagramScraper = () => {
+    window.location.href = serviceEndpoints.instagramScraper.consoleUrl;
   };
 
   return (
@@ -303,8 +311,9 @@ function App() {
             <IntegrationServiceSection
               kicker="Scraping Service"
               title="Social and Search Scrapers"
-              description="Placeholders for scraping workflows across social profiles, public pages, search results, maps listings, and professional profiles."
+              description="Run Instagram scraping now, with placeholders ready for public pages, search results, maps listings, and professional profiles."
               platforms={scraperPlatforms}
+              onOpen={openInstagramScraper}
             />
 
             <IntegrationServiceSection
