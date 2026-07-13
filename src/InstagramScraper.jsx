@@ -74,11 +74,6 @@ const publicInstagramUrl = (value) => {
   }
 };
 
-const openPostInBrowser = (event, postUrl) => {
-  event.preventDefault();
-  window.open(publicInstagramUrl(postUrl), "_blank", "noopener,noreferrer");
-};
-
 const exportColumns = [
   "rank",
   "thumbnail_url",
@@ -316,7 +311,6 @@ function InstagramScraper() {
                           target="_blank"
                           rel="external noopener noreferrer"
                           referrerPolicy="no-referrer"
-                          onClick={(event) => openPostInBrowser(event, post.post_url)}
                         >
                           Open post
                         </a>
