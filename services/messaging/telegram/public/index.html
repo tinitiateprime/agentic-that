@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
     <title>Telegram workflow workspace</title>
-    <link rel="stylesheet" href="/console/styles.css?v=telegram-ui-2">
+    <link rel="stylesheet" href="/console/styles.css?v=telegram-ui-7">
   </head>
   <body>
     <main>
@@ -144,44 +144,15 @@
           </section>
 
           <section id="view-add-number" class="view" hidden>
-            <section class="panel user-guide-panel" aria-labelledby="telegram-user-guide-title">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">Help guide</p>
-                  <h2 id="telegram-user-guide-title">User manual</h2>
-                </div>
-                <a class="guide-link" href="https://my.telegram.org/auth?to=apps" target="_blank" rel="noopener noreferrer">Open Telegram API page</a>
-              </div>
-              <ol class="guide-steps">
-                <li>
-                  Open <a href="https://my.telegram.org/auth?to=apps" target="_blank" rel="noopener noreferrer">my.telegram.org</a>.
-                  Enter your Telegram phone number. For India, use <strong>+91</strong> before the number.
-                </li>
-                <li>
-                  Telegram sends a confirmation code inside your Telegram app. Enter that code on my.telegram.org and click <strong>Sign in</strong>.
-                </li>
-                <li>
-                  On the next page, click <a href="https://my.telegram.org/apps" target="_blank" rel="noopener noreferrer">API development tools</a>.
-                </li>
-                <li>
-                  On the API tools page, copy the first two credentials: <strong>API ID</strong> and <strong>API hash</strong>.
-                </li>
-                <li>
-                  Paste the API ID and API hash into the fields below. Select your country code, enter the phone number, then click <strong>Send verification code</strong>.
-                </li>
-                <li>
-                  Telegram sends another login code. Enter it here to finish connecting the number.
-                </li>
-              </ol>
-            </section>
-
             <section class="panel connect-panel" aria-labelledby="connect-title">
               <div class="panel-heading">
                 <div>
                   <p class="eyebrow">Add new number</p>
                   <h2 id="connect-title">Telegram login</h2>
                 </div>
-                <span id="connect-step" class="step-pill">1 of 3</span>
+                <div class="connect-heading-actions">
+                  <button class="guide-button" type="button" data-guide-open aria-controls="telegram-guide-panel" aria-expanded="false">Help guide</button>
+                </div>
               </div>
               <p id="connect-copy" class="muted">Use the full phone number with country code. Telegram will deliver a verification code.</p>
 
@@ -1074,6 +1045,82 @@
         </div>
       </section>
     </main>
-    <script src="/console/app.js?v=telegram-ui-5" defer></script>
+
+    <aside id="telegram-guide-panel" class="guide-panel" role="complementary" aria-labelledby="telegram-user-guide-title" hidden>
+      <div class="guide-dialog">
+        <div class="guide-dialog-header">
+          <div>
+            <p class="eyebrow">Help guide</p>
+            <h2 id="telegram-user-guide-title">Telegram API setup</h2>
+          </div>
+          <button class="icon-button guide-close-button" type="button" data-guide-close aria-label="Close help guide">X</button>
+        </div>
+
+        <p class="guide-intro">Use these quick steps to create Telegram API credentials and connect your number.</p>
+
+        <ol class="guide-steps">
+          <li>
+            <span>1</span>
+            <p>Open <a href="https://my.telegram.org/auth?to=apps" target="_blank" rel="noopener noreferrer">my.telegram.org</a>.</p>
+          </li>
+          <li>
+            <span>2</span>
+            <div>
+              <p>Enter your Telegram phone number. For India, use <strong>+91</strong> before the number.</p>
+              <div class="guide-preview" aria-label="Telegram phone number screen preview">
+                <div class="guide-browser-bar">my.telegram.org/auth?to=apps</div>
+                <div class="guide-mini-page">
+                  <div class="guide-mini-nav"><b>Home</b><b>FAQ</b><b>Apps</b><b>API</b><b>Protocol</b></div>
+                  <h3>Delete Account or Manage Apps</h3>
+                  <p>Enter your number and we will send you a confirmation code via Telegram.</p>
+                  <label>Your Phone Number</label>
+                  <div class="guide-input">+91 98765 43210</div>
+                  <button type="button" tabindex="-1">Next</button>
+                </div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span>3</span>
+            <div>
+              <p>Enter the confirmation code received in Telegram and click <strong>Sign in</strong>.</p>
+              <div class="guide-preview" aria-label="Telegram confirmation screen preview">
+                <div class="guide-browser-bar">my.telegram.org/auth</div>
+                <div class="guide-mini-page">
+                  <h3>Confirmation code</h3>
+                  <p>Code sent to <strong>+91</strong> <span class="blurred-value">98765 43210</span></p>
+                  <label>Confirmation code</label>
+                  <div class="guide-input">12345</div>
+                  <button type="button" tabindex="-1">Sign in</button>
+                </div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span>4</span>
+            <p>Click <a href="https://my.telegram.org/apps" target="_blank" rel="noopener noreferrer">API development tools</a>.</p>
+          </li>
+          <li>
+            <span>5</span>
+            <div>
+              <p>Copy <strong>API ID</strong> and <strong>API hash</strong>, then paste them into this form.</p>
+              <div class="guide-preview" aria-label="Telegram API configuration preview">
+                <div class="guide-browser-bar">my.telegram.org/apps</div>
+                <div class="guide-mini-page api-preview">
+                  <h3>App configuration</h3>
+                  <div class="guide-api-row"><label>App api_id:</label><div class="guide-input blurred-value">29161615</div></div>
+                  <div class="guide-api-row"><label>App api_hash:</label><div class="guide-input blurred-value">3cd7191d234615c390f3a3b47b4dbbd1</div></div>
+                </div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span>6</span>
+            <p>Enter your phone number here, click <strong>Send verification code</strong>, then enter the Telegram code.</p>
+          </li>
+        </ol>
+      </div>
+    </aside>
+    <script src="/console/app.js?v=telegram-ui-10" defer></script>
   </body>
 </html>

@@ -98,7 +98,7 @@ const el = {
   signInView: $("sign-in-view"), workspace: $("workspace"), identity: $("identity"), userName: $("user-name"), signOut: $("sign-out"),
   passwordSignInForm: $("password-sign-in-form"), tokenSignInForm: $("token-sign-in-form"), username: $("username"), loginPassword: $("login-password"), displayName: $("display-name"), createAccount: $("create-account"), accessToken: $("access-token"), signInStatus: $("sign-in-status"),
   viewKicker: $("view-kicker"), viewTitle: $("view-title"), profileSelect: $("global-profile-select"), refreshAccounts: $("refresh-accounts"),
-  phoneForm: $("phone-form"), telegramApiId: $("telegram-api-id"), telegramApiHash: $("telegram-api-hash"), phone: $("phone"), phoneCountryCode: $("phone-country-code"), codeForm: $("code-form"), code: $("code"), passwordForm: $("password-form"), telegramPassword: $("telegram-password"), connectStep: $("connect-step"), connectCopy: $("connect-copy"), connectStatus: $("connect-status"),
+  phoneForm: $("phone-form"), telegramApiId: $("telegram-api-id"), telegramApiHash: $("telegram-api-hash"), phone: $("phone"), phoneCountryCode: $("phone-country-code"), codeForm: $("code-form"), code: $("code"), passwordForm: $("password-form"), telegramPassword: $("telegram-password"), connectCopy: $("connect-copy"), connectStatus: $("connect-status"),
   accountList: $("account-list"), numberSearch: $("number-search"), numberStatusFilter: $("number-status-filter"), selectedProfileCard: $("selected-profile-card"),
   metricAccounts: $("metric-accounts"), metricContacts: $("metric-contacts"), metricGroups: $("metric-groups"), metricPosts: $("metric-posts"),
   quickSendForm: $("quick-send-form"), quickRecipient: $("quick-recipient"), quickMessage: $("quick-message"), quickSendButton: $("quick-send-button"), messageStatus: $("message-status"),
@@ -110,6 +110,32 @@ const el = {
   postHistorySent: $("post-history-sent"), postHistoryPending: $("post-history-pending"),
   globalSearch: $("global-search"), globalResults: $("global-results"), settingsForm: $("settings-form"), settingsStatus: $("settings-status"), backupJson: $("backup-json"), backupStatus: $("backup-status")
 };
+
+function setGuideButtonState(isOpen) {
+  $$("[data-guide-open]").forEach((button) => button.setAttribute("aria-expanded", String(isOpen)));
+}
+
+function openTelegramGuide() {
+  const panel = $("telegram-guide-panel");
+  if (!panel) return;
+  panel.hidden = false;
+  document.body.classList.add("guide-docked");
+  setGuideButtonState(true);
+}
+
+function closeTelegramGuide() {
+  const panel = $("telegram-guide-panel");
+  if (!panel || panel.hidden) return;
+  panel.hidden = true;
+  document.body.classList.remove("guide-docked");
+  setGuideButtonState(false);
+}
+
+function toggleTelegramGuide() {
+  const panel = $("telegram-guide-panel");
+  if (!panel || panel.hidden) openTelegramGuide();
+  else closeTelegramGuide();
+}
 
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, options = {}) {
@@ -847,7 +873,6 @@ function setLoginStage(stage) {
   state.login.stage = stage;
   const isPhone = stage === "phone", isCode = stage === "code", isPassword = stage === "password";
   el.phoneForm.hidden = !isPhone; el.codeForm.hidden = !isCode; el.passwordForm.hidden = !isPassword;
-  el.connectStep.textContent = isPhone ? "1 of 3" : isCode ? "2 of 3" : "3 of 3";
   el.connectCopy.textContent = isPhone ? "Use the full phone number with country code. Telegram will deliver a verification code." : isCode ? "Enter the code Telegram sent. It is used once and is not saved by this page." : "This Telegram account uses two-factor authentication. Enter its password to finish connecting.";
   if (isCode) el.code.focus(); if (isPassword) el.telegramPassword.focus();
 }
@@ -986,6 +1011,8 @@ document.addEventListener("submit", async (event) => {
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
+  if (button.dataset.guideOpen !== undefined) { toggleTelegramGuide(); return; }
+  if (button.dataset.guideClose !== undefined) { closeTelegramGuide(); return; }
   if (button.dataset.view) setView(button.dataset.view);
   if (button.dataset.jump) setView(button.dataset.jump);
   if (button.dataset.inboxView) setInboxView(button.dataset.inboxView);
@@ -1029,6 +1056,10 @@ document.addEventListener("click", async (event) => {
   const editPost = button.dataset.editPost; if (editPost) { const item = state.posts.find((row) => row.id === editPost); if (item) fillPost(item); }
   const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { state.posts.unshift({ ...item, id: uid("post"), title: `${item.title} copy`, status: "Draft", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); write(keys.posts, state.posts); render(); } }
   const deletePost = button.dataset.deletePost; if (deletePost) { state.posts = state.posts.filter((row) => row.id !== deletePost); write(keys.posts, state.posts); render(); }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeTelegramGuide();
 });
 
 (async function restoreSession() {
