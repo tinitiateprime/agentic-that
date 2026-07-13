@@ -128,6 +128,33 @@ a { color: var(--blue); word-break: break-word; }
 .panel { padding: 1rem; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .85rem; }
 .panel-heading h2 { margin-bottom: 0; }
+.user-guide-panel {
+  border-color: rgba(101, 214, 189, .28);
+  background: linear-gradient(135deg, rgba(101, 214, 189, .08), rgba(143, 183, 255, .05)), var(--surface);
+}
+.user-guide-panel .panel-heading { align-items: center; flex-wrap: wrap; }
+.guide-link {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 2.15rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: .45rem .65rem;
+  color: var(--ink);
+  background: rgba(101, 214, 189, .1);
+  font-size: .82rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+.guide-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.guide-steps li { margin: .42rem 0; padding-left: .15rem; }
+.guide-steps strong { color: var(--ink); }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
 .metric-card { padding: .85rem; }
 .metric-card span { display: block; margin-bottom: .15rem; font-size: 1.6rem; font-weight: 850; }
@@ -296,6 +323,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 @media (max-width: 480px) {
   h1 { font-size: 1.35rem; }
   .auth-card, .panel { padding: .85rem; }
+  .guide-link { width: 100%; justify-content: center; }
   .nav-menu { grid-template-columns: 1fr; }
   .button-row .button, .account-actions .mini-button, .record-actions .mini-button { flex: 1 1 auto; }
 }
