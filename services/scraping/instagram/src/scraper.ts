@@ -243,6 +243,16 @@ function addBase64Session(sessions: InstagramSession[], name: string, value?: st
   addJsonSession(sessions, name, Buffer.from(text, "base64").toString("utf8"));
 }
 
+function readChunkedEnv(prefix: string, limit = 20) {
+  const chunks: string[] = [];
+  for (let index = 1; index <= limit; index += 1) {
+    const chunk = process.env[`${prefix}_${index}`]?.trim();
+    if (!chunk) break;
+    chunks.push(chunk);
+  }
+  return chunks.length > 0 ? chunks.join("") : undefined;
+}
+
 function instagramCookies(session: InstagramSession) {
   const state = session.storageState;
   if (!state || typeof state !== "object" || !("cookies" in state)) return [];
@@ -340,8 +350,8 @@ async function loadLocalSessions() {
 async function loadStorageSessions() {
   const sessions: InstagramSession[] = [];
 
-  addJsonSession(sessions, "env-json", process.env.INSTAGRAM_STORAGE_STATE_JSON);
-  addBase64Session(sessions, "env-base64", process.env.INSTAGRAM_STORAGE_STATE_BASE64);
+  addJsonSession(sessions, "env-json", process.env.INSTAGRAM_STORAGE_STATE_JSON || readChunkedEnv("INSTAGRAM_STORAGE_STATE_JSON_CHUNK"));
+  addBase64Session(sessions, "env-base64", process.env.INSTAGRAM_STORAGE_STATE_BASE64 || readChunkedEnv("INSTAGRAM_STORAGE_STATE_BASE64_CHUNK"));
 
   const jsonPool = process.env.INSTAGRAM_STORAGE_STATES_JSON?.trim();
   if (jsonPool) {

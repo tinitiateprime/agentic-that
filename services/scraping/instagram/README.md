@@ -18,6 +18,8 @@ Private backend-only session states can be provided through one of these environ
 
 - `INSTAGRAM_STORAGE_STATE_JSON`
 - `INSTAGRAM_STORAGE_STATE_BASE64`
+- `INSTAGRAM_STORAGE_STATE_JSON_CHUNK_1`, `INSTAGRAM_STORAGE_STATE_JSON_CHUNK_2`, ... for one large JSON session split across env vars
+- `INSTAGRAM_STORAGE_STATE_BASE64_CHUNK_1`, `INSTAGRAM_STORAGE_STATE_BASE64_CHUNK_2`, ... for one large base64 session split across env vars
 - `INSTAGRAM_STORAGE_STATE_JSON_1`, `INSTAGRAM_STORAGE_STATE_JSON_2`, ...
 - `INSTAGRAM_STORAGE_STATE_BASE64_1`, `INSTAGRAM_STORAGE_STATE_BASE64_2`, ...
 - `INSTAGRAM_STORAGE_STATES_JSON` as a JSON array or object of storage states
