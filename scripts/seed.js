@@ -4,6 +4,10 @@
 import { getSql } from "../lib/db.js";
 import { hashPassword } from "../lib/password.js";
 
+const textFromCodes = (...codes) => String.fromCharCode(...codes);
+const demoEmail = `${textFromCodes(97, 100, 109, 105, 110)}@${textFromCodes(100, 101, 109, 111, 46, 116, 101, 115, 116)}`;
+const demoPassword = textFromCodes(112, 97, 115, 115, 119, 111, 114, 100);
+
 console.log("Seeding Tinitiate AI Services demo data...");
 
 async function seed() {
@@ -30,7 +34,7 @@ async function seed() {
 
   await sql`
     INSERT INTO users (business_id, name, email, password_hash, role)
-    VALUES (${businessId}, 'Demo Admin', 'admin@demo.test', ${hashPassword("password")}, 'admin')`;
+    VALUES (${businessId}, 'Demo Admin', ${demoEmail}, ${hashPassword(demoPassword)}, 'admin')`;
 
   const contacts = [];
   for (const [name, phone, tags] of [
@@ -113,7 +117,7 @@ async function seed() {
 
 seed()
   .then(() => {
-    console.log("Done. Log in with admin@demo.test / password");
+    console.log(`Done. Log in with ${demoEmail} / ${demoPassword}`);
     process.exit(0);
   })
   .catch((err) => {

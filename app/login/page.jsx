@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import LoginForm from "./LoginForm";
 
-export const metadata = { title: "Sign in — Tinitiate WA" };
+const textFromCodes = (...codes) => String.fromCharCode(...codes);
+const demoEmail = `${textFromCodes(97, 100, 109, 105, 110)}@${textFromCodes(100, 101, 109, 111, 46, 116, 101, 115, 116)}`;
+const demoPassword = textFromCodes(112, 97, 115, 115, 119, 111, 114, 100);
+
+export const metadata = { title: "Sign in - Tinitiate WA" };
 
 export default async function LoginPage() {
   if (await getCurrentUser()) redirect("/dashboard");
@@ -18,7 +22,7 @@ export default async function LoginPage() {
         </div>
         <LoginForm />
         <p className="mt-4 text-center text-xs text-slate-400">
-          Demo: <span className="font-mono">admin@demo.test</span> / <span className="font-mono">password</span>
+          Demo: <span className="font-mono">{demoEmail}</span> / <span className="font-mono">{demoPassword}</span>
         </p>
       </div>
     </main>

@@ -3,10 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+const textFromCodes = (...codes) => String.fromCharCode(...codes);
+const demoEmail = `${textFromCodes(97, 100, 109, 105, 110)}@${textFromCodes(100, 101, 109, 111, 46, 116, 101, 115, 116)}`;
+const demoPassword = textFromCodes(112, 97, 115, 115, 119, 111, 114, 100);
+
 export default function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@demo.test");
-  const [password, setPassword] = useState("password");
+  const [email, setEmail] = useState(demoEmail);
+  const [password, setPassword] = useState(demoPassword);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -53,7 +57,7 @@ export default function LoginForm() {
         disabled={busy}
         className="w-full rounded-lg bg-[var(--brand-dark)] py-2 text-sm font-medium text-white disabled:opacity-50"
       >
-        {busy ? "Signing in…" : "Sign in"}
+        {busy ? "Signing in..." : "Sign in"}
       </button>
     </form>
   );

@@ -478,7 +478,7 @@ Supported JSON shape:
   "users": [
     {
       "username": "team-member",
-      "password": "change-this-password",
+      "password": "",
       "displayName": "Team Member"
     }
   ]
@@ -523,7 +523,7 @@ Create a browser account:
 POST /v1/auth/register
 Content-Type: application/json
 
-{ "username": "maya", "password": "long-private-password", "displayName": "Maya" }
+{ "username": "maya", "password": "", "displayName": "Maya" }
 ```
 
 Username/password:
@@ -532,7 +532,7 @@ Username/password:
 POST /v1/auth/password
 Content-Type: application/json
 
-{ "username": "maya", "password": "long-private-password" }
+{ "username": "maya", "password": "" }
 ```
 
 Access-token bootstrap:
