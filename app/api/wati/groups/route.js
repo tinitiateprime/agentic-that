@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import { getSql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { importContacts } from "@/lib/data";
 import { normalizeWaNumber, watiConfigured, watiGetContacts } from "@/lib/wa/provider";
@@ -39,19 +39,15 @@ export async function POST(req) {
 
   const imported = await importContacts(user.business_id, watiContacts);
   const wanted = new Set(watiContacts.map((c) => normalizeWaNumber(c.phone)).filter(Boolean));
-  const allRows = await db
-    .prepare("SELECT id, phone FROM contacts WHERE business_id = ?")
-    .all(user.business_id);
+  const sql = await getSql();
+  const allRows = await sql`SELECT id, phone FROM contacts WHERE business_id = ${user.business_id}`;
   const contacts = allRows.filter((c) => wanted.has(normalizeWaNumber(c.phone)));
 
-  const groupId = await db.tx(async ({ prepare }) => {
-    const group = await prepare(
-      "INSERT INTO groups (business_id, name) VALUES (?, ?) RETURNING id"
-    ).get(user.business_id, groupName);
-    const insertMember = prepare(
-      "INSERT INTO group_members (group_id, contact_id) VALUES (?, ?) ON CONFLICT DO NOTHING"
-    );
-    for (const contact of contacts) await insertMember.run(group.id, contact.id);
+  const groupId = await sql.begin(async (tx) => {
+    const [group] = await tx`INSERT INTO groups (business_id, name) VALUES (${user.business_id}, ${groupName}) RETURNING id`;
+    for (const contact of contacts) {
+      await tx`INSERT INTO group_members (group_id, contact_id) VALUES (${group.id}, ${contact.id}) ON CONFLICT DO NOTHING`;
+    }
     return group.id;
   });
   return Response.json({

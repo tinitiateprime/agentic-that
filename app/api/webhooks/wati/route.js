@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import { getSql } from "@/lib/db";
 import { recordInbound } from "@/lib/wa/messaging";
 import { normalizeWaNumber } from "@/lib/wa/provider";
 
@@ -27,21 +27,23 @@ export async function POST(req) {
   }
 
   // Single-tenant deploy: route to the (first) business.
-  const business = await db.prepare("SELECT * FROM businesses ORDER BY id LIMIT 1").get();
+  const sql = await getSql();
+  const [business] = await sql`SELECT * FROM businesses ORDER BY id LIMIT 1`;
   if (!business) return Response.json({ ok: true });
 
   const waId = normalizeWaNumber(payload.waId || payload.from || payload.phone || "");
   if (!waId) return Response.json({ ok: true });
 
   // Match an existing contact by normalized number, or auto-create one.
-  const contactRows = await db.prepare("SELECT * FROM contacts WHERE business_id = ?").all(business.id);
+  const contactRows = await sql`SELECT * FROM contacts WHERE business_id = ${business.id}`;
   let contact = contactRows.find((c) => normalizeWaNumber(c.phone) === waId);
 
   if (!contact) {
     const name = payload.senderName || payload.profileName || `+${waId}`;
-    contact = await db
-      .prepare("INSERT INTO contacts (business_id, name, phone) VALUES (?, ?, ?) RETURNING *")
-      .get(business.id, name, `+${waId}`);
+    [contact] = await sql`
+      INSERT INTO contacts (business_id, name, phone)
+      VALUES (${business.id}, ${name}, ${`+${waId}`})
+      RETURNING *`;
   }
 
   // Was it a button / list tap?

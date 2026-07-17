@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import { getSql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getBusiness } from "@/lib/data";
 import { sendToContact, sendTemplateToContact, renderTemplate } from "@/lib/wa/messaging";
@@ -19,7 +19,7 @@ export async function POST(req) {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { phone, name, body } = await req.json();
+  const { phone, name, body, phoneNumberId } = await req.json();
   const waId = normalizeWaNumber(phone);
   const text = body?.trim();
   if (!waId) return Response.json({ error: "Enter a valid WhatsApp number" }, { status: 400 });
@@ -27,16 +27,18 @@ export async function POST(req) {
 
   const business = await getBusiness(user.business_id);
 
-  const rows = await db.prepare("SELECT * FROM contacts WHERE business_id = ?").all(business.id);
+  const sql = await getSql();
+  const rows = await sql`SELECT * FROM contacts WHERE business_id = ${business.id}`;
   let contact = rows.find((c) => normalizeWaNumber(c.phone) === waId);
   const isNewNumber = !contact;
 
   if (!contact) {
     // Without a name, default to the phone number — renderTemplate() treats
     // that as "no name known" so {{name}} doesn't show the number back to them.
-    contact = await db
-      .prepare("INSERT INTO contacts (business_id, name, phone) VALUES (?, ?, ?) RETURNING *")
-      .get(business.id, name?.trim() || `+${waId}`, `+${waId}`);
+    [contact] = await sql`
+      INSERT INTO contacts (business_id, name, phone)
+      VALUES (${business.id}, ${name?.trim() || `+${waId}`}, ${`+${waId}`})
+      RETURNING *`;
   }
 
   const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
@@ -80,10 +82,11 @@ export async function POST(req) {
       language: tpl.language,
       previewBody: `[WhatsApp template: ${tpl.name}]`,
       broadcastName: `quicksend_${contact.id}_${Date.now()}`,
+      phoneNumberId: phoneNumberId || undefined,
     });
     return Response.json({ ok: true, message, contact, usedTemplate: tpl.name });
   }
 
-  const message = await sendToContact({ business, contact, body: text });
+  const message = await sendToContact({ business, contact, body: text, phoneNumberId: phoneNumberId || undefined });
   return Response.json({ ok: true, message, contact });
 }

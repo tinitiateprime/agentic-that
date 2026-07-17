@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import { getSql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 
 // Add one or more contacts to a group.
@@ -8,9 +8,8 @@ export async function POST(req, { params }) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
 
-  const group = await db
-    .prepare("SELECT * FROM groups WHERE id = ? AND business_id = ?")
-    .get(id, user.business_id);
+  const sql = await getSql();
+  const [group] = await sql`SELECT * FROM groups WHERE id = ${id} AND business_id = ${user.business_id}`;
   if (!group) return Response.json({ error: "Group not found" }, { status: 404 });
 
   const { contactIds } = await req.json();
@@ -18,11 +17,10 @@ export async function POST(req, { params }) {
     return Response.json({ error: "contactIds required" }, { status: 400 });
   }
 
-  await db.tx(async ({ prepare }) => {
-    const ins = prepare(
-      "INSERT INTO group_members (group_id, contact_id) VALUES (?, ?) ON CONFLICT DO NOTHING"
-    );
-    for (const cid of contactIds) await ins.run(id, cid);
+  await sql.begin(async (tx) => {
+    for (const cid of contactIds) {
+      await tx`INSERT INTO group_members (group_id, contact_id) VALUES (${id}, ${cid}) ON CONFLICT DO NOTHING`;
+    }
   });
   return Response.json({ ok: true });
 }
@@ -33,6 +31,7 @@ export async function DELETE(req, { params }) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
   const { contactId } = await req.json();
-  await db.prepare("DELETE FROM group_members WHERE group_id = ? AND contact_id = ?").run(id, contactId);
+  const sql = await getSql();
+  await sql`DELETE FROM group_members WHERE group_id = ${id} AND contact_id = ${contactId}`;
   return Response.json({ ok: true });
 }

@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { timeAgo } from "@/lib/format";
+import SenderSelect from "@/components/SenderSelect";
 
 const DEFAULT_BUTTONS = ["Sales", "Support", "Catalog"];
 
-export default function NotificationCenter({ contacts, provider }) {
+export default function NotificationCenter({ contacts, provider, phoneNumbers = [] }) {
   const [tab, setTab] = useState("messages");
   const [query, setQuery] = useState("");
   const isWati = provider === "wati";
@@ -53,7 +54,7 @@ export default function NotificationCenter({ contacts, provider }) {
       {tab === "messages" ? (
         <MessagesTab contacts={filtered} query={query} setQuery={setQuery} />
       ) : (
-        <NewMessageTab isWati={isWati} isMeta={isMeta} />
+        <NewMessageTab isWati={isWati} isMeta={isMeta} phoneNumbers={phoneNumbers} />
       )}
     </div>
   );
@@ -111,7 +112,7 @@ function MessagesTab({ contacts, query, setQuery }) {
   );
 }
 
-function NewMessageTab({ isWati, isMeta }) {
+function NewMessageTab({ isWati, isMeta, phoneNumbers = [] }) {
   const router = useRouter();
   const [form, setForm] = useState({
     name: "",
@@ -119,6 +120,7 @@ function NewMessageTab({ isWati, isMeta }) {
     body: "Hi {{name}}, how can we help you today?",
     buttons: DEFAULT_BUTTONS,
   });
+  const [fromPhoneId, setFromPhoneId] = useState(""); // "" = default business number
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [savedContactId, setSavedContactId] = useState(null);
@@ -177,6 +179,7 @@ function NewMessageTab({ isWati, isMeta }) {
           contactId,
           body: form.body,
           buttons,
+          phoneNumberId: fromPhoneId || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -237,6 +240,8 @@ function NewMessageTab({ isWati, isMeta }) {
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <SenderSelect phoneNumbers={phoneNumbers} value={fromPhoneId} onChange={setFromPhoneId} />
 
       <div className="flex flex-wrap justify-end gap-2">
         <button

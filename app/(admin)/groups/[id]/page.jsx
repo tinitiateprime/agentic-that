@@ -7,6 +7,7 @@ import {
   listContactsNotInGroup,
   listTemplates,
 } from "@/lib/data";
+import { metaListPhoneNumbers, metaTemplatesConfigured } from "@/lib/wa/provider";
 import GroupDetail from "./GroupDetail";
 
 export async function generateMetadata({ params }) {
@@ -24,6 +25,9 @@ export default async function GroupDetailPage({ params }) {
   const members = await listGroupMembers(group.id);
   const available = await listContactsNotInGroup(user.business_id, group.id);
   const templates = await listTemplates(user.business_id);
+  // Sender numbers on the WABA — lets the broadcast pick which business number
+  // to send from when there's more than one.
+  const phoneNumbers = metaTemplatesConfigured() ? await metaListPhoneNumbers().catch(() => []) : [];
 
   return (
     <div className="space-y-4">
@@ -38,6 +42,7 @@ export default async function GroupDetailPage({ params }) {
         members={members}
         available={available}
         templates={templates}
+        phoneNumbers={phoneNumbers}
       />
     </div>
   );

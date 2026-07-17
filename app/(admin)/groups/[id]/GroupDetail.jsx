@@ -3,8 +3,9 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import SenderSelect from "@/components/SenderSelect";
 
-export default function GroupDetail({ group, members, available, templates }) {
+export default function GroupDetail({ group, members, available, templates, phoneNumbers = [] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(null); // { type, text }
@@ -13,6 +14,7 @@ export default function GroupDetail({ group, members, available, templates }) {
   // ── Broadcast ────────────────────────────────────────────────────────────
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [mode, setMode] = useState("session"); // "session" | "template" | "bot"
+  const [fromPhoneId, setFromPhoneId] = useState(""); // "" = default business number
   const [bcastBody, setBcastBody] = useState("");
   const [bcastTpl, setBcastTpl] = useState(""); // CRM template id
   const [watiTemplate, setWatiTemplate] = useState(""); // approved WATI template name
@@ -75,7 +77,7 @@ export default function GroupDetail({ group, members, available, templates }) {
     const res = await fetch(`/api/groups/${group.id}/broadcast`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, phoneNumberId: fromPhoneId || undefined }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
@@ -337,22 +339,25 @@ export default function GroupDetail({ group, members, available, templates }) {
             </>
           )}
 
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setShowBroadcast(false)} className="rounded-lg px-3 py-2 text-sm text-slate-600">
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={
-                busy ||
-                (mode === "session" && !bcastTpl && !bcastBody.trim()) ||
-                (mode === "template" && !watiTemplate) ||
-                (mode === "bot" && (!botBody.trim() || botButtons.every((b) => !b.trim())))
-              }
-              className="rounded-lg bg-[var(--brand-dark)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {busy ? "Sending…" : `Send to ${members.length} member${members.length !== 1 ? "s" : ""}`}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SenderSelect phoneNumbers={phoneNumbers} value={fromPhoneId} onChange={setFromPhoneId} />
+            <div className="ml-auto flex gap-2">
+              <button type="button" onClick={() => setShowBroadcast(false)} className="rounded-lg px-3 py-2 text-sm text-slate-600">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  busy ||
+                  (mode === "session" && !bcastTpl && !bcastBody.trim()) ||
+                  (mode === "template" && !watiTemplate) ||
+                  (mode === "bot" && (!botBody.trim() || botButtons.every((b) => !b.trim())))
+                }
+                className="rounded-lg bg-[var(--brand-dark)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Sending…" : `Send to ${members.length} member${members.length !== 1 ? "s" : ""}`}
+              </button>
+            </div>
           </div>
         </form>
       )}

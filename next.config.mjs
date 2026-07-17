@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["better-sqlite3"],
   async rewrites() {
     if (process.env.NODE_ENV !== "development") return [];
 

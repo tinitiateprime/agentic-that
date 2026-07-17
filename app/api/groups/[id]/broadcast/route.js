@@ -27,7 +27,9 @@ export async function POST(req, { params }) {
   const members = await listGroupMembers(group.id);
   if (!members.length) return Response.json({ error: "Group has no members" }, { status: 400 });
 
-  const { body, templateId, watiTemplate, templateParams, language, buttons } = await req.json();
+  const { body, templateId, watiTemplate, templateParams, language, buttons, phoneNumberId } =
+    await req.json();
+  const fromPhoneId = phoneNumberId || undefined;
 
   const results = [];
 
@@ -44,6 +46,7 @@ export async function POST(req, { params }) {
         contact,
         body: renderTemplate(text, { contact, business }),
         buttons: cleanButtons,
+        phoneNumberId: fromPhoneId,
       });
       results.push({ contactId: contact.id, name: contact.name, status: msg.status, error: msg.error || null });
     }
@@ -67,6 +70,7 @@ export async function POST(req, { params }) {
         language,
         previewBody: `[WhatsApp template: ${watiTemplate}]`,
         broadcastName,
+        phoneNumberId: fromPhoneId,
       });
       results.push({ contactId: contact.id, name: contact.name, status: msg.status, error: msg.error || null });
     }
@@ -88,7 +92,7 @@ export async function POST(req, { params }) {
   }
 
   for (const contact of members) {
-    const msg = await sendToContact({ business, contact, body: getBody(contact), templateName });
+    const msg = await sendToContact({ business, contact, body: getBody(contact), templateName, phoneNumberId: fromPhoneId });
     results.push({ contactId: contact.id, name: contact.name, status: msg.status, error: msg.error || null });
   }
 

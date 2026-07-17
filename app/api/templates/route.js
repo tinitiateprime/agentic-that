@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import { getSql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 
 export async function POST(req) {
@@ -8,8 +8,10 @@ export async function POST(req) {
   if (!name?.trim() || !body?.trim()) {
     return Response.json({ error: "Name and body are required" }, { status: 400 });
   }
-  const row = await db
-    .prepare("INSERT INTO templates (business_id, name, category, body) VALUES (?, ?, ?, ?) RETURNING id")
-    .get(user.business_id, name.trim(), category?.trim() || "marketing", body.trim());
+  const sql = await getSql();
+  const [row] = await sql`
+    INSERT INTO templates (business_id, name, category, body)
+    VALUES (${user.business_id}, ${name.trim()}, ${category?.trim() || "marketing"}, ${body.trim()})
+    RETURNING id`;
   return Response.json({ ok: true, id: row.id });
 }

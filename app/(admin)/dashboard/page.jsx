@@ -13,7 +13,7 @@ import {
   messageStatusSummary,
 } from "@/lib/data";
 import { timeAgo } from "@/lib/format";
-import { metaGetTemplates, metaTemplatesConfigured } from "@/lib/wa/provider";
+import { metaGetTemplates, metaTemplatesConfigured, metaListPhoneNumbers } from "@/lib/wa/provider";
 // WATI CRM is no longer used for this project — kept commented (not deleted)
 // in case it's needed again; see components/WatiContactsBox.jsx.
 // import WatiContactsBox from "@/components/WatiContactsBox";
@@ -51,6 +51,9 @@ export default async function DashboardPage({ searchParams }) {
   const messageStats = await messageStatusSummary(business.id);
   const metaConfigured = metaTemplatesConfigured();
   const metaTemplates = metaConfigured ? await metaGetTemplates({ approvedOnly: false }).catch(() => []) : [];
+  // Sender numbers on the WABA — lets Quick send pick which business number to
+  // send from when there's more than one (multi-number WABA).
+  const phoneNumbers = metaConfigured ? await metaListPhoneNumbers().catch(() => []) : [];
 
   return (
     <div className="space-y-5">
@@ -68,7 +71,7 @@ export default async function DashboardPage({ searchParams }) {
 
       {/* Quick send — type any WhatsApp number and message it directly via
           the active provider (WA_PROVIDER=meta). */}
-      <QuickSendBox />
+      <QuickSendBox phoneNumbers={phoneNumbers} />
 
       {/* WATI contacts box disabled — this project no longer uses the WATI
           CRM. Not deleted, just not rendered:
