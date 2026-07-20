@@ -5,6 +5,7 @@ import multer from "multer";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import {
@@ -68,7 +69,8 @@ import {
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { disconnectPlatformFolder } from "./services/folder-sync.js";
 
-const app = express();
+export const publishingApp = express();
+const app = publishingApp;
 const port = Number(process.env.PUBLISH_QUEUE_SERVICE_PORT ?? process.env.PORT ?? 8792);
 const host = process.env.PUBLISH_QUEUE_SERVICE_HOST?.trim() || "127.0.0.1";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -333,12 +335,13 @@ app.use("/uploads", express.static(uploadDir));
 // --- HEALTH ---
 app.get("/api/health", async (_req, res) => {
   try {
-    await localStorageHealth();
+    const storage = await localStorageHealth();
+    const serverless = process.env.SERVERLESS === "true" || process.env.NETLIFY === "true";
     res.json({
       ok: true,
       service: "agenticthat-publish-queue-runner",
-      storage: "local-json",
-      automationReady: true,
+      storage: storage.storage,
+      automationReady: !serverless,
       automationRunning: isAutomationRunning()
     });
   } catch (error) {
@@ -508,6 +511,12 @@ app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: 
 
 app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
   try {
+    if (process.env.SERVERLESS === "true" || process.env.NETLIFY === "true") {
+      res.status(409).json({
+        message: "Interactive browser login requires the persistent Publish Queue Runner. Configure PUBLISH_QUEUE_API_URL to that runner before opening a manual login session."
+      });
+      return;
+    }
     const user = currentUser(req);
     const { account, started } = await startManualAccountSession(pathParam(req.params.id, "id"));
     await logActivity(
@@ -925,6 +934,12 @@ app.get("/api/automation/platforms/:platform/input", requireRoles("operations_ma
 // --- TRIGGER AUTOMATION ---
 app.post("/api/automation/run", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
+    if (process.env.SERVERLESS === "true" || process.env.NETLIFY === "true") {
+      res.status(409).json({
+        message: "Browser publishing requires the persistent Publish Queue Runner. Configure PUBLISH_QUEUE_API_URL to the runner and try again."
+      });
+      return;
+    }
     const user = currentUser(req);
     const payload = automationRunRequestSchema.parse(req.body ?? {});
     await logActivity(user.id, "automation.started", "automation_run", null, "Manual publisher automation was started.", {});
@@ -972,32 +987,53 @@ if (process.env.NODE_ENV === "production" && authSecret() === "local-development
 }
 
 if (process.env.NODE_ENV === "production") {
-  const missingRolePasswords = [
-    "OPERATIONS_MANAGER_PASSWORD",
-    "POST_UPLOADER_PASSWORD",
-    "SCHEDULER_PASSWORD",
-    "VIEWER_PASSWORD",
-  ].filter(name => !(process.env[`PUBLISH_QUEUE_${name}`]?.trim() || process.env[name]?.trim()));
-  if (missingRolePasswords.length > 0) {
-    throw new Error(`Publishing role passwords are required in production: ${missingRolePasswords.join(", ")}.`);
+  const managerPassword = process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD?.trim()
+    || process.env.OPERATIONS_MANAGER_PASSWORD?.trim()
+    || process.env.ADMIN_PASSWORD?.trim();
+  if (!managerPassword) {
+    throw new Error("PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD or ADMIN_PASSWORD is required in production.");
   }
 }
 
-const server = app.listen(port, host, () => {
-  console.log(`Publish Queue Runner API listening on http://${host}:${port}`);
-  void reconcileSavedAccountSessions().catch(error => {
-    console.warn("Could not reconcile saved publishing sessions:", error instanceof Error ? error.message : error);
+export type PublishingHttpServerOptions = {
+  host?: string;
+  port?: number;
+  startBackgroundServices?: boolean;
+};
+
+export function createPublishingHttpServer(options: PublishingHttpServerOptions = {}): Server {
+  const serverHost = options.host ?? host;
+  const serverPort = options.port ?? port;
+  const startBackgroundServices = options.startBackgroundServices ?? true;
+  const server = app.listen(serverPort, serverHost, () => {
+    const address = server.address();
+    const resolvedPort = typeof address === "object" && address ? address.port : serverPort;
+    console.log(`Publish Queue Runner API listening on http://${serverHost}:${resolvedPort}`);
+    if (!startBackgroundServices) return;
+    void reconcileSavedAccountSessions().catch(error => {
+      console.warn("Could not reconcile saved publishing sessions:", error instanceof Error ? error.message : error);
+    });
+    startScheduler();
   });
-  startScheduler();
-});
+  return server;
+}
+
+const isDirectExecution = Boolean(process.argv[1])
+  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+const server = isDirectExecution
+  ? createPublishingHttpServer()
+  : null;
 
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   stopScheduler();
-  server.close();
+  server?.close();
 }
 
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+if (server) {
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}

@@ -13,8 +13,8 @@ export function parseMoneyToCents(input) {
   return Math.round((Number.isFinite(n) ? n : 0) * 100);
 }
 
-// Supabase returns ISO timestamps with a timezone. Add a timezone only when
-// one is absent, so a bare "YYYY-MM-DD HH:mm:ss" is still read as UTC.
+// PostgreSQL timestamps normally include a timezone. Add one only when it is
+// absent, so a bare "YYYY-MM-DD HH:mm:ss" is still read as UTC.
 function parseDate(value) {
   if (value instanceof Date) return value;
   const normalized = String(value).trim().replace(" ", "T");

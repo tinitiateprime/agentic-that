@@ -1,8 +1,8 @@
 import postgres from "postgres";
 import { hashPassword, verifyPassword } from "./password.js";
 
-// Single data backend: Supabase (Postgres). Every query in the app goes through
-// the postgres.js tagged-template client returned by getSql().
+// Single data backend: PostgreSQL. Every query in the app goes through the
+// postgres.js tagged-template client returned by getSql().
 //
 //   const sql = await getSql();
 //   const rows = await sql`SELECT * FROM contacts WHERE business_id = ${id}`;
@@ -11,34 +11,21 @@ import { hashPassword, verifyPassword } from "./password.js";
 // getSql() guarantees the schema migration + first-boot admin have run before
 // the first query. It is lazy, so next build never touches the database.
 
-function runtimeEnv(parts, fallback = "") {
-  return process.env[parts.join("_")] || fallback;
+function runtimeEnv(name, fallback = "") {
+  return process.env[name] || fallback;
 }
 
-// Supabase / Postgres connection string, from the Supabase dashboard:
-// Project Settings > Database > Connection string (URI).
-//
-// Use the pooled Transaction connection (port 6543) for Netlify/serverless, or
-// the direct connection (port 5432) for a long-running local server.
+// Use a serverless-compatible pooled PostgreSQL connection for Netlify and a
+// direct connection for a long-running local server.
 function connectionString() {
-  const url = (
-    runtimeEnv(["SUPABASE", "DATABASE", "URL"]) ||
-    runtimeEnv(["SUPABASE", "DB", "URL"]) ||
-    runtimeEnv(["DATABASE", "URL"])
-  ).trim();
+  const url = runtimeEnv("DATABASE_URL").trim();
   if (!url) {
-    throw new Error(
-      "SUPABASE_DATABASE_URL is not set. Paste your Supabase connection string from Project Settings > Database > Connection string."
-    );
+    throw new Error("DATABASE_URL is not set. Add a serverless-compatible pooled PostgreSQL connection URL.");
   }
 
   // Guard against the example placeholder being copied verbatim.
   if (url.includes("...") || /\[YOUR-PASSWORD\]/i.test(url) || /aws-\.\.\./.test(url)) {
-    throw new Error(
-      "SUPABASE_DATABASE_URL still contains a placeholder. Use your real Supabase string from " +
-        "Project Settings > Database > Connection string (URI), with the actual host " +
-        "and your DB password filled in."
-    );
+    throw new Error("DATABASE_URL still contains a placeholder. Add the real database host, credentials, and database name.");
   }
   return url;
 }
@@ -65,8 +52,8 @@ const globalForDb = globalThis;
 
 function getClient() {
   return globalForDb.__tinitiateSql || (globalForDb.__tinitiateSql = postgres(connectionString(), {
-    // Safe with Supabase's transaction pooler, which cannot hold server-side
-    // prepared statements across pooled connections.
+    // Serverless transaction poolers cannot retain prepared statements across
+    // pooled connections.
     prepare: false,
     max: Number(process.env.PG_POOL_MAX || 5),
     idle_timeout: 20,
@@ -87,8 +74,8 @@ export async function getSql() {
 }
 
 async function bootstrapAdmin(sql) {
-  const email = runtimeEnv(["ADMIN", "EMAIL"]).trim();
-  const password = runtimeEnv(["ADMIN", "PASSWORD"]);
+  const email = runtimeEnv("ADMIN_EMAIL").trim();
+  const password = runtimeEnv("ADMIN_PASSWORD");
   if (!email || !password) return;
 
   const [existing] = await sql`SELECT id, password_hash FROM users WHERE email = ${email}`;
@@ -103,8 +90,8 @@ async function bootstrapAdmin(sql) {
   if (!biz) {
     [biz] = await sql`
       INSERT INTO businesses (name, admin_number, provider, currency)
-      VALUES (${runtimeEnv(["BUSINESS", "NAME"], "My Business")}, ${runtimeEnv(["WA", "FROM"])},
-              ${runtimeEnv(["WA", "PROVIDER"], "mock")}, ${runtimeEnv(["CURRENCY"], "INR")})
+      VALUES (${runtimeEnv("BUSINESS_NAME", "My Business")}, ${runtimeEnv("WA_FROM")},
+              ${runtimeEnv("WA_PROVIDER", "mock")}, ${runtimeEnv("CURRENCY", "INR")})
       RETURNING id`;
   }
 

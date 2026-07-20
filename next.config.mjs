@@ -34,7 +34,7 @@ const nextConfig = {
         ? `http://127.0.0.1:${Number(process.env.PUBLISH_QUEUE_SERVICE_PORT || 8792)}`
         : "");
 
-    if (publishQueueTarget) {
+    if (publishQueueTarget && process.env.NETLIFY !== "true") {
       const target = publishQueueTarget.replace(/\/$/, "");
       rewrites.push(
         {

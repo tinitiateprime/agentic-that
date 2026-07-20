@@ -3,7 +3,7 @@ import { normalizeWaNumber } from "./wa/provider.js";
 
 // This deployment serves a single business; helpers resolve it from the
 // signed-in user's business_id. All queries are scoped by business_id and run
-// against Supabase (Postgres) via the `sql` tagged-template client.
+// against PostgreSQL via the `sql` tagged-template client.
 
 export async function getBusiness(businessId) {
   const sql = await getSql();

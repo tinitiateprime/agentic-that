@@ -18,7 +18,7 @@ Developer runs npm run server
 
 Each user enters their own Telegram API ID and API Hash when connecting a number. Those credentials and the Telegram session are encrypted in `data/store.json`, so one phone number is never reused as another sender.
 
-No PostgreSQL, Supabase, pgAdmin, or separate database server is required. Backend data is stored in the local encrypted JSON datastore at `data/store.json`. The application UI opens in the browser, while VS Code is only used for editing/running the project.
+No PostgreSQL, pgAdmin, or separate database server is required. Backend data is stored in the local encrypted JSON datastore at `data/store.json`. The application UI opens in the browser, while VS Code is only used for editing/running the project.
 
 ## What You Can Do
 

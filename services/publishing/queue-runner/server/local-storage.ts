@@ -33,6 +33,11 @@ import {
 
 type StoredUser = UserProfile & { passwordHash: string };
 
+type BlobStore = {
+  get: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<unknown>;
+  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean }) => Promise<unknown>;
+};
+
 type StoredFileInput = {
   originalName: string;
   fileName: string;
@@ -101,6 +106,12 @@ const passwordIterations = 120_000;
 const passwordAlgorithm = "pbkdf2_sha256";
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localStoreFile = resolveFromRoot(process.env.PUBLISH_QUEUE_DATA_PATH ?? "./data/store.json");
+const useNetlifyBlobs = (
+  process.env.DATA_STORE === "netlify-blobs" ||
+  process.env.NETLIFY === "true" ||
+  Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
+);
+let blobStorePromise: Promise<BlobStore> | null = null;
 let storeMutationQueue: Promise<void> = Promise.resolve();
 let storeReadyPromise: Promise<void> | null = null;
 
@@ -150,7 +161,7 @@ function verifyPassword(password: string, passwordHash?: string | null) {
 
 function configuredBootstrapUsers(): BootstrapUser[] {
   const managerUsername = bootstrapEnvironment("OPERATIONS_MANAGER_USERNAME") || "operations.manager";
-  const managerPassword = bootstrapEnvironment("OPERATIONS_MANAGER_PASSWORD");
+  const managerPassword = bootstrapEnvironment("OPERATIONS_MANAGER_PASSWORD") || process.env.ADMIN_PASSWORD?.trim();
   const uploaderUsername = bootstrapEnvironment("POST_UPLOADER_USERNAME") || "content.uploader";
   const uploaderPassword = bootstrapEnvironment("POST_UPLOADER_PASSWORD");
   const schedulerUsername = bootstrapEnvironment("SCHEDULER_USERNAME") || "post.scheduler";
@@ -158,7 +169,7 @@ function configuredBootstrapUsers(): BootstrapUser[] {
   const viewerUsername = bootstrapEnvironment("VIEWER_USERNAME") || "workspace.viewer";
   const viewerPassword = bootstrapEnvironment("VIEWER_PASSWORD");
 
-  return [
+  const users = [
     {
       username: managerUsername,
       fullName: bootstrapEnvironment("OPERATIONS_MANAGER_NAME") || "Operations Manager",
@@ -196,6 +207,9 @@ function configuredBootstrapUsers(): BootstrapUser[] {
     username: normalizeUsername(user.username),
     email: normalizeEmail(user.email, user.username)
   })) as BootstrapUser[];
+
+  const requireConfiguredPassword = process.env.NODE_ENV === "production" || process.env.SERVERLESS === "true" || process.env.NETLIFY === "true";
+  return users.filter(user => user.role === "operations_manager" || user.passwordConfigured || !requireConfiguredPassword);
 }
 
 function createAutomation(platform: Platform, accountId: string, uploadId: string, sourceFileUrl: string) {
@@ -294,6 +308,12 @@ function addBootstrapUsers(store: Store) {
 }
 
 async function writeStoreFile(store: Store) {
+  if (useNetlifyBlobs) {
+    const blobStore = await getBlobStore();
+    await blobStore.setJSON("store", store);
+    return;
+  }
+
   await fs.mkdir(path.dirname(localStoreFile), { recursive: true });
   const temporaryFile = localStoreFile + "." + process.pid + "." + randomUUID() + ".tmp";
   await fs.writeFile(temporaryFile, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
@@ -306,24 +326,36 @@ async function writeStoreFile(store: Store) {
 }
 
 async function readStoreFile() {
+  if (useNetlifyBlobs) {
+    const blobStore = await getBlobStore();
+    return normalizeStore(await blobStore.get("store", { type: "json", consistency: "strong" }));
+  }
+
   return normalizeStore(JSON.parse(await fs.readFile(localStoreFile, "utf8")));
+}
+
+function getBlobStore(): Promise<BlobStore> {
+  blobStorePromise ??= import("@netlify/blobs")
+    .then(({ getStore }) => getStore("agentic-that-publishing") as BlobStore);
+  return blobStorePromise;
 }
 
 async function ensureStoreReady() {
   if (!storeReadyPromise) {
     storeReadyPromise = (async () => {
-      await fs.mkdir(path.dirname(localStoreFile), { recursive: true });
+      if (!useNetlifyBlobs) await fs.mkdir(path.dirname(localStoreFile), { recursive: true });
       let store: Store;
       let mustWrite = false;
       try {
         store = await readStoreFile();
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (useNetlifyBlobs || (error as NodeJS.ErrnoException).code !== "ENOENT") {
           throw new Error("Could not read local publish queue data: " + (error instanceof Error ? error.message : String(error)));
         }
         store = emptyStore();
         mustWrite = true;
       }
+      if (useNetlifyBlobs && store.users.length === 0) mustWrite = true;
       if (addBootstrapUsers(store)) mustWrite = true;
       if (mustWrite) await writeStoreFile(store);
     })();
@@ -351,8 +383,12 @@ async function mutateStore<T>(mutator: (store: Store) => T | Promise<T>) {
 
 export async function localStorageHealth() {
   const store = await readStore();
-  await fs.access(localStoreFile);
-  return { path: localStoreFile, version: store.version };
+  if (!useNetlifyBlobs) await fs.access(localStoreFile);
+  return {
+    path: useNetlifyBlobs ? "netlify-blobs://agentic-that-publishing/store" : localStoreFile,
+    version: store.version,
+    storage: useNetlifyBlobs ? "netlify-blobs" : "local-json"
+  };
 }
 
 export async function logActivity(

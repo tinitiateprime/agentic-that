@@ -94,6 +94,7 @@ function readPublishingSession() {
 
 async function responsePayload(response) {
   const text = await response.text().catch(() => "");
+  const isJson = response.headers.get("content-type")?.includes("application/json");
   let payload = {};
   try {
     payload = text ? JSON.parse(text) : {};
@@ -101,7 +102,10 @@ async function responsePayload(response) {
     payload = {};
   }
   if (!response.ok) {
-    const error = new Error(payload.message || payload.error || text || "The request could not be completed.");
+    const fallback = isJson || !text.trim()
+      ? text.trim() || "The request could not be completed."
+      : `The service API returned ${response.status} instead of JSON. Refresh the page or check the service connection.`;
+    const error = new Error(payload.message || payload.error || fallback);
     error.status = response.status;
     throw error;
   }
@@ -746,7 +750,7 @@ function PublishingManager({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="Start the AgenticThat development workspace, then refresh this integration."
+        copy="The publishing API did not respond. Refresh once; if the problem remains, check the Netlify function deployment or the configured external runner URL."
         action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
       />
     );
@@ -760,6 +764,7 @@ function PublishingManager({
           <p>Protected configuration</p>
           <h3>Operations Manager access required</h3>
           <div>Sign in here once. The same secure session opens Publish Queue Runner, while account configuration remains in Config Manager.</div>
+          <small><ShieldCheck size={14} />On Netlify, use <strong>operations.manager</strong> with the workspace admin password unless a dedicated publishing password is configured.</small>
           {status === "needs-manager" && <small><CircleAlert size={14} />The current Publish Queue role cannot manage accounts.</small>}
         </div>
         <form onSubmit={signIn}>

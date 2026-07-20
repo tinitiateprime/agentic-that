@@ -6,6 +6,12 @@ import { cookies } from "next/headers";
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const useNetlifyBlobs = (
+  process.env.DATA_STORE === "netlify-blobs" ||
+  process.env.NETLIFY === "true" ||
+  Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
+);
+let blobStorePromise = null;
 
 function resolveDataPath() {
   if (process.env.PLATFORM_AUTH_DATA_PATH?.trim()) {
@@ -53,12 +59,13 @@ function verifyPassword(password, storedHash) {
 }
 
 async function readStore() {
+  if (useNetlifyBlobs) {
+    const store = await getBlobStore();
+    return normalizeStore(await store.get("store", { type: "json", consistency: "strong" }));
+  }
+
   try {
-    const parsed = JSON.parse(await readFile(dataPath, "utf8"));
-    if (parsed?.version !== 1 || !Array.isArray(parsed.users) || !Array.isArray(parsed.sessions)) {
-      throw new Error("Platform authentication data has an invalid structure.");
-    }
-    return parsed;
+    return normalizeStore(JSON.parse(await readFile(dataPath, "utf8")));
   } catch (error) {
     if (error?.code === "ENOENT") return emptyStore();
     throw error;
@@ -66,10 +73,30 @@ async function readStore() {
 }
 
 async function writeStore(store) {
+  if (useNetlifyBlobs) {
+    const blobStore = await getBlobStore();
+    await blobStore.setJSON("store", store);
+    return;
+  }
+
   await mkdir(path.dirname(dataPath), { recursive: true });
   const temporaryPath = `${dataPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporaryPath, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporaryPath, dataPath);
+}
+
+function normalizeStore(value) {
+  if (!value || typeof value !== "object") return emptyStore();
+  if (value.version !== 1 || !Array.isArray(value.users) || !Array.isArray(value.sessions)) {
+    throw new Error("Platform authentication data has an invalid structure.");
+  }
+  return value;
+}
+
+function getBlobStore() {
+  blobStorePromise ??= import("@netlify/blobs")
+    .then(({ getStore }) => getStore("agentic-that-platform-auth"));
+  return blobStorePromise;
 }
 
 function pruneSessions(store) {

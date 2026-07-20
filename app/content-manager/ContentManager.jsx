@@ -102,6 +102,7 @@ function readPublishingSession() {
 
 async function responsePayload(response) {
   const text = await response.text().catch(() => "");
+  const isJson = response.headers.get("content-type")?.includes("application/json");
   let payload = {};
   try {
     payload = text ? JSON.parse(text) : {};
@@ -109,7 +110,10 @@ async function responsePayload(response) {
     payload = {};
   }
   if (!response.ok) {
-    const error = new Error(payload.message || payload.error || text || "The request could not be completed.");
+    const fallback = isJson || !text.trim()
+      ? text.trim() || "The request could not be completed."
+      : `The service API returned ${response.status} instead of JSON. Refresh the page or check the service connection.`;
+    const error = new Error(payload.message || payload.error || fallback);
     error.status = response.status;
     throw error;
   }
@@ -619,7 +623,7 @@ function PublishingContent({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="Start the Publish Queue Runner API, then refresh Content Manager to load accounts and post data."
+        copy="The publishing API did not respond. Use Refresh above; if the problem remains, check the Netlify function deployment or external runner URL."
         action={<a className="content-primary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={15} /></a>}
       />
     );
@@ -633,6 +637,7 @@ function PublishingContent({
           <p>Protected content data</p>
           <h3>Publish Queue sign in required</h3>
           <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, schedules, and storage links.</div>
+          <small><ShieldCheck size={14} />On Netlify, use <strong>operations.manager</strong> with the workspace admin password unless a dedicated publishing password is configured.</small>
         </div>
         <form onSubmit={signIn}>
           <label><span>Username</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>

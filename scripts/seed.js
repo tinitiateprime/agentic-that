@@ -1,8 +1,8 @@
 // Wipes and recreates demo data. Safe to re-run any time.
 //   npm run seed
-// Runs against Supabase (Postgres) via the shared sql client.
-import { getSql } from "../lib/db.js";
-import { hashPassword } from "../lib/password.js";
+// Runs against PostgreSQL via the shared WhatsApp sql client.
+import { getSql } from "../services/messaging/whatsapp/src/lib/db.js";
+import { hashPassword } from "../services/messaging/whatsapp/src/lib/password.js";
 
 const textFromCodes = (...codes) => String.fromCharCode(...codes);
 const demoEmail = `${textFromCodes(97, 100, 109, 105, 110)}@${textFromCodes(100, 101, 109, 111, 46, 116, 101, 115, 116)}`;

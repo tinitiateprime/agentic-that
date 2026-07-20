@@ -67,7 +67,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = await response.text().catch(() => "");
-    let message = payload.trim() || `Request failed with ${response.status}`;
+    const isJson = response.headers.get("content-type")?.includes("application/json");
+    let message = isJson || !payload.trim()
+      ? payload.trim() || `Request failed with ${response.status}`
+      : `The publishing API returned ${response.status} instead of JSON. Refresh the page or check the service connection.`;
     try {
       const error = JSON.parse(payload) as { message?: string };
       message = error?.message ?? message;
