@@ -117,7 +117,27 @@ export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
 
   useEffect(() => {
-    setSession(readSavedSession());
+    const savedSession = readSavedSession();
+    if (!savedSession) return;
+
+    let cancelled = false;
+    api.me()
+      .then(user => {
+        if (cancelled) return;
+        const currentSession = { token: savedSession.token, user };
+        window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentSession));
+        setSession(currentSession);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAuthToken(null);
+        window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+        setSession(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const signIn = (response: AuthResponse) => {

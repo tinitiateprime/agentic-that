@@ -765,7 +765,7 @@ function PublishingManager({
           <p>Protected configuration</p>
           <h3>Operations Manager access required</h3>
           <div>Sign in here once. The same secure session opens Publish Queue Runner, while account configuration remains in Config Manager.</div>
-          <small><ShieldCheck size={14} />On Netlify, use <strong>operations.manager</strong> with the workspace admin password unless a dedicated publishing password is configured.</small>
+          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
           {status === "needs-manager" && <small><CircleAlert size={14} />The current Publish Queue role cannot manage accounts.</small>}
         </div>
         <form onSubmit={signIn}>

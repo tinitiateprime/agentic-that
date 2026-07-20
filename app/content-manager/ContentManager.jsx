@@ -638,7 +638,7 @@ function PublishingContent({
           <p>Protected content data</p>
           <h3>Publish Queue sign in required</h3>
           <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, schedules, and storage links.</div>
-          <small><ShieldCheck size={14} />On Netlify, use <strong>operations.manager</strong> with the workspace admin password unless a dedicated publishing password is configured.</small>
+          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
         </div>
         <form onSubmit={signIn}>
           <label><span>Username</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
