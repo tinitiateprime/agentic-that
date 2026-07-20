@@ -6,9 +6,18 @@ import { cookies } from "next/headers";
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const dataPath = path.resolve(
-  process.env.PLATFORM_AUTH_DATA_PATH || path.join(process.cwd(), "data", "platform-auth.json")
-);
+
+function resolveDataPath() {
+  if (process.env.PLATFORM_AUTH_DATA_PATH?.trim()) {
+    return path.resolve(process.env.PLATFORM_AUTH_DATA_PATH.trim());
+  }
+  if (process.env.NETLIFY === "true") {
+    return "/tmp/platform-auth.json";
+  }
+  return path.join(process.cwd(), "data", "platform-auth.json");
+}
+
+const dataPath = path.resolve(resolveDataPath());
 
 let mutationQueue = Promise.resolve();
 
