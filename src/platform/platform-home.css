@@ -55,12 +55,38 @@
 
 .site-signin,
 .site-create-account,
-.site-signout {
+.site-signout,
+.site-content-manager,
+.site-config-manager {
   min-height: 40px;
   border-radius: 8px;
   padding: 0 15px;
   font-size: 13px;
   font-weight: 750;
+}
+
+.site-content-manager {
+  color: #e8f7ff;
+  border: 1px solid #295974;
+  background: #081d2a;
+}
+
+.site-content-manager:hover {
+  color: #ffffff;
+  border-color: #3b84a8;
+  background: #0b2b3c;
+}
+
+.site-config-manager {
+  color: #d9fff4;
+  border: 1px solid #1d5f50;
+  background: #09251f;
+}
+
+.site-config-manager:hover {
+  color: #ffffff;
+  border-color: #2d8f77;
+  background: #0d342b;
 }
 
 .site-signin {
@@ -591,6 +617,12 @@
 .service-card:hover {
   background: #090909;
   transform: translateY(-2px);
+}
+
+.service-card-button {
+  width: 100%;
+  color: inherit;
+  text-align: left;
 }
 
 .scrape-intelligence-card {

@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+browser-data/
+data/*
+!data/.gitkeep
+uploads/*
+!uploads/.gitkeep

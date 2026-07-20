@@ -15,13 +15,13 @@ Netlify reads [netlify.toml](../netlify.toml):
 
 ```text
 Build command: npm run build
-Publish directory: dist
+Publish directory: .next
 Functions directory: netlify/functions
 ```
 
 ## Required Environment Variables
 
-Add these in Netlify site settings:
+The Telegram API always requires these values in Netlify site settings:
 
 ```text
 SESSION_ENCRYPTION_KEY=<generated secret>
@@ -29,6 +29,8 @@ USER_PROVISIONING_KEY=<generated secret>
 SESSION_COOKIE_SECURE=true
 DATA_STORE=netlify-blobs
 ```
+
+The complete environment list for Telegram, WhatsApp, Instagram scraping, and the externally hosted Publish Queue backend is maintained in [netlify-env.md](./netlify-env.md).
 
 Generate the two secrets locally:
 

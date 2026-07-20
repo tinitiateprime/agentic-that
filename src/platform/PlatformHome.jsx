@@ -21,6 +21,13 @@ const navItems = ["Marketplace", "Services", "Solutions", "Docs", "Company"];
 
 const services = [
   {
+    name: "Content Manager",
+    description: "View connected accounts by service and app, with content counts for publishing destinations.",
+    meta: "Account inventory",
+    action: "Open manager",
+    destination: "/content-manager",
+  },
+  {
     name: "Auto Scrape Intelligence",
     description: "Deploy intelligent agents to scrape Instagram profiles, reels, hashtags, comments and post signals into clean JSON/CSV files.",
     meta: "Data pipeline",
@@ -28,8 +35,9 @@ const services = [
   },
   {
     name: "Publish Queue Runner",
-    description: "Schedule content from local folders across Instagram, X, LinkedIn, Facebook, and YouTube.",
+    description: "Create and schedule content across Instagram, X, LinkedIn, Facebook, and YouTube.",
     meta: "Content operations",
+    destination: "/publishing",
   },
   {
     name: "Post Engagement Agent",
@@ -52,7 +60,15 @@ const scraperPlatforms = [
   { name: "LinkedIn", logo: LinkedInLogo },
 ];
 
-const socialPublishingPlatforms = [
+const publishingPlatforms = [
+  { name: "Instagram", logo: InstagramLogo, action: "Open runner", enabled: true },
+  { name: "Facebook", logo: FacebookLogo, action: "Open runner", enabled: true },
+  { name: "X", logo: XLogo, action: "Open runner", enabled: true },
+  { name: "YouTube", logo: YouTubeLogo, action: "Open runner", enabled: true },
+  { name: "LinkedIn", logo: LinkedInLogo, action: "Open runner", enabled: true },
+];
+
+const socialEngagementPlatforms = [
   { name: "Instagram", logo: InstagramLogo },
   { name: "Facebook", logo: FacebookLogo },
   { name: "X", logo: XLogo },
@@ -104,6 +120,27 @@ function ScrapeIntelligenceCard({ service }) {
         </video>
       </div>
     </article>
+  );
+}
+
+function StandardServiceCard({ service, onOpen }) {
+  const content = (
+    <>
+      <div className="service-top">
+        <h3>{service.name}</h3>
+        <span>{onOpen ? service.action || "Open runner" : service.meta}</span>
+      </div>
+      <p className="repo">{service.repo}</p>
+      <p className="service-text">{service.description}</p>
+    </>
+  );
+
+  return onOpen ? (
+    <button className="service-card service-card-button" type="button" onClick={onOpen}>
+      {content}
+    </button>
+  ) : (
+    <article className="service-card">{content}</article>
   );
 }
 
@@ -215,6 +252,14 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
     window.location.href = destination;
   };
 
+  const openConfigManager = () => {
+    openProtectedService(serviceEndpoints.configManager.consoleUrl);
+  };
+
+  const openContentManager = () => {
+    openProtectedService(serviceEndpoints.contentManager.consoleUrl);
+  };
+
   const openTelegramDashboard = () => {
     if (!serviceEndpoints.telegram.dashboardUrl) {
       window.alert(
@@ -228,6 +273,10 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 
   const openInstagramScraper = () => {
     openProtectedService(serviceEndpoints.instagramScraper.consoleUrl);
+  };
+
+  const openPublishQueue = () => {
+    openProtectedService(serviceEndpoints.publishQueue.consoleUrl);
   };
 
   const openWhatsAppDashboard = () => {
@@ -281,6 +330,16 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
         </div>
 
         <div className="nav-actions">
+          {user && (
+            <>
+              <button className="site-content-manager" type="button" onClick={openContentManager}>
+                Content Manager
+              </button>
+              <button className="site-config-manager" type="button" onClick={openConfigManager}>
+                Config Manager
+              </button>
+            </>
+          )}
           <button className="ghost-button" type="button">
             Contact
           </button>
@@ -351,14 +410,11 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
               service.featured ? (
                 <ScrapeIntelligenceCard service={service} key={service.name} />
               ) : (
-              <article className="service-card" key={service.name}>
-                <div className="service-top">
-                  <h3>{service.name}</h3>
-                  <span>{service.meta}</span>
-                </div>
-                <p className="repo">{service.repo}</p>
-                <p className="service-text">{service.description}</p>
-              </article>
+                <StandardServiceCard
+                  key={service.name}
+                  service={service}
+                  onOpen={service.destination ? () => openProtectedService(service.destination) : null}
+                />
               )
             ))}
           </div>
@@ -383,15 +439,16 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             <IntegrationServiceSection
               kicker="Publishing Service"
               title="Publish Queue Runner"
-              description="Queue, schedule, and track publishing workflows across major social channels once each platform connector is added."
-              platforms={socialPublishingPlatforms}
+              description="Create, queue, schedule, and track browser-based publishing workflows across all connected social channels."
+              platforms={publishingPlatforms}
+              onOpen={openPublishQueue}
             />
 
             <IntegrationServiceSection
               kicker="Engagement Service"
               title="Post Engagement Agent"
               description="Prepare monitored engagement workflows for posts, replies, interactions, and verification-driven actions across social channels."
-              platforms={socialPublishingPlatforms}
+              platforms={socialEngagementPlatforms}
             />
           </div>
         </div>

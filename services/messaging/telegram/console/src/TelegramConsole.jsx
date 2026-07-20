@@ -77,7 +77,7 @@ export function TelegramConsole() {
                   "Sign in"
                 ),
                 h("button", {"id":"create-account","className":"button ghost","type":"button"},
-                  "Create account"
+                  "Create workspace"
                 )
               )
             ),
@@ -236,7 +236,7 @@ export function TelegramConsole() {
                     h("use", {"href":"#nav-connect"})
                   ),
                   h("span", null,
-                    "Connect account"
+                    "Config Manager"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"manage-numbers"},

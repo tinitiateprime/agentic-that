@@ -60,15 +60,22 @@ const instagramPort = await findPort(
   positivePort(process.env.INSTAGRAM_SERVICE_PORT, 8791, "INSTAGRAM_SERVICE_PORT"),
   "Instagram"
 );
+const publishQueuePort = await findPort(
+  positivePort(process.env.PUBLISH_QUEUE_SERVICE_PORT, 8792, "PUBLISH_QUEUE_SERVICE_PORT"),
+  "Publish Queue"
+);
 
 const siteUrl = `http://${host}:${sitePort}`;
 const telegramUrl = `http://${host}:${telegramPort}/console`;
 const instagramUrl = `${siteUrl}/scraper/instagram`;
+const publishQueueUrl = `${siteUrl}/publishing`;
+const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
 
 console.log("\nAgenticThat development workspace");
 console.log(`  Website + WhatsApp  ${siteUrl}`);
 console.log(`  Telegram           ${telegramUrl}`);
 console.log(`  Instagram          ${instagramUrl}`);
+console.log(`  Publish Queue      ${publishQueueUrl}`);
 console.log("  Press Ctrl+C once to stop every service.\n");
 
 const commonEnv = { ...process.env, HOST: host };
@@ -83,7 +90,11 @@ const services = [
       ...commonEnv,
       PORT: String(sitePort),
       DEV_PORT_ATTEMPTS: "1",
+      TELEGRAM_SERVICE_PORT: String(telegramPort),
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
+      PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
+      PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
+      NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: telegramUrl,
     },
   },
@@ -109,6 +120,18 @@ const services = [
     env: {
       ...commonEnv,
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
+    },
+  },
+  {
+    name: "publishing",
+    color: "\u001b[33m",
+    command: process.execPath,
+    args: ["--import", tsxLoader, path.join(projectRoot, "services", "publishing", "queue-runner", "server", "index.ts")],
+    cwd: path.join(projectRoot, "services", "publishing", "queue-runner"),
+    env: {
+      ...commonEnv,
+      PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
+      PUBLISH_QUEUE_WEB_ORIGIN: siteUrl,
     },
   },
 ];

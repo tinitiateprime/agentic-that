@@ -593,7 +593,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     sendJson(request, response, 200, {
       ok: true,
       service: "telegram-multi-user",
-      storage: process.env.DATA_STORE || "json"
+      storage: process.env.DATA_STORE || "json",
+      configManagerUrl: config.corsOrigin
+        ? config.corsOrigin.replace(/\/$/, "") + "/config-manager?service=messaging&platform=telegram"
+        : "/config-manager?service=messaging&platform=telegram"
     });
     return;
   }

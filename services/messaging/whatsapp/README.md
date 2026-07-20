@@ -23,7 +23,7 @@ Open:
 http://127.0.0.1:5173/dashboard
 ```
 
-The root `.env.local` contains the local Meta/Supabase credentials and is ignored by git.
+The root `.env.local` contains the local Meta and PostgreSQL credentials and is ignored by git.
 
 ## Required Runtime Settings
 
@@ -36,9 +36,7 @@ META_ACCESS_TOKEN=replace_me
 META_PHONE_NUMBER_ID=replace_me
 META_WABA_ID=replace_me
 META_APP_ID=replace_me
-META_APP_SECRET=replace_me
 META_WEBHOOK_VERIFY_TOKEN=replace_me
-DB_CONNECTOR=postgres
 DATABASE_URL=replace_me
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me
@@ -46,7 +44,7 @@ BUSINESS_NAME=AgenticThat
 WA_FROM=+910000000000
 ```
 
-For local-only demos without live WhatsApp delivery, set `WA_PROVIDER=mock` and `DB_CONNECTOR=sqlite`.
+For local-only demos without live WhatsApp delivery, set `WA_PROVIDER=mock`. A PostgreSQL `DATABASE_URL` is still required for application data.
 
 ## Webhook
 

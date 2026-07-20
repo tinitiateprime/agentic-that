@@ -54,6 +54,10 @@
     "services/messaging/telegram/src/**/*.ts",
     "services/scraping/instagram/console/src/**/*.jsx",
     "services/scraping/instagram/src/**/*.ts",
+    "services/publishing/queue-runner/server/**/*.ts",
+    "services/publishing/queue-runner/shared/**/*.ts",
+    "services/publishing/queue-runner/src/**/*.ts",
+    "services/publishing/queue-runner/src/**/*.tsx",
     ".next/types/**/*.ts"
   ],
   "exclude": [

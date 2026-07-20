@@ -150,13 +150,14 @@ You can also set `AUTH_CONFIG_PATH` to point at an optional JSON login file for 
 
 ### 6. Connect a Telegram Number
 
-In the dashboard:
+Account connections are centrally managed from the AgenticThat **Config Manager**:
 
-1. Open `Add Number`.
-2. Enter the Telegram phone number with country code, for example `+91XXXXXXXXXX`.
-3. Submit the Telegram verification code sent by Telegram.
-4. If prompted, enter that Telegram account's 2FA password.
-5. Select the connected profile from the top `Profile` selector.
+1. Sign in to the Telegram workspace once.
+2. Open `http://127.0.0.1:5173/config-manager?service=messaging&platform=telegram`.
+3. Enter the Telegram API ID, API hash, and phone number with country code.
+4. Submit the verification code sent by Telegram.
+5. If prompted, enter that Telegram account's 2FA password.
+6. Return to Telegram and select the connected profile from the top `Profile` selector.
 
 The selected profile controls the sender for quick messages, inbox replies, and post sending.
 
@@ -250,13 +251,13 @@ Because `data/store.json` is not pushed, the new developer starts with a fresh d
 
 Shows a summary of connected numbers, contacts, groups, channels, posts, and the currently selected profile.
 
-### Add Number
+### Config Manager
 
-Connects a Telegram phone number. The backend sends the Telegram code request, stores the temporary login challenge encrypted, and saves the final session encrypted in the JSON datastore.
+Opens the central AgenticThat Config Manager where Telegram phone numbers are connected. The backend still stores temporary login challenges and final sessions encrypted in the Telegram JSON datastore.
 
 ### Manage Numbers
 
-Lists connected Telegram accounts. You can search, filter, refresh, or delete a connected account. Deleting removes the local account record and attempts to revoke the Telegram session.
+Lists the Telegram accounts connected through Config Manager. You can search, filter, refresh, select, and edit local profile details here. Account disconnection is handled in Config Manager.
 
 ### Profiles
 

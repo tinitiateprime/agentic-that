@@ -1,0 +1,8 @@
+import "@fontsource/roboto/latin-400.css";
+import "@fontsource/roboto/latin-500.css";
+import "@fontsource/roboto/latin-700.css";
+import "./config-manager.css";
+
+export default function ConfigManagerLayout({ children }) {
+  return <div className="config-manager-scope">{children}</div>;
+}
