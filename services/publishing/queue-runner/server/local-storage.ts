@@ -161,7 +161,8 @@ function verifyPassword(password: string, passwordHash?: string | null) {
 
 function configuredBootstrapUsers(): BootstrapUser[] {
   const managerUsername = bootstrapEnvironment("OPERATIONS_MANAGER_USERNAME") || "operations.manager";
-  const managerPassword = bootstrapEnvironment("OPERATIONS_MANAGER_PASSWORD") || process.env.ADMIN_PASSWORD?.trim();
+  const configuredManagerPassword = bootstrapEnvironment("OPERATIONS_MANAGER_PASSWORD");
+  const managerPassword = configuredManagerPassword || process.env.ADMIN_PASSWORD?.trim();
   const uploaderUsername = bootstrapEnvironment("POST_UPLOADER_USERNAME") || "content.uploader";
   const uploaderPassword = bootstrapEnvironment("POST_UPLOADER_PASSWORD");
   const schedulerUsername = bootstrapEnvironment("SCHEDULER_USERNAME") || "post.scheduler";
@@ -176,7 +177,10 @@ function configuredBootstrapUsers(): BootstrapUser[] {
       email: normalizeEmail(bootstrapEnvironment("OPERATIONS_MANAGER_EMAIL"), managerUsername),
       role: "operations_manager",
       password: managerPassword || "Tinitiate@2026",
-      passwordConfigured: Boolean(managerPassword)
+      // ADMIN_PASSWORD is an initial bootstrap fallback, not an authoritative
+      // publishing password. Only the publishing-specific variable should
+      // overwrite a password later changed through User management.
+      passwordConfigured: Boolean(configuredManagerPassword)
     },
     {
       username: uploaderUsername,
