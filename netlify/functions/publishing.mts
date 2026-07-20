@@ -111,5 +111,4 @@ export default async function handler(request: Request) {
 
 export const config: Config = {
   path: ["/api/publishing/*", "/publishing/uploads/*"],
-  memory: 1024,
 };
