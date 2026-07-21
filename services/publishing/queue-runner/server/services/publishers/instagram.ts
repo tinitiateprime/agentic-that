@@ -102,21 +102,6 @@ async function getLoginError(page: Page) {
   return text || null;
 }
 
-async function clickAndType(page: Page, locators: Locator[], value: string, fieldName: string) {
-  const input = await firstVisible(locators);
-  if (!input) throw new Error(`Could not find Instagram ${fieldName} field.`);
-
-  console.log(`Clicking Instagram ${fieldName} field...`);
-  await input.scrollIntoViewIfNeeded();
-  await input.click({ force: true, timeout: 10000 });
-  await page.waitForTimeout(100);
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-  await page.keyboard.press("Backspace");
-  await page.keyboard.type(value, { delay: 12 });
-  await page.waitForTimeout(200);
-  console.log(`Instagram ${fieldName} entered.`);
-}
-
 async function clickLoginInterstitialLink(page: Page) {
   const usernameInput = await firstVisible([
     page.locator('input[name="username"]'),
@@ -160,49 +145,6 @@ async function clickLoginInterstitialLink(page: Page) {
       timeout: 15000,
     });
   }
-}
-
-async function clickLogIn(page: Page) {
-  const loginButton = await firstVisible([
-    page.getByRole("button", { name: /^Log in$/i }),
-    page.getByRole("button", { name: /^Log In$/i }),
-    page.locator('button[type="submit"]').filter({ hasText: /Log in/i }),
-    page.locator('button[type="submit"]'),
-  ]);
-
-  if (!loginButton) throw new Error("Could not find Instagram Log in button.");
-
-  console.log("Clicking Instagram Log in button...");
-  await loginButton.scrollIntoViewIfNeeded();
-  await loginButton.click({ force: true, timeout: 10000 });
-}
-
-async function fillLoginForm(page: Page, username: string, password: string) {
-  await clickAndType(
-    page,
-    [
-      page.getByLabel(/Phone number, username, or email/i),
-      page.locator('input[name="username"]'),
-      page.locator('input[autocomplete="username"]'),
-      page.locator('input[type="text"]'),
-    ],
-    username,
-    "email/username",
-  );
-
-  await clickAndType(
-    page,
-    [
-      page.getByLabel(/^Password$/i),
-      page.locator('input[name="password"]'),
-      page.locator('input[autocomplete="current-password"]'),
-      page.locator('input[type="password"]'),
-    ],
-    password,
-    "password",
-  );
-
-  await clickLogIn(page);
 }
 
 async function loginFormIsVisible(page: Page) {

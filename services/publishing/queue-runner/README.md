@@ -1,61 +1,75 @@
 # Publish Queue Runner
 
-This is the integrated AgenticThat publishing service. The UI is mounted at `/publishing`; its Express API runs as a managed development service. Local browser uploads go directly to that API so large media does not pass through the Next.js development proxy. Server-side tools continue to use `/api/publishing/*`.
+Publish Queue Runner is the local execution service for AgenticThat's Netlify
+publishing dashboard. It supports Facebook, Instagram, X, LinkedIn, and YouTube
+through isolated Chrome profiles and fully manual account login.
 
-## What is included
+## Components
 
-- Unified image/video composer for Instagram, X, LinkedIn, Facebook, and YouTube.
-- Multiple publishing accounts with isolated persistent Chrome profiles.
-- Queue, exact-time scheduling, reusable schedules, delivery history, and role-based access.
-- Manual browser login followed by saved-session Playwright publishing. Official social APIs are not required.
-- Atomic local JSON persistence for users, accounts, schedules, queue state, and activity history.
+- Netlify serves `/publishing`, Config Manager, and Content Manager.
+- The Manifest V3 extension in `extensions/publishing-companion` securely bridges
+  the deployed dashboard to this computer.
+- This companion stores queue metadata in `data/store.json`, stores media in
+  `uploads/`, checks schedules every minute, and performs browser publishing.
+- Each configured social account receives its own profile under `browser-data/`.
 
-Machine-specific source state was intentionally not imported. `browser-data/`, `data/`, `uploads/`, logs, build output, and the old project's `node_modules/` remain excluded.
+Social-network passwords and verification codes are never accepted or stored by
+AgenticThat. The user enters them directly into the dedicated Chrome window.
 
-## Configuration
-
-Copy `.env.example` to `.env.local` in this directory, or define the same values in the workspace `.env.local`. The data file defaults to `data/store.json`; set `PUBLISH_QUEUE_DATA_PATH` only when you want a different local path.
-
-Required outside local-only development:
-
-- `PUBLISH_QUEUE_AUTH_TOKEN_SECRET`
-- Strong values for the four bootstrap role passwords
-
-The local data file is created automatically on first start and is written atomically. Passwords are stored as salted PBKDF2 hashes. Setting a `PUBLISH_QUEUE_*_PASSWORD` value resets that named bootstrap user's password when the service starts, so local credentials can be recovered without editing the data file.
-
-## Run
+## First-time setup
 
 From the repository root:
 
-```text
-npm run dev
-```
+1. Double-click `Install Publishing Extension.cmd` and follow its four steps.
+2. Double-click `Start Publishing Companion.cmd`.
+3. Optionally run `npm run publishing:install-startup` so the companion starts
+   when the Windows user signs in.
+4. Open `https://agenticthat.netlify.app/publishing`.
+5. Sign in to Publish Queue, add accounts in Config Manager, and choose **Login**
+   for each account.
 
-When using the deployed Netlify dashboard on this Windows computer, start only
-the persistent publishing companion with:
+Developer commands:
 
 ```text
 npm run publishing:companion
+npm run publishing:extension:open
+npm run test:publishing
+npm run build
 ```
 
-The dashboard automatically discovers it at `http://127.0.0.1:8792`. Account
-login opens in Chrome on this computer, browser profiles and media remain on
-this computer, and the local scheduler stays active while the companion is
-running. When the companion is unavailable, the dashboard falls back to the
-Netlify management API and does not attempt browser publishing.
+## Upload and scheduling workflow
 
-The workspace starts the website, Telegram, Instagram scraper, and Publish Queue Runner together. Sign in to AgenticThat, open Publish Queue Runner, then use the publishing service credentials. The outer AgenticThat session protects the page; the publishing login provides its finer-grained operations roles.
+1. Choose **Create Post**.
+2. Select one image or video using the normal file picker or drag and drop.
+3. Enter the default description and optional per-platform variations.
+4. Select one or more configured accounts.
+5. Choose now, an exact future time, or a reusable schedule.
+6. Submit. Media is transferred to the companion in safe, size-checked chunks;
+   no structured folders are required.
 
-For a separately hosted API, set `PUBLISH_QUEUE_API_URL` for the Next.js server and `NEXT_PUBLIC_PUBLISH_QUEUE_API_URL` for browser requests. The API host must support persistent processes, local media storage, Chrome, and browser profiles; it cannot run as a request-only Netlify Function.
+Operations Manager submissions with **now** destinations start publishing
+immediately. Scheduled posts remain queued until due. The computer must remain
+powered on and the companion must be running; overdue work is picked up when it
+returns. Schedule inputs use the publishing computer's local time; keep
+`PUBLISH_QUEUE_SCHEDULER_TIMEZONE` aligned with that computer.
 
-## Publishing workflow
+## Reliability behavior
 
-1. Open AgenticThat **Config Manager** and select Publish Queue Runner.
-2. Add the social account there, then use its login action to complete the normal platform login in Chrome.
-3. Create a post and select destinations. Operations Managers immediately start a targeted background publish for every **now** destination; scheduled destinations remain queued until due.
-4. Leave the API process and computer running. The scheduler checks due posts every minute by default.
-5. Use **Run automation** to retry or drain other ready queue items. Account runs are serialized and Chrome concurrency is limited by `PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS`.
+- Queue execution is serialized and account concurrency is bounded by
+  `PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS`.
+- A post is marked processing before browser work begins and records attempt and
+  failure details.
+- After an interrupted publish, the default `review` recovery mode holds the post
+  for human verification instead of risking a duplicate.
+- Expired login sessions mark the account **Login required** and keep the failed
+  post available for review and requeue.
+- Uploaded file extension, MIME family, size, chunk offsets, and file signature
+  are validated before queue creation.
 
-Publish Queue Runner only displays and selects configured accounts. Account creation, editing, login, pausing, and removal are centralized at `/config-manager?service=publishing`.
+Browser publishing depends on third-party interfaces. Platform UI changes,
+CAPTCHA, two-factor prompts, restrictions, and internet outages may still need
+manual action; these conditions are surfaced as recoverable failures rather than
+silent success.
 
-Platform UI changes, challenges, two-factor prompts, and account restrictions can still require manual intervention. Failed attempts remain visible for review.
+See [publishing-extension.md](../../../docs/publishing-extension.md) for extension
+installation and architecture details.

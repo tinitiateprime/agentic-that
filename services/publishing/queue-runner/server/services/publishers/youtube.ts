@@ -860,40 +860,6 @@ async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart =
   });
 }
 
-async function fillGoogleLoginForm(page: Page, email: string, password: string) {
-  try {
-    const useAnother = page.locator('button:has-text("Use another account")');
-    if (await useAnother.count() > 0) await useAnother.click();
-  } catch {
-    // Ignore account chooser variations.
-  }
-
-  const emailField = await waitForVisible([
-    page.locator("#identifierId"),
-    page.locator('input[type="email"]'),
-  ], 60000);
-
-  if (emailField) {
-    console.log("Entering YouTube email...");
-    await emailField.fill(email);
-    await page.locator("#identifierNext").click({ timeout: 15000 });
-    await page.waitForTimeout(2000);
-  }
-
-  const passwordField = await waitForVisible([
-    page.locator('input[type="password"]'),
-  ], 60000);
-
-  if (!passwordField) {
-    console.log("YouTube needs manual verification before the password step.");
-    return;
-  }
-
-  console.log("Entering YouTube password...");
-  await passwordField.fill(password);
-  await page.locator("#passwordNext").click({ timeout: 15000 });
-}
-
 export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   const savedSessionOnly = Boolean(accountLogin?.useSavedSessionOnly);
   const manualLoginOnly = !savedSessionOnly;

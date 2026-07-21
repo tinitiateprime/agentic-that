@@ -700,7 +700,6 @@ function PublishingManager({
         displayName: form.displayName.trim(),
         handle: form.handle.trim(),
         loginIdentifier: form.loginIdentifier.trim(),
-        loginConfirmation: form.loginConfirmation.trim() || undefined,
         enabled: form.enabled
       });
       const account = form.id
@@ -751,7 +750,7 @@ function PublishingManager({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="The publishing API did not respond. Refresh once; if the problem remains, check the Netlify function deployment or the configured external runner URL."
+        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
         action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
       />
     );
@@ -812,7 +811,7 @@ function PublishingManager({
       </div>
 
       <div className="config-publishing-toolbar">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, schedules, storage access, and channel views.</p></div>
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, schedules, and channel views.</p></div>
         {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>
 
@@ -840,7 +839,7 @@ function PublishingManager({
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
               <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Login ready" : "Login required"}</span>
-              <span className="config-account-meta">{account.loginIdentifier}</span>
+              <span className="config-account-meta">{account.loginIdentifier || "Manual Chrome login"}</span>
               <div className="config-account-actions">
                 <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account"><Pencil size={15} /></button>
                 <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Refresh saved account login" : "Connect account login"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}</button>
@@ -858,7 +857,6 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
   const [displayName, setDisplayName] = useState(account?.displayName || "");
   const [handle, setHandle] = useState(account?.handle || "");
   const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
-  const [loginConfirmation, setLoginConfirmation] = useState(account?.loginConfirmation || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
 
   const submit = (event) => {
@@ -868,7 +866,6 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
       displayName,
       handle,
       loginIdentifier,
-      loginConfirmation,
       enabled
     });
   };
@@ -884,8 +881,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
         <div className="config-form-grid">
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
           <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
-          <label><span>Login email or username</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="name@example.com" required /></label>
-          <label><span>Login confirmation</span><input value={loginConfirmation} onChange={event => setLoginConfirmation(event.target.value)} placeholder="Optional phone, username, or recovery hint" /></label>
+          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; enter login in Chrome" /></label>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>
         <div className="config-form-actions"><button className="config-secondary" type="button" onClick={onCancel}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}{account ? "Save changes" : "Add account"}</button></div>

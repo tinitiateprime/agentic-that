@@ -1,11 +1,7 @@
 import type { Page } from "playwright-core";
 
 export type AccountLogin = {
-  identifier?: string;
-  password?: string;
-  confirmation?: string;
   useSavedSessionOnly?: boolean;
-  forceManualLogin?: boolean;
   ignoreLoginErrors?: boolean;
 };
 

@@ -495,21 +495,6 @@ async function isManualVerificationVisible(page: Page, url: string) {
   return Boolean(manualPrompt);
 }
 
-async function clickAndType(page: Page, locators: Locator[], value: string, fieldName: string) {
-  const input = await firstVisible(locators);
-  if (!input) throw new Error(`Could not find Facebook ${fieldName} field.`);
-
-  console.log(`Clicking Facebook ${fieldName} field...`);
-  await input.scrollIntoViewIfNeeded();
-  await input.click({ force: true, timeout: 10000 });
-  await page.waitForTimeout(150);
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-  await page.keyboard.press("Backspace");
-  await page.keyboard.type(value, { delay: 15 });
-  await page.waitForTimeout(250);
-  console.log(`Facebook ${fieldName} entered.`);
-}
-
 function facebookEmailFieldLocators(page: Page) {
   return [
     page.locator("input#email"),
@@ -527,40 +512,6 @@ function facebookPasswordFieldLocators(page: Page) {
     page.locator('input[autocomplete="current-password"]'),
     page.locator('input[type="password"]'),
   ];
-}
-
-async function clickLogIn(page: Page) {
-  const loginButton = await firstVisible([
-    page.getByRole("button", { name: /^Log in$/i }),
-    page.getByRole("button", { name: /^Log In$/i }),
-    page.locator('button[name="login"]'),
-    page.locator('button[type="submit"]').filter({ hasText: /Log in/i }),
-    page.locator('button[type="submit"]'),
-  ]);
-
-  if (!loginButton) throw new Error("Could not find Facebook Log in button.");
-
-  console.log("Clicking Facebook Log in button...");
-  await loginButton.scrollIntoViewIfNeeded();
-  await loginButton.click({ force: true, timeout: 10000 });
-}
-
-async function fillLoginForm(page: Page, email: string, password: string) {
-  await clickAndType(
-    page,
-    facebookEmailFieldLocators(page),
-    email,
-    "email/phone",
-  );
-
-  await clickAndType(
-    page,
-    facebookPasswordFieldLocators(page),
-    password,
-    "password",
-  );
-
-  await clickLogIn(page);
 }
 
 async function loginFormIsVisible(page: Page) {

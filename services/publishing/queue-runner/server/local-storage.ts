@@ -7,17 +7,13 @@ import nodeCron from "node-cron";
 import {
   type ActivityLog,
   type AutomationInput,
-  type CreateGoogleDriveStorageConnectionInput,
   type CreateUserProfileInput,
   type DashboardSummary,
-  type FolderConnection,
   type Platform,
   type PlatformAccount,
   type PlatformUpload,
   type PublishingSchedule,
   type SocialMediaSchedule,
-  type StorageConnection,
-  type StorageConnectionStatus,
   type UpdateUploadDetailsInput,
   type UpdateUserProfileInput,
   type UploadStatus,
@@ -48,7 +44,6 @@ type StoredFileInput = {
   caption: string;
   scheduledAt?: string;
   scheduleId?: number;
-  folderSource?: PlatformUpload["folderSource"];
 };
 
 type BootstrapUser = {
@@ -89,8 +84,6 @@ type Store = {
   schedules: PublishingSchedule[];
   socialMediaSchedules: SocialMediaSchedule[];
   uploads: PlatformUpload[];
-  folderConnections: FolderConnection[];
-  storageConnections: StorageConnection[];
   activityLogs: ActivityLog[];
   automationRuns: AutomationRunRecord[];
   automationRunPosts: AutomationRunPostRecord[];
@@ -238,8 +231,6 @@ function emptyStore(): Store {
     schedules: [],
     socialMediaSchedules: [],
     uploads: [],
-    folderConnections: [],
-    storageConnections: [],
     activityLogs: [],
     automationRuns: [],
     automationRunPosts: []
@@ -249,16 +240,12 @@ function emptyStore(): Store {
 function normalizeStore(value: unknown): Store {
   const input = value && typeof value === "object" ? value as Partial<Store> : {};
   return {
-    ...emptyStore(),
-    ...input,
     version: 1,
     users: Array.isArray(input.users) ? input.users : [],
     accounts: Array.isArray(input.accounts) ? input.accounts : [],
     schedules: Array.isArray(input.schedules) ? input.schedules : [],
     socialMediaSchedules: Array.isArray(input.socialMediaSchedules) ? input.socialMediaSchedules : [],
     uploads: Array.isArray(input.uploads) ? input.uploads : [],
-    folderConnections: Array.isArray(input.folderConnections) ? input.folderConnections : [],
-    storageConnections: Array.isArray(input.storageConnections) ? input.storageConnections : [],
     activityLogs: Array.isArray(input.activityLogs) ? input.activityLogs : [],
     automationRuns: Array.isArray(input.automationRuns) ? input.automationRuns : [],
     automationRunPosts: Array.isArray(input.automationRunPosts) ? input.automationRunPosts : []
@@ -529,114 +516,6 @@ export async function listActivityLogs(limit = 100) {
   return [...store.activityLogs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, safeLimit);
 }
 
-export async function listStorageConnections() {
-  const store = await readStore();
-  return [...store.storageConnections].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export async function getStorageConnection(storageConnectionId: string) {
-  const store = await readStore();
-  return store.storageConnections.find(item => item.id === storageConnectionId) ?? null;
-}
-
-export async function upsertLocalDriveStorageConnection(
-  folderConnection: FolderConnection,
-  input: { displayName?: string } = {},
-  actorUserId?: string
-) {
-  return mutateStore(store => {
-    const timestamp = nowIso();
-    const index = store.storageConnections.findIndex(item => item.legacyConnectedFolderId === folderConnection.id);
-    const existing = index >= 0 ? store.storageConnections[index] : undefined;
-    const connection: StorageConnection = {
-      id: existing?.id ?? "storage_" + nanoid(12),
-      storageType: "local_drive",
-      displayName: input.displayName?.trim() || platformLabels[folderConnection.platform] + " local drive",
-      platform: folderConnection.platform,
-      accountId: folderConnection.accountId,
-      connectedByUserId: actorUserId ?? existing?.connectedByUserId,
-      localFolderPath: folderConnection.folderPath,
-      legacyConnectedFolderId: folderConnection.id,
-      status: folderConnection.lastError ? "error" : "connected",
-      active: true,
-      lastSyncedAt: folderConnection.lastScannedAt,
-      lastError: folderConnection.lastError,
-      createdAt: existing?.createdAt ?? folderConnection.createdAt,
-      updatedAt: timestamp
-    };
-    if (index >= 0) store.storageConnections[index] = connection;
-    else store.storageConnections.push(connection);
-    return connection;
-  });
-}
-
-function driveFolderIdFromInput(input: CreateGoogleDriveStorageConnectionInput) {
-  if (input.googleDriveFolderId?.trim()) return input.googleDriveFolderId.trim();
-  const url = input.googleDriveFolderUrl?.trim();
-  if (!url) return undefined;
-  const foldersMatch = url.match(/\/folders\/([a-zA-Z0-9_-]+)/);
-  if (foldersMatch?.[1]) return foldersMatch[1];
-  return new URL(url).searchParams.get("id") ?? undefined;
-}
-
-export async function createGoogleDriveStorageConnection(input: CreateGoogleDriveStorageConnectionInput, actorUserId?: string) {
-  return mutateStore(store => {
-    const account = store.accounts.find(item => item.id === input.accountId);
-    if (!account) throw new Error("Publishing account not found.");
-    if (!account.enabled) throw new Error("Choose an enabled publishing account.");
-    const folderId = driveFolderIdFromInput(input);
-    if (!folderId && !input.googleDriveFolderUrl?.trim()) throw new Error("Google Drive folder id or URL is required.");
-    const timestamp = nowIso();
-    const connection: StorageConnection = {
-      id: "storage_" + nanoid(12),
-      storageType: "google_drive",
-      displayName: input.displayName.trim(),
-      platform: account.platform,
-      accountId: account.id,
-      connectedByUserId: actorUserId,
-      googleDriveFolderId: folderId,
-      googleDriveFolderUrl: input.googleDriveFolderUrl?.trim() || undefined,
-      googleDriveFolderName: input.googleDriveFolderName?.trim() || undefined,
-      status: "pending_auth",
-      active: true,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-    store.storageConnections.push(connection);
-    return connection;
-  });
-}
-
-export async function updateStorageConnectionSyncState(
-  storageConnectionId: string,
-  status: StorageConnectionStatus,
-  lastError?: string | null
-) {
-  return mutateStore(store => {
-    const index = store.storageConnections.findIndex(item => item.id === storageConnectionId);
-    if (index < 0) return null;
-    const existing = store.storageConnections[index];
-    const updated: StorageConnection = {
-      ...existing,
-      status,
-      lastSyncedAt: status === "connected" ? nowIso() : existing.lastSyncedAt,
-      lastError: lastError || undefined,
-      updatedAt: nowIso()
-    };
-    store.storageConnections[index] = updated;
-    return updated;
-  });
-}
-
-export async function deleteStorageConnection(storageConnectionId: string) {
-  return mutateStore(store => {
-    const existing = store.storageConnections.find(item => item.id === storageConnectionId);
-    if (!existing) return null;
-    store.storageConnections = store.storageConnections.filter(item => item.id !== storageConnectionId);
-    return existing;
-  });
-}
-
 async function insertPostStatusHistory(
   postId: string,
   oldStatus: UploadStatus | null,
@@ -704,6 +583,55 @@ export async function finishAutomationRunPost(
   });
 }
 
+export async function recoverInterruptedPublishingWork() {
+  const recoveryMode = process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY?.trim().toLowerCase() === "retry"
+    ? "retry"
+    : "review";
+  const recoveredAt = nowIso();
+
+  return mutateStore(store => {
+    let recoveredUploads = 0;
+    let recoveredRuns = 0;
+
+    store.uploads = store.uploads.map(upload => {
+      if (upload.status !== "processing") return upload;
+      recoveredUploads += 1;
+      return {
+        ...upload,
+        status: recoveryMode === "retry" ? "queued" : "failed",
+        failureReason: recoveryMode === "retry"
+          ? undefined
+          : "The companion stopped during publishing. Verify the platform before retrying to prevent a duplicate post.",
+        updatedAt: recoveredAt,
+      };
+    });
+
+    store.automationRuns = store.automationRuns.map(run => {
+      if (run.status !== "running") return run;
+      recoveredRuns += 1;
+      return {
+        ...run,
+        status: "failed",
+        finishedAt: recoveredAt,
+        errorMessage: recoveryMode === "retry"
+          ? "The companion stopped during publishing; unfinished posts were requeued."
+          : "The companion stopped during publishing; verify the platform before retrying unfinished posts.",
+      };
+    });
+
+    store.automationRunPosts = store.automationRunPosts.map(post => post.status === "processing"
+      ? {
+          ...post,
+          status: "failed",
+          finishedAt: recoveredAt,
+          failureMessage: "The publishing companion stopped before completion was recorded.",
+        }
+      : post);
+
+    return { recoveredUploads, recoveredRuns, recoveryMode };
+  });
+}
+
 function scheduledTime(upload: PlatformUpload) {
   if (!upload.scheduledAt) return null;
   const timestamp = Date.parse(upload.scheduledAt);
@@ -712,7 +640,6 @@ function scheduledTime(upload: PlatformUpload) {
 
 export function isUploadReadyForAutomation(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued") return false;
-  if (upload.folderSource && !upload.scheduledAt) return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt === null ? !upload.scheduledAt : scheduledAt <= now;
 }
@@ -749,8 +676,7 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
       platform,
       displayName: input.displayName,
       handle: input.handle,
-      loginIdentifier: input.loginIdentifier,
-      loginConfirmation: input.loginConfirmation || undefined,
+      loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
       createdAt: timestamp,
@@ -772,11 +698,8 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       ...existing,
       displayName: input.displayName,
       handle: input.handle,
-      loginIdentifier: input.loginIdentifier,
-      loginConfirmation: input.loginConfirmation || undefined,
-      credentialConfigured: input.loginIdentifier === existing.loginIdentifier
-        ? existing.credentialConfigured
-        : false,
+      loginIdentifier: input.loginIdentifier ?? "",
+      credentialConfigured: existing.credentialConfigured,
       enabled: input.enabled ?? existing.enabled,
       updatedAt: nowIso()
     };
@@ -803,14 +726,10 @@ export async function deletePlatformAccount(accountId: string) {
   return mutateStore(store => {
     const existing = store.accounts.find(account => account.id === accountId);
     if (!existing) return null;
-    if (store.folderConnections.some(connection => connection.accountId === accountId)) {
-      throw new Error("Disconnect this account's folder before deleting it.");
-    }
     if (store.uploads.some(upload => upload.accountId === accountId)) {
       throw new Error("This account has post history and cannot be deleted. Disable it instead.");
     }
     store.accounts = store.accounts.filter(account => account.id !== accountId);
-    store.storageConnections = store.storageConnections.filter(connection => connection.accountId !== accountId);
     store.socialMediaSchedules = store.socialMediaSchedules.filter(item => item.accountId !== accountId);
     return existing;
   });
@@ -1136,6 +1055,7 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       title: file.title || file.caption,
       caption: file.caption,
       status: "queued",
+      attemptCount: 0,
       uploadedAt: timestamp,
       updatedAt: timestamp,
       scheduledAt: file.scheduledAt || undefined,
@@ -1143,7 +1063,6 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       createdByUserId: actorUserId,
       scheduledByUserId: file.scheduledAt || file.scheduleId ? actorUserId : undefined,
       lastUpdatedByUserId: actorUserId,
-      folderSource: file.folderSource,
       automation: createAutomation(account.platform, accountId, id, file.url)
     };
     store.uploads.unshift(created);
@@ -1167,7 +1086,17 @@ export async function updateUploadStatus(
     if (index < 0) return null;
     oldStatus = store.uploads[index].status;
     statusChanged = oldStatus !== status;
-    const next = { ...store.uploads[index], status, lastUpdatedByUserId: actorUserId ?? store.uploads[index].lastUpdatedByUserId, updatedAt: changedAt };
+    const existing = store.uploads[index];
+    const next: PlatformUpload = {
+      ...existing,
+      status,
+      failureReason: status === "failed" ? changeReason : undefined,
+      attemptCount: status === "processing" ? (existing.attemptCount ?? 0) + 1 : existing.attemptCount ?? 0,
+      lastAttemptAt: status === "processing" ? changedAt : existing.lastAttemptAt,
+      postedAt: status === "posted" ? changedAt : existing.postedAt,
+      lastUpdatedByUserId: actorUserId ?? existing.lastUpdatedByUserId,
+      updatedAt: changedAt,
+    };
     store.uploads[index] = next;
     return next;
   });
@@ -1202,7 +1131,6 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
     }
     let accountId = existing.accountId;
     if (input.accountId && input.accountId !== accountId) {
-      if (existing.folderSource) throw new Error("Folder posts stay assigned to the account that owns their source folder.");
       const account = store.accounts.find(item => item.id === input.accountId);
       if (!account || account.platform !== existing.platform) throw new Error("Choose an account from the same platform.");
       if (!account.enabled) throw new Error("Choose an enabled publishing account.");
@@ -1225,6 +1153,7 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
       scheduledByUserId: scheduleTouched ? actorUserId : existing.scheduledByUserId,
       lastUpdatedByUserId: actorUserId,
       status: "queued",
+      failureReason: undefined,
       updatedAt: changedAt,
       automation: createAutomation(existing.platform, accountId, existing.id, existing.url)
     };
@@ -1236,119 +1165,6 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
     await insertPostStatusHistory(uploadId, oldStatus, "queued", "Post details updated and requeued", changedAt, actorUserId);
   }
   return updatedUpload;
-}
-
-export async function listFolderConnections() {
-  const store = await readStore();
-  return [...store.folderConnections].sort((a, b) => a.platform.localeCompare(b.platform));
-}
-
-export async function getFolderConnection(connectionId: string) {
-  const store = await readStore();
-  return store.folderConnections.find(connection => connection.id === connectionId) ?? null;
-}
-
-export async function upsertFolderConnection(accountId: string, folderPath: string) {
-  return mutateStore(store => {
-    const account = store.accounts.find(item => item.id === accountId);
-    if (!account) throw new Error("Publishing account not found.");
-    const timestamp = nowIso();
-    const index = store.folderConnections.findIndex(connection => connection.accountId === accountId);
-    if (index >= 0) {
-      const updated: FolderConnection = {
-        ...store.folderConnections[index],
-        folderPath,
-        updatedAt: timestamp,
-        lastScannedAt: undefined,
-        lastError: undefined
-      };
-      store.folderConnections[index] = updated;
-      return updated;
-    }
-    const connection: FolderConnection = {
-      id: "folder_" + nanoid(12),
-      platform: account.platform,
-      accountId,
-      folderPath,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-    store.folderConnections.push(connection);
-    return connection;
-  });
-}
-
-export async function deleteFolderConnection(connectionId: string) {
-  return mutateStore(store => {
-    const existing = store.folderConnections.find(connection => connection.id === connectionId);
-    if (!existing) return null;
-    store.folderConnections = store.folderConnections.filter(connection => connection.id !== connectionId);
-    store.storageConnections = store.storageConnections.filter(connection => connection.legacyConnectedFolderId !== connectionId);
-    return existing;
-  });
-}
-
-export async function updateFolderConnectionScan(connectionId: string, lastError?: string) {
-  return mutateStore(store => {
-    const index = store.folderConnections.findIndex(connection => connection.id === connectionId);
-    if (index < 0) return null;
-    const timestamp = nowIso();
-    const updated: FolderConnection = {
-      ...store.folderConnections[index],
-      updatedAt: timestamp,
-      lastScannedAt: timestamp,
-      lastError
-    };
-    store.folderConnections[index] = updated;
-    const storageIndex = store.storageConnections.findIndex(connection => connection.legacyConnectedFolderId === connectionId);
-    if (storageIndex >= 0) {
-      store.storageConnections[storageIndex] = {
-        ...store.storageConnections[storageIndex],
-        status: lastError ? "error" : "connected",
-        lastSyncedAt: timestamp,
-        lastError,
-        updatedAt: timestamp
-      };
-    }
-    return updated;
-  });
-}
-
-export async function setFolderSourcePresent(uploadId: string, present: boolean) {
-  return mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
-    if (index < 0 || !store.uploads[index].folderSource) return null;
-    const existing = store.uploads[index];
-    const updated: PlatformUpload = {
-      ...existing,
-      folderSource: { ...existing.folderSource!, present },
-      updatedAt: nowIso()
-    };
-    store.uploads[index] = updated;
-    return updated;
-  });
-}
-
-export async function updateFolderUploadFile(
-  uploadId: string,
-  input: { originalName: string; mimeType: string; size: number; fingerprint: string }
-) {
-  return mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
-    if (index < 0 || !store.uploads[index].folderSource) return null;
-    const existing = store.uploads[index];
-    const updated: PlatformUpload = {
-      ...existing,
-      originalName: input.originalName,
-      mimeType: input.mimeType,
-      size: input.size,
-      status: existing.status === "failed" ? "queued" : existing.status,
-      folderSource: { ...existing.folderSource!, fingerprint: input.fingerprint, present: true },
-      updatedAt: nowIso()
-    };
-    store.uploads[index] = updated;
-    return updated;
-  });
 }
 
 export async function listDueScheduledUploads() {

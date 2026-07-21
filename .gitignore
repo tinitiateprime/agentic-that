@@ -21,6 +21,9 @@ services/**/logs/
 services/**/*.session
 services/**/output/
 services/**/sessions/
+services/**/browser-data/
 services/**/account_config/sessions/
+services/**/uploads/*
+!services/**/uploads/.gitkeep
 public/console/
 /data/

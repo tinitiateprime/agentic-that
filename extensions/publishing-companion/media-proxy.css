@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+html, body, #media { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: #eef1f5; font: 13px/1.4 system-ui, sans-serif; }
+#media { display: grid; place-items: center; color: #536173; }
+img, video { width: 100%; height: 100%; display: block; object-fit: cover; background: #111; }
+.error { padding: 12px; color: #a52727; text-align: center; }

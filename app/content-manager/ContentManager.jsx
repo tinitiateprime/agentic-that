@@ -232,7 +232,6 @@ export default function ContentManager({
   const [publishingAccounts, setPublishingAccounts] = useState([]);
   const [publishingUploads, setPublishingUploads] = useState([]);
   const [publishingSchedules, setPublishingSchedules] = useState([]);
-  const [storageConnections, setStorageConnections] = useState([]);
 
   const loadTelegram = useCallback(async () => {
     setTelegramStatus("checking");
@@ -256,7 +255,6 @@ export default function ContentManager({
       setPublishingAccounts([]);
       setPublishingUploads([]);
       setPublishingSchedules([]);
-      setStorageConnections([]);
       setPublishingStatus("needs-login");
       return;
     }
@@ -264,11 +262,10 @@ export default function ContentManager({
     setPublishingStatus("checking");
     try {
       const me = await publishingRequest("/api/auth/me", session.token);
-      const [accountsResult, uploadsResult, schedulesResult, storageResult] = await Promise.allSettled([
+      const [accountsResult, uploadsResult, schedulesResult] = await Promise.allSettled([
         publishingRequest("/api/accounts", session.token),
         publishingRequest("/api/uploads", session.token),
-        publishingRequest("/api/schedules", session.token),
-        publishingRequest("/api/storage-connections", session.token)
+        publishingRequest("/api/schedules", session.token)
       ]);
 
       const nextSession = { token: session.token, user: me };
@@ -276,7 +273,6 @@ export default function ContentManager({
       setPublishingAccounts(accountsResult.status === "fulfilled" && Array.isArray(accountsResult.value) ? accountsResult.value : []);
       setPublishingUploads(uploadsResult.status === "fulfilled" && Array.isArray(uploadsResult.value) ? uploadsResult.value : []);
       setPublishingSchedules(schedulesResult.status === "fulfilled" && Array.isArray(schedulesResult.value) ? schedulesResult.value : []);
-      setStorageConnections(storageResult.status === "fulfilled" && Array.isArray(storageResult.value) ? storageResult.value : []);
       setPublishingStatus("ready");
     } catch (error) {
       if (error.status === 401) {
@@ -285,7 +281,6 @@ export default function ContentManager({
         setPublishingAccounts([]);
         setPublishingUploads([]);
         setPublishingSchedules([]);
-        setStorageConnections([]);
         setPublishingStatus("needs-login");
       } else {
         setPublishingStatus("offline");
@@ -430,7 +425,6 @@ export default function ContentManager({
               accounts={publishingAccounts}
               uploads={publishingUploads}
               schedules={publishingSchedules}
-              storageConnections={storageConnections}
               platform={publishingPlatform}
               publishQueueUrl={publishQueueUrl}
               onPlatformChange={selectPublishingPlatform}
@@ -579,7 +573,6 @@ function PublishingContent({
   accounts,
   uploads,
   schedules,
-  storageConnections,
   platform,
   publishQueueUrl,
   onPlatformChange,
@@ -624,7 +617,7 @@ function PublishingContent({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="The publishing API did not respond. Use Refresh above; if the problem remains, check the Netlify function deployment or external runner URL."
+        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
         action={<a className="content-primary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={15} /></a>}
       />
     );
@@ -637,7 +630,7 @@ function PublishingContent({
           <span><LockKeyhole size={25} /></span>
           <p>Protected content data</p>
           <h3>Publish Queue sign in required</h3>
-          <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, schedules, and storage links.</div>
+          <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, and schedules.</div>
           <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
         </div>
         <form onSubmit={signIn}>
@@ -675,7 +668,6 @@ function PublishingContent({
         <Metric icon={FileText} label="total posts" value={uploads.length} />
         <Metric icon={Clock3} label="scheduled posts" value={scheduledCount} />
         <Metric icon={CheckCircle2} label="posted" value={postedCount} />
-        <Metric icon={Plug} label="storage links" value={storageConnections.length} />
         <Metric icon={Database} label="schedule templates" value={schedules.length} />
       </div>
 
@@ -701,7 +693,7 @@ function PublishingContent({
 
       <CollectionHeader
         title={platformLabels[platform] + " accounts"}
-        copy="Each account card shows routing, content counts, storage links, and latest activity for this app."
+        copy="Each account card shows routing, content counts, login readiness, and latest activity for this app."
         count={platformAccounts.length}
         meta={queuedCount + " queued across all publishing apps"}
       />
@@ -720,7 +712,6 @@ function PublishingContent({
               key={account.id}
               account={account}
               uploads={uploads.filter((upload) => upload.accountId === account.id)}
-              storageConnections={storageConnections.filter((connection) => connection.accountId === account.id)}
             />
           ))}
         </div>
@@ -729,15 +720,14 @@ function PublishingContent({
   );
 }
 
-function PublishingAccountCard({ account, uploads, storageConnections }) {
+function PublishingAccountCard({ account, uploads }) {
   const counts = uploads.reduce((result, upload) => {
     result[upload.status] = (result[upload.status] || 0) + 1;
     return result;
   }, {});
   const latestActivity = latestDate([
     account.updatedAt,
-    ...uploads.map((upload) => upload.updatedAt || upload.uploadedAt),
-    ...storageConnections.map((connection) => connection.updatedAt || connection.lastSyncedAt)
+    ...uploads.map((upload) => upload.updatedAt || upload.uploadedAt)
   ]);
 
   return (
@@ -758,7 +748,7 @@ function PublishingAccountCard({ account, uploads, storageConnections }) {
       <div className="content-account-fields">
         <AccountField label="Login identity" value={account.loginIdentifier} />
         <AccountField label="Publishing login" value={account.credentialConfigured ? "Saved session ready" : "Open Login in Config Manager"} />
-        <AccountField label="Storage links" value={String(storageConnections.length)} />
+        <AccountField label="Queued posts" value={String(counts.queued || 0)} />
         <AccountField label="Latest activity" value={formatDate(latestActivity)} />
         <AccountField label="Added" value={formatDate(account.createdAt)} />
       </div>

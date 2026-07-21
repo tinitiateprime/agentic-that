@@ -2,7 +2,7 @@
 
 import {
   Loader2, RefreshCw, Upload, X,
-  CalendarClock, FileText, FolderSync, Pencil, Trash2,
+  CalendarClock, FileText, Pencil, Trash2,
   ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
@@ -11,8 +11,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, Platform, PlatformAccount, PlatformUpload, PublishingSchedule, ScheduleFrequency, ScheduleStatus, StorageConnection, StorageSourceType, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
-import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, storageSourceTypeLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
+import type { ActivityLog, Platform, PlatformAccount, PlatformUpload, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, assetUrl, setAuthToken, type AuthResponse } from "./lib/api.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -60,7 +60,6 @@ type RolePermissions = {
   canManageUsers: boolean;
   canViewActivity: boolean;
   canManageAccounts: boolean;
-  canManageStorageAccess: boolean;
   canEditContent: boolean;
   canSchedulePosts: boolean;
   canRunAutomation: boolean;
@@ -93,7 +92,6 @@ function permissionsForRole(role: UserRole): RolePermissions {
     canManageUsers: role === 'operations_manager',
     canViewActivity: role === 'operations_manager',
     canManageAccounts: role === 'operations_manager',
-    canManageStorageAccess: role === 'operations_manager' || role === 'post_uploader',
     canEditContent: role === 'operations_manager' || role === 'post_uploader',
     canSchedulePosts: role === 'operations_manager' || role === 'scheduler',
     canRunAutomation: role === 'operations_manager',
@@ -197,7 +195,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
           <div className='auth-message'>
             <p className='auth-kicker'>Social publishing operations</p>
             <h1>Plan the work. Publish at the right moment.</h1>
-            <p>One workspace for your folders, schedules, and connected publishing channels.</p>
+            <p>One workspace for uploads, schedules, and connected publishing channels.</p>
           </div>
           <div className='auth-channel-row' aria-label='Supported platforms'>
             <span>YouTube</span><span>Instagram</span><span>LinkedIn</span><span>Facebook</span><span>X</span>
@@ -211,6 +209,11 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
             <p className='auth-kicker'>Secure workspace</p>
             <h2 id='access-title'>Sign in</h2>
             <p>Use your assigned workspace credentials. Your role controls which sections are available after sign in.</p>
+          </div>
+
+          <div className='temporary-access'>
+            <CircleDashed size={17} />
+            <span>Before signing in, install the publishing extension and start <code>Start Publishing Companion.cmd</code>.</span>
           </div>
 
           <div className='role-options' aria-label='Choose login type'>
@@ -263,14 +266,13 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [uploads, setUploads] = useState<PlatformUpload[]>([]);
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
   const [schedules, setSchedules] = useState<PublishingSchedule[]>([]);
-  const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [connectionMode, setConnectionMode] = useState<'extension' | 'direct' | 'checking'>('checking');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [scheduleManagerOpen, setScheduleManagerOpen] = useState(false);
-  const [storageAccessPlatform, setStorageAccessPlatform] = useState<Platform | null>(null);
   const [userManagerOpen, setUserManagerOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [editingUpload, setEditingUpload] = useState<PlatformUpload | null>(null);
@@ -281,17 +283,16 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
     if (showLoading) setLoading(true);
     try {
       const baseRequests = [
+        api.health(),
         api.uploads(),
         api.accounts(),
         api.schedules(),
       ] as const;
-      const [latestUploads, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
+      const [health, latestUploads, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
+      setConnectionMode(health.transport);
       setUploads(latestUploads);
       setAccounts(latestAccounts);
       setSchedules(latestSchedules);
-      if (permissions.canManageStorageAccess) {
-        setStorageConnections(await api.storageConnections());
-      }
       if (permissions.canManageUsers) {
         const [latestUsers, latestActivity] = await Promise.all([
           api.users(),
@@ -343,7 +344,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         uploads={uploads}
         accounts={accounts}
         schedules={schedules}
-        storageConnections={storageConnections}
+        connectionMode={connectionMode}
         users={users}
         activityLogs={activityLogs}
         loading={loading}
@@ -356,7 +357,6 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
           window.location.href = '/config-manager?service=publishing&platform=' + platform;
         }}
         onOpenSchedules={() => permissions.canSchedulePosts && setScheduleManagerOpen(true)}
-        onOpenStorageAccess={setStorageAccessPlatform}
         onOpenUsers={() => setUserManagerOpen(true)}
         onOpenActivity={() => setActivityOpen(true)}
         onEdit={setEditingUpload}
@@ -364,17 +364,6 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         onCloseEdit={() => setEditingUpload(null)}
         onCreated={() => void refresh(false)}
       />
-      {storageAccessPlatform && (
-        <StorageAccessModal
-          key={storageAccessPlatform}
-          platform={storageAccessPlatform}
-          accounts={accounts.filter(account => account.platform === storageAccessPlatform)}
-          storageConnections={storageConnections.filter(connection => connection.platform === storageAccessPlatform)}
-          permissions={permissions}
-          onClose={() => setStorageAccessPlatform(null)}
-          onSuccess={() => void refresh()}
-        />
-      )}
       {scheduleManagerOpen && (
         <ScheduleManagerModal
           schedules={schedules}
@@ -975,7 +964,7 @@ function Workboard({
   uploads,
   accounts,
   schedules,
-  storageConnections,
+  connectionMode,
   users,
   activityLogs,
   loading,
@@ -986,7 +975,6 @@ function Workboard({
   onSignOut,
   onOpenAccounts,
   onOpenSchedules,
-  onOpenStorageAccess,
   onOpenUsers,
   onOpenActivity,
   onEdit,
@@ -999,7 +987,7 @@ function Workboard({
   uploads: PlatformUpload[];
   accounts: PlatformAccount[];
   schedules: PublishingSchedule[];
-  storageConnections: StorageConnection[];
+  connectionMode: 'extension' | 'direct' | 'checking';
   users: UserProfile[];
   activityLogs: ActivityLog[];
   loading: boolean;
@@ -1010,7 +998,6 @@ function Workboard({
   onSignOut: () => void;
   onOpenAccounts: (platform: Platform) => void;
   onOpenSchedules: () => void;
-  onOpenStorageAccess: (platform: Platform) => void;
   onOpenUsers: () => void;
   onOpenActivity: () => void;
   onEdit: (upload: PlatformUpload) => void;
@@ -1107,7 +1094,6 @@ function Workboard({
   const canEditPosts = permissions.canEditContent || permissions.canSchedulePosts;
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
   const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
-  const connectedStorageCount = storageConnections.filter(connection => connection.active && connection.status === 'connected').length;
   const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length;
   const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && account.enabled)).length;
   const todayEvents = eventByDay[toLocalDayKey(new Date())] ?? [];
@@ -1145,7 +1131,7 @@ function Workboard({
           <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
         </nav>
         <div className='workboard-actions'>
-          <span className='workboard-status'><CircleDashed size={14} className={loading ? 'spin' : ''} />Live</span>
+          <span className='workboard-status' title={connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && <button className='workboard-run' onClick={onRun} disabled={isRunning}>{isRunning ? <Loader2 className='spin' size={16} /> : <Send size={16} />}{isRunning ? 'Publishing' : 'Run automation'}</button>}
           <button className='workboard-tool' title='Refresh workspace' onClick={onRefresh}><RefreshCw size={18} className={loading ? 'spin' : ''} /></button>
@@ -1214,7 +1200,7 @@ function Workboard({
             <div className='setup-grid'>
               <span><strong>{enabledAccountsCount}</strong><small>accounts</small></span>
               <span><strong>{activeSchedulesCount}</strong><small>schedules</small></span>
-              <span><strong>{connectedStorageCount}</strong><small>storage</small></span>
+              <span><strong>{metrics.queued}</strong><small>queued</small></span>
             </div>
             {nextScheduledPosts.length > 0 && <div className='next-posts'>
               <small>Next scheduled</small>
@@ -1230,16 +1216,14 @@ function Workboard({
           {platforms.map(platform => {
             const platformPosts = uploads.filter(upload => upload.platform === platform);
             const platformAccounts = accounts.filter(account => account.platform === platform);
-            const platformStorage = storageConnections.filter(connection => connection.platform === platform);
             return (
               <article key={platform} className={`platform-metric-card platform-${platform}`}>
                 <div className='platform-metric-card-top'><CustomIcon platform={platform} size={34} /><span>{platformLabels[platform]}</span><ChevronRight size={16} /></div>
                 <div className='platform-metric-number'><strong>{platformPosts.length}</strong><span>posts</span></div>
-                <div className='platform-account-summary'><UsersRound size={13} /><span>{platformAccounts.length} {platformAccounts.length === 1 ? 'account' : 'accounts'} · {platformStorage.length} storage</span></div>
+                <div className='platform-account-summary'><UsersRound size={13} /><span>{platformAccounts.length} {platformAccounts.length === 1 ? 'account' : 'accounts'} · {platformPosts.filter(post => post.status === 'queued').length} queued</span></div>
                 <div className='platform-card-actions'>
                   {permissions.canSchedulePosts && <button type='button' onClick={() => setSchedulePlatform(platform)}><CalendarClock size={14} />Schedule</button>}
                   {permissions.canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}><Settings2 size={14} />Config Manager</button>}
-                  {permissions.canManageStorageAccess && <button type='button' onClick={() => onOpenStorageAccess(platform)}><FolderSync size={14} />Storage</button>}
                 </div>
               </article>
             );
@@ -1297,7 +1281,7 @@ function Workboard({
             <div className='review-queue-list'>{reviewQueue.length === 0 ? <div className='review-queue-empty'><CircleCheckBig size={24} /><strong>Nothing waiting for review.</strong><span>Every tracked post has been delivered.</span></div> : reviewQueue.map(upload => (
               <button className='review-queue-row' key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <div className={`review-queue-media review-${upload.status}`}><PostMediaPreview upload={upload} compact /><i><CustomIcon platform={upload.platform} size={17} /></i></div>
-                <span><strong>{upload.title || upload.originalName}</strong><small>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
+                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
                 <Pencil size={14} />
               </button>
             ))}</div>
@@ -1472,7 +1456,7 @@ function PlatformScheduleModal({
                 <div className='platform-schedule-empty'>
                   <CalendarDays size={26} />
                   <strong>No posts waiting here.</strong>
-                  <span>Connect storage or choose another account to schedule imported posts.</span>
+                  <span>Create a post or choose another account to schedule publishing.</span>
                 </div>
               ) : visibleUploads.map(upload => (
                 <button type='button' className='platform-schedule-post-row' key={upload.id} onClick={() => onEdit(upload)}>
@@ -1619,7 +1603,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [displayName, setDisplayName] = useState('');
   const [handle, setHandle] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
-  const [loginConfirmation, setLoginConfirmation] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
@@ -1629,7 +1612,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setDisplayName(account?.displayName ?? '');
     setHandle(account?.handle ?? '');
     setLoginIdentifier(account?.loginIdentifier ?? '');
-    setLoginConfirmation(account?.loginConfirmation ?? '');
     setEnabled(account?.enabled ?? true);
   };
 
@@ -1638,7 +1620,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setDisplayName('');
     setHandle('');
     setLoginIdentifier('');
-    setLoginConfirmation('');
     setEnabled(true);
   };
 
@@ -1658,15 +1639,12 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const saveAccount = async (loginAfterSave = false) => {
     if (!displayName.trim()) return alert('Account name is required.');
     if (!handle.trim()) return alert('Account handle is required.');
-    if (!loginIdentifier.trim()) return alert('Login email or username is required.');
-
     setLoading(true);
     try {
       const payload = {
         displayName: displayName.trim(),
         handle: handle.trim(),
         loginIdentifier: loginIdentifier.trim(),
-        loginConfirmation: loginConfirmation.trim() || undefined,
         enabled,
       };
       const account = editing === 'new'
@@ -1704,8 +1682,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login email or username</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='name@example.com' /></div>
-            <div className='field account-form-wide'><label>Login confirmation</label><input value={loginConfirmation} onChange={event => setLoginConfirmation(event.target.value)} placeholder='Optional username, phone, or recovery hint for manual prompts' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Chrome' /></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
           </div>
           <div className='account-form-actions'>
@@ -1720,7 +1697,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Chrome login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
@@ -1729,149 +1706,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
             </article>)}
           </div>
         </div>}
-      </div>
-    </div>
-  </div>;
-}
-
-function StorageAccessModal({ platform, accounts, storageConnections, permissions, onClose, onSuccess }: {
-  platform: Platform;
-  accounts: PlatformAccount[];
-  storageConnections: StorageConnection[];
-  permissions: RolePermissions;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const [accountId, setAccountId] = useState('');
-  const [storageType, setStorageType] = useState<StorageSourceType>('local_drive');
-  const [displayName, setDisplayName] = useState('');
-  const [localFiles, setLocalFiles] = useState<File[]>([]);
-  const [fileInputVersion, setFileInputVersion] = useState(0);
-  const [driveFolderId, setDriveFolderId] = useState('');
-  const [driveFolderUrl, setDriveFolderUrl] = useState('');
-  const [driveFolderName, setDriveFolderName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const platformAccounts = accounts.filter(account => account.enabled);
-
-  useEffect(() => {
-    setAccountId(platformAccounts[0]?.id ?? '');
-  }, [platformAccounts[0]?.id]);
-
-  const addLocalFiles = (fileList: FileList | null) => {
-    const nextFiles = Array.from(fileList ?? []);
-    if (nextFiles.length === 0) return;
-    setLocalFiles(current => {
-      const seen = new Set(current.map(file => `${file.name}:${file.size}:${file.lastModified}`));
-      const uniqueFiles = nextFiles.filter(file => {
-        const key = `${file.name}:${file.size}:${file.lastModified}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      return [...current, ...uniqueFiles];
-    });
-  };
-
-  const removeLocalFile = (index: number) => {
-    setLocalFiles(current => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const formatLocalFileSize = (size: number) => {
-    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-    return `${Math.max(1, Math.ceil(size / 1024))} KB`;
-  };
-
-  const save = async () => {
-    if (!accountId) return alert('Choose a publishing account.');
-    if (storageType === 'local_drive' && localFiles.length === 0) return alert('Choose at least one post file to upload.');
-    if (storageType === 'google_drive' && !driveFolderId.trim() && !driveFolderUrl.trim()) return alert('Google Drive folder id or URL is required.');
-
-    setLoading(true);
-    try {
-      if (storageType === 'local_drive') {
-        await api.uploadLocalPosts(platform, { accountId, files: localFiles });
-      } else {
-        await api.createGoogleDriveConnection({
-          accountId,
-          displayName: displayName.trim() || driveFolderName.trim() || 'Google Drive source',
-          googleDriveFolderId: driveFolderId.trim() || undefined,
-          googleDriveFolderUrl: driveFolderUrl.trim() || undefined,
-          googleDriveFolderName: driveFolderName.trim() || undefined,
-        });
-      }
-      onSuccess();
-      setDisplayName('');
-      setLocalFiles([]);
-      setFileInputVersion(version => version + 1);
-      setDriveFolderId('');
-      setDriveFolderUrl('');
-      setDriveFolderName('');
-    } catch (error) {
-      alert('Error: ' + (error instanceof Error ? error.message : 'Could not save storage access'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const removeConnection = async (connection: StorageConnection) => {
-    if (!confirm(`Remove ${connection.displayName}?`)) return;
-    setLoading(true);
-    try {
-      await api.deleteStorageConnection(connection.id);
-      onSuccess();
-    } catch (error) {
-      alert('Error: ' + (error instanceof Error ? error.message : 'Could not remove storage source'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const accountName = (accountId: string) => {
-    const account = accounts.find(item => item.id === accountId);
-    return account ? `${account.displayName} (${account.handle})` : 'Publishing account';
-  };
-
-  return <div className='modal-overlay' onClick={onClose}>
-    <div className='modal-panel account-manager-modal storage-access-modal' onClick={event => event.stopPropagation()}>
-      <div className='modal-head'><span>{platformLabels[platform]} storage</span><button onClick={onClose}><X size={22} /></button></div>
-      <div className='modal-body'>
-        <div className='account-form'>
-          <div className='account-form-heading'>{storageType === 'local_drive' ? <Upload size={34} /> : <FolderSync size={34} />}<div><strong>{storageType === 'local_drive' ? 'Upload local posts' : 'Add storage source'}</strong><span>{storageType === 'local_drive' ? 'Select media from this device and add it to the post queue.' : 'Connect Google Drive as the media source for posts.'}</span></div></div>
-          <div className='account-form-grid'>
-            <div className='field'><label>Source type</label><select value={storageType} onChange={event => setStorageType(event.target.value as StorageSourceType)}><option value='local_drive'>Local Drive Upload</option><option value='google_drive'>Google Drive</option></select></div>
-            <div className='field'><label>Publishing account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}><option value=''>Choose account</option>{platformAccounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle})</option>)}</select></div>
-            {storageType === 'local_drive' && <div className='field account-form-wide local-upload-field'>
-              <label>Post files</label>
-              <div className='local-upload-panel'>
-                <input key={fileInputVersion} id={`local-post-upload-${platform}`} className='visually-hidden-input' type='file' accept='image/*,video/*' multiple onChange={event => { addLocalFiles(event.target.files); event.currentTarget.value = ''; }} />
-                <label className='local-upload-button' htmlFor={`local-post-upload-${platform}`}><Upload size={17} />Choose files</label>
-                <span className='local-upload-count'>{localFiles.length ? `${localFiles.length} selected` : 'No files selected'}</span>
-                {localFiles.length > 0 && <div className='local-upload-list'>
-                  {localFiles.map((file, index) => <div className='local-upload-row' key={`${file.name}-${file.size}-${file.lastModified}`}><FileText size={15} /><span><strong>{file.name}</strong><small>{formatLocalFileSize(file.size)}</small></span><button type='button' onClick={() => removeLocalFile(index)} aria-label={`Remove ${file.name}`}><X size={14} /></button></div>)}
-                </div>}
-              </div>
-            </div>}
-            {storageType === 'google_drive' && <div className='field account-form-wide'><label>Display name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Google Drive campaign folder' /></div>}
-            {storageType === 'google_drive' && <>
-              <div className='field'><label>Drive folder id</label><input value={driveFolderId} onChange={event => setDriveFolderId(event.target.value)} placeholder='1AbCDEF...' /></div>
-              <div className='field'><label>Drive folder name</label><input value={driveFolderName} onChange={event => setDriveFolderName(event.target.value)} placeholder='Campaign posts' /></div>
-              <div className='field account-form-wide'><label>Drive folder URL</label><input value={driveFolderUrl} onChange={event => setDriveFolderUrl(event.target.value)} placeholder='https://drive.google.com/drive/folders/...' /></div>
-            </>}
-          </div>
-          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Close</button><button className='btn-primary' onClick={save} disabled={loading || !permissions.canManageStorageAccess}>{loading ? <Loader2 className='spin' size={17} /> : storageType === 'local_drive' ? <Upload size={17} /> : <FolderSync size={17} />}{storageType === 'local_drive' ? 'Upload posts' : 'Add source'}</button></div>
-        </div>
-        <div className='account-list-view storage-access-list-view'>
-          <div className='account-list-intro'><div><strong>{storageConnections.length} storage {storageConnections.length === 1 ? 'source' : 'sources'}</strong><span>Google Drive sources and legacy folder connections appear here.</span></div></div>
-          <div className='storage-access-list'>
-            {storageConnections.length === 0 ? <div className='account-list-empty'><FolderOpen size={27} /><strong>No storage sources yet</strong><span>Connect Google Drive here. Local Drive uploads become posts immediately.</span></div> : storageConnections.map(connection => <article className='storage-access-row' key={connection.id}>
-              <span className='publishing-account-icon'><FolderSync size={18} /></span>
-              <span><strong>{connection.displayName}</strong><small>{storageSourceTypeLabels[connection.storageType]} · {accountName(connection.accountId)}</small></span>
-              <span className={`schedule-status ${connection.status === 'connected' ? 'active' : 'inactive'}`}>{connection.status}</span>
-              <span className='storage-access-path'>{connection.storageType === 'local_drive' ? connection.localFolderPath : connection.googleDriveFolderName || connection.googleDriveFolderId || connection.googleDriveFolderUrl}</span>
-              <button className='btn-danger ghost-danger' onClick={() => removeConnection(connection)} disabled={loading}><Trash2 size={14} /></button>
-            </article>)}
-          </div>
-        </div>
       </div>
     </div>
   </div>;
@@ -1985,7 +1819,7 @@ function ActivityLogModal({ activityLogs, onClose }: {
       <div className='modal-head'><span>Operations activity</span><button onClick={onClose}><X size={22} /></button></div>
       <div className='modal-body'>
         <div className='account-list-view'>
-          <div className='account-list-intro'><div><strong>{activityLogs.length} recent events</strong><span>Audit trail for uploads, schedules, users, accounts, folders, and automation.</span></div></div>
+          <div className='account-list-intro'><div><strong>{activityLogs.length} recent events</strong><span>Audit trail for uploads, schedules, users, accounts, and automation.</span></div></div>
           <div className='activity-log-list'>{activityLogs.length === 0 ? <div className='account-list-empty'><ListFilter size={27} /><strong>No activity yet</strong><span>New actions will appear here after users start working.</span></div> : activityLogs.map(item => <article className='activity-log-row' key={item.id}>
             <span className='activity-dot' />
             <span><strong>{item.summary}</strong><small>{item.actorName ?? item.actorUsername ?? 'System'} - {item.action}</small></span>
@@ -1998,8 +1832,12 @@ function ActivityLogModal({ activityLogs, onClose }: {
 }
 
 function PostMediaPreview({ upload, compact = false, networkPreview = false }: { upload: PlatformUpload; compact?: boolean; networkPreview?: boolean }) {
-  if (upload.mimeType.startsWith('image/')) return <img src={assetUrl(upload.url)} alt='' />;
-  if (upload.mimeType.startsWith('video/')) return <video src={assetUrl(upload.url)} controls={!compact && !networkPreview} muted playsInline autoPlay={compact} loop={compact} />;
+  const mediaUrl = assetUrl(upload.url, { compact, controls: !compact && !networkPreview });
+  if (mediaUrl.startsWith('chrome-extension://')) {
+    return <iframe className='extension-media-preview' src={mediaUrl} title={upload.originalName} loading='lazy' />;
+  }
+  if (upload.mimeType.startsWith('image/')) return <img src={mediaUrl} alt='' />;
+  if (upload.mimeType.startsWith('video/')) return <video src={mediaUrl} controls={!compact && !networkPreview} muted playsInline autoPlay={compact} loop={compact} />;
   return <div className='post-preview-file'><FileText size={28} /><span>{upload.originalName}</span></div>;
 }
 
@@ -2141,7 +1979,6 @@ function EditPostModal({
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
-    if (canEditSchedule && upload.folderSource && scheduleMode === 'none') return alert("Choose a schedule for this folder post");
     if (canEditSchedule && scheduleMode === 'exact' && !scheduledDate) return alert("Choose a scheduled date and time.");
     if (canEditSchedule && scheduleMode === 'template' && !scheduleId) return alert("Choose a schedule template.");
     if (scheduledDate && (!Number.isFinite(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now())) {
@@ -2177,11 +2014,12 @@ function EditPostModal({
         <div className="modal-body">
           <div className="post-editor-workspace">
             <div className="post-editor-form">
+              {upload.status === 'failed' && upload.failureReason && <div className='workspace-error' role='alert'><CircleAlert size={18} /><span><strong>Publishing needs attention</strong><small>{upload.failureReason}</small></span></div>}
               <div className="edit-source-row">
                 <CustomIcon platform={upload.platform} size={28} />
                 <div><strong>{upload.originalName}</strong><span>{platformLabels[upload.platform]}</span></div>
               </div>
-              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={Boolean(upload.folderSource)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}){account.enabled ? '' : ' — paused'}</option>)}</select>{upload.folderSource && <small className='field-help'>This post is locked to the account that owns its source folder.</small>}</div>
+              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}){account.enabled ? '' : ' — paused'}</option>)}</select></div>
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}

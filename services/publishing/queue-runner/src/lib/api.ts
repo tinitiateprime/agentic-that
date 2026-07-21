@@ -3,14 +3,12 @@ import type {
   AutomationInput,
   CreateUserProfileInput,
   DashboardSummary,
-  CreateGoogleDriveStorageConnectionInput,
   LoginInput,
   Platform,
   PlatformAccount,
   PlatformUpload,
   PublishingSchedule,
   SocialMediaSchedule,
-  StorageConnection,
   UpdateUploadDetailsInput,
   UpdateUploadStatusInput,
   UpdateUserProfileInput,
@@ -19,23 +17,13 @@ import type {
   UnifiedPostDestinationInput,
   UserProfile
 } from "../../shared/schema.ts";
-import { publishingAssetUrl, publishingFetch } from "../../../../../lib/publishing-endpoint.ts";
+import { isPublishingExtensionActive, publishingAssetUrl, publishingFetch } from "../../../../../lib/publishing-endpoint.ts";
 
 let authToken: string | null = null;
 
 export type AuthResponse = {
   user: UserProfile;
   token: string;
-};
-
-export type LocalDriveConnectionResponse = {
-  connection: StorageConnection;
-  sync: {
-    added: number;
-    updated: number;
-    removed: number;
-    retainedHistory?: number;
-  };
 };
 
 export function setAuthToken(token: string | null) {
@@ -84,11 +72,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function assetUrl(url: string) {
-  return publishingAssetUrl(url);
+export function assetUrl(url: string, options: { compact?: boolean; controls?: boolean } = {}) {
+  return publishingAssetUrl(url, options);
 }
 
 export const api = {
+  health: async () => {
+    const health = await request<{
+      ok: boolean;
+      automationReady: boolean;
+      automationRunning: boolean;
+      extensionBridge?: boolean;
+      platforms?: Platform[];
+    }>("/api/health");
+    if (isPublishingExtensionActive() && !health.extensionBridge) {
+      throw new Error("Restart Start Publishing Companion.cmd to load the extension-compatible publishing service.");
+    }
+    return { ...health, transport: isPublishingExtensionActive() ? "extension" as const : "direct" as const };
+  },
+
   login: (payload: LoginInput) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
 
@@ -120,48 +122,58 @@ export const api = {
       method: "DELETE"
     }),
 
-  uploadLocalPosts: (platform: Platform, payload: { accountId: string; files: File[] | FileList }) => {
-    const formData = new FormData();
-    formData.set("accountId", payload.accountId);
-    Array.from(payload.files).forEach(file => formData.append("files", file));
-    return request<PlatformUpload[]>(`/api/platforms/${platform}/uploads`, {
-      method: "POST",
-      body: formData
-    });
-  },
-
-  createUnifiedPost: (payload: {
+  createUnifiedPost: async (payload: {
     file: File;
     title: string;
     description: string;
     destinations: UnifiedPostDestinationInput[];
   }) => {
-    const formData = new FormData();
-    formData.set("file", payload.file);
-    formData.set("title", payload.title);
-    formData.set("description", payload.description);
-    formData.set("destinations", JSON.stringify(payload.destinations));
-    return request<PlatformUpload[]>("/api/posts/unified", {
-      method: "POST",
-      body: formData
-    });
+    let stagedUploadId: string | null = null;
+    try {
+      const session = await request<{ id: string; offset: number; chunkSize: number }>("/api/staged-uploads", {
+        method: "POST",
+        body: JSON.stringify({
+          originalName: payload.file.name,
+          mimeType: payload.file.type,
+          size: payload.file.size,
+        }),
+      });
+      stagedUploadId = session.id;
+      const chunkSize = Math.min(2 * 1024 * 1024, Math.max(64 * 1024, session.chunkSize || 2 * 1024 * 1024));
+      let offset = session.offset;
+      while (offset < payload.file.size) {
+        const chunk = payload.file.slice(offset, Math.min(payload.file.size, offset + chunkSize));
+        const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Offset": String(offset),
+          },
+          body: await chunk.arrayBuffer(),
+        });
+        if (!Number.isInteger(result.offset) || result.offset <= offset) {
+          throw new Error("The companion returned an invalid upload offset.");
+        }
+        offset = result.offset;
+      }
+
+      const uploads = await request<PlatformUpload[]>("/api/posts/unified/staged", {
+        method: "POST",
+        body: JSON.stringify({
+          stagedUploadId: session.id,
+          title: payload.title,
+          description: payload.description,
+          destinations: payload.destinations,
+        }),
+      });
+      stagedUploadId = null;
+      return uploads;
+    } finally {
+      if (stagedUploadId) {
+        await request<void>(`/api/staged-uploads/${stagedUploadId}`, { method: "DELETE" }).catch(() => undefined);
+      }
+    }
   },
-
-  storageConnections: () => request<StorageConnection[]>("/api/storage-connections"),
-
-  createGoogleDriveConnection: (payload: CreateGoogleDriveStorageConnectionInput) =>
-    request<StorageConnection>("/api/storage-connections/google-drive", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-
-  syncStorageConnection: (connectionId: string) =>
-    request<LocalDriveConnectionResponse>(`/api/storage-connections/${connectionId}/sync`, {
-      method: "POST"
-    }),
-
-  deleteStorageConnection: (connectionId: string) =>
-    request<void>(`/api/storage-connections/${connectionId}`, { method: "DELETE" }),
 
   accounts: (platform?: Platform) => request<PlatformAccount[]>(`/api/accounts${platform ? `?platform=${platform}` : ""}`),
 

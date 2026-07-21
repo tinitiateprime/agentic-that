@@ -65,6 +65,15 @@ function accountSessionStatePath(account: PublishingAccount) {
   return path.join(accountProfilePath(account), "automation-session-state.json");
 }
 
+export async function removeSavedAccountProfile(account: PublishingAccount) {
+  const profilesRoot = path.resolve(accountProfilesDir);
+  const profilePath = path.resolve(accountProfilePath(account));
+  if (!profilePath.startsWith(`${profilesRoot}${path.sep}`)) {
+    throw new Error("The saved account profile path is invalid.");
+  }
+  await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 });
+}
+
 export function hasSavedAccountSession(account: PublishingAccount) {
   try {
     const sessionPath = accountSessionStatePath(account);
@@ -256,8 +265,7 @@ async function prepareXSessionInNormalChrome(account: PublishingAccount) {
     const context = browser.contexts()[0];
     const page = context.pages().find(item => item.url().includes("x.com")) ?? context.pages()[0] ?? await context.newPage();
     await page.bringToFront().catch(() => undefined);
-    await loginToX(page, undefined, false, accountLogin(account, {
-      forceManualLogin: true,
+    await loginToX(page, undefined, false, accountLogin({
       ignoreLoginErrors: true,
     }));
     await saveAccountSessionState(account, context);
@@ -271,22 +279,18 @@ async function prepareXSessionInNormalChrome(account: PublishingAccount) {
 
 type AccountLoginOptions = {
   useSavedSessionOnly?: boolean;
-  forceManualLogin?: boolean;
   ignoreLoginErrors?: boolean;
 };
 
-function accountLogin(account: PublishingAccount, options: AccountLoginOptions = {}): AccountLogin {
+function accountLogin(options: AccountLoginOptions = {}): AccountLogin {
   return {
-    identifier: account.loginIdentifier === "Existing browser session" ? undefined : account.loginIdentifier,
-    confirmation: account.loginConfirmation,
     useSavedSessionOnly: options.useSavedSessionOnly,
-    forceManualLogin: options.forceManualLogin,
     ignoreLoginErrors: options.ignoreLoginErrors
   };
 }
 
-async function publishOne(page: Page, upload: PlatformUpload, account: PublishingAccount, options: AccountLoginOptions = {}) {
-  const login = accountLogin(account, options);
+async function publishOne(page: Page, upload: PlatformUpload, options: AccountLoginOptions = {}) {
+  const login = accountLogin(options);
   switch (upload.platform) {
     case "youtube": return postToYouTube(page, upload, login);
     case "linkedin": return postToLinkedIn(page, upload, login);
@@ -297,7 +301,7 @@ async function publishOne(page: Page, upload: PlatformUpload, account: Publishin
 }
 
 async function loginOnly(page: Page, account: PublishingAccount, options: AccountLoginOptions = {}) {
-  const login = accountLogin(account, options);
+  const login = accountLogin(options);
   switch (account.platform) {
     case "youtube": return loginToYouTube(page, login);
     case "linkedin": return loginToLinkedIn(page, undefined, login);
@@ -305,26 +309,6 @@ async function loginOnly(page: Page, account: PublishingAccount, options: Accoun
     case "facebook": return loginToFacebook(page, undefined, false, login);
     case "x": return loginToX(page, undefined, false, login);
   }
-}
-
-async function prepareXAccountSession(account: PublishingAccount) {
-  console.log(`Checking saved X session for ${account.handle} (${account.id}).`);
-
-  let browser = await launchAccountBrowser(account);
-  try {
-    const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { useSavedSessionOnly: true });
-    await saveAccountSessionState(account, browser);
-    console.log(`X session ready for ${account.handle}.`);
-    return;
-  } catch {
-    console.log(`Saved X session is not active for ${account.handle}.`);
-  } finally {
-    await browser.close().catch(() => undefined);
-  }
-
-  console.log(`Opening normal Chrome for manual X login for ${account.handle}.`);
-  await prepareXSessionInNormalChrome(account);
 }
 
 function getFailureHoldMs() {
@@ -355,6 +339,7 @@ async function runAccountQueue(
 
   let browser: BrowserContext | null = null;
   let hadFailure = false;
+  let sessionInvalidated = false;
 
   async function failUnfinishedPosts(message: string) {
     const currentUploads = await listUploads(account.platform, account.id);
@@ -379,11 +364,12 @@ async function runAccountQueue(
       await updateUploadStatus(upload.id, "processing", `Automation ${trigger} run ${automationRunId} started publishing`);
 
       try {
-        await publishOne(page, upload, account, options);
+        await publishOne(page, upload, options);
       } catch (error) {
         hadFailure = true;
         const message = errorMessage(error);
         if (isSessionFailure(message)) {
+          sessionInvalidated = true;
           clearSavedAccountSession(account);
           await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
         }
@@ -409,6 +395,7 @@ async function runAccountQueue(
     hadFailure = true;
     const message = errorMessage(error);
     if (isSessionFailure(message)) {
+      sessionInvalidated = true;
       clearSavedAccountSession(account);
       await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
     }
@@ -416,44 +403,9 @@ async function runAccountQueue(
     throw error;
   } finally {
     if (browser) {
-      await saveAccountSessionState(account, browser);
+      if (!sessionInvalidated) await saveAccountSessionState(account, browser);
       await browser.close().catch(() => undefined);
     }
-  }
-}
-
-function needsSessionPreparation(upload: PlatformUpload) {
-  return upload.status === "queued" && Boolean(upload.scheduledAt || upload.scheduleId);
-}
-
-async function prepareAccountSession(account: PublishingAccount) {
-  if (account.platform === "x") {
-    await prepareXAccountSession(account);
-    return;
-  }
-
-  console.log(`Checking saved session for ${account.platform} account ${account.handle} (${account.id}).`);
-  let browser = await launchAccountBrowser(account);
-  try {
-    const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { useSavedSessionOnly: true });
-    await saveAccountSessionState(account, browser);
-    console.log(`Session ready for ${account.platform} account ${account.handle}.`);
-    return;
-  } catch (error) {
-    const message = errorMessage(error);
-    console.warn(
-      `Saved session is not active for ${account.platform} account ${account.handle}: ${message}. Opening Chrome for manual login.`,
-    );
-    await browser.close().catch(() => undefined);
-
-    browser = await launchAccountBrowser(account);
-    const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { forceManualLogin: true, ignoreLoginErrors: true });
-    await saveAccountSessionState(account, browser);
-    console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
-  } finally {
-    await browser.close();
   }
 }
 
@@ -467,11 +419,11 @@ async function prepareManualAccountSession(account: PublishingAccount) {
   const browser = await launchAccountBrowser(account);
   try {
     const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { forceManualLogin: true, ignoreLoginErrors: true });
+    await loginOnly(page, account, { ignoreLoginErrors: true });
     await saveAccountSessionState(account, browser);
     console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
   } finally {
-    await browser.close();
+    await browser.close().catch(() => undefined);
   }
 }
 
@@ -503,35 +455,6 @@ export async function startManualAccountSession(accountId: string) {
 
   activeSessionPreparations.set(account.id, operation);
   return { account, started: true };
-}
-
-async function prepareScheduledAccountSessions() {
-  const uploads = await listUploads();
-  const scheduledAccountIds = [...new Set(uploads.filter(needsSessionPreparation).map(upload => upload.accountId))];
-  if (scheduledAccountIds.length === 0) {
-    console.log("No scheduled accounts need session preparation.");
-    return;
-  }
-
-  console.log(`Preparing browser sessions for ${scheduledAccountIds.length} scheduled account(s)...`);
-  const accounts = await Promise.all(scheduledAccountIds.map(accountId => getPublishingAccount(accountId)));
-
-  await Promise.all(accounts.map(async (account, index) => {
-    const accountId = scheduledAccountIds[index];
-    if (!account || !account.enabled) {
-      console.warn(`Skipping session preparation for missing or disabled account ${accountId}.`);
-      return;
-    }
-
-    try {
-      await prepareAccountSession(account);
-    } catch (error) {
-      console.error(
-        `Session preparation failed for ${account.platform} account ${account.handle}:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }));
 }
 
 type RunAutomationOptions = {

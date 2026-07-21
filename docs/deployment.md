@@ -30,7 +30,7 @@ SESSION_COOKIE_SECURE=true
 DATA_STORE=netlify-blobs
 ```
 
-The complete environment list for Telegram, WhatsApp, Instagram scraping, and the externally hosted Publish Queue backend is maintained in [netlify-env.md](./netlify-env.md).
+The complete environment list for Telegram, WhatsApp, Instagram scraping, and publishing is maintained in [netlify-env.md](./netlify-env.md).
 
 Generate the two secrets locally:
 
@@ -47,3 +47,8 @@ On Netlify, backend users, Telegram sessions, login challenges, and message hist
 ## Important Netlify Limitation
 
 Netlify Functions are request-based. They can handle login, account listing, and sending messages, but they do not keep a permanent Telegram listener running in the background.
+They also cannot retain interactive Chrome profiles or run browser publishing
+continuously. Keep the interface on Netlify and run the publishing companion on
+the Windows computer used for social login. The Chrome extension connects the
+deployed dashboard to that companion. See
+[publishing-extension.md](./publishing-extension.md).

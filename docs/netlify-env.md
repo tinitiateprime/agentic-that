@@ -14,9 +14,6 @@ SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
 USER_PROVISIONING_KEY=<different-new-random-32-byte-base64url-secret>
 SESSION_COOKIE_SECURE=true
 
-# Publish Queue embedded management API
-PUBLISH_QUEUE_AUTH_TOKEN_SECRET=<new-random-signing-secret>
-
 # WhatsApp using the Meta Cloud API
 WA_PROVIDER=meta
 META_API_VERSION=v25.0
@@ -63,6 +60,8 @@ TELEGRAM_API_ID=
 TELEGRAM_API_HASH=
 TELEGRAM_API_URL=
 NEXT_PUBLIC_PUBLISH_QUEUE_API_URL=
+PUBLISH_QUEUE_API_URL=
+PUBLISH_QUEUE_AUTH_TOKEN_SECRET=
 PLATFORM_AUTH_DATA_PATH=
 SECRETS_SCAN_OMIT_KEYS=
 ```
@@ -81,14 +80,14 @@ WATI_API_URL=<wati-tenant-api-url>
 WATI_ACCESS_TOKEN=<wati-access-token>
 ```
 
-Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service instead of the included Netlify Function. Publish Queue account management, Content Manager inventory, user roles, and schedules work on Netlify through the included function and Netlify Blobs, so `PUBLISH_QUEUE_API_URL` should normally be omitted.
+Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service instead of the included Netlify Function. For the normal local publishing setup, omit both Publish Queue URL variables. The Chrome extension connects the dashboard to the companion at `http://127.0.0.1:8792`, keeping account configuration, schedules, local media, and browser sessions together on the computer that performs publishing.
 
-## Publish Queue backend host
+## Local Publish Queue companion
 
-Interactive social login and browser publishing require a long-running Publish Queue Runner because a request-only Netlify Function cannot keep Chrome profiles or a scheduler running. Configure these variables on its separate persistent host, not on Netlify:
+Interactive social login and browser publishing require the long-running local companion because a request-only Netlify Function cannot keep Chrome profiles or a scheduler running. Configure these values in the repository `.env.local` on the publishing computer, not in Netlify:
 
 ```env
-PUBLISH_QUEUE_SERVICE_HOST=0.0.0.0
+PUBLISH_QUEUE_SERVICE_HOST=127.0.0.1
 PUBLISH_QUEUE_WEB_ORIGIN=https://<your-netlify-site>.netlify.app
 PUBLISH_QUEUE_DATA_PATH=<persistent-data-path>/store.json
 PUBLISH_QUEUE_UPLOAD_DIR=<persistent-upload-directory>
@@ -101,9 +100,9 @@ PUBLISH_QUEUE_SCHEDULER_TIMEZONE=Asia/Kolkata
 PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS=2
 ```
 
-Then set the Netlify `PUBLISH_QUEUE_API_URL` value to that backend's public HTTPS origin and give it both **Builds** and **Functions** scope. The included publishing function will proxy Config Manager, Content Manager, uploads, and runner requests to it. Never set this value to the Netlify site's own URL, because that creates a self-reference instead of connecting a runner. Do not use the development default passwords in production.
+Install the extension with `Install Publishing Extension.cmd`, and start the companion with `Start Publishing Companion.cmd`. Do not set either Publish Queue URL on Netlify for this local-extension architecture, and do not use development default passwords in production.
 
-When no external runner is configured, `operations.manager` uses `ADMIN_PASSWORD` on Netlify. You can override it with `PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD`. In that embedded mode, account configuration and content inventory are durable, while interactive login and browser publishing return a clear message asking for the persistent runner.
+When no external runner is configured, start the local companion before opening Publish Queue. The dashboard intentionally refuses to create a second serverless publishing store because the local scheduler would not see posts saved there.
 
 ## Webhook
 

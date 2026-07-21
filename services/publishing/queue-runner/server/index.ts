@@ -1,8 +1,7 @@
 import "./env.js";
 import cors from "cors";
 import express from "express";
-import multer from "multer";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Server } from "node:http";
@@ -10,10 +9,10 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import {
   createUserProfileSchema,
-  createGoogleDriveStorageConnectionSchema,
   loginInputSchema,
   platformLabels,
   platformPostRules,
+  platforms,
   platformSchema,
   scheduleIdSchema,
   updateUploadDetailsSchema,
@@ -30,7 +29,6 @@ import {
 } from "../shared/schema.js";
 import {
   automationInput,
-  createGoogleDriveStorageConnection,
   createPlatformAccount,
   createPublishingSchedule,
   createUpload,
@@ -40,22 +38,19 @@ import {
   deletePlatformAccount,
   deletePublishingSchedule,
   deleteUpload,
-  getStorageConnection,
   getUserProfile,
   listPlatformAccounts,
   listPublishingSchedules,
   listSocialMediaSchedules,
   listActivityLogs,
-  listStorageConnections,
   listUploads,
   listUserProfiles,
   localStorageHealth,
   logActivity,
   loginUser,
-  deleteStorageConnection,
+  recoverInterruptedPublishingWork,
   updatePublishingSchedule,
   updatePlatformAccount,
-  updateStorageConnectionSyncState,
   updateUploadDetails,
   updateUploadStatus,
   updateUserProfile,
@@ -63,11 +58,11 @@ import {
 import {
   isAutomationRunning,
   reconcileSavedAccountSessions,
+  removeSavedAccountProfile,
   runAutomation,
   startManualAccountSession,
 } from "./services/publisher.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
-import { disconnectPlatformFolder } from "./services/folder-sync.js";
 
 export const publishingApp = express();
 const app = publishingApp;
@@ -75,11 +70,21 @@ const port = Number(process.env.PUBLISH_QUEUE_SERVICE_PORT ?? process.env.PORT ?
 const host = process.env.PUBLISH_QUEUE_SERVICE_HOST?.trim() || "127.0.0.1";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uploadDir = resolveFromRoot(process.env.PUBLISH_QUEUE_UPLOAD_DIR ?? process.env.UPLOAD_DIR ?? "./uploads");
+const stagedUploadDir = path.join(uploadDir, ".staged");
 const allowedUploadExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"]);
 const allowedUploadMimePrefixes = ["image/", "video/"];
+const imageUploadExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
+const videoUploadExtensions = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"]);
 const maxUploadFileSize = Number(process.env.UPLOAD_MAX_FILE_BYTES ?? 500 * 1024 * 1024);
+const configuredWebOrigins = new Set(
+  (process.env.PUBLISH_QUEUE_WEB_ORIGIN ?? process.env.WEB_ORIGIN ?? "")
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean),
+);
 
 fs.mkdirSync(uploadDir, { recursive: true });
+fs.mkdirSync(stagedUploadDir, { recursive: true });
 
 app.use((req, res, next) => {
   if (req.headers["access-control-request-private-network"] === "true") {
@@ -120,11 +125,6 @@ function assertScheduleCanReceivePosts(schedule: PublishingSchedule) {
   }
 }
 
-function defaultPostText(fileName: string) {
-  const extension = path.extname(fileName);
-  return path.basename(fileName, extension).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "New post";
-}
-
 function safeUploadFileName(originalName: string) {
   const extension = path.extname(originalName).toLowerCase();
   const safeBase = path.basename(originalName, extension)
@@ -134,11 +134,6 @@ function safeUploadFileName(originalName: string) {
   return `${Date.now()}-${randomUUID().slice(0, 8)}-${safeBase}${extension}`;
 }
 
-function isAllowedUpload(file: Express.Multer.File) {
-  const extension = path.extname(file.originalname).toLowerCase();
-  return allowedUploadExtensions.has(extension) && allowedUploadMimePrefixes.some(prefix => file.mimetype.startsWith(prefix));
-}
-
 async function removeStoredUploadFile(fileName: string) {
   const resolvedUploadDir = path.resolve(uploadDir);
   const storedFilePath = path.resolve(resolvedUploadDir, fileName);
@@ -146,54 +141,20 @@ async function removeStoredUploadFile(fileName: string) {
   await fs.promises.unlink(storedFilePath).catch(() => undefined);
 }
 
-const localPostUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, callback) => callback(null, uploadDir),
-    filename: (_req, file, callback) => callback(null, safeUploadFileName(file.originalname))
-  }),
-  limits: {
-    files: 25,
-    fileSize: Number.isFinite(maxUploadFileSize) ? Math.max(1024 * 1024, maxUploadFileSize) : 500 * 1024 * 1024
-  },
-  fileFilter: (_req, file, callback) => {
-    if (!isAllowedUpload(file)) {
-      callback(new Error("Upload images or videos only."));
-      return;
-    }
-    callback(null, true);
-  }
-});
-
-const localPostUploadMiddleware: express.RequestHandler = (req, res, next) => {
-  localPostUpload.array("files", 25)(req, res, async (error) => {
-    if (error) {
-      const files = Array.isArray(req.files) ? req.files as Express.Multer.File[] : [];
-      await Promise.all(files.map(file => removeStoredUploadFile(file.filename)));
-      next(error);
-      return;
-    }
-    next();
-  });
+type StoredUploadFile = {
+  originalname: string;
+  filename: string;
+  mimetype: string;
+  size: number;
 };
 
-const unifiedPostUploadMiddleware: express.RequestHandler = (req, res, next) => {
-  localPostUpload.single("file")(req, res, async (error) => {
-    if (error) {
-      if (req.file) await removeStoredUploadFile(req.file.filename);
-      next(error);
-      return;
-    }
-    next();
-  });
-};
-
-function mediaKind(file: Express.Multer.File) {
+function mediaKind(file: StoredUploadFile) {
   if (file.mimetype.startsWith("image/")) return "image" as const;
   if (file.mimetype.startsWith("video/")) return "video" as const;
   throw new Error("Upload an image or video.");
 }
 
-function assertPlatformPostCompatible(platform: Platform, file: Express.Multer.File, title: string, description: string) {
+function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile, title: string, description: string) {
   const rules = platformPostRules[platform];
   const kind = mediaKind(file);
   if (!rules.media.includes(kind)) {
@@ -225,11 +186,55 @@ const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
 });
 
+const stagedUploadCreateSchema = z.object({
+  originalName: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().min(1).max(120),
+  size: z.number().int().positive()
+});
+
+const stagedUploadIdSchema = z.string().regex(/^stage_[A-Za-z0-9_-]{12,}$/, "The staged upload ID is invalid.");
+
+const stagedUnifiedPostSchema = z.object({
+  stagedUploadId: stagedUploadIdSchema,
+  title: z.string().max(500).optional().default(""),
+  description: z.string().trim().min(1, "Enter a post description."),
+  destinations: unifiedPostDestinationsSchema
+});
+
+type StagedUploadRecord = {
+  id: string;
+  userId: string;
+  originalName: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+};
+
 function authSecret() {
-  return process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET?.trim()
+  const configured = process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET?.trim()
     || process.env.AUTH_TOKEN_SECRET?.trim()
-    || process.env.LOCAL_ACCOUNT_SECRET_KEY?.trim()
-    || "local-development-auth-token-secret";
+    || process.env.LOCAL_ACCOUNT_SECRET_KEY?.trim();
+  if (configured) return configured;
+  if (process.env.SERVERLESS === "true" || process.env.NETLIFY === "true") {
+    return "local-development-auth-token-secret";
+  }
+
+  const configuredStorePath = resolveFromRoot(process.env.PUBLISH_QUEUE_DATA_PATH ?? "./data/store.json");
+  const secretPath = resolveFromRoot(
+    process.env.PUBLISH_QUEUE_LOCAL_AUTH_SECRET_PATH ?? path.join(path.dirname(configuredStorePath), ".auth-token-secret"),
+  );
+  try {
+    const saved = fs.readFileSync(secretPath, "utf8").trim();
+    if (saved.length >= 32) return saved;
+  } catch {
+    // Create a local-only secret below.
+  }
+
+  const generated = randomBytes(48).toString("base64url");
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  fs.writeFileSync(secretPath, generated, { encoding: "utf8", mode: 0o600 });
+  return generated;
 }
 
 function encodeBase64Url(value: string | Buffer) {
@@ -331,9 +336,157 @@ async function findUploadOrThrow(uploadId: string): Promise<PlatformUpload> {
   return upload;
 }
 
+function stagedMetadataPath(stagedUploadId: string) {
+  return path.join(stagedUploadDir, `${stagedUploadId}.json`);
+}
+
+function stagedContentPath(stagedUploadId: string) {
+  return path.join(stagedUploadDir, `${stagedUploadId}.part`);
+}
+
+async function readStagedUpload(stagedUploadId: string) {
+  const parsed = JSON.parse(await fs.promises.readFile(stagedMetadataPath(stagedUploadId), "utf8")) as StagedUploadRecord;
+  if (parsed.id !== stagedUploadId) throw new Error("The staged upload metadata is invalid.");
+  return parsed;
+}
+
+async function removeStagedUpload(stagedUploadId: string) {
+  await Promise.all([
+    fs.promises.unlink(stagedMetadataPath(stagedUploadId)).catch(() => undefined),
+    fs.promises.unlink(stagedContentPath(stagedUploadId)).catch(() => undefined),
+  ]);
+}
+
+async function cleanExpiredStagedUploads() {
+  const expiry = Date.now() - 24 * 60 * 60 * 1000;
+  const entries = await fs.promises.readdir(stagedUploadDir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(entries.filter(entry => entry.isFile()).map(async (entry) => {
+    const entryPath = path.join(stagedUploadDir, entry.name);
+    const stat = await fs.promises.stat(entryPath).catch(() => null);
+    if (stat && stat.mtimeMs < expiry) await fs.promises.unlink(entryPath).catch(() => undefined);
+  }));
+}
+
+async function assertStagedMediaSignature(record: StagedUploadRecord, contentPath: string) {
+  const extension = path.extname(record.originalName).toLowerCase();
+  const handle = await fs.promises.open(contentPath, "r");
+  try {
+    const header = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const bytes = header.subarray(0, bytesRead);
+    const ascii = bytes.toString("ascii");
+    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const isGif = ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a");
+    const isWebp = ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP";
+    const isMp4Family = ascii.slice(4, 8) === "ftyp";
+    const isAvi = ascii.startsWith("RIFF") && ascii.slice(8, 11) === "AVI";
+    const isEbml = bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+    const signatureValid = extension === ".jpg" || extension === ".jpeg" ? isJpeg
+      : extension === ".png" ? isPng
+        : extension === ".gif" ? isGif
+          : extension === ".webp" ? isWebp
+            : extension === ".avi" ? isAvi
+              : extension === ".webm" || extension === ".mkv" ? isEbml
+                : isMp4Family;
+    if (!signatureValid) throw new Error("The uploaded file content does not match its image or video extension.");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function createUnifiedPosts(
+  file: StoredUploadFile,
+  user: UserProfile,
+  titleInput: string,
+  descriptionInput: string,
+  destinationsInput: unknown,
+) {
+  const createdUploads: PlatformUpload[] = [];
+  const title = titleInput.trim();
+  const description = descriptionInput.trim();
+  if (!description) throw new Error("Enter a post description.");
+
+  try {
+    const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
+    const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
+    if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
+    if (user.role === "post_uploader" && destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
+      throw new Error("Post uploaders can create queued posts but cannot assign schedules.");
+    }
+
+    const [allAccounts, allSchedules] = await Promise.all([
+      listPlatformAccounts(),
+      listPublishingSchedules(),
+    ]);
+    const accountById = new Map(allAccounts.map(account => [account.id, account]));
+    const scheduleById = new Map(allSchedules.map(schedule => [schedule.id, schedule]));
+    const destinationAccounts = destinations.map(destination => {
+      const account = accountById.get(destination.accountId);
+      if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
+      return { destination, account };
+    });
+
+    const youtubeVideoSelected = file.mimetype.startsWith("video/") && destinationAccounts.some(({ account }) => account.platform === "youtube");
+    if (youtubeVideoSelected && !title) throw new Error("YouTube requires a title.");
+
+    for (const { destination, account } of destinationAccounts) {
+      const platformDescription = destination.description?.trim() || description;
+      if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
+      assertPlatformPostCompatible(account.platform, file, title, platformDescription);
+      if (destination.scheduleId) {
+        const schedule = scheduleById.get(destination.scheduleId);
+        if (!schedule) throw new Error(`Schedule #${destination.scheduleId} was not found.`);
+        assertScheduleCanReceivePosts(schedule);
+      }
+    }
+
+    for (const { destination, account } of destinationAccounts) {
+      const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
+      createdUploads.push(await createUpload(destination.accountId, {
+        originalName: file.originalname,
+        fileName: file.filename,
+        mimeType: file.mimetype,
+        size: file.size,
+        url: `/uploads/${file.filename}`,
+        title: account.platform === "youtube" && file.mimetype.startsWith("video/") ? title : undefined,
+        caption: destination.description?.trim() || description,
+        scheduledAt,
+        scheduleId: destination.scheduleId,
+      }, user.id));
+    }
+
+    await logActivity(user.id, "post.unified_created", "post_group", createdUploads[0]?.id, `${title || file.originalname} was prepared for ${createdUploads.length} publishing ${createdUploads.length === 1 ? "destination" : "destinations"}.`, {
+      title,
+      uploadIds: createdUploads.map(upload => upload.id),
+      accountIds: destinations.map(destination => destination.accountId),
+      platforms: [...new Set(createdUploads.map(upload => upload.platform))],
+    });
+    return createdUploads;
+  } catch (error) {
+    await Promise.all(createdUploads.map(upload => deleteUpload(upload.id).catch(() => undefined)));
+    throw error;
+  }
+}
+
 app.use(
   cors({
-    origin: (process.env.PUBLISH_QUEUE_WEB_ORIGIN ?? process.env.WEB_ORIGIN)?.split(",") ?? true
+    origin(requestOrigin, callback) {
+      if (!requestOrigin) {
+        callback(null, true);
+        return;
+      }
+
+      let loopbackOrigin = false;
+      try {
+        const hostname = new URL(requestOrigin).hostname.toLowerCase();
+        loopbackOrigin = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+      } catch {
+        loopbackOrigin = false;
+      }
+
+      callback(null, loopbackOrigin || configuredWebOrigins.has(requestOrigin));
+    }
   })
 );
 app.use(express.json({ limit: "2mb" }));
@@ -349,7 +502,9 @@ app.get("/api/health", async (_req, res) => {
       service: "agenticthat-publish-queue-runner",
       storage: storage.storage,
       automationReady: !serverless,
-      automationRunning: isAutomationRunning()
+      automationRunning: isAutomationRunning(),
+      extensionBridge: true,
+      platforms,
     });
   } catch (error) {
     res.status(503).json({
@@ -509,6 +664,9 @@ app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: 
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
+    await removeSavedAccountProfile(account).catch(error => {
+      console.warn(`Could not remove the saved browser profile for ${account.handle}:`, error instanceof Error ? error.message : error);
+    });
     await logActivity(currentUser(req).id, "account.deleted", "publishing_account", account.id, `${account.displayName} account was deleted.`, { platform: account.platform, handle: account.handle });
     res.status(204).send();
   } catch (error) {
@@ -542,76 +700,6 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager", "p
         : "Manual login is already running for this account.",
       started,
     });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// --- STORAGE ACCESS ---
-app.get("/api/storage-connections", requireRoles("operations_manager", "post_uploader"), async (_req, res, next) => {
-  try {
-    res.json(await listStorageConnections());
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/storage-connections/local-drive", requireRoles("operations_manager", "post_uploader"), (_req, res) => {
-  res.status(410).json({ message: "Local Drive folder syncing was replaced by uploading posts from your device." });
-});
-
-app.post("/api/storage-connections/google-drive", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
-  try {
-    const user = currentUser(req);
-    const payload = createGoogleDriveStorageConnectionSchema.parse(req.body);
-    const storageConnection = await createGoogleDriveStorageConnection(payload, user.id);
-    await logActivity(user.id, "storage.google_drive_connected", "storage_connection", storageConnection.id, `${storageConnection.displayName} Google Drive connection was added.`, {
-      accountId: storageConnection.accountId,
-      platform: storageConnection.platform,
-      folderId: storageConnection.googleDriveFolderId
-    });
-    res.status(201).json(storageConnection);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/storage-connections/:id/sync", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
-  try {
-    const user = currentUser(req);
-    const storageConnection = await getStorageConnection(pathParam(req.params.id, "id"));
-    if (!storageConnection) {
-      res.status(404).json({ message: "Storage connection not found" });
-      return;
-    }
-    if (storageConnection.storageType === "google_drive") {
-      await updateStorageConnectionSyncState(storageConnection.id, "pending_auth", "Google Drive sync needs OAuth/API credentials before imports can run.");
-      res.status(400).json({ message: "Google Drive sync needs OAuth/API credentials before imports can run." });
-      return;
-    }
-    res.status(410).json({ message: "Local Drive folder syncing was replaced by uploading posts from your device." });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/storage-connections/:id", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
-  try {
-    const user = currentUser(req);
-    const storageConnection = await getStorageConnection(pathParam(req.params.id, "id"));
-    if (!storageConnection) {
-      res.status(404).json({ message: "Storage connection not found" });
-      return;
-    }
-    if (storageConnection.storageType === "local_drive" && storageConnection.legacyConnectedFolderId) {
-      await disconnectPlatformFolder(storageConnection.legacyConnectedFolderId);
-    }
-    await deleteStorageConnection(storageConnection.id);
-    await logActivity(user.id, "storage.deleted", "storage_connection", storageConnection.id, `${storageConnection.displayName} storage access was removed.`, {
-      storageType: storageConnection.storageType,
-      accountId: storageConnection.accountId
-    });
-    res.status(204).send();
   } catch (error) {
     next(error);
   }
@@ -677,129 +765,107 @@ app.get("/api/social-media-schedules", async (_req, res, next) => {
 });
 
 // --- LOCAL DEVICE UPLOADS ---
-app.post("/api/posts/unified", requireRoles("operations_manager", "post_uploader"), unifiedPostUploadMiddleware, async (req: RequestWithUser, res, next) => {
-  const file = req.file;
-  const createdUploads: PlatformUpload[] = [];
-
+app.post("/api/staged-uploads", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
   try {
-    if (!file) throw new Error("Choose one image or video to upload.");
     const user = currentUser(req);
-    const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
-    const description = typeof req.body.description === "string" ? req.body.description.trim() : "";
-    if (!description) throw new Error("Enter a post description.");
-
-    let rawDestinations: unknown;
-    try {
-      rawDestinations = JSON.parse(typeof req.body.destinations === "string" ? req.body.destinations : "[]");
-    } catch {
-      throw new Error("Publishing destinations are invalid.");
+    const payload = stagedUploadCreateSchema.parse(req.body);
+    const extension = path.extname(payload.originalName).toLowerCase();
+    if (!allowedUploadExtensions.has(extension) || !allowedUploadMimePrefixes.some(prefix => payload.mimeType.startsWith(prefix))) {
+      throw new Error("Upload images or videos only.");
     }
-    const destinations = unifiedPostDestinationsSchema.parse(rawDestinations);
-    const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
-    if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
-    if (user.role === "post_uploader" && destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
-      throw new Error("Post uploaders can create queued posts but cannot assign schedules.");
+    if ((payload.mimeType.startsWith("image/") && !imageUploadExtensions.has(extension))
+      || (payload.mimeType.startsWith("video/") && !videoUploadExtensions.has(extension))) {
+      throw new Error("The selected file extension does not match its media type.");
+    }
+    if (payload.size > maxUploadFileSize) {
+      throw new Error(`The selected media exceeds the ${Math.floor(maxUploadFileSize / (1024 * 1024))} MB upload limit.`);
     }
 
-    const [allAccounts, allSchedules] = await Promise.all([
-      listPlatformAccounts(),
-      listPublishingSchedules(),
-    ]);
-    const accountById = new Map(allAccounts.map(account => [account.id, account]));
-    const scheduleById = new Map(allSchedules.map(schedule => [schedule.id, schedule]));
-    const destinationAccounts = destinations.map(destination => {
-      const account = accountById.get(destination.accountId);
-      if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
-      return { destination, account };
-    });
-
-    const youtubeVideoSelected = file.mimetype.startsWith("video/") && destinationAccounts.some(({ account }) => account.platform === "youtube");
-    if (youtubeVideoSelected && !title) {
-      throw new Error("YouTube requires a title.");
-    }
-
-    for (const { destination, account } of destinationAccounts) {
-      const platformDescription = destination.description?.trim() || description;
-      if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
-      assertPlatformPostCompatible(account.platform, file, title, platformDescription);
-      if (destination.scheduleId) {
-        const schedule = scheduleById.get(destination.scheduleId);
-        if (!schedule) throw new Error(`Schedule #${destination.scheduleId} was not found.`);
-        assertScheduleCanReceivePosts(schedule);
-      }
-    }
-
-    for (const { destination, account } of destinationAccounts) {
-      const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
-      createdUploads.push(await createUpload(destination.accountId, {
-        originalName: file.originalname,
-        fileName: file.filename,
-        mimeType: file.mimetype,
-        size: file.size,
-        url: `/uploads/${file.filename}`,
-        title: account.platform === "youtube" && file.mimetype.startsWith("video/") ? title : undefined,
-        caption: destination.description?.trim() || description,
-        scheduledAt,
-        scheduleId: destination.scheduleId,
-      }, user.id));
-    }
-
-    await logActivity(user.id, "post.unified_created", "post_group", createdUploads[0]?.id, `${title} was prepared for ${createdUploads.length} publishing ${createdUploads.length === 1 ? "destination" : "destinations"}.`, {
-      title,
-      uploadIds: createdUploads.map(upload => upload.id),
-      accountIds: destinations.map(destination => destination.accountId),
-      platforms: [...new Set(createdUploads.map(upload => upload.platform))],
-    });
-    res.status(201).json(createdUploads);
+    await cleanExpiredStagedUploads();
+    const id = `stage_${randomUUID().replace(/-/g, "")}`;
+    const record: StagedUploadRecord = {
+      id,
+      userId: user.id,
+      originalName: payload.originalName,
+      fileName: safeUploadFileName(payload.originalName),
+      mimeType: payload.mimeType,
+      size: payload.size,
+      createdAt: new Date().toISOString(),
+    };
+    await fs.promises.writeFile(stagedMetadataPath(id), JSON.stringify(record), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    await fs.promises.writeFile(stagedContentPath(id), Buffer.alloc(0), { flag: "wx", mode: 0o600 });
+    res.status(201).json({ id, offset: 0, chunkSize: 2 * 1024 * 1024 });
   } catch (error) {
-    await Promise.all(createdUploads.map(upload => deleteUpload(upload.id).catch(() => undefined)));
-    if (file) await removeStoredUploadFile(file.filename);
     next(error);
   }
 });
 
-app.post("/api/platforms/:platform/uploads", requireRoles("operations_manager", "post_uploader"), localPostUploadMiddleware, async (req: RequestWithUser, res, next) => {
-  const files = Array.isArray(req.files) ? req.files as Express.Multer.File[] : [];
-  const createdUploads: PlatformUpload[] = [];
+app.post(
+  "/api/staged-uploads/:id/chunks",
+  requireRoles("operations_manager", "post_uploader"),
+  express.raw({ type: "application/octet-stream", limit: "3mb" }),
+  async (req: RequestWithUser, res, next) => {
+    try {
+      const user = currentUser(req);
+      const stagedUploadId = stagedUploadIdSchema.parse(pathParam(req.params.id, "id"));
+      const record = await readStagedUpload(stagedUploadId);
+      if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+      const requestedOffset = Number(req.headers["x-upload-offset"]);
+      if (!Number.isInteger(requestedOffset) || requestedOffset < 0) throw new Error("The upload offset is invalid.");
+      const content = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (content.length === 0) throw new Error("The upload chunk is empty.");
+      const contentPath = stagedContentPath(stagedUploadId);
+      const currentSize = (await fs.promises.stat(contentPath)).size;
+      if (currentSize !== requestedOffset) {
+        res.status(409).json({ message: "The upload offset is out of date.", offset: currentSize });
+        return;
+      }
+      if (currentSize + content.length > record.size) throw new Error("The uploaded data exceeds the declared file size.");
+      await fs.promises.appendFile(contentPath, content);
+      res.json({ id: stagedUploadId, offset: currentSize + content.length });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
+app.delete("/api/staged-uploads/:id", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
-    const platform = platformSchema.parse(req.params.platform);
-    const accountId = typeof req.body.accountId === "string" ? req.body.accountId.trim() : "";
-    if (!accountId) throw new Error("Choose a publishing account.");
-    if (files.length === 0) throw new Error("Choose at least one image or video to upload.");
+    const stagedUploadId = stagedUploadIdSchema.parse(pathParam(req.params.id, "id"));
+    const record = await readStagedUpload(stagedUploadId);
+    if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+    await removeStagedUpload(stagedUploadId);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
 
-    const account = (await listPlatformAccounts(platform)).find(item => item.id === accountId);
-    if (!account) throw new Error(`Choose a ${platform} publishing account.`);
-    if (!account.enabled) throw new Error("Choose an enabled publishing account.");
+app.post("/api/posts/unified/staged", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+  let finalFileName: string | null = null;
+  try {
+    const user = currentUser(req);
+    const payload = stagedUnifiedPostSchema.parse(req.body);
+    const record = await readStagedUpload(payload.stagedUploadId);
+    if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+    const stagedPath = stagedContentPath(record.id);
+    const receivedSize = (await fs.promises.stat(stagedPath)).size;
+    if (receivedSize !== record.size) throw new Error(`The media upload is incomplete (${receivedSize} of ${record.size} bytes received).`);
+    await assertStagedMediaSignature(record, stagedPath);
 
-    for (const file of files) {
-      const caption = defaultPostText(file.originalname);
-      const upload = await createUpload(account.id, {
-        originalName: file.originalname,
-        fileName: file.filename,
-        mimeType: file.mimetype,
-        size: file.size,
-        url: `/uploads/${file.filename}`,
-        title: caption,
-        caption
-      }, user.id);
-      createdUploads.push(upload);
-    }
-
-    await logActivity(user.id, "post.uploaded", "post", createdUploads.length === 1 ? createdUploads[0].id : null, `${createdUploads.length} local ${createdUploads.length === 1 ? "post was" : "posts were"} uploaded.`, {
-      platform,
-      accountId: account.id,
-      uploadIds: createdUploads.map(upload => upload.id)
-    });
-
+    finalFileName = record.fileName;
+    await fs.promises.rename(stagedPath, path.join(uploadDir, record.fileName));
+    const createdUploads = await createUnifiedPosts({
+      originalname: record.originalName,
+      filename: record.fileName,
+      mimetype: record.mimeType,
+      size: record.size,
+    }, user, payload.title, payload.description, payload.destinations);
+    await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(createdUploads);
   } catch (error) {
-    await Promise.all(createdUploads.map(async (upload) => {
-      await deleteUpload(upload.id).catch(() => undefined);
-      await removeStoredUploadFile(upload.fileName);
-    }));
-    await Promise.all(files.map(file => removeStoredUploadFile(file.filename)));
+    if (finalFileName) await removeStoredUploadFile(finalFileName);
     next(error);
   }
 });
@@ -907,19 +973,6 @@ app.delete("/api/uploads/:id", requireRoles("operations_manager", "post_uploader
   }
 });
 
-// --- OLD FOLDER API REMOVED ---
-app.get("/api/folder-connections", requireRoles("operations_manager", "post_uploader"), (_req, res) => {
-  res.status(410).json({ message: "Folder connections were replaced by Storage Access. Use /api/storage-connections." });
-});
-
-app.post("/api/accounts/:accountId/folder-connection", requireRoles("operations_manager", "post_uploader"), (_req, res) => {
-  res.status(410).json({ message: "Folder connections were replaced by Storage Access. Add a Local Drive source instead." });
-});
-
-app.delete("/api/folder-connections/:id", requireRoles("operations_manager", "post_uploader"), (_req, res) => {
-  res.status(410).json({ message: "Folder connections were replaced by Storage Access. Remove the Storage Access connection instead." });
-});
-
 // --- AUTOMATION INPUT ---
 app.get("/api/automation/input", requireRoles("operations_manager"), async (_req, res, next) => {
   try {
@@ -965,14 +1018,6 @@ app.post("/api/automation/run", requireRoles("operations_manager"), async (req: 
 
 // --- ERROR HANDLER ---
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if (error instanceof multer.MulterError) {
-    const message = error.code === "LIMIT_FILE_SIZE"
-      ? `The selected media exceeds the ${Math.floor(maxUploadFileSize / (1024 * 1024))} MB upload limit.`
-      : error.message;
-    res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ message });
-    return;
-  }
-
   if (error instanceof ZodError) {
     res.status(400).json({
       message: "Validation failed",
@@ -1017,10 +1062,23 @@ export function createPublishingHttpServer(options: PublishingHttpServerOptions 
     const resolvedPort = typeof address === "object" && address ? address.port : serverPort;
     console.log(`Publish Queue Runner API listening on http://${serverHost}:${resolvedPort}`);
     if (!startBackgroundServices) return;
-    void reconcileSavedAccountSessions().catch(error => {
-      console.warn("Could not reconcile saved publishing sessions:", error instanceof Error ? error.message : error);
-    });
-    startScheduler();
+    void (async () => {
+      try {
+        const recovery = await recoverInterruptedPublishingWork();
+        if (recovery.recoveredUploads > 0) {
+          console.warn(
+            `Recovered ${recovery.recoveredUploads} interrupted post(s) in ${recovery.recoveryMode} mode.`,
+          );
+        }
+      } catch (error) {
+        console.error("Could not recover interrupted publishing work:", error instanceof Error ? error.message : error);
+      }
+
+      await reconcileSavedAccountSessions().catch(error => {
+        console.warn("Could not reconcile saved publishing sessions:", error instanceof Error ? error.message : error);
+      });
+      startScheduler();
+    })();
   });
   return server;
 }

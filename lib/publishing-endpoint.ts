@@ -1,3 +1,9 @@
+import {
+  extensionMediaProxyUrl,
+  publishingExtensionFetch,
+  publishingExtensionIsActive,
+} from "./publishing-extension-bridge.ts";
+
 const configuredPublishingOrigin = process.env.NEXT_PUBLIC_PUBLISH_QUEUE_API_URL?.trim().replace(/\/$/, "") ?? "";
 const localPublishingOrigin = "http://127.0.0.1:8792";
 
@@ -27,7 +33,8 @@ async function detectLocalPublishingCompanion() {
 
   companionCheck = (async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 1_200);
+    // Chrome 142+ may wait while the user grants Local Network Access / Apps on device.
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     try {
       const response = await fetch(
         `${localPublishingOrigin}/api/health`,
@@ -61,7 +68,17 @@ export async function resolvePublishingOrigin() {
 }
 
 export async function publishingFetch(path: string, init: RequestInit = {}) {
+  if (!configuredPublishingOrigin && typeof window !== "undefined" && !(init.body instanceof FormData)) {
+    const extensionResponse = await publishingExtensionFetch(path, init);
+    if (extensionResponse) return extensionResponse;
+  }
+
   const origin = await resolvePublishingOrigin();
+  if (!origin && typeof window !== "undefined") {
+    throw new Error(
+      "The publishing companion could not be reached. Install the AgenticThat Chrome extension, start Start Publishing Companion.cmd, and try again."
+    );
+  }
   const normalizedPath = path.startsWith("/api/") ? path : `/api/${path.replace(/^\//, "")}`;
   const requestUrl = origin
     ? `${origin}${normalizedPath}`
@@ -73,12 +90,18 @@ export async function publishingFetch(path: string, init: RequestInit = {}) {
   );
 }
 
-export function publishingAssetUrl(url: string) {
+export function publishingAssetUrl(url: string, options: { compact?: boolean; controls?: boolean } = {}) {
   if (url.startsWith("http") || url.startsWith("data:")) return url;
+  const extensionUrl = extensionMediaProxyUrl(url, options);
+  if (extensionUrl) return extensionUrl;
   if (activePublishingOrigin) return `${activePublishingOrigin}${url}`;
   return url.startsWith("/uploads/") ? `/publishing${url}` : url;
 }
 
 export function isLocalPublishingCompanionActive() {
   return activePublishingOrigin === localPublishingOrigin;
+}
+
+export function isPublishingExtensionActive() {
+  return publishingExtensionIsActive();
 }

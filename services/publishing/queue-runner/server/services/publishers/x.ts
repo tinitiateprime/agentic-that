@@ -150,53 +150,6 @@ async function getLoginError(page: Page) {
   return null;
 }
 
-async function replaceFieldValue(page: Page, field: Locator, value: string, fieldName: string) {
-  console.log(`Entering X ${fieldName}...`);
-  await field.scrollIntoViewIfNeeded().catch(() => undefined);
-  await field.click({ force: true, timeout: 10000 });
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-  await page.keyboard.press("Backspace");
-  await page.keyboard.type(value, { delay: 45 });
-}
-
-async function clickFlowButton(page: Page, label: RegExp) {
-  const button = await firstVisible([
-    page.getByRole("button", { name: label }),
-    page.locator('[role="button"]').filter({ hasText: label }),
-    page.getByText(label),
-  ]);
-
-  if (!button) return false;
-
-  await button.scrollIntoViewIfNeeded().catch(() => undefined);
-  await button.click({ force: true, timeout: 10000 });
-  return true;
-}
-
-async function clickLoginButton(page: Page) {
-  const deadline = Date.now() + 10000;
-
-  while (Date.now() < deadline) {
-    if (!await firstVisible(passwordFields(page))) return false;
-
-    const button = await firstVisible([
-      page.getByRole("button", { name: /^(?:Log in|Login|Continue)$/i }),
-      page.locator('button[type="submit"]'),
-      page.locator('[role="button"]').filter({ hasText: /^(?:Log in|Login|Continue)$/i }),
-    ]);
-
-    if (button) {
-      await button.scrollIntoViewIfNeeded().catch(() => undefined);
-      await button.click({ force: true, timeout: 10000 });
-      return true;
-    }
-
-    await page.waitForTimeout(250);
-  }
-
-  return false;
-}
-
 async function openPostComposer(page: Page) {
   console.log("Opening X post composer...");
   const composeButton = await waitForVisible([
@@ -326,71 +279,6 @@ async function waitForXPostComplete(page: Page, composer: Locator) {
   }
 
   throw new Error("X did not confirm the post within 90 seconds.");
-}
-
-async function waitForPasswordOrConfirmation(page: Page, confirmation: string) {
-  const deadline = Date.now() + 30000;
-  let confirmationEntered = false;
-
-  while (Date.now() < deadline) {
-    const loginError = await getLoginError(page);
-    if (loginError) throw new Error(`X login error: ${loginError}`);
-
-    const passwordField = await firstVisible(passwordFields(page));
-    if (passwordField) return passwordField;
-    if (await isLoggedIn(page)) return null;
-
-    const pageText = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
-    const asksForConfirmation = /phone number or username|confirm your identity|enter your username/i.test(pageText);
-
-    if (asksForConfirmation && !confirmationEntered) {
-      const confirmationField = await firstVisible([
-        page.locator('[data-testid="ocfEnterTextTextInput"]'),
-        page.locator('input[name="text"]'),
-        page.locator('input[type="text"]'),
-      ]);
-
-      if (confirmationField) {
-        await replaceFieldValue(page, confirmationField, confirmation, "login confirmation");
-        await clickFlowButton(page, /^(?:Next|Continue)$/i);
-        confirmationEntered = true;
-        await page.waitForTimeout(800);
-        continue;
-      }
-    }
-
-    if (await isManualVerificationVisible(page, page.url())) return null;
-    await page.waitForTimeout(250);
-  }
-
-  return null;
-}
-
-async function fillAutomaticLogin(page: Page, identifier: string, password: string, confirmation: string) {
-  const identifierField = await waitForVisible(identifierFields(page));
-  if (!identifierField) throw new Error("Could not find the X username, email, or phone field.");
-
-  await replaceFieldValue(page, identifierField, identifier, "username/email/phone");
-
-  if (!await clickFlowButton(page, /^(?:Next|Continue)$/i)) {
-    throw new Error("Could not find the X Continue or Next button.");
-  }
-
-  const passwordField = await waitForPasswordOrConfirmation(page, confirmation);
-  if (!passwordField) {
-    console.log("X requires manual confirmation before the password step.");
-    return;
-  }
-
-  await replaceFieldValue(page, passwordField, password, "password");
-
-  if (!await clickLoginButton(page)) {
-    const loginError = await getLoginError(page);
-    if (loginError) throw new Error(`X login error: ${loginError}`);
-    throw new Error("Could not find the X Log in button.");
-  }
-
-  console.log("X Log in clicked.");
 }
 
 async function waitForLoginResult(page: Page, allowManualLoginFromStart: boolean, ignoreLoginErrors = false) {

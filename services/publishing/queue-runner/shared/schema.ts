@@ -5,16 +5,12 @@ export const uploadStatuses = ["queued", "processing", "posted", "failed"] as co
 export const scheduleFrequencies = ["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"] as const;
 export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
-export const storageSourceTypes = ["local_drive", "google_drive"] as const;
-export const storageConnectionStatuses = ["connected", "syncing", "pending_auth", "error", "disabled"] as const;
 
 export const platformSchema = z.enum(platforms);
 export const uploadStatusSchema = z.enum(uploadStatuses);
 export const scheduleFrequencySchema = z.enum(scheduleFrequencies);
 export const scheduleStatusSchema = z.enum(scheduleStatuses);
 export const userRoleSchema = z.enum(userRoles);
-export const storageSourceTypeSchema = z.enum(storageSourceTypes);
-export const storageConnectionStatusSchema = z.enum(storageConnectionStatuses);
 export const scheduleIdSchema = z.coerce.number().int().positive();
 
 export type Platform = (typeof platforms)[number];
@@ -22,8 +18,6 @@ export type UploadStatus = (typeof uploadStatuses)[number];
 export type ScheduleFrequency = (typeof scheduleFrequencies)[number];
 export type ScheduleStatus = (typeof scheduleStatuses)[number];
 export type UserRole = (typeof userRoles)[number];
-export type StorageSourceType = (typeof storageSourceTypes)[number];
-export type StorageConnectionStatus = (typeof storageConnectionStatuses)[number];
 
 export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
   daily: "Daily",
@@ -42,10 +36,6 @@ export const userRoleLabels: Record<UserRole, string> = {
   viewer: "Viewer"
 };
 
-export const storageSourceTypeLabels: Record<StorageSourceType, string> = {
-  local_drive: "Local Drive",
-  google_drive: "Google Drive"
-};
 
 export const loginInputSchema = z.object({
   username: z.string().trim().min(1, "Username is required"),
@@ -88,7 +78,6 @@ export const platformAccountSchema = z.object({
   displayName: z.string(),
   handle: z.string(),
   loginIdentifier: z.string(),
-  loginConfirmation: z.string().optional(),
   credentialConfigured: z.boolean(),
   enabled: z.boolean(),
   createdAt: z.string(),
@@ -98,8 +87,7 @@ export const platformAccountSchema = z.object({
 export const upsertPlatformAccountSchema = z.object({
   displayName: z.string().trim().min(1, "Account name is required"),
   handle: z.string().trim().min(1, "Account handle is required"),
-  loginIdentifier: z.string().trim().min(1, "Login email or username is required"),
-  loginConfirmation: z.string().trim().optional(),
+  loginIdentifier: z.string().trim().max(254).optional().default(""),
   enabled: z.boolean().optional()
 });
 
@@ -141,61 +129,6 @@ export const socialMediaScheduleSchema = z.object({
   updatedAt: z.string()
 });
 
-export const storageConnectionSchema = z.object({
-  id: z.string(),
-  storageType: storageSourceTypeSchema,
-  displayName: z.string(),
-  platform: platformSchema,
-  accountId: z.string(),
-  connectedByUserId: z.string().optional(),
-  localFolderPath: z.string().optional(),
-  googleDriveFolderId: z.string().optional(),
-  googleDriveFolderUrl: z.string().optional(),
-  googleDriveFolderName: z.string().optional(),
-  legacyConnectedFolderId: z.string().optional(),
-  status: storageConnectionStatusSchema,
-  active: z.boolean(),
-  lastSyncedAt: z.string().optional(),
-  lastError: z.string().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string()
-});
-
-export const createLocalDriveStorageConnectionSchema = z.object({
-  displayName: z.string().trim().optional(),
-  accountId: z.string().trim().min(1, "Choose a publishing account"),
-  folderPath: z.string().trim().min(1, "Legacy source path is required")
-});
-
-export const createGoogleDriveStorageConnectionSchema = z.object({
-  displayName: z.string().trim().min(1, "Connection name is required"),
-  accountId: z.string().trim().min(1, "Choose a publishing account"),
-  googleDriveFolderId: z.string().trim().optional(),
-  googleDriveFolderUrl: z.string().trim().url("Use a valid Google Drive folder URL").optional().or(z.literal("")),
-  googleDriveFolderName: z.string().trim().optional()
-}).superRefine((value, context) => {
-  if (!value.googleDriveFolderId && !value.googleDriveFolderUrl) {
-    context.addIssue({ code: "custom", message: "Google Drive folder id or URL is required.", path: ["googleDriveFolderId"] });
-  }
-});
-
-export const folderConnectionSchema = z.object({
-  id: z.string(),
-  platform: platformSchema,
-  accountId: z.string(),
-  folderPath: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  lastScannedAt: z.string().optional(),
-  lastError: z.string().optional()
-});
-
-export const folderSourceSchema = z.object({
-  connectionId: z.string(),
-  relativePath: z.string(),
-  fingerprint: z.string(),
-  present: z.boolean()
-});
 
 export const platformLabels: Record<Platform, string> = {
   instagram: "Instagram",
@@ -274,9 +207,13 @@ export const platformUploadSchema = z.object({
   extension: z.string(),
   size: z.number(),
   url: z.string(),
-  title: z.string().optional(), // 👈 NEW TITLE FIELD
+  title: z.string().optional(),
   caption: z.string().min(1, "Caption is required"),
   status: uploadStatusSchema,
+  failureReason: z.string().optional(),
+  attemptCount: z.number().int().nonnegative().optional(),
+  lastAttemptAt: z.string().optional(),
+  postedAt: z.string().optional(),
   uploadedAt: z.string(),
   updatedAt: z.string(),
   scheduledAt: z.string().optional(),
@@ -284,7 +221,6 @@ export const platformUploadSchema = z.object({
   createdByUserId: z.string().optional(),
   scheduledByUserId: z.string().optional(),
   lastUpdatedByUserId: z.string().optional(),
-  folderSource: folderSourceSchema.optional(),
   automation: uploadAutomationSchema
 });
 
@@ -318,16 +254,12 @@ export type PlatformUpload = z.infer<typeof platformUploadSchema>;
 export type PlatformAccount = z.infer<typeof platformAccountSchema>;
 export type PublishingSchedule = z.infer<typeof publishingScheduleSchema>;
 export type SocialMediaSchedule = z.infer<typeof socialMediaScheduleSchema>;
-export type StorageConnection = z.infer<typeof storageConnectionSchema>;
-export type FolderConnection = z.infer<typeof folderConnectionSchema>;
 export type UploadAutomation = z.infer<typeof uploadAutomationSchema>;
 export type UserProfile = z.infer<typeof userProfileSchema>;
 export type ActivityLog = z.infer<typeof activityLogSchema>;
 export type LoginInput = z.input<typeof loginInputSchema>;
 export type CreateUserProfileInput = z.input<typeof createUserProfileSchema>;
 export type UpdateUserProfileInput = z.input<typeof updateUserProfileSchema>;
-export type CreateLocalDriveStorageConnectionInput = z.input<typeof createLocalDriveStorageConnectionSchema>;
-export type CreateGoogleDriveStorageConnectionInput = z.input<typeof createGoogleDriveStorageConnectionSchema>;
 export type UpdateUploadStatusInput = z.input<typeof updateUploadStatusSchema>;
 export type UpdateUploadDetailsInput = z.input<typeof updateUploadDetailsSchema>;
 export type UpsertPlatformAccountInput = z.input<typeof upsertPlatformAccountSchema>;

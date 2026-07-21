@@ -85,66 +85,6 @@ async function getLoginError(page: Page) {
   return text || null;
 }
 
-async function clickLabelFallback(page: Page, label: RegExp, fieldName: string) {
-  const labelLocator = page.getByText(label).first();
-
-  try {
-    await labelLocator.waitFor({ state: "visible", timeout: 5000 });
-  } catch {
-    return false;
-  }
-
-  const labelBox = await labelLocator.boundingBox();
-  if (!labelBox) return false;
-
-  console.log(`Clicking LinkedIn ${fieldName} field by label position...`);
-  await page.mouse.click(labelBox.x + Math.max(180, labelBox.width + 40), labelBox.y + labelBox.height + 28);
-  await page.waitForTimeout(300);
-  return true;
-}
-
-async function typeIntoField(page: Page, locators: Locator[], value: string, fieldName: string, labelFallback: RegExp) {
-  const input = await firstVisible(locators);
-
-  if (input) {
-    console.log(`Clicking LinkedIn ${fieldName} field...`);
-    await input.scrollIntoViewIfNeeded();
-    await input.click({ force: true, timeout: 10000 });
-  } else if (!(await clickLabelFallback(page, labelFallback, fieldName))) {
-    throw new Error(`Could not find the LinkedIn ${fieldName} field.`);
-  }
-
-  await page.waitForTimeout(300);
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-  await page.keyboard.press("Backspace");
-  await page.keyboard.type(value, { delay: 35 });
-  await page.waitForTimeout(500);
-  console.log(`LinkedIn ${fieldName} entered.`);
-}
-
-async function clickSignIn(page: Page) {
-  const signInButton = await firstVisible([
-    page.locator('button[type="submit"]').filter({ hasText: /^Sign in$/i }),
-    page.getByRole("button", { name: /^Sign in$/i }),
-    page.locator('button[type="submit"]'),
-    page.locator('input[type="submit"]'),
-  ]);
-
-  if (signInButton) {
-    console.log("Clicking LinkedIn Sign in button...");
-    await signInButton.scrollIntoViewIfNeeded();
-    await signInButton.click({ force: true, timeout: 10000 });
-    return;
-  }
-
-  const signInText = page.getByText(/^Sign in$/i).last();
-  const box = await signInText.boundingBox().catch(() => null);
-  if (!box) throw new Error("Could not find LinkedIn Sign in button.");
-
-  console.log("Clicking LinkedIn Sign in button by text position...");
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-}
-
 async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
 
@@ -344,41 +284,6 @@ async function waitForPostComplete(page: Page) {
 
   await page.waitForTimeout(2000);
   console.log("LinkedIn post published.");
-}
-
-async function fillLoginForm(page: Page, email: string, password: string) {
-  await typeIntoField(
-    page,
-    [
-      page.getByLabel(/Email or phone/i),
-      page.getByRole("textbox", { name: /Email or phone/i }),
-      page.locator("input#username"),
-      page.locator('input[name="session_key"]'),
-      page.locator('input[autocomplete="username"]'),
-      page.locator('input[type="email"]'),
-      page.locator('input[type="text"]'),
-    ],
-    email,
-    "email",
-    /^Email or phone$/i,
-  );
-
-  await typeIntoField(
-    page,
-    [
-      page.getByLabel(/^Password$/i),
-      page.locator("input#password"),
-      page.locator('input[name="session_password"]'),
-      page.locator('input[autocomplete="current-password"]'),
-      page.locator('input[type="password"]'),
-    ],
-    password,
-    "password",
-    /^Password$/i,
-  );
-
-  await clickSignIn(page);
-  console.log("Clicked LinkedIn Sign in.");
 }
 
 async function loginFormIsVisible(page: Page) {
