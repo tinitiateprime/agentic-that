@@ -26,7 +26,7 @@ Suggested description:
 ## Upload checklist
 
 1. Run `npm run publishing:extension:package`.
-2. Upload `artifacts/AgenticThat-Publishing-Extension-1.0.0.zip`.
+2. Upload `artifacts/AgenticThat-Publishing-Extension-1.1.0.zip`.
 3. Use `extensions/publishing-companion/icons/icon-128.png` as the store icon.
 4. Enter `https://agentic-that.netlify.app/publishing/privacy` as the public
    privacy-policy URL.

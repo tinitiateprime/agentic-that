@@ -20,6 +20,25 @@ New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 Get-ChildItem -LiteralPath $extensionRoot -Force | Where-Object { $_.Name -notin @("README.md") } | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination $stagingRoot -Recurse -Force
 }
+
+# The source manifest supports unpacked local development. The Web Store build
+# exposes the dashboard bridge only to the production dashboard.
+$stagedManifestPath = Join-Path $stagingRoot "manifest.json"
+$stagedManifest = Get-Content -LiteralPath $stagedManifestPath -Raw | ConvertFrom-Json
+$productionMatch = "https://agentic-that.netlify.app/*"
+foreach ($contentScript in $stagedManifest.content_scripts) {
+  $contentScript.matches = @($productionMatch)
+}
+foreach ($resource in $stagedManifest.web_accessible_resources) {
+  $resource.matches = @($productionMatch)
+}
+$manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
+[System.IO.File]::WriteAllText(
+  $stagedManifestPath,
+  $manifestJson + [Environment]::NewLine,
+  [System.Text.UTF8Encoding]::new($false)
+)
+
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force
