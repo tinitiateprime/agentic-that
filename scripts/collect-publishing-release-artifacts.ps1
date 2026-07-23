@@ -17,5 +17,6 @@ if (-not $portable) { throw "Windows companion portable ZIP was not produced." }
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Setup.exe") -Force
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Publishing-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Portable.zip") -Force
 
 Write-Host "Windows companion release artifacts copied to $artifactRoot" -ForegroundColor Green

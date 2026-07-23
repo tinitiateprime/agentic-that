@@ -12,7 +12,7 @@
 4. After approval, add the public listing URL to Netlify as
    `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` with Builds scope.
 5. Keep `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` set to the stable GitHub
-   Release URL documented in `docs/netlify-env.md`.
+   portable Release URL documented in `docs/netlify-env.md`.
 
 For production distribution, obtain a Windows code-signing certificate. Add its
 base64-encoded PFX as the GitHub Actions secret `WINDOWS_CERTIFICATE_BASE64` and
@@ -31,8 +31,8 @@ git push origin publishing-v1.1.0
 
 GitHub Actions builds the extension ZIP, signed Windows installer when signing
 secrets are configured, and portable ZIP. The tag job publishes all three as a
-GitHub Release. The stable installer URL used by Netlify then resolves without a
-repository download.
+GitHub Release. It also publishes the portable ZIP with a stable unversioned
+filename, which is the download used by Netlify.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The

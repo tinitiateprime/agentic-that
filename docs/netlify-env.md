@@ -9,7 +9,7 @@ DATA_STORE=netlify-blobs
 NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL=/console
 NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
-NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe
+NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip
 
 # Telegram API and encrypted account sessions
 SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
@@ -90,14 +90,17 @@ Interactive social login and browser publishing use the installable Windows
 companion because a request-based Netlify Function cannot own persistent Chrome
 profiles or a continuously running scheduler. Customers install the extension
 and companion from the setup card on `/publishing`; they do not configure local
-environment variables, download the repository, or run commands.
+environment variables, download the repository, or run commands. After
+downloading the portable companion, they extract the ZIP and open
+`AgenticThat Publishing Companion.exe` from the extracted folder.
 
 After the Chrome Web Store approves the extension, set
 `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` to its public listing and redeploy. Keep
-`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable GitHub Release URL
-shown above. Do not set either Publish Queue API URL for this local-extension
-architecture. The companion generates and protects its own credentials and
-stores each customer's queue and browser sessions on that customer's computer.
+`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable portable GitHub
+Release URL shown above. Do not set either Publish Queue API URL for this
+local-extension architecture. The companion generates and protects its own
+credentials and stores each customer's queue and browser sessions on that
+customer's computer.
 
 ## Webhook
 
