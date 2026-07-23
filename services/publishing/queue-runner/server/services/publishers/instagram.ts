@@ -602,6 +602,9 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
 }
 
 export async function postToInstagram(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  if (upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName) {
+    throw new Error("Instagram does not support text-only feed posts.");
+  }
   const filePath = publishingUploadFilePath(upload.fileName);
   if (!fs.existsSync(filePath)) throw new Error(`Instagram upload file not found: ${filePath}`);
 

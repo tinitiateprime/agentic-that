@@ -12,6 +12,7 @@ import {
   type Platform,
   type PlatformAccount,
   type PlatformUpload,
+  type PostFormat,
   type PublishingSchedule,
   type SocialMediaSchedule,
   type UpdateUploadDetailsInput,
@@ -38,6 +39,7 @@ type StoredFileInput = {
   originalName: string;
   fileName: string;
   mimeType: string;
+  postFormat: PostFormat;
   size: number;
   url: string;
   title?: string;
@@ -1042,9 +1044,13 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
     const timestamp = nowIso();
     const id = "upload_" + nanoid(12);
     const extension = path.extname(file.originalName).replace(".", "").toLowerCase() || "unknown";
+    const displayTitle = file.postFormat === "text"
+      ? `Text post: ${file.caption.replace(/\s+/g, " ").slice(0, 72)}${file.caption.length > 72 ? "…" : ""}`
+      : file.title || file.caption;
     const created: PlatformUpload = {
       id,
       platform: account.platform,
+      postFormat: file.postFormat,
       accountId,
       originalName: file.originalName,
       fileName: file.fileName,
@@ -1052,7 +1058,7 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       extension,
       size: file.size,
       url: file.url,
-      title: file.title || file.caption,
+      title: displayTitle,
       caption: file.caption,
       status: "queued",
       attemptCount: 0,

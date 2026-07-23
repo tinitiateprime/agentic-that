@@ -361,8 +361,9 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
 }
 
 export async function postToLinkedIn(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
-  const filePath = publishingUploadFilePath(upload.fileName);
-  if (!fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
+  if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
 
   if (!upload.caption?.trim()) {
     throw new Error("LinkedIn post text is required.");
@@ -370,7 +371,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
 
   await loginToLinkedIn(page, upload, accountLogin);
   await clickStartPost(page);
-  await attachLinkedInMedia(page, filePath);
+  if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
   await clickPostWhenReady(page);
   await waitForPostComplete(page);

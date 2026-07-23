@@ -9,9 +9,9 @@ import {
   Bookmark, Check, Clock3, Download, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, Platform, PlatformAccount, PlatformUpload, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import type { ActivityLog, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, assetUrl, setAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
@@ -517,6 +517,11 @@ type PlatformEligibility = {
 };
 
 const emptyComposerSchedule = (): ComposerScheduleDraft => ({ mode: 'now', exactAt: '', scheduleId: '' });
+const composerFormatOptions: Array<{ id: PostFormat; label: string; detail: string; icon: ReactNode }> = [
+  { id: 'image', label: 'Image', detail: 'Single visual post', icon: <ImageIcon size={22} /> },
+  { id: 'video', label: 'Video', detail: 'Short or long-form video', icon: <Video size={22} /> },
+  { id: 'text', label: 'Text', detail: 'No media required', icon: <FileText size={22} /> },
+];
 
 function localScheduleDateTime(dateValue: string | undefined, time: string) {
   if (!dateValue) return null;
@@ -533,17 +538,22 @@ function scheduleCanReceivePosts(schedule: PublishingSchedule) {
   return Boolean(runAt && runAt.getTime() > Date.now());
 }
 
-function getPlatformEligibility(platform: Platform, file: File | null, title: string, description: string): PlatformEligibility {
-  if (!file) return { allowed: false, mediaCompatible: false, reason: 'Add media to check compatibility' };
-  const kind = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null;
-  if (!kind) return { allowed: false, mediaCompatible: false, reason: 'Images and videos only' };
+function getPlatformEligibility(platform: Platform, postFormat: PostFormat | null, file: File | null, title: string, description: string): PlatformEligibility {
+  if (!postFormat) return { allowed: false, mediaCompatible: false, reason: 'Choose a post format first' };
   const rules = platformPostRules[platform];
-  if (!rules.media.includes(kind)) {
-    return { allowed: false, mediaCompatible: false, reason: `${platformLabels[platform]} requires ${rules.media.join(' or ')}` };
+  if (!rules.formats.includes(postFormat)) {
+    return { allowed: false, mediaCompatible: false, reason: 'Text-only posts are not supported' };
   }
-  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(kind);
+  if (postFormat !== 'text' && !file) {
+    return { allowed: false, mediaCompatible: true, reason: `Add ${postFormat} to continue` };
+  }
+  if (file && postFormat !== 'text') {
+    const fileFormat = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null;
+    if (fileFormat !== postFormat) return { allowed: false, mediaCompatible: false, reason: `Choose a valid ${postFormat}` };
+  }
+  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(postFormat);
   if (titleRequired && !title.trim()) return { allowed: false, mediaCompatible: true, reason: 'Add YouTube title' };
-  if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: 'Add a description' };
+  if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: postFormat === 'text' ? 'Write your post text' : 'Add a description' };
   if (rules.titleLimit && title.length > rules.titleLimit) {
     return { allowed: false, mediaCompatible: true, reason: `Title limit: ${rules.titleLimit} characters` };
   }
@@ -586,7 +596,8 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-function ComposerPreviewMedia({ file, previewUrl, platform }: { file: File | null; previewUrl: string; platform: Platform }) {
+function ComposerPreviewMedia({ file, previewUrl, platform, postFormat }: { file: File | null; previewUrl: string; platform: Platform; postFormat: PostFormat }) {
+  if (postFormat === 'text') return null;
   if (!file || !previewUrl) return <div className='composer-preview-empty'>Add media</div>;
   const className = `composer-preview-media ${platform} ${file.type.startsWith('video/') ? 'video' : 'image'}`;
   return file.type.startsWith('video/')
@@ -600,17 +611,19 @@ function ComposerPlatformPreview({
   previewUrl,
   title,
   description,
+  postFormat,
 }: {
   platform: Platform;
   file: File | null;
   previewUrl: string;
   title: string;
   description: string;
+  postFormat: PostFormat;
 }) {
-  const isVideo = Boolean(file?.type.startsWith('video/'));
+  const isVideo = postFormat === 'video';
   const name = 'AgenticThat';
   const handle = platform === 'x' ? '@agenticthat' : '';
-  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} />;
+  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} postFormat={postFormat} />;
 
   if (platform === 'linkedin') return <article className='composer-preview-card linkedin'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>8m · Public</small></div><MoreHorizontal size={17} /></header>
@@ -620,7 +633,7 @@ function ComposerPlatformPreview({
 
   if (platform === 'facebook') return <article className='composer-preview-card facebook'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>13m · Public</small></div><MoreHorizontal size={17} /></header>
-    <p>{description}</p><div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>
+    <p>{description}</p>{postFormat !== 'text' && <div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>}
     <footer><ThumbsUp size={18} /><MessageCircle size={18} /><Share2 size={18} /></footer>
   </article>;
 
@@ -633,7 +646,7 @@ function ComposerPlatformPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={17} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={17} /><MessageCircle size={17} /><Send size={17} /><Bookmark size={17} /></footer></aside>
   </article>;
 
-  if (platform === 'youtube' && !isVideo) return <article className='composer-preview-card youtube-community'>
+  if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={17} /></header>
     <p>{description}</p>{media}
     <footer><span><ThumbsUp size={16} />Like</span><span><MessageCircle size={16} />Comment</span><span><Share2 size={16} />Share</span></footer>
@@ -653,15 +666,17 @@ function PolishedComposerPreview({
   previewUrl,
   title,
   description,
+  postFormat,
 }: {
   platform: Platform;
   file: File | null;
   previewUrl: string;
   title: string;
   description: string;
+  postFormat: PostFormat;
 }) {
-  const isVideo = Boolean(file?.type.startsWith('video/'));
-  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} />;
+  const isVideo = postFormat === 'video';
+  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} postFormat={postFormat} />;
   const name = 'AgenticThat';
 
   if (platform === 'linkedin') return <article className='composer-preview-card linkedin polished'>
@@ -672,7 +687,7 @@ function PolishedComposerPreview({
 
   if (platform === 'facebook') return <article className='composer-preview-card facebook polished'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>13m · Public</small></div><MoreHorizontal size={18} /></header>
-    <p>{description}</p><div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>
+    <p>{description}</p>{postFormat !== 'text' && <div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>}
     <footer><span><ThumbsUp size={21} /></span><span><MessageCircle size={21} /></span><span><Share2 size={21} /></span></footer>
     <div className='facebook-comment'><span className='avatar small' /><em>Write a comment...</em></div>
   </article>;
@@ -686,7 +701,7 @@ function PolishedComposerPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={18} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={20} /><MessageCircle size={20} /><Send size={20} /><Bookmark size={20} /></footer><small>Add a comment...</small></aside>
   </article>;
 
-  if (platform === 'youtube' && !isVideo) return <article className='composer-preview-card youtube-community polished'>
+  if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community polished ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={18} /></header>
     <p>{description}</p>{media}
     <footer><span><ThumbsUp size={18} />Like</span><span><MessageCircle size={18} />Comment</span><span><Share2 size={18} />Share</span></footer>
@@ -717,6 +732,7 @@ function UnifiedComposer({
   onOpenAccounts: (platform: Platform) => void;
   onCreated: () => void;
 }) {
+  const [postFormat, setPostFormat] = useState<PostFormat | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -743,8 +759,8 @@ function UnifiedComposer({
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
-    getPlatformEligibility(platform, file, title, description),
-  ])) as Record<Platform, PlatformEligibility>, [file, title, description]);
+    getPlatformEligibility(platform, postFormat, file, title, description),
+  ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
 
   const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled), [accounts]);
   const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
@@ -760,8 +776,9 @@ function UnifiedComposer({
     .map(accountId => accounts.find(account => account.id === accountId))
     .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = Boolean(file?.type.startsWith('video/') && (enabledAccounts.some(account => account.platform === 'youtube') || selectedPlatforms.includes('youtube')));
-  const selectedNeedsTitle = Boolean(file?.type.startsWith('video/') && selectedPlatforms.includes('youtube'));
+  const showYoutubeTitle = Boolean(postFormat === 'video' && (enabledAccounts.some(account => account.platform === 'youtube') || selectedPlatforms.includes('youtube')));
+  const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
+  const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
   useEffect(() => {
@@ -779,7 +796,18 @@ function UnifiedComposer({
       setMessage({ type: 'error', text: 'Choose one image or video file.' });
       return;
     }
+    if (nextFile && postFormat && !nextFile.type.startsWith(`${postFormat}/`)) {
+      setMessage({ type: 'error', text: `Choose a ${postFormat} file for the selected format.` });
+      return;
+    }
     setFile(nextFile);
+  };
+
+  const chooseFormat = (nextFormat: PostFormat) => {
+    setMessage(null);
+    setPostFormat(nextFormat);
+    setFile(null);
+    if (nextFormat !== 'video') setTitle('');
   };
 
   const toggleAccount = (accountId: string) => {
@@ -832,6 +860,7 @@ function UnifiedComposer({
   };
 
   const resetComposer = () => {
+    setPostFormat(null);
     setFile(null);
     setTitle('');
     setDescription('');
@@ -844,9 +873,10 @@ function UnifiedComposer({
 
   const submit = async () => {
     setMessage(null);
-    if (!file) return setMessage({ type: 'error', text: 'Choose one image or video.' });
+    if (!postFormat) return setMessage({ type: 'error', text: 'Choose an image, video, or text post format.' });
+    if (postFormat !== 'text' && !file) return setMessage({ type: 'error', text: `Choose one ${postFormat} file.` });
     if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: 'Enter a YouTube title.' });
-    if (!description.trim()) return setMessage({ type: 'error', text: 'Enter a post description.' });
+    if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
     const invalidAccount = selectedAccounts.find(account => !eligibility[account.platform].allowed);
     if (invalidAccount) return setMessage({ type: 'error', text: `${platformLabels[invalidAccount.platform]} is not compatible with the current post.` });
@@ -875,7 +905,7 @@ function UnifiedComposer({
 
     setSubmitting(true);
     try {
-      const created = await api.createUnifiedPost({ file, title: selectedNeedsTitle ? title.trim() : '', description: description.trim(), destinations });
+      const created = await api.createUnifiedPost({ postFormat, file, title: selectedNeedsTitle ? title.trim() : '', description: description.trim(), destinations });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
       const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId);
       let publishingError = '';
@@ -909,29 +939,46 @@ function UnifiedComposer({
   return (
     <section className='unified-composer' aria-labelledby='unified-composer-heading'>
       <header className='unified-composer-heading'>
-        <div><p className='section-kicker'>Universal post</p><h1 id='unified-composer-heading'>Create once. Publish everywhere it fits.</h1><span>One media file, one title, and one description become destination-ready posts for every account you choose.</span></div>
-        <div className='composer-progress' aria-label='Post creation steps'><span className={file ? 'done' : 'active'}>1<i>Content</i></span><span className={file && selectedAccounts.length ? 'done' : file ? 'active' : ''}>2<i>Destinations</i></span><span className={selectedAccounts.length ? 'active' : ''}>3<i>Timing</i></span></div>
+        <div><p className='section-kicker'>Universal post</p><h1 id='unified-composer-heading'>Create once. Publish everywhere it fits.</h1><span>Choose a format, tailor the content, and send it to every compatible account from one controlled workflow.</span></div>
+        <div className='composer-progress' aria-label='Post creation steps'><span className={contentReady ? 'done' : 'active'}>1<i>Content</i></span><span className={contentReady && selectedAccounts.length ? 'done' : contentReady ? 'active' : ''}>2<i>Destinations</i></span><span className={selectedAccounts.length ? 'active' : ''}>3<i>Timing</i></span></div>
       </header>
 
       <div className='composer-content-grid'>
         <div className='composer-input-column'>
-          <div
-            className={`composer-upload ${dragActive ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
-            onDragEnter={event => { event.preventDefault(); setDragActive(true); }}
-            onDragOver={event => event.preventDefault()}
-            onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragActive(false); }}
-            onDrop={event => { event.preventDefault(); setDragActive(false); chooseFile(event.dataTransfer.files[0] ?? null); }}
-          >
-            <input id='unified-post-file' type='file' accept='image/*,video/*' onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
-            {file && previewUrl ? <div className='composer-media-preview'>
-              {file.type.startsWith('video/') ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
-              <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
-              <span>{file.type.startsWith('video/') ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
-            </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one image or video here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+          <div className='composer-format-picker'>
+            <div className='composer-format-heading'><span><small className='section-kicker'>Post format</small><strong>What are you publishing?</strong></span>{postFormat && <small>Selected: {postFormat}</small>}</div>
+            <div className='composer-format-options' role='group' aria-label='Choose post format'>
+              {composerFormatOptions.map(option => <button type='button' key={option.id} className={postFormat === option.id ? 'selected' : ''} aria-pressed={postFormat === option.id} onClick={() => chooseFormat(option.id)}>
+                <span>{option.icon}</span><strong>{option.label}</strong><small>{option.detail}</small>{postFormat === option.id && <i><Check size={13} /></i>}
+              </button>)}
+            </div>
           </div>
 
-          {showYoutubeTitle && <label className='composer-field'><span>YouTube title <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder='Required only when YouTube is selected' maxLength={100} /></label>}
-          <label className='composer-field'><span>Description <small>{description.length} characters</small></span><textarea value={description} onChange={event => setDescription(event.target.value)} placeholder='Default caption for all apps. YouTube uses this as the video description.' rows={6} /></label>
+          {postFormat && <div key={postFormat} className={`composer-format-stage format-${postFormat}`}>
+            {postFormat !== 'text' && <div
+              className={`composer-upload ${dragActive ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
+              onDragEnter={event => { event.preventDefault(); setDragActive(true); }}
+              onDragOver={event => event.preventDefault()}
+              onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragActive(false); }}
+              onDrop={event => { event.preventDefault(); setDragActive(false); chooseFile(event.dataTransfer.files[0] ?? null); }}
+            >
+              <input id='unified-post-file' type='file' accept={`${postFormat}/*`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
+              {file && previewUrl ? <div className='composer-media-preview'>
+                {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
+                <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
+                <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+            </div>}
+
+            {showYoutubeTitle && <label className='composer-field'><span>YouTube title <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder='Required only when YouTube is selected' maxLength={100} /></label>}
+            <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
+              <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
+              <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
+              {postFormat === 'text' && <small className='composer-text-support'><CircleCheckBig size={13} />Available for X, Facebook, LinkedIn, and YouTube Community. Instagram is excluded.</small>}
+            </label>
+          </div>}
+
+          {!postFormat && <div className='composer-format-prompt'><span><ArrowRight size={18} /></span><div><strong>Select a format to continue</strong><small>The composer will reveal only the fields and channels that apply.</small></div></div>}
         </div>
 
         <div className='composer-destination-column'>
@@ -957,7 +1004,7 @@ function UnifiedComposer({
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
                 <div className='composer-platform-tools'><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
                 {activePanel && <div className={`composer-platform-panel ${copyMode}`}>
-                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} description</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default description</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={title} description={platformText} /></div>}
+                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} {postFormat === 'text' ? 'post text' : 'description'}</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default {postFormat === 'text' ? 'post text' : 'description'}</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={title} description={platformText} postFormat={postFormat ?? 'image'} /></div>}
                 </div>}
               </article>;
             })}
@@ -988,7 +1035,7 @@ function UnifiedComposer({
 
       <footer className='composer-footer'>
         <div>{message && <p className={`composer-message ${message.type}`} role='status'>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !file || !selectedAccounts.length} onClick={submit}>{submitting ? <Loader2 className='spin' size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={submit}>{submitting ? <Loader2 className='spin' size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );
@@ -1132,11 +1179,6 @@ function Workboard({
   const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
   const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length;
   const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && account.enabled)).length;
-  const todayEvents = eventByDay[toLocalDayKey(new Date())] ?? [];
-  const nextScheduledPosts = uploads
-    .filter(upload => upload.scheduledAt && upload.status !== 'posted' && Date.parse(upload.scheduledAt) >= Date.now())
-    .sort((a, b) => Date.parse(a.scheduledAt ?? '') - Date.parse(b.scheduledAt ?? ''))
-    .slice(0, 4);
   const overviewCards = [
     { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
     { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${reviewQueue.length} open items`, icon: <CircleAlert size={18} />, tone: 'attention' },
@@ -1180,13 +1222,12 @@ function Workboard({
 
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>
-          <p className='section-kicker'>Workspace</p>
-          <h1 id='dashboard-overview-heading'>Dashboard</h1>
-          <span>{user.fullName} - {userRoleLabels[user.role]}</span>
-          <div className='dashboard-action-row'>
-            {permissions.canEditContent && <button type='button' className='dashboard-primary-action' onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create post</button>}
-            <button type='button' className='dashboard-secondary-action' onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review queue</button>
-            {permissions.canSchedulePosts && <button type='button' className='dashboard-secondary-action' onClick={onOpenSchedules}><CalendarClock size={16} />Schedules</button>}
+          <p className='section-kicker'>Operational overview</p>
+          <h1 id='dashboard-overview-heading'>Publishing workspace</h1>
+          <span>{user.fullName} · {userRoleLabels[user.role]}</span>
+          <div className={`dashboard-context ${attentionCount ? 'needs-attention' : 'healthy'}`}>
+            {attentionCount ? <CircleAlert size={17} /> : <CircleCheckBig size={17} />}
+            <span><strong>{attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'item needs' : 'items need'} attention` : 'Publishing operations are clear'}</strong><small>{activeSchedulesCount} active {activeSchedulesCount === 1 ? 'schedule' : 'schedules'} · {healthyChannelCount} connected {healthyChannelCount === 1 ? 'channel' : 'channels'}</small></span>
           </div>
         </div>
         <div className='dashboard-stat-grid'>
@@ -1203,47 +1244,6 @@ function Workboard({
         <div className='dashboard-create-panel'>
           {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
         </div>
-
-        <aside className='dashboard-side-stack' aria-label='Priority workspace panels'>
-          <article className='dashboard-panel priority-panel'>
-            <header><span><ListFilter size={16} />Open queue</span><strong>{reviewQueue.length}</strong></header>
-            <div className='priority-list'>
-              {reviewQueue.length === 0 ? <div className='panel-empty'><CircleCheckBig size={21} /><strong>All clear</strong><small>No posts are waiting.</small></div> : reviewQueue.slice(0, 4).map(upload => (
-                <button key={upload.id} type='button' className={`priority-row priority-${upload.status}`} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
-                  <span className='priority-platform'><CustomIcon platform={upload.platform} size={18} /></span>
-                  <span><strong>{upload.title || upload.originalName}</strong><small>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} - {upload.status === 'failed' ? 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs time'}</small></span>
-                  <StatusStateIcon state={upload.scheduledAt && upload.status === 'queued' ? 'scheduled' : upload.status} size={15} />
-                </button>
-              ))}
-            </div>
-            {reviewQueue.length > 4 && <button type='button' className='panel-link' onClick={() => navigateWorkboard('operations')}>View all {reviewQueue.length}</button>}
-          </article>
-
-          <article className='dashboard-panel next-panel'>
-            <header><span><CalendarDays size={16} />Today</span><strong>{todayEvents.length}</strong></header>
-            <div className='mini-schedule-list'>
-              {todayEvents.length === 0 ? <div className='panel-empty compact'><CalendarClock size={20} /><strong>No posts today</strong><small>Next scheduled posts appear below.</small></div> : todayEvents.slice(0, 3).map(upload => (
-                <button key={upload.id} type='button' className='mini-schedule-row' onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
-                  <CustomIcon platform={upload.platform} size={16} />
-                  <span><strong>{upload.title || upload.originalName}</strong><small>{new Date(getAuditTimestamp(upload)).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</small></span>
-                </button>
-              ))}
-            </div>
-          </article>
-
-          <article className='dashboard-panel setup-panel'>
-            <header><span><ShieldCheck size={16} />Workspace setup</span></header>
-            <div className='setup-grid'>
-              <span><strong>{enabledAccountsCount}</strong><small>accounts</small></span>
-              <span><strong>{activeSchedulesCount}</strong><small>schedules</small></span>
-              <span><strong>{metrics.queued}</strong><small>queued</small></span>
-            </div>
-            {nextScheduledPosts.length > 0 && <div className='next-posts'>
-              <small>Next scheduled</small>
-              {nextScheduledPosts.slice(0, 2).map(upload => <button key={upload.id} type='button' onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}><CustomIcon platform={upload.platform} size={15} /><span>{formatEventTime(upload.scheduledAt ?? upload.updatedAt)}</span></button>)}
-            </div>}
-          </article>
-        </aside>
       </section>
 
       <section className='platform-metrics' id='channels' aria-labelledby='post-metrics-heading'>
@@ -1867,7 +1867,17 @@ function ActivityLogModal({ activityLogs, onClose }: {
   </div>;
 }
 
+function uploadPostFormat(upload: PlatformUpload): PostFormat {
+  if (upload.postFormat) return upload.postFormat;
+  if (upload.mimeType.startsWith('image/')) return 'image';
+  if (upload.mimeType.startsWith('video/')) return 'video';
+  return 'text';
+}
+
 function PostMediaPreview({ upload, compact = false, networkPreview = false }: { upload: PlatformUpload; compact?: boolean; networkPreview?: boolean }) {
+  if (uploadPostFormat(upload) === 'text') {
+    return compact ? <div className='post-preview-text'><FileText size={22} /><span>Text</span></div> : null;
+  }
   const mediaUrl = assetUrl(upload.url, { compact, controls: !compact && !networkPreview });
   if (mediaUrl.startsWith('chrome-extension://')) {
     return <iframe className='extension-media-preview' src={mediaUrl} title={upload.originalName} loading='lazy' />;
@@ -1887,7 +1897,8 @@ function PlatformPostPreview({
   caption: string;
 }) {
   const displayTitle = title.trim() || upload.originalName;
-  const isYouTubeCommunity = upload.platform === 'youtube' && upload.mimeType.startsWith('image/');
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeCommunity = upload.platform === 'youtube' && postFormat !== 'video';
   const handle = upload.platform === 'youtube' ? 'AgenticThat' : '@agenticthat';
   const networkLabel = upload.platform === 'x' ? 'Post' : isYouTubeCommunity ? 'Community post preview' : upload.platform === 'youtube' ? 'Video preview' : 'Post preview';
 
@@ -1897,7 +1908,7 @@ function PlatformPostPreview({
       <article className='preview-post-card'>
         <div className='preview-post-account'><CustomIcon platform={upload.platform} size={28} /><div><strong>{handle}</strong><small>{networkLabel}</small></div><span>•••</span></div>
         {(upload.platform !== 'youtube' || isYouTubeCommunity) && <p className='preview-post-caption'>{caption || 'Write a caption to see it here.'}</p>}
-        <div className='preview-post-media'><PostMediaPreview upload={upload} /></div>
+        {postFormat !== 'text' && <div className='preview-post-media'><PostMediaPreview upload={upload} /></div>}
         {upload.platform === 'youtube' && !isYouTubeCommunity && <div className='preview-youtube-copy'><strong>{displayTitle}</strong><span>{caption || 'Write a description to see it here.'}</span></div>}
         {(upload.platform !== 'youtube' || isYouTubeCommunity) && <div className='preview-post-actions'><span>{upload.platform === 'x' ? 'Reply  Repost  Like' : upload.platform === 'linkedin' ? 'Like  Comment  Repost' : 'Like  Comment  Share'}</span><small>Preview only</small></div>}
       </article>
@@ -1918,7 +1929,8 @@ function NetworkPostPreview({
   caption: string;
 }) {
   const displayTitle = title.trim() || upload.originalName;
-  const isYouTubeCommunity = upload.platform === 'youtube' && upload.mimeType.startsWith('image/');
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeCommunity = upload.platform === 'youtube' && postFormat !== 'video';
   const postText = caption.trim() || (upload.platform === 'youtube' ? 'Write a description to see it here.' : 'Write a caption to see it here.');
   const previewNames: Record<Platform, string> = { instagram: 'AgenticThat', x: 'AgenticThat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: 'AgenticThat' };
   const previewHandles: Record<Platform, string> = { instagram: '@agenticthat', x: '@agenticthat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: '@agenticthat' };
@@ -1926,7 +1938,7 @@ function NetworkPostPreview({
   const accountHandle = account?.handle ?? previewHandles[upload.platform];
   const avatarLetter = (accountName.trim()[0] || 't').toLowerCase();
   const profile = (name: string, detail: string) => <div className='network-profile'><span className={`network-avatar ${upload.platform === 'youtube' ? 'yt-letter' : ''}`}>{upload.platform === 'youtube' ? avatarLetter : ''}</span><span><strong>{name}</strong><small>{detail}</small></span><MoreHorizontal size={18} /></div>;
-  const media = <div className={`network-media ${upload.mimeType.startsWith('video/') ? 'network-video' : ''}`}><PostMediaPreview upload={upload} networkPreview /></div>;
+  const media = postFormat === 'text' ? null : <div className={`network-media ${postFormat === 'video' ? 'network-video' : ''}`}><PostMediaPreview upload={upload} networkPreview /></div>;
 
   return (
     <section className={`platform-post-preview network-preview preview-${upload.platform}`} aria-label={`${platformLabels[upload.platform]} post preview`}>
@@ -2006,12 +2018,13 @@ function EditPostModal({
   const [minimumSchedule] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60_000)));
   const [loading, setLoading] = useState(false);
   const isYouTube = upload.platform === "youtube";
-  const isYouTubeVideo = isYouTube && upload.mimeType.startsWith("video/");
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeVideo = isYouTube && postFormat === "video";
   const canEditContent = permissions.canEditContent;
   const canEditSchedule = permissions.canSchedulePosts;
 
   const save = async () => {
-    if (canEditContent && !caption.trim()) return alert("Caption is required");
+    if (canEditContent && !caption.trim()) return alert(postFormat === "text" ? "Post text is required" : "Caption is required");
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
@@ -2060,7 +2073,7 @@ function EditPostModal({
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}
               <div className="field">
-                <label>{isYouTube ? "Description" : "Caption"}</label>
+                <label>{postFormat === "text" ? "Post text" : isYouTube ? "Description" : "Caption"}</label>
                 <textarea rows={5} value={caption} onChange={event => setCaption(event.target.value)} disabled={!canEditContent} />
               </div>
               <div className="field">

@@ -687,9 +687,9 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
   }
 }
 
-async function clickCommunityPostWhenReady(page: Page) {
+async function clickCommunityPostWhenReady(page: Page, requireImagePreview = true) {
   console.log("Clicking YouTube Community Post button...");
-  await waitForCommunityImagePreview(page, 30000);
+  if (requireImagePreview) await waitForCommunityImagePreview(page, 30000);
   const composer = await getCommunityComposer(page);
 
   await page.waitForFunction(() => {
@@ -900,6 +900,17 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
   return { success: true };
 }
 
+async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  await loginToYouTube(page, accountLogin);
+  await openYouTubeCreateMenu(page);
+  await clickCreateCommunityPost(page);
+  await fillCommunityPostDescription(page, upload.caption);
+  await clickCommunityPostWhenReady(page, false);
+  await waitForCommunityPostComplete(page);
+  console.log("Step completed: YouTube Community text post published.");
+  return { success: true };
+}
+
 async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath: string, accountLogin?: AccountLogin) {
   await loginToYouTube(page, accountLogin);
 
@@ -939,6 +950,9 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
 }
 
 export async function postToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  if (isTextOnly) return postCommunityTextToYouTube(page, upload, accountLogin);
+
   const filePath = publishingUploadFilePath(upload.fileName);
   if (!fs.existsSync(filePath)) throw new Error(`YouTube upload file not found: ${filePath}`);
 

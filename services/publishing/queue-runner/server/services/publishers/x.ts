@@ -333,15 +333,16 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
 }
 
 export async function postToX(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
-  const filePath = publishingUploadFilePath(upload.fileName);
-  if (!fs.existsSync(filePath)) throw new Error(`X upload file not found: ${filePath}`);
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
+  if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`X upload file not found: ${filePath}`);
 
   const caption = upload.caption?.trim();
   if (!caption) throw new Error("X caption is required.");
 
   await loginToX(page, upload, false, accountLogin);
   await openPostComposer(page);
-  await attachXMedia(page, filePath);
+  if (!isTextOnly) await attachXMedia(page, filePath);
   await fillXCaption(page, caption);
   const composer = await clickXPostWhenReady(page);
   await waitForXPostComplete(page, composer);

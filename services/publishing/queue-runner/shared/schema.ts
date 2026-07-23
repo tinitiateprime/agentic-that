@@ -1,12 +1,14 @@
 import { z } from "zod";
 
 export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube"] as const;
+export const postFormats = ["image", "video", "text"] as const;
 export const uploadStatuses = ["queued", "processing", "posted", "failed"] as const;
 export const scheduleFrequencies = ["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"] as const;
 export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
 
 export const platformSchema = z.enum(platforms);
+export const postFormatSchema = z.enum(postFormats);
 export const uploadStatusSchema = z.enum(uploadStatuses);
 export const scheduleFrequencySchema = z.enum(scheduleFrequencies);
 export const scheduleStatusSchema = z.enum(scheduleStatuses);
@@ -14,6 +16,7 @@ export const userRoleSchema = z.enum(userRoles);
 export const scheduleIdSchema = z.coerce.number().int().positive();
 
 export type Platform = (typeof platforms)[number];
+export type PostFormat = (typeof postFormats)[number];
 export type UploadStatus = (typeof uploadStatuses)[number];
 export type ScheduleFrequency = (typeof scheduleFrequencies)[number];
 export type ScheduleStatus = (typeof scheduleStatuses)[number];
@@ -138,20 +141,18 @@ export const platformLabels: Record<Platform, string> = {
   youtube: "YouTube"
 };
 
-export type PostMediaKind = "image" | "video";
-
 export const platformPostRules: Record<Platform, {
-  media: readonly PostMediaKind[];
+  formats: readonly PostFormat[];
   descriptionLimit: number;
   titleLimit?: number;
   titleRequired?: boolean;
-  titleRequiredFor?: readonly PostMediaKind[];
+  titleRequiredFor?: readonly PostFormat[];
 }> = {
-  instagram: { media: ["image", "video"], descriptionLimit: 2_200 },
-  x: { media: ["image", "video"], descriptionLimit: 280 },
-  linkedin: { media: ["image", "video"], descriptionLimit: 3_000 },
-  facebook: { media: ["image", "video"], descriptionLimit: 63_206 },
-  youtube: { media: ["image", "video"], descriptionLimit: 5_000, titleLimit: 100, titleRequiredFor: ["video"] }
+  instagram: { formats: ["image", "video"], descriptionLimit: 2_200 },
+  x: { formats: ["image", "video", "text"], descriptionLimit: 280 },
+  linkedin: { formats: ["image", "video", "text"], descriptionLimit: 3_000 },
+  facebook: { formats: ["image", "video", "text"], descriptionLimit: 63_206 },
+  youtube: { formats: ["image", "video", "text"], descriptionLimit: 5_000, titleLimit: 100, titleRequiredFor: ["video"] }
 };
 
 export const unifiedPostDestinationSchema = z.object({
@@ -200,6 +201,7 @@ export const uploadAutomationSchema = z.object({
 export const platformUploadSchema = z.object({
   id: z.string(),
   platform: platformSchema,
+  postFormat: postFormatSchema.optional(),
   accountId: z.string(),
   originalName: z.string(),
   fileName: z.string(),

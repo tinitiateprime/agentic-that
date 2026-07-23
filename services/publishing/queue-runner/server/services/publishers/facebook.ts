@@ -574,8 +574,9 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
 }
 
 export async function postToFacebook(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
-  const filePath = publishingUploadFilePath(upload.fileName);
-  if (!fs.existsSync(filePath)) throw new Error(`Facebook upload file not found: ${filePath}`);
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
+  if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`Facebook upload file not found: ${filePath}`);
 
   if (!upload.caption?.trim()) {
     throw new Error("Facebook caption is required.");
@@ -585,7 +586,7 @@ export async function postToFacebook(page: Page, upload: PlatformUpload, account
   await clickWhatsOnYourMind(page);
   await waitForCreatePostComposerReady(page);
   await typeFacebookCaption(page, upload.caption.trim());
-  await attachFacebookMedia(page, filePath);
+  if (!isTextOnly) await attachFacebookMedia(page, filePath);
   await clickFacebookPostWhenReady(page);
   await waitForFacebookPostComplete(page);
 

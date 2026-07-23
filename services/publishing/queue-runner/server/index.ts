@@ -22,6 +22,7 @@ import {
   upsertPublishingScheduleSchema,
   unifiedPostDestinationsSchema,
   type Platform,
+  type PostFormat,
   type PublishingSchedule,
   type PlatformUpload,
   type UserProfile,
@@ -150,19 +151,20 @@ type StoredUploadFile = {
   size: number;
 };
 
-function mediaKind(file: StoredUploadFile) {
+function postFormatForFile(file: StoredUploadFile): PostFormat {
   if (file.mimetype.startsWith("image/")) return "image" as const;
   if (file.mimetype.startsWith("video/")) return "video" as const;
+  if (file.mimetype === "text/plain") return "text" as const;
   throw new Error("Upload an image or video.");
 }
 
 function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile, title: string, description: string) {
   const rules = platformPostRules[platform];
-  const kind = mediaKind(file);
-  if (!rules.media.includes(kind)) {
-    throw new Error(`${platformLabels[platform]} does not support ${kind} posts in this publishing flow.`);
+  const postFormat = postFormatForFile(file);
+  if (!rules.formats.includes(postFormat)) {
+    throw new Error(`${platformLabels[platform]} does not support ${postFormat} posts in this publishing flow.`);
   }
-  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(kind);
+  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(postFormat);
   if (titleRequired && !title) throw new Error(`${platformLabels[platform]} requires a title.`);
   if (rules.titleLimit && title.length > rules.titleLimit) {
     throw new Error(`${platformLabels[platform]} titles must be ${rules.titleLimit} characters or fewer.`);
@@ -200,6 +202,11 @@ const stagedUnifiedPostSchema = z.object({
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
+  destinations: unifiedPostDestinationsSchema
+});
+
+const textUnifiedPostSchema = z.object({
+  description: z.string().trim().min(1, "Write your post text."),
   destinations: unifiedPostDestinationsSchema
 });
 
@@ -408,6 +415,7 @@ async function createUnifiedPosts(
   const title = titleInput.trim();
   const description = descriptionInput.trim();
   if (!description) throw new Error("Enter a post description.");
+  const postFormat = postFormatForFile(file);
 
   try {
     const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
@@ -429,7 +437,7 @@ async function createUnifiedPosts(
       return { destination, account };
     });
 
-    const youtubeVideoSelected = file.mimetype.startsWith("video/") && destinationAccounts.some(({ account }) => account.platform === "youtube");
+    const youtubeVideoSelected = postFormat === "video" && destinationAccounts.some(({ account }) => account.platform === "youtube");
     if (youtubeVideoSelected && !title) throw new Error("YouTube requires a title.");
 
     for (const { destination, account } of destinationAccounts) {
@@ -449,9 +457,10 @@ async function createUnifiedPosts(
         originalName: file.originalname,
         fileName: file.filename,
         mimeType: file.mimetype,
+        postFormat,
         size: file.size,
-        url: `/uploads/${file.filename}`,
-        title: account.platform === "youtube" && file.mimetype.startsWith("video/") ? title : undefined,
+        url: postFormat === "text" ? "" : `/uploads/${file.filename}`,
+        title: account.platform === "youtube" && postFormat === "video" ? title : undefined,
         caption: destination.description?.trim() || description,
         scheduledAt,
         scheduleId: destination.scheduleId,
@@ -842,6 +851,22 @@ app.delete("/api/staged-uploads/:id", requireRoles("operations_manager", "post_u
     if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
     await removeStagedUpload(stagedUploadId);
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/posts/unified/text", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+  try {
+    const user = currentUser(req);
+    const payload = textUnifiedPostSchema.parse(req.body);
+    const createdUploads = await createUnifiedPosts({
+      originalname: "Text post",
+      filename: "",
+      mimetype: "text/plain",
+      size: Buffer.byteLength(payload.description, "utf8"),
+    }, user, "", payload.description, payload.destinations);
+    res.status(201).json(createdUploads);
   } catch (error) {
     next(error);
   }

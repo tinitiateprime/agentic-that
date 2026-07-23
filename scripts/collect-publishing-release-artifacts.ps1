@@ -10,7 +10,7 @@ if (-not $artifactRoot.StartsWith($projectRoot + [System.IO.Path]::DirectorySepa
 
 $manifest = Get-Content (Join-Path $desktopRoot "package.json") -Raw | ConvertFrom-Json
 $setup = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "AgenticThat-Publishing-Companion-Setup.exe" | Select-Object -First 1
-$portable = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "*.zip" | Select-Object -First 1
+$portable = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter ("*-{0}.zip" -f $manifest.version) | Select-Object -First 1
 if (-not $setup) { throw "Windows companion Setup executable was not produced." }
 if (-not $portable) { throw "Windows companion portable ZIP was not produced." }
 

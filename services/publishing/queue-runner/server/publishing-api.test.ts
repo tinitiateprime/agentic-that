@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 
-test("publishing API supports login, chunked media upload, queue scheduling, and failure details", async (context) => {
+test("publishing API supports login, media and text posts, queue scheduling, and failure details", async (context) => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agenticthat-publishing-api-"));
   const uploadDir = path.join(temporaryRoot, "uploads");
   process.env.NODE_ENV = "test";
@@ -57,6 +57,49 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
   });
   assert.equal(accountResponse.status, 201);
   const account = await accountResponse.json() as { id: string };
+
+  const textPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Text-only publishing integration test",
+      destinations: [{ accountId: account.id }],
+    }),
+  });
+  assert.equal(textPostResponse.status, 201);
+  const textPosts = await textPostResponse.json() as Array<{
+    postFormat?: string;
+    fileName: string;
+    mimeType: string;
+    url: string;
+    status: string;
+  }>;
+  assert.equal(textPosts.length, 1);
+  assert.equal(textPosts[0].postFormat, "text");
+  assert.equal(textPosts[0].fileName, "");
+  assert.equal(textPosts[0].mimeType, "text/plain");
+  assert.equal(textPosts[0].url, "");
+  assert.equal(textPosts[0].status, "queued");
+
+  const instagramAccountResponse = await api("/api/platforms/instagram/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: "Instagram test account",
+      handle: "@agenticthat-instagram-test",
+      enabled: true,
+    }),
+  });
+  assert.equal(instagramAccountResponse.status, 201);
+  const instagramAccount = await instagramAccountResponse.json() as { id: string };
+  const unsupportedTextResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Instagram must reject this text-only post",
+      destinations: [{ accountId: instagramAccount.id }],
+    }),
+  });
+  assert.equal(unsupportedTextResponse.status, 400);
+  const unsupportedText = await unsupportedTextResponse.json() as { message: string };
+  assert.match(unsupportedText.message, /Instagram does not support text posts/i);
 
   const media = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const stagedResponse = await api("/api/staged-uploads", {

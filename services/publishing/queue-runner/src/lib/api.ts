@@ -7,6 +7,7 @@ import type {
   Platform,
   PlatformAccount,
   PlatformUpload,
+  PostFormat,
   PublishingSchedule,
   SocialMediaSchedule,
   UpdateUploadDetailsInput,
@@ -124,11 +125,23 @@ export const api = {
     }),
 
   createUnifiedPost: async (payload: {
-    file: File;
+    postFormat: PostFormat;
+    file: File | null;
     title: string;
     description: string;
     destinations: UnifiedPostDestinationInput[];
   }) => {
+    if (payload.postFormat === "text") {
+      return request<PlatformUpload[]>("/api/posts/unified/text", {
+        method: "POST",
+        body: JSON.stringify({
+          description: payload.description,
+          destinations: payload.destinations,
+        }),
+      });
+    }
+
+    if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
     try {
       const session = await request<{ id: string; offset: number; chunkSize: number }>("/api/staged-uploads", {

@@ -4033,6 +4033,306 @@ button, input, textarea, select { font-family: inherit; }
   border-radius: 8px;
 }
 
+.dashboard-context {
+  max-width: 470px;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 5px;
+  padding: 9px 11px;
+  border: 1px solid #D9E8E2;
+  border-radius: 7px;
+  background: #F4FAF7;
+  color: #087354;
+}
+
+.dashboard-context.needs-attention {
+  border-color: #F0D5A9;
+  background: #FFF9EF;
+  color: #A15C00;
+}
+
+.dashboard-context > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.dashboard-context strong {
+  color: #243842;
+  font-size: 11px;
+}
+
+.dashboard-context small {
+  overflow: hidden;
+  color: #6A7881;
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-workflow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.composer-format-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.composer-format-heading {
+  min-height: 34px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-format-heading > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.composer-format-heading strong {
+  color: #17202A;
+  font-size: 14px;
+}
+
+.composer-format-heading > small {
+  color: #0B7A66;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.composer-format-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.composer-format-options button {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 20px;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 12px 10px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #D6E1DC;
+  border-radius: 9px;
+  background: #FFFFFF;
+  color: #52665D;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.composer-format-options button::after {
+  width: 70px;
+  height: 70px;
+  position: absolute;
+  right: -36px;
+  bottom: -44px;
+  border-radius: 50%;
+  background: #B9E2D2;
+  content: "";
+  opacity: 0;
+  transform: scale(.6);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.composer-format-options button:hover {
+  border-color: #8DB8A8;
+  background: #FBFDFC;
+  transform: translateY(-2px);
+}
+
+.composer-format-options button.selected {
+  border-color: #0B7A66;
+  background: #EDF8F3;
+  box-shadow: 0 0 0 2px rgba(11, 122, 102, .09);
+  color: #0B7A66;
+  transform: translateY(-2px);
+}
+
+.composer-format-options button.selected::after {
+  opacity: .34;
+  transform: scale(1);
+}
+
+.composer-format-options button > span {
+  width: 34px;
+  height: 34px;
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #EEF3F1;
+  color: #3D554B;
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.composer-format-options button.selected > span {
+  background: #0B7A66;
+  color: #FFFFFF;
+  transform: scale(1.04);
+}
+
+.composer-format-options button strong {
+  align-self: end;
+  overflow: hidden;
+  color: #243842;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-format-options button small {
+  align-self: start;
+  grid-column: 2 / span 2;
+  overflow: hidden;
+  color: #74837C;
+  font-size: 8px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-format-options button > i {
+  width: 19px;
+  height: 19px;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: grid;
+  align-self: center;
+  justify-self: end;
+  place-items: center;
+  z-index: 1;
+  border-radius: 50%;
+  background: #0B7A66;
+  color: #FFFFFF;
+  font-style: normal;
+}
+
+.composer-format-stage {
+  display: grid;
+  gap: 14px;
+  transform-origin: top center;
+  animation: composer-format-reveal 280ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.composer-format-prompt {
+  min-height: 174px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  border: 1px dashed #CFDBD6;
+  border-radius: 8px;
+  background: #F7FAF8;
+  color: #73827B;
+  text-align: left;
+}
+
+.composer-format-prompt > span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #E6F2ED;
+  color: #0B7A66;
+}
+
+.composer-format-prompt > div {
+  display: grid;
+  gap: 3px;
+}
+
+.composer-format-prompt strong {
+  color: #314852;
+  font-size: 12px;
+}
+
+.composer-format-prompt small {
+  color: #74837C;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.composer-text-field {
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid #D5E2DC;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #FFFFFF 0%, #F8FBF9 100%);
+}
+
+.composer-text-field textarea {
+  min-height: 242px;
+  background: #FFFFFF;
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.composer-text-support {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #557168;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.composer-text-support svg {
+  flex: 0 0 auto;
+  color: #0B7A66;
+}
+
+.composer-preview-card.text-only {
+  min-height: 210px;
+}
+
+.composer-preview-card.text-only > p {
+  min-height: 92px;
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.post-preview-text {
+  width: 100%;
+  height: 100%;
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 3px;
+  background: #EAF4F0;
+  color: #0B7A66;
+}
+
+.post-preview-text span {
+  font-size: 8px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+@keyframes composer-format-reveal {
+  from { opacity: 0; transform: translateY(8px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 #overview,
 #channels,
 #operations,
@@ -4143,8 +4443,13 @@ button, input, textarea, select { font-family: inherit; }
   .dashboard-stat-grid,
   .workboard-app .platform-metric-grid,
   .composer-platform-grid,
-  .composer-shared-schedule {
+  .composer-shared-schedule,
+  .composer-format-options {
     grid-template-columns: 1fr;
+  }
+
+  .composer-format-options button {
+    min-height: 70px;
   }
 
   .dashboard-stat-card {
@@ -4186,6 +4491,18 @@ button, input, textarea, select { font-family: inherit; }
   .workboard-day-inspector {
     border-top: 1px solid #E1E9E5;
     border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-format-stage {
+    animation: none;
+  }
+
+  .composer-format-options button,
+  .composer-format-options button::after,
+  .composer-format-options button > span {
+    transition: none;
   }
 }
 .extension-media-preview {
