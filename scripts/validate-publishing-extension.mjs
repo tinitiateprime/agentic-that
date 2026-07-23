@@ -6,6 +6,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const extensionRoot = path.join(projectRoot, "extensions", "publishing-companion");
 const manifestPath = path.join(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const productionOrigin = "https://agentic-that.netlify.app";
+const productionMatch = `${productionOrigin}/*`;
 
 if (manifest.manifest_version !== 3) throw new Error("Publishing extension must use Manifest V3.");
 if (!manifest.background?.service_worker) throw new Error("Publishing extension service worker is missing.");
@@ -14,6 +16,12 @@ if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length 
 }
 if ((manifest.host_permissions ?? []).some(permission => permission === "<all_urls>")) {
   throw new Error("Publishing extension must not request <all_urls>.");
+}
+if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
+  throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
+}
+if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).includes(productionMatch))) {
+  throw new Error(`Publishing extension media resources must be available on ${productionMatch}.`);
 }
 
 const files = new Set([
@@ -32,6 +40,9 @@ for (const file of scriptFiles) {
   const source = await readFile(path.join(extensionRoot, file), "utf8");
   if (/\beval\s*\(|new\s+Function\s*\(/.test(source)) {
     throw new Error(`${file} contains forbidden dynamic code execution.`);
+  }
+  if (file === manifest.background.service_worker && !source.includes(JSON.stringify(productionOrigin))) {
+    throw new Error(`Publishing extension service worker must trust ${productionOrigin}.`);
   }
 }
 

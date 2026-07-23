@@ -20,7 +20,7 @@ Suggested description:
 
 - `http://127.0.0.1:8792/*`: communicate with the companion installed on the
   same computer.
-- `https://agenticthat.netlify.app/*`: expose the bridge only inside the
+- `https://agentic-that.netlify.app/*`: expose the bridge only inside the
   AgenticThat dashboard.
 
 ## Upload checklist
@@ -28,7 +28,7 @@ Suggested description:
 1. Run `npm run publishing:extension:package`.
 2. Upload `artifacts/AgenticThat-Publishing-Extension-1.0.0.zip`.
 3. Use `extensions/publishing-companion/icons/icon-128.png` as the store icon.
-4. Enter `https://agenticthat.netlify.app/publishing/privacy` as the public
+4. Enter `https://agentic-that.netlify.app/publishing/privacy` as the public
    privacy-policy URL.
 5. Complete the data-use questionnaire using the behavior described above.
 6. Submit for review. After approval, set Netlify environment variable

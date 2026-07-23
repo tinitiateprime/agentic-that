@@ -5,7 +5,7 @@ to the Windows companion on `127.0.0.1:8792`. It requests no broad browsing
 permission and never receives or stores social-network passwords.
 
 Customers install the reviewed extension from the Chrome Web Store using the
-button on `https://agenticthat.netlify.app/publishing`. They do not load this
+button on `https://agentic-that.netlify.app/publishing`. They do not load this
 folder or download the repository.
 
 For local development only, run `npm run publishing:extension:open`, enable
@@ -17,5 +17,5 @@ copy, permission explanations, and the submission checklist are in
 `docs/chrome-web-store-listing.md`.
 
 The production origin is intentionally restricted to
-`https://agenticthat.netlify.app`. Add a specific origin to `manifest.json`
+`https://agentic-that.netlify.app`. Add a specific origin to `manifest.json`
 before moving the production dashboard to another domain.

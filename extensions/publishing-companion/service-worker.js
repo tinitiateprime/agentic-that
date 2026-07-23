@@ -5,7 +5,7 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD"
 function isAllowedDashboard(urlText) {
   try {
     const url = new URL(urlText || "");
-    if (url.origin === "https://agenticthat.netlify.app") return true;
+    if (url.origin === "https://agentic-that.netlify.app") return true;
     return (url.hostname === "localhost" || url.hostname === "127.0.0.1")
       && (url.protocol === "http:" || url.protocol === "https:");
   } catch {

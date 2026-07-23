@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DASHBOARD_URL = "https://agenticthat.netlify.app/publishing";
+const DASHBOARD_URL = "https://agentic-that.netlify.app/publishing";
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const SERVICE_ORIGIN = "http://127.0.0.1:8792";
 const userDataOverride = process.env.AGENTICTHAT_COMPANION_DATA_DIR?.trim();
@@ -107,7 +107,7 @@ function configureRuntimeEnvironment() {
   process.env.NODE_ENV = "production";
   process.env.PUBLISH_QUEUE_SERVICE_HOST = "127.0.0.1";
   process.env.PUBLISH_QUEUE_SERVICE_PORT = "8792";
-  process.env.PUBLISH_QUEUE_WEB_ORIGIN = "https://agenticthat.netlify.app";
+  process.env.PUBLISH_QUEUE_WEB_ORIGIN = "https://agentic-that.netlify.app";
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDirectory;
   process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = browserDataDirectory;

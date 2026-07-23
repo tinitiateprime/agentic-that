@@ -74,7 +74,7 @@ type AutomationNotice = {
 
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || 'https://github.com/tintiatekaushik-spec/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe';
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe';
 const extensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
 
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [

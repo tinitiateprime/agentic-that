@@ -26,7 +26,7 @@ module.exports = {
         description: "Local scheduler and browser publisher for AgenticThat",
         setupExe: "AgenticThat-Publishing-Companion-Setup.exe",
         setupIcon: path.join(__dirname, "assets", "app-icon.ico"),
-        iconUrl: "https://agenticthat.netlify.app/publishing-companion-icon.ico",
+        iconUrl: "https://agentic-that.netlify.app/publishing-companion-icon.ico",
         noMsi: true,
         ...(certificateFile ? { certificateFile, certificatePassword } : {}),
       },

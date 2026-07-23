@@ -16,7 +16,7 @@ scheduler inside a request-based Netlify function.
 
 Customers do not download this repository or run commands.
 
-1. Open `https://agenticthat.netlify.app/publishing` in Google Chrome.
+1. Open `https://agentic-that.netlify.app/publishing` in Google Chrome.
 2. Choose **Install extension** and confirm the Chrome Web Store installation.
 3. Choose **Install Windows companion**, run the installer once, and leave
    **Start automatically with Windows** enabled.

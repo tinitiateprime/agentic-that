@@ -39,6 +39,20 @@ try {
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
   }
+
+  $productionOrigin = "https://agentic-that.netlify.app"
+  $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "http://127.0.0.1:8792/api/health" -Headers @{
+    Origin = $productionOrigin
+    "Access-Control-Request-Method" = "GET"
+    "Access-Control-Request-Headers" = "authorization,content-type"
+  } -TimeoutSec 5
+  if ($preflight.StatusCode -ne 204) {
+    throw "The production dashboard CORS preflight returned $($preflight.StatusCode)."
+  }
+  if ($preflight.Headers["Access-Control-Allow-Origin"] -ne $productionOrigin) {
+    throw "The packaged companion does not allow the production dashboard origin."
+  }
+
   if (-not (Test-Path -LiteralPath (Join-Path $smokeRoot "companion-settings.json"))) {
     throw "The packaged companion did not create protected settings."
   }
@@ -50,6 +64,7 @@ try {
   Write-Host "Process: $($process.Id)"
   Write-Host "Chrome: detected"
   Write-Host "Extension bridge: enabled"
+  Write-Host "Production dashboard origin: allowed"
   Write-Host "Platforms: $($health.platforms -join ', ')"
 } finally {
   Remove-Item Env:AGENTICTHAT_COMPANION_DATA_DIR -ErrorAction SilentlyContinue

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AgenticThat Publishing Companion",
   "description": "Connects the AgenticThat publishing dashboard to the local publishing companion.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minimum_chrome_version": "120",
   "host_permissions": [
     "http://127.0.0.1:8792/*"
@@ -27,7 +27,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://agenticthat.netlify.app/*",
+        "https://agentic-that.netlify.app/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
@@ -45,7 +45,7 @@
         "media-proxy.css"
       ],
       "matches": [
-        "https://agenticthat.netlify.app/*",
+        "https://agentic-that.netlify.app/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ]

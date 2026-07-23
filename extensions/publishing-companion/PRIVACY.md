@@ -1,7 +1,7 @@
 # AgenticThat Publishing Companion privacy
 
 The extension connects the AgenticThat publishing dashboard at
-`https://agenticthat.netlify.app` to the AgenticThat Publishing Companion on
+`https://agentic-that.netlify.app` to the AgenticThat Publishing Companion on
 `http://127.0.0.1:8792`.
 
 The extension does not collect, sell, transmit, or store social-network
