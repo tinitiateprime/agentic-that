@@ -806,7 +806,7 @@ function PublishingManager({
       <EmptyState
         icon={CircleAlert}
         title="The website cannot reach the Companion"
-        copy="In the Companion window, confirm Local service says Connected. Then install or repair the Chrome bridge and try again."
+        copy="Confirm Local service says Connected in the Companion window. In Chrome, allow Local network access for this site, or install the Chrome bridge, then try again."
         action={
           <div className="config-empty-actions">
             <a className="config-primary" href={publishingExtensionDownloadUrl} target="_blank" rel="noreferrer">Download Chrome bridge<ExternalLink size={15} /></a>

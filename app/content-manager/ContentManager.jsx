@@ -633,7 +633,7 @@ function PublishingContent({
       <EmptyState
         icon={CircleAlert}
         title="The website cannot reach the Companion"
-        copy="Confirm Local service says Connected in the Companion window, then install or repair the Chrome bridge."
+        copy="Confirm Local service says Connected in the Companion window. Then allow Local network access in Chrome, or install the Chrome bridge."
         action={
           <div className="content-empty-actions">
             <a className="content-primary" href={publishingExtensionDownloadUrl} target="_blank" rel="noreferrer">Download Chrome bridge<ExternalLink size={15} /></a>

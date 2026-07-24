@@ -314,7 +314,7 @@ function PlatformManagerAccess({
                 <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
               </div>}
               {status.connectionHelpRequired && !status.upgradeRequired && <>
-                <p className='temporary-access'>Confirm <strong>Local service: Connected</strong> in the Companion window. If it is connected, install or repair the Chrome bridge.</p>
+                <p className='temporary-access'>Confirm <strong>Local service: Connected</strong> in the Companion window. Then allow Local network access in Chrome, or install the Chrome bridge.</p>
                 <div className='publishing-setup-actions'>
                   <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Download Chrome bridge</a>
                   <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
@@ -441,7 +441,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
               <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
               <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
             </div>
-            {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
+            {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Allow Local network access if Chrome asks. Otherwise extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
             {connectionState === 'chrome-missing' && <p>Google Chrome is missing. Open the Companion app and choose <strong>Install Google Chrome</strong>.</p>}
             {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
