@@ -32,6 +32,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
+const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
+  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
   instagram: "Instagram",
@@ -226,37 +228,44 @@ export default function ConfigManager({
     }
   }, []);
 
-  useEffect(() => {
-    const connectPublishing = async () => {
-      if (!publishingIdentityToken) return loadPublishing();
-      try {
-        const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
-          method: "POST",
-          body: JSON.stringify({ token: publishingIdentityToken })
-        });
-        setPublishingManagerStatus(managerStatus);
-        const savedSession = readPublishingSession();
-        if (savedSession) {
-          try {
-            const me = await publishingRequest("/api/auth/me", savedSession.token);
-            if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
-          } catch {
-            // Show this workspace's password screen.
-          }
+  const connectPublishing = useCallback(async () => {
+    setPublishingStatus("checking");
+    if (!publishingIdentityToken) return loadPublishing();
+    try {
+      const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
+        method: "POST",
+        body: JSON.stringify({ token: publishingIdentityToken })
+      });
+      setPublishingManagerStatus(managerStatus);
+      const savedSession = readPublishingSession();
+      if (savedSession) {
+        try {
+          const me = await publishingRequest("/api/auth/me", savedSession.token);
+          if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
+        } catch {
+          // Show this workspace's password screen.
         }
-        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-        setPublishingSession(null);
-        setPublishingAccounts([]);
-        setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
-      } catch {
-        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-        setPublishingSession(null);
-        setPublishingAccounts([]);
-        setPublishingStatus("offline");
       }
-    };
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
+    } catch (error) {
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingManagerStatus(null);
+      setPublishingStatus(
+        error.status === 401 && error.message === "Sign in to continue."
+          ? "needs-upgrade"
+          : "offline"
+      );
+    }
+  }, [loadPublishing, publishingIdentityToken]);
+
+  useEffect(() => {
     void Promise.all([loadTelegram(), connectPublishing()]);
-  }, [loadPublishing, loadTelegram, publishingIdentityToken]);
+  }, [connectPublishing, loadTelegram]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
   const activeDefinition = services.find(service => service.id === activeService) || services[0];
@@ -346,7 +355,7 @@ export default function ConfigManager({
               <button
                 type="button"
                 className="config-refresh"
-                onClick={() => activeService === "messaging" ? void loadTelegram() : void loadPublishing()}
+                onClick={() => activeService === "messaging" ? void loadTelegram() : void connectPublishing()}
               >
                 <RefreshCw size={16} />Refresh
               </button>
@@ -376,11 +385,13 @@ export default function ConfigManager({
               publishQueueUrl={publishQueueUrl}
               publishingIdentityToken={publishingIdentityToken}
               managerStatus={publishingManagerStatus}
+              accountEmail={user.email}
               onSession={session => {
                 setPublishingSession(session);
                 void loadPublishing(session);
               }}
               onReload={() => loadPublishing(publishingSession)}
+              onReconnect={connectPublishing}
               setNotice={setNotice}
             />
           )}
@@ -682,8 +693,10 @@ function PublishingManager({
   publishQueueUrl,
   publishingIdentityToken,
   managerStatus,
+  accountEmail,
   onSession,
   onReload,
+  onReconnect,
   setNotice
 }) {
   const [password, setPassword] = useState("");
@@ -790,14 +803,31 @@ function PublishingManager({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
-        action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
+        copy="The Publishing Companion did not respond. Confirm the Chrome extension is installed and the Companion app is open."
+        action={<button className="config-primary" type="button" onClick={() => void onReconnect()}><RefreshCw size={16} />Try again</button>}
+      />
+    );
+  }
+
+  if (status === "needs-upgrade") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="Update the Publishing Companion"
+        copy="This computer is running an older Companion that does not support account-owned Operations Manager passwords. Close it, install the latest version, and try again."
+        action={
+          <div className="config-empty-actions">
+            <a className="config-primary" href={publishingCompanionDownloadUrl}>Download latest Companion<ExternalLink size={15} /></a>
+            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
       />
     );
   }
 
   if (status === "needs-login" || status === "needs-setup" || status === "needs-manager") {
     const firstSetup = status === "needs-setup";
+    const managerUsername = managerStatus?.username || accountEmail || "your workspace";
     return (
       <div className="config-auth-card">
         <div className="config-auth-copy">
@@ -807,11 +837,11 @@ function PublishingManager({
           <div>{firstSetup
             ? "Choose your own password now. This account creator becomes the Operations Manager and will use this password for future publishing logins."
             : "Enter the Operations Manager password you created for this account."}</div>
-          <small><ShieldCheck size={14} />This password belongs to <strong>{managerStatus?.username || "your workspace"}</strong>, not the Companion.</small>
+          <small><ShieldCheck size={14} />This password belongs to <strong>{managerUsername}</strong>, not the Companion.</small>
           {status === "needs-manager" && <small><CircleAlert size={14} />The current Publish Queue role cannot manage accounts.</small>}
         </div>
         <form onSubmit={signIn}>
-          <label><span>Manager username</span><input value={managerStatus?.username || ""} readOnly /></label>
+          <label><span>Manager account (automatic)</span><input name="username" value={managerUsername} autoComplete="username" readOnly /></label>
           <label><span>{firstSetup ? "Create password" : "Operations Manager password"}</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={password} onChange={event => setPassword(event.target.value)} autoComplete={firstSetup ? "new-password" : "current-password"} minLength={8} required /><button type="button" onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
           {firstSetup && <label><span>Confirm password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" minLength={8} required /></div></label>}
           <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{firstSetup ? "Create manager access" : "Continue to accounts"}</button>

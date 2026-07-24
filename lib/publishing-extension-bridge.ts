@@ -59,7 +59,7 @@ export async function detectPublishingExtension(force = false) {
       source: PAGE_SOURCE,
       type: PING_TYPE,
       requestId: id,
-    }, READY_TYPE, 900);
+    }, READY_TYPE, 3_000);
     if (typeof response.version !== "string" || typeof response.extensionBaseUrl !== "string") return null;
     cachedDetails = { version: response.version, extensionBaseUrl: response.extensionBaseUrl };
     lastDetectionAt = Date.now();

@@ -74,14 +74,17 @@ test("publishing API supports login, media and text posts, queue scheduling, and
       body: JSON.stringify({ token: identityToken }),
     });
     assert.equal(statusResponse.status, 200);
-    const initialStatus = await statusResponse.json() as { configured: boolean };
+    const initialStatus = await statusResponse.json() as { configured: boolean; username: string };
     assert.equal(initialStatus.configured, false);
+    assert.equal(initialStatus.username, email);
     const setupResponse = await fetch(`${origin}/api/auth/platform/setup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: identityToken, password: "OwnerPassword@2026" }),
     });
     assert.equal(setupResponse.status, 200);
+    const setupResult = await setupResponse.json() as { user: { username: string } };
+    assert.equal(setupResult.user.username, email);
     const repeatedSetup = await fetch(`${origin}/api/auth/platform/setup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

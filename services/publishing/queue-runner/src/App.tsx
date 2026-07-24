@@ -57,6 +57,15 @@ type AuthSession = {
   user: UserProfile;
 };
 
+type PlatformAccessStatus = {
+  state: 'checking' | 'ready' | 'error';
+  configured: boolean;
+  username: string;
+  workspaceId: string;
+  message?: string;
+  upgradeRequired?: boolean;
+};
+
 type RolePermissions = {
   canManageUsers: boolean;
   canViewActivity: boolean;
@@ -117,13 +126,12 @@ function readSavedSession(): AuthSession | null {
 
 export default function App({ publishingIdentityToken }: { publishingIdentityToken?: string }) {
   const [session, setSession] = useState<AuthSession | null>(null);
-  const [platformStatus, setPlatformStatus] = useState<{
-    state: 'checking' | 'ready' | 'error';
-    configured: boolean;
-    username: string;
-    workspaceId: string;
-    message?: string;
-  }>({ state: publishingIdentityToken ? 'checking' : 'ready', configured: false, username: '', workspaceId: '' });
+  const [platformStatus, setPlatformStatus] = useState<PlatformAccessStatus>({
+    state: publishingIdentityToken ? 'checking' : 'ready',
+    configured: false,
+    username: '',
+    workspaceId: '',
+  });
 
   useEffect(() => {
     if (publishingIdentityToken) {
@@ -157,12 +165,17 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
           setAuthToken(null);
           window.sessionStorage.removeItem(AUTH_SESSION_KEY);
           setSession(null);
+          const rawMessage = error instanceof Error ? error.message : 'The publishing workspace could not be opened.';
+          const upgradeRequired = rawMessage === 'Sign in to continue.';
           setPlatformStatus({
             state: 'error',
             configured: false,
             username: '',
             workspaceId: '',
-            message: error instanceof Error ? error.message : 'The publishing workspace could not be opened.',
+            message: upgradeRequired
+              ? 'This computer is running an older Publishing Companion that cannot open account-owned workspaces.'
+              : rawMessage,
+            upgradeRequired,
           });
         });
       return () => {
@@ -225,7 +238,7 @@ function PlatformManagerAccess({
   onConfigured,
 }: {
   identityToken: string;
-  status: { state: 'checking' | 'ready' | 'error'; configured: boolean; username: string; workspaceId: string; message?: string };
+  status: PlatformAccessStatus;
   onSignIn: (response: AuthResponse) => void;
   onConfigured: () => void;
 }) {
@@ -288,7 +301,13 @@ function PlatformManagerAccess({
           {status.state === 'checking' ? (
             <div className='temporary-access'><Loader2 className='spin' size={18} /><span>Checking workspace setup…</span></div>
           ) : status.state === 'error' ? (
-            <p className='auth-error' role='alert'>{status.message}</p>
+            <>
+              <p className='auth-error' role='alert'>{status.message}</p>
+              {status.upgradeRequired && <div className='publishing-setup-actions'>
+                <a href={companionDownloadUrl}><Download size={15} />Download latest Companion</a>
+                <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
+              </div>}
+            </>
           ) : (
             <form className='auth-form' onSubmit={event => { event.preventDefault(); void submit(); }}>
               {!firstSetup && <div className='workspace-access-switch' role='group' aria-label='Choose workspace sign-in type'>

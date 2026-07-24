@@ -26,6 +26,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
+const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
+  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
   instagram: "Instagram",
@@ -287,40 +289,46 @@ export default function ContentManager({
     }
   }, []);
 
-  useEffect(() => {
-    const connectPublishing = async () => {
-      if (!publishingIdentityToken) return loadPublishing();
-      try {
-        const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
-          method: "POST",
-          body: JSON.stringify({ token: publishingIdentityToken })
-        });
-        const savedSession = readPublishingSession();
-        if (savedSession) {
-          try {
-            const me = await publishingRequest("/api/auth/me", savedSession.token);
-            if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
-          } catch {
-            // Ask for this workspace's manager password in Config Manager.
-          }
+  const connectPublishing = useCallback(async () => {
+    setPublishingStatus("checking");
+    if (!publishingIdentityToken) return loadPublishing();
+    try {
+      const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
+        method: "POST",
+        body: JSON.stringify({ token: publishingIdentityToken })
+      });
+      const savedSession = readPublishingSession();
+      if (savedSession) {
+        try {
+          const me = await publishingRequest("/api/auth/me", savedSession.token);
+          if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
+        } catch {
+          // Ask for this workspace's manager password in Config Manager.
         }
-        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-        setPublishingSession(null);
-        setPublishingAccounts([]);
-        setPublishingUploads([]);
-        setPublishingSchedules([]);
-        setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
-      } catch {
-        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-        setPublishingSession(null);
-        setPublishingAccounts([]);
-        setPublishingUploads([]);
-        setPublishingSchedules([]);
-        setPublishingStatus("offline");
       }
-    };
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingUploads([]);
+      setPublishingSchedules([]);
+      setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
+    } catch (error) {
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingUploads([]);
+      setPublishingSchedules([]);
+      setPublishingStatus(
+        error.status === 401 && error.message === "Sign in to continue."
+          ? "needs-upgrade"
+          : "offline"
+      );
+    }
+  }, [loadPublishing, publishingIdentityToken]);
+
+  useEffect(() => {
     void Promise.all([loadTelegram(), connectPublishing()]);
-  }, [loadPublishing, loadTelegram, publishingIdentityToken]);
+  }, [connectPublishing, loadTelegram]);
 
   const connectedAccounts = telegramAccounts.length + publishingAccounts.length;
   const activePublishingAccounts = publishingAccounts.filter((account) => account.enabled).length;
@@ -359,7 +367,7 @@ export default function ContentManager({
 
   const refreshActive = () => {
     if (activeService === "messaging" && messagingPlatform === "telegram") return loadTelegram();
-    if (activeService === "publishing") return loadPublishing(publishingSession);
+    if (activeService === "publishing") return connectPublishing();
     return Promise.resolve();
   };
 
@@ -458,6 +466,7 @@ export default function ContentManager({
               platform={publishingPlatform}
               publishQueueUrl={publishQueueUrl}
               onPlatformChange={selectPublishingPlatform}
+              onReconnect={connectPublishing}
               onSession={(session) => {
                 if (!session) {
                   window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
@@ -605,6 +614,7 @@ function PublishingContent({
   platform,
   publishQueueUrl,
   onPlatformChange,
+  onReconnect,
   onSession
 }) {
   const platformAccounts = useMemo(
@@ -621,8 +631,19 @@ function PublishingContent({
       <EmptyState
         icon={CircleAlert}
         title="Publish Queue service is unavailable"
-        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
-        action={<a className="content-primary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={15} /></a>}
+        copy="The Publishing Companion did not respond. Confirm the Chrome extension is installed and the Companion app is open."
+        action={<button className="content-primary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>}
+      />
+    );
+  }
+
+  if (status === "needs-upgrade") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="Update the Publishing Companion"
+        copy="This computer is running an older Companion that cannot open account-owned publishing workspaces."
+        action={<a className="content-primary" href={publishingCompanionDownloadUrl}>Download latest Companion<ExternalLink size={15} /></a>}
       />
     );
   }

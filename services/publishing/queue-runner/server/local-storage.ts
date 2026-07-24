@@ -555,6 +555,21 @@ function findPlatformManager(store: Store, identity: PlatformWorkspaceIdentity) 
   );
 }
 
+function platformManagerUsername(store: Store, identity: PlatformWorkspaceIdentity, exceptId?: string) {
+  const email = normalizeUsername(identity.email);
+  if (!store.users.some(user => user.id !== exceptId && normalizeUsername(user.username) === email)) {
+    return email;
+  }
+
+  const base = identity.email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, ".") || "manager";
+  let username = base;
+  let suffix = 1;
+  while (store.users.some(user => user.id !== exceptId && normalizeUsername(user.username) === username)) {
+    username = `${base}.${suffix++}`;
+  }
+  return username;
+}
+
 function assertWorkspaceKey(user: StoredUser, identity: PlatformWorkspaceIdentity) {
   const providedHash = workspaceKeyHash(identity.workspaceKey);
   if (user.workspaceKeyHash && user.workspaceKeyHash !== providedHash) {
@@ -575,12 +590,19 @@ export async function platformWorkspaceManagerStatus(identity: PlatformWorkspace
     }
     const existing = store.users[existingIndex];
     const providedHash = assertWorkspaceKey(existing, identity);
-    if (!existing.workspaceKeyHash) {
-      store.users[existingIndex] = { ...existing, workspaceKeyHash: providedHash, updatedAt: nowIso() };
+    const username = normalizeUsername(existing.username)
+      || platformManagerUsername(store, identity, existing.id);
+    if (!existing.workspaceKeyHash || username !== existing.username) {
+      store.users[existingIndex] = {
+        ...existing,
+        username,
+        workspaceKeyHash: existing.workspaceKeyHash || providedHash,
+        updatedAt: nowIso(),
+      };
     }
     return {
       configured: Boolean(existing.platformPasswordConfigured),
-      username: existing.username,
+      username,
       workspaceId: existing.workspaceId,
     };
   });
@@ -599,6 +621,8 @@ export async function setupPlatformWorkspaceManager(identity: PlatformWorkspaceI
       }
       const updated: StoredUser = {
         ...existing,
+        username: normalizeUsername(existing.username)
+          || platformManagerUsername(store, identity, existing.id),
         workspaceKeyHash: keyHash,
         fullName: identity.fullName,
         email: identity.email.toLowerCase(),
@@ -612,12 +636,7 @@ export async function setupPlatformWorkspaceManager(identity: PlatformWorkspaceI
       return publicUser(updated);
     }
 
-    const base = identity.email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, ".") || "manager";
-    let username = base;
-    let suffix = 1;
-    while (store.users.some(user => normalizeUsername(user.username) === username)) {
-      username = `${base}.${suffix++}`;
-    }
+    const username = platformManagerUsername(store, identity);
     const stored: StoredUser = {
       id: "user_" + nanoid(12),
       workspaceId: identity.workspaceId,
