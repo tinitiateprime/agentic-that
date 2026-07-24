@@ -25,8 +25,8 @@ publisher.
 After the code is on `main`, create and push the release tag:
 
 ```text
-git tag publishing-v1.1.1
-git push origin publishing-v1.1.1
+git tag publishing-v1.1.2
+git push origin publishing-v1.1.2
 ```
 
 GitHub Actions builds the extension ZIP, signed Windows installer when signing

@@ -63,17 +63,44 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     const identityToken = signPublishingWorkspaceIdentity({
       sub: platformUserId,
       workspaceId,
+      workspaceKey: `workspace-key-${workspaceId}-that-is-long-enough`,
       name: platformUserId,
       email,
       businessName: workspaceId,
     });
-    const response = await fetch(`${origin}/api/auth/platform`, {
+    const statusResponse = await fetch(`${origin}/api/auth/platform/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: identityToken }),
     });
-    assert.equal(response.status, 200);
-    return response.json() as Promise<{ token: string }>;
+    assert.equal(statusResponse.status, 200);
+    const initialStatus = await statusResponse.json() as { configured: boolean };
+    assert.equal(initialStatus.configured, false);
+    const setupResponse = await fetch(`${origin}/api/auth/platform/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "OwnerPassword@2026" }),
+    });
+    assert.equal(setupResponse.status, 200);
+    const repeatedSetup = await fetch(`${origin}/api/auth/platform/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "Replacement@2026" }),
+    });
+    assert.equal(repeatedSetup.status, 400);
+    const wrongLogin = await fetch(`${origin}/api/auth/platform/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "WrongPassword" }),
+    });
+    assert.equal(wrongLogin.status, 401);
+    const loginResponse = await fetch(`${origin}/api/auth/platform/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "OwnerPassword@2026" }),
+    });
+    assert.equal(loginResponse.status, 200);
+    return loginResponse.json() as Promise<{ token: string }>;
   }
   const [workspaceA, workspaceB] = await Promise.all([
     platformSession("Owner A", "workspace_a", "owner-a@example.com"),

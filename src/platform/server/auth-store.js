@@ -97,6 +97,10 @@ function normalizeStore(value) {
     users: value.users.map((user) => ({
       ...user,
       workspaceId: user.workspaceId || `workspace_${user.id}`,
+      publishingWorkspaceKey: user.publishingWorkspaceKey || crypto
+        .createHash("sha256")
+        .update(`publishing:${user.id}:${user.passwordHash}`)
+        .digest("base64url"),
     })),
   };
 }
@@ -159,6 +163,7 @@ export async function registerPlatformUser({ name, businessName, email, password
     const user = {
       id: crypto.randomUUID(),
       workspaceId: `workspace_${crypto.randomUUID()}`,
+      publishingWorkspaceKey: crypto.randomBytes(32).toString("base64url"),
       name: normalizedName,
       businessName: normalizedBusiness,
       email: normalizedEmail,
@@ -216,11 +221,15 @@ export async function getCurrentPlatformUser() {
   return user ? publicUser(user) : null;
 }
 
-export function createPublishingIdentityToken(user) {
-  const publicIdentity = publicUser(user);
+export async function createPublishingIdentityToken(user) {
+  const store = await readStore();
+  const storedUser = store.users.find((candidate) => candidate.id === user.id);
+  if (!storedUser) throw new Error("Platform user not found.");
+  const publicIdentity = publicUser(storedUser);
   return signPublishingWorkspaceIdentity({
     sub: publicIdentity.id,
     workspaceId: publicIdentity.workspaceId,
+    workspaceKey: storedUser.publishingWorkspaceKey,
     name: publicIdentity.name,
     email: publicIdentity.email,
     businessName: publicIdentity.businessName,

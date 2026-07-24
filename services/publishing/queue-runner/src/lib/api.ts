@@ -96,8 +96,23 @@ export const api = {
   login: (payload: LoginInput) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
 
-  platformLogin: (token: string) =>
-    request<AuthResponse>("/api/auth/platform", { method: "POST", body: JSON.stringify({ token }) }),
+  platformStatus: (token: string) =>
+    request<{ configured: boolean; username: string; workspaceId: string }>("/api/auth/platform/status", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  setupPlatformManager: (token: string, password: string) =>
+    request<AuthResponse>("/api/auth/platform/setup", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
+
+  loginPlatformManager: (token: string, password: string) =>
+    request<AuthResponse>("/api/auth/platform/login", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
 
   me: () => request<UserProfile>("/api/auth/me"),
 

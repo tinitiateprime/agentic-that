@@ -179,6 +179,7 @@ export default function ConfigManager({
   const [telegramUser, setTelegramUser] = useState(null);
   const [telegramAccounts, setTelegramAccounts] = useState([]);
   const [publishingStatus, setPublishingStatus] = useState("checking");
+  const [publishingManagerStatus, setPublishingManagerStatus] = useState(null);
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
 
@@ -229,12 +230,24 @@ export default function ConfigManager({
     const connectPublishing = async () => {
       if (!publishingIdentityToken) return loadPublishing();
       try {
-        const session = await publishingRequest("/api/auth/platform", "", {
+        const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
           method: "POST",
           body: JSON.stringify({ token: publishingIdentityToken })
         });
-        window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(session));
-        return loadPublishing(session);
+        setPublishingManagerStatus(managerStatus);
+        const savedSession = readPublishingSession();
+        if (savedSession) {
+          try {
+            const me = await publishingRequest("/api/auth/me", savedSession.token);
+            if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
+          } catch {
+            // Show this workspace's password screen.
+          }
+        }
+        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+        setPublishingSession(null);
+        setPublishingAccounts([]);
+        setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
       } catch {
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
@@ -361,6 +374,8 @@ export default function ConfigManager({
               accounts={publishingAccounts}
               initialPlatform={initialPublishingPlatform}
               publishQueueUrl={publishQueueUrl}
+              publishingIdentityToken={publishingIdentityToken}
+              managerStatus={publishingManagerStatus}
               onSession={session => {
                 setPublishingSession(session);
                 void loadPublishing(session);
@@ -665,12 +680,14 @@ function PublishingManager({
   accounts,
   initialPlatform,
   publishQueueUrl,
+  publishingIdentityToken,
+  managerStatus,
   onSession,
   onReload,
   setNotice
 }) {
-  const [username, setUsername] = useState("operations.manager");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [selectedPlatform, setSelectedPlatform] = useState(initialPlatform || "instagram");
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -684,11 +701,16 @@ function PublishingManager({
 
   const signIn = async (event) => {
     event.preventDefault();
+    const firstSetup = status === "needs-setup";
+    if (firstSetup && password !== confirmPassword) {
+      setNotice({ tone: "error", message: "Passwords do not match." });
+      return;
+    }
     setBusy(true);
     try {
-      const response = await publishingRequest("/api/auth/login", "", {
+      const response = await publishingRequest(firstSetup ? "/api/auth/platform/setup" : "/api/auth/platform/login", "", {
         method: "POST",
-        body: JSON.stringify({ username: username.trim(), password })
+        body: JSON.stringify({ token: publishingIdentityToken, password })
       });
       if (response.user.role !== "operations_manager") {
         throw new Error("Use an Operations Manager account to configure publishing accounts.");
@@ -696,6 +718,7 @@ function PublishingManager({
       const nextSession = { token: response.token, user: response.user };
       window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(nextSession));
       setPassword("");
+      setConfirmPassword("");
       onSession(nextSession);
       setNotice({ tone: "success", message: "Publish Queue configuration access is ready." });
     } catch (error) {
@@ -773,21 +796,25 @@ function PublishingManager({
     );
   }
 
-  if (status === "needs-login" || status === "needs-manager") {
+  if (status === "needs-login" || status === "needs-setup" || status === "needs-manager") {
+    const firstSetup = status === "needs-setup";
     return (
       <div className="config-auth-card">
         <div className="config-auth-copy">
           <span><LockKeyhole size={25} /></span>
-          <p>Protected configuration</p>
-          <h3>Operations Manager access required</h3>
-          <div>Sign in here once. The same secure session opens Publish Queue Runner, while account configuration remains in Config Manager.</div>
-          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
+          <p>{firstSetup ? "First-time workspace setup" : "Protected configuration"}</p>
+          <h3>{firstSetup ? "Create your Operations Manager password" : "Operations Manager access required"}</h3>
+          <div>{firstSetup
+            ? "Choose your own password now. This account creator becomes the Operations Manager and will use this password for future publishing logins."
+            : "Enter the Operations Manager password you created for this account."}</div>
+          <small><ShieldCheck size={14} />This password belongs to <strong>{managerStatus?.username || "your workspace"}</strong>, not the Companion.</small>
           {status === "needs-manager" && <small><CircleAlert size={14} />The current Publish Queue role cannot manage accounts.</small>}
         </div>
         <form onSubmit={signIn}>
-          <label><span>Username</span><input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label><span>Password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /><button type="button" onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
-          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Continue to accounts</button>
+          <label><span>Manager username</span><input value={managerStatus?.username || ""} readOnly /></label>
+          <label><span>{firstSetup ? "Create password" : "Operations Manager password"}</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={password} onChange={event => setPassword(event.target.value)} autoComplete={firstSetup ? "new-password" : "current-password"} minLength={8} required /><button type="button" onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+          {firstSetup && <label><span>Confirm password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" minLength={8} required /></div></label>}
+          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{firstSetup ? "Create manager access" : "Continue to accounts"}</button>
           <a href={publishQueueUrl} target="_blank" rel="noreferrer">Open Publish Queue Runner<ExternalLink size={14} /></a>
         </form>
       </div>

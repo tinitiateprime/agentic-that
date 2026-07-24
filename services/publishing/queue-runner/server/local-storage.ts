@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
@@ -28,7 +28,11 @@ import {
   platforms
 } from "../shared/schema.js";
 
-type StoredUser = UserProfile & { passwordHash: string };
+type StoredUser = UserProfile & {
+  passwordHash: string;
+  workspaceKeyHash?: string;
+  platformPasswordConfigured?: boolean;
+};
 
 type BlobStore = {
   get: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<unknown>;
@@ -295,7 +299,12 @@ function normalizeStore(value: unknown): Store {
 }
 
 function publicUser(user: StoredUser): UserProfile {
-  const { passwordHash: _passwordHash, ...profile } = user;
+  const {
+    passwordHash: _passwordHash,
+    workspaceKeyHash: _workspaceKeyHash,
+    platformPasswordConfigured: _platformPasswordConfigured,
+    ...profile
+  } = user;
   return profile;
 }
 
@@ -507,25 +516,75 @@ export async function loginUser(username: string, password: string) {
   return user;
 }
 
-export async function ensurePlatformWorkspaceManager(identity: {
+type PlatformWorkspaceIdentity = {
   platformUserId: string;
   workspaceId: string;
+  workspaceKey: string;
   fullName: string;
   email: string;
-}) {
+};
+
+function workspaceKeyHash(workspaceKey: string) {
+  return createHash("sha256").update(workspaceKey).digest("base64url");
+}
+
+function findPlatformManager(store: Store, identity: PlatformWorkspaceIdentity) {
+  return store.users.findIndex(user =>
+    user.platformUserId === identity.platformUserId && user.workspaceId === identity.workspaceId
+  );
+}
+
+function assertWorkspaceKey(user: StoredUser, identity: PlatformWorkspaceIdentity) {
+  const providedHash = workspaceKeyHash(identity.workspaceKey);
+  if (user.workspaceKeyHash && user.workspaceKeyHash !== providedHash) {
+    throw new Error("This Operations Manager belongs to another workspace.");
+  }
+  return providedHash;
+}
+
+export async function platformWorkspaceManagerStatus(identity: PlatformWorkspaceIdentity) {
   return mutateStore(store => {
-    const existingIndex = store.users.findIndex(user =>
-      user.platformUserId === identity.platformUserId && user.workspaceId === identity.workspaceId
-    );
+    const existingIndex = findPlatformManager(store, identity);
+    if (existingIndex < 0) {
+      return {
+        configured: false,
+        username: identity.email.toLowerCase(),
+        workspaceId: identity.workspaceId,
+      };
+    }
+    const existing = store.users[existingIndex];
+    const providedHash = assertWorkspaceKey(existing, identity);
+    if (!existing.workspaceKeyHash) {
+      store.users[existingIndex] = { ...existing, workspaceKeyHash: providedHash, updatedAt: nowIso() };
+    }
+    return {
+      configured: Boolean(existing.platformPasswordConfigured),
+      username: existing.username,
+      workspaceId: existing.workspaceId,
+    };
+  });
+}
+
+export async function setupPlatformWorkspaceManager(identity: PlatformWorkspaceIdentity, password: string) {
+  return mutateStore(store => {
+    const existingIndex = findPlatformManager(store, identity);
     const timestamp = nowIso();
+    const keyHash = workspaceKeyHash(identity.workspaceKey);
     if (existingIndex >= 0) {
       const existing = store.users[existingIndex];
+      assertWorkspaceKey(existing, identity);
+      if (existing.platformPasswordConfigured) {
+        throw new Error("Operations Manager password is already configured. Sign in with it.");
+      }
       const updated: StoredUser = {
         ...existing,
+        workspaceKeyHash: keyHash,
         fullName: identity.fullName,
         email: identity.email.toLowerCase(),
         role: "operations_manager",
         isActive: true,
+        passwordHash: hashPassword(password),
+        platformPasswordConfigured: true,
         updatedAt: timestamp,
       };
       store.users[existingIndex] = updated;
@@ -542,18 +601,43 @@ export async function ensurePlatformWorkspaceManager(identity: {
       id: "user_" + nanoid(12),
       workspaceId: identity.workspaceId,
       platformUserId: identity.platformUserId,
+      workspaceKeyHash: keyHash,
       username,
       fullName: identity.fullName,
       email: identity.email.toLowerCase(),
       role: "operations_manager",
       isActive: true,
-      passwordHash: hashPassword(randomBytes(32).toString("base64url")),
+      passwordHash: hashPassword(password),
+      platformPasswordConfigured: true,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     store.users.push(stored);
     return publicUser(stored);
   });
+}
+
+export async function loginPlatformWorkspaceManager(identity: PlatformWorkspaceIdentity, password: string) {
+  const user = await mutateStore(store => {
+    const index = findPlatformManager(store, identity);
+    if (index < 0) return null;
+    const existing = store.users[index];
+    assertWorkspaceKey(existing, identity);
+    if (!existing.platformPasswordConfigured || !existing.isActive || !verifyPassword(password, existing.passwordHash)) {
+      return null;
+    }
+    const updated = {
+      ...existing,
+      lastLoginAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    store.users[index] = updated;
+    return publicUser(updated);
+  });
+  if (user) {
+    await logActivity(user.id, "auth.login", "user_profile", user.id, user.fullName + " signed in.", { role: user.role });
+  }
+  return user;
 }
 
 export async function createUserProfile(input: CreateUserProfileInput, actorUserId?: string, workspaceId = legacyWorkspaceId) {

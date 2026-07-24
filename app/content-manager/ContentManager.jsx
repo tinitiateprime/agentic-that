@@ -8,8 +8,6 @@ import {
   Clock3,
   Database,
   ExternalLink,
-  Eye,
-  EyeOff,
   FileText,
   KeyRound,
   Loader2,
@@ -293,12 +291,25 @@ export default function ContentManager({
     const connectPublishing = async () => {
       if (!publishingIdentityToken) return loadPublishing();
       try {
-        const session = await publishingRequest("/api/auth/platform", "", {
+        const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
           method: "POST",
           body: JSON.stringify({ token: publishingIdentityToken })
         });
-        window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(session));
-        return loadPublishing(session);
+        const savedSession = readPublishingSession();
+        if (savedSession) {
+          try {
+            const me = await publishingRequest("/api/auth/me", savedSession.token);
+            if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
+          } catch {
+            // Ask for this workspace's manager password in Config Manager.
+          }
+        }
+        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+        setPublishingSession(null);
+        setPublishingAccounts([]);
+        setPublishingUploads([]);
+        setPublishingSchedules([]);
+        setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
       } catch {
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
@@ -457,7 +468,6 @@ export default function ContentManager({
                 setPublishingSession(session);
                 void loadPublishing(session);
               }}
-              setNotice={setNotice}
             />
           )}
           {activeService === "engagement" && (
@@ -595,37 +605,12 @@ function PublishingContent({
   platform,
   publishQueueUrl,
   onPlatformChange,
-  onSession,
-  setNotice
+  onSession
 }) {
-  const [username, setUsername] = useState("operations.manager");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
   const platformAccounts = useMemo(
     () => accounts.filter((account) => account.platform === platform),
     [accounts, platform]
   );
-
-  const signIn = async (event) => {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const response = await publishingRequest("/api/auth/login", "", {
-        method: "POST",
-        body: JSON.stringify({ username: username.trim(), password })
-      });
-      const nextSession = { token: response.token, user: response.user };
-      setPassword("");
-      onSession(nextSession);
-      setNotice({ tone: "success", message: "Publish Queue content data is ready." });
-    } catch (error) {
-      setNotice({ tone: "error", message: error.message });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   if (status === "checking") {
     return <div className="content-loading"><Loader2 className="spin" size={22} />Loading Publish Queue content...</div>;
@@ -642,27 +627,20 @@ function PublishingContent({
     );
   }
 
-  if (status === "needs-login") {
+  if (status === "needs-login" || status === "needs-setup") {
+    const firstSetup = status === "needs-setup";
     return (
       <div className="content-auth-card">
         <div className="content-auth-copy">
           <span><LockKeyhole size={25} /></span>
-          <p>Protected content data</p>
-          <h3>Publish Queue sign in required</h3>
-          <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, and schedules.</div>
-          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
+          <p>{firstSetup ? "First-time setup required" : "Protected content data"}</p>
+          <h3>{firstSetup ? "Create Operations Manager access" : "Operations Manager sign in required"}</h3>
+          <div>{firstSetup
+            ? "Create your workspace password in Config Manager before viewing publishing content."
+            : "Enter your workspace’s Operations Manager password in Config Manager to continue."}</div>
+          <small><ShieldCheck size={14} />Your password is created by you and is not copied from the Companion.</small>
         </div>
-        <form onSubmit={signIn}>
-          <label><span>Username</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label>
-            <span>Password</span>
-            <div className="content-secret-input">
-              <input type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
-              <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-            </div>
-          </label>
-          <button className="content-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Continue</button>
-        </form>
+        <a className="content-primary" href="/config-manager?service=publishing">{firstSetup ? "Create manager password" : "Sign in through Config Manager"}<ArrowRight size={16} /></a>
       </div>
     );
   }

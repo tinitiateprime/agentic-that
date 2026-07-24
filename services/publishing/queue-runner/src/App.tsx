@@ -117,23 +117,51 @@ function readSavedSession(): AuthSession | null {
 
 export default function App({ publishingIdentityToken }: { publishingIdentityToken?: string }) {
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [platformStatus, setPlatformStatus] = useState<{
+    state: 'checking' | 'ready' | 'error';
+    configured: boolean;
+    username: string;
+    message?: string;
+  }>({ state: publishingIdentityToken ? 'checking' : 'ready', configured: false, username: '' });
 
   useEffect(() => {
     if (publishingIdentityToken) {
       let cancelled = false;
-      api.platformLogin(publishingIdentityToken)
-        .then(response => {
+      api.platformStatus(publishingIdentityToken)
+        .then(async status => {
           if (cancelled) return;
-          const currentSession = { token: response.token, user: response.user };
-          setAuthToken(response.token);
-          window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentSession));
-          setSession(currentSession);
+          const savedSession = readSavedSession();
+          if (savedSession) {
+            try {
+              const user = await api.me();
+              if (cancelled) return;
+              if (user.workspaceId === status.workspaceId) {
+                const currentSession = { token: savedSession.token, user };
+                window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentSession));
+                setSession(currentSession);
+                setPlatformStatus({ state: 'ready', configured: true, username: status.username });
+                return;
+              }
+            } catch {
+              // Show this workspace's password screen below.
+            }
+          }
+          setAuthToken(null);
+          window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+          setSession(null);
+          setPlatformStatus({ state: 'ready', configured: status.configured, username: status.username });
         })
-        .catch(() => {
+        .catch(error => {
           if (cancelled) return;
           setAuthToken(null);
           window.sessionStorage.removeItem(AUTH_SESSION_KEY);
           setSession(null);
+          setPlatformStatus({
+            state: 'error',
+            configured: false,
+            username: '',
+            message: error instanceof Error ? error.message : 'The publishing workspace could not be opened.',
+          });
         });
       return () => {
         cancelled = true;
@@ -178,7 +206,101 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
 
   return session
     ? <Dashboard session={session} onSignOut={signOut} />
+    : publishingIdentityToken
+      ? <PlatformManagerAccess
+          identityToken={publishingIdentityToken}
+          status={platformStatus}
+          onSignIn={signIn}
+          onConfigured={() => setPlatformStatus(current => ({ ...current, configured: true }))}
+        />
     : <LandingPage onSignIn={signIn} />;
+}
+
+function PlatformManagerAccess({
+  identityToken,
+  status,
+  onSignIn,
+  onConfigured,
+}: {
+  identityToken: string;
+  status: { state: 'checking' | 'ready' | 'error'; configured: boolean; username: string; message?: string };
+  onSignIn: (response: AuthResponse) => void;
+  onConfigured: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const firstSetup = !status.configured;
+
+  const submit = async () => {
+    setError('');
+    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (firstSetup && password !== confirmPassword) return setError('Passwords do not match.');
+    setLoading(true);
+    try {
+      const response = firstSetup
+        ? await api.setupPlatformManager(identityToken, password)
+        : await api.loginPlatformManager(identityToken, password);
+      if (firstSetup) onConfigured();
+      onSignIn(response);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Unable to continue.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className='auth-page'>
+      <section className='auth-visual' aria-label='Social publishing workspace'>
+        <div className='auth-visual-content'>
+          <a className='auth-brand' href='/'>AgenticThat<span> / Publish Queue</span></a>
+          <div className='auth-message'>
+            <p className='auth-kicker'>Your private publishing workspace</p>
+            <h1>{firstSetup ? 'Create your manager access.' : 'Welcome back.'}</h1>
+            <p>Publishing accounts, users, posts, and schedules stay isolated inside this workspace.</p>
+          </div>
+        </div>
+      </section>
+      <section className='auth-access' aria-labelledby='manager-access-title'>
+        <div className='auth-access-inner'>
+          <div className='auth-heading'>
+            <p className='auth-kicker'>Operations Manager</p>
+            <h2 id='manager-access-title'>{firstSetup ? 'Set your password' : 'Enter your password'}</h2>
+            <p>{firstSetup
+              ? 'Choose the Operations Manager password for this account. You will use it for future publishing logins.'
+              : 'Use the Operations Manager password you created for this account.'}</p>
+          </div>
+          {status.state === 'checking' ? (
+            <div className='temporary-access'><Loader2 className='spin' size={18} /><span>Checking workspace setup…</span></div>
+          ) : status.state === 'error' ? (
+            <p className='auth-error' role='alert'>{status.message}</p>
+          ) : (
+            <form className='auth-form' onSubmit={event => { event.preventDefault(); void submit(); }}>
+              <label>
+                <span>Manager username</span>
+                <div className='auth-input'><KeyRound size={17} /><input value={status.username} readOnly /></div>
+              </label>
+              <label>
+                <span>{firstSetup ? 'Create password' : 'Operations Manager password'}</span>
+                <div className='auth-input'><LockKeyhole size={17} /><input type='password' value={password} onChange={event => setPassword(event.target.value)} autoComplete={firstSetup ? 'new-password' : 'current-password'} /></div>
+              </label>
+              {firstSetup && <label>
+                <span>Confirm password</span>
+                <div className='auth-input'><ShieldCheck size={17} /><input type='password' value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete='new-password' /></div>
+              </label>}
+              {error && <p className='auth-error' role='alert'>{error}</p>}
+              <button type='submit' className='auth-submit' disabled={loading}>
+                {loading ? <Loader2 className='spin' size={18} /> : <ArrowRight size={18} />}
+                {firstSetup ? 'Create manager access' : 'Open publishing workspace'}
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void }) {

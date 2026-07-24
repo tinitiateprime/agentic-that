@@ -13,5 +13,5 @@ export default async function PublishingPage() {
     redirect("/?auth=login&next=/publishing");
   }
 
-  return <PublishQueueRunner publishingIdentityToken={createPublishingIdentityToken(user)} />;
+  return <PublishQueueRunner publishingIdentityToken={await createPublishingIdentityToken(user)} />;
 }

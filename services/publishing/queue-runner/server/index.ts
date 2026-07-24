@@ -40,7 +40,6 @@ import {
   deletePlatformAccount,
   deletePublishingSchedule,
   deleteUpload,
-  ensurePlatformWorkspaceManager,
   getPlatformAccount,
   getUserProfile,
   listPlatformAccounts,
@@ -49,10 +48,13 @@ import {
   listActivityLogs,
   listUploads,
   listUserProfiles,
+  loginPlatformWorkspaceManager,
   localStorageHealth,
   logActivity,
   loginUser,
+  platformWorkspaceManagerStatus,
   recoverInterruptedPublishingWork,
+  setupPlatformWorkspaceManager,
   updatePublishingSchedule,
   updatePlatformAccount,
   updateUploadDetails,
@@ -191,6 +193,11 @@ const scheduleOnlyUpdateSchema = z.object({
 
 const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
+});
+
+const platformPasswordSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8, "Password must be at least 8 characters").max(128),
 });
 
 const stagedUploadCreateSchema = z.object({
@@ -549,20 +556,45 @@ app.post("/api/auth/login", async (req, res, next) => {
   }
 });
 
-app.post("/api/auth/platform", async (req, res, next) => {
+function platformIdentity(token: string) {
+  const identity = verifyPublishingWorkspaceIdentity(token);
+  if (!identity) throw new Error("Your AgenticThat workspace session is invalid or expired.");
+  return {
+    platformUserId: identity.sub,
+    workspaceId: identity.workspaceId,
+    workspaceKey: identity.workspaceKey,
+    fullName: identity.name,
+    email: identity.email,
+  };
+}
+
+app.post("/api/auth/platform/status", async (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    const identity = verifyPublishingWorkspaceIdentity(token);
-    if (!identity) {
-      res.status(401).json({ message: "Your AgenticThat session is invalid or expired." });
+    res.json(await platformWorkspaceManagerStatus(platformIdentity(token)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/platform/setup", async (req, res, next) => {
+  try {
+    const payload = platformPasswordSchema.parse(req.body);
+    const user = await setupPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
+    res.json({ user, token: signAuthToken(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/platform/login", async (req, res, next) => {
+  try {
+    const payload = platformPasswordSchema.parse(req.body);
+    const user = await loginPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
+    if (!user) {
+      res.status(401).json({ message: "Incorrect Operations Manager password." });
       return;
     }
-    const user = await ensurePlatformWorkspaceManager({
-      platformUserId: identity.sub,
-      workspaceId: identity.workspaceId,
-      fullName: identity.name,
-      email: identity.email,
-    });
     res.json({ user, token: signAuthToken(user) });
   } catch (error) {
     next(error);

@@ -31,7 +31,7 @@ export default async function ConfigManagerPage({ searchParams }) {
       initialService={requestedService}
       initialMessagingPlatform={requestedMessagingPlatform}
       initialPublishingPlatform={requestedPublishingPlatform}
-      publishingIdentityToken={createPublishingIdentityToken(user)}
+      publishingIdentityToken={await createPublishingIdentityToken(user)}
       user={{ name: user.name, email: user.email, businessName: user.businessName }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}
       publishQueueUrl={serviceEndpoints.publishQueue.consoleUrl}
