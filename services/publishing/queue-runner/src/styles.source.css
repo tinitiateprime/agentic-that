@@ -1130,6 +1130,47 @@ textarea, input[type="datetime-local"], .field input[type="text"] {
 .composer-role-note > span { display: grid; gap: 3px; }
 .composer-role-note strong { font-size: 10px; }
 .composer-role-note small { color: #73857D; font-size: 9px; }
+
+.workspace-access-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 10px; background: #EAF2EE; }
+.workspace-access-switch button { padding: 9px 10px; border: 0; border-radius: 8px; color: #647A70; font-size: 10px; font-weight: 800; cursor: pointer; background: transparent; }
+.workspace-access-switch button.active { color: #194E3B; background: #FFFFFF; box-shadow: 0 2px 8px rgba(35, 73, 58, .12); }
+
+.handoff-queue { display: grid; gap: 12px; margin-top: 18px; padding: 18px; border: 1px solid #DDE7E2; border-radius: 14px; background: #FFFFFF; box-shadow: 0 10px 28px rgba(31, 61, 50, .06); }
+.handoff-list { display: grid; gap: 8px; }
+.handoff-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid #E1EAE6; border-radius: 10px; background: #F9FBFA; }
+.handoff-row.scheduled { opacity: .78; }
+.handoff-format { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 10px; color: #246B52; background: #E7F4EF; }
+.handoff-copy { display: grid; min-width: 0; gap: 3px; }
+.handoff-copy strong { overflow: hidden; color: #183D31; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-copy small { overflow: hidden; color: #70837B; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-status { padding: 5px 8px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.handoff-status.awaiting_schedule { color: #8A5B00; background: #FFF2D4; }
+.handoff-status.scheduled { color: #176B4D; background: #DDF3E9; }
+.handoff-readonly { color: #7B8D85; font-size: 10px; }
+.handoff-empty { display: flex; align-items: center; gap: 11px; padding: 17px; border: 1px dashed #CAD8D2; border-radius: 10px; color: #61786E; background: #FAFCFB; }
+.handoff-empty > span { display: grid; gap: 3px; }
+.handoff-empty strong { color: #294C40; font-size: 11px; }
+.handoff-empty small { font-size: 9px; }
+
+.submission-schedule-modal { width: min(760px, calc(100vw - 24px)); }
+.submission-schedule-modal .modal-body { display: grid; gap: 18px; }
+.submission-schedule-summary { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 11px; background: #F3F8F6; }
+.submission-schedule-summary > span:last-child { display: grid; min-width: 0; gap: 4px; }
+.submission-schedule-summary strong { color: #173D30; font-size: 13px; }
+.submission-schedule-summary small { overflow: hidden; color: #657B72; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.submission-destination-section, .submission-timing-section { display: grid; gap: 10px; }
+.submission-account-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.submission-account-grid > label { display: flex; align-items: center; gap: 9px; padding: 11px; border: 1px solid #DCE7E2; border-radius: 9px; cursor: pointer; background: #FFFFFF; }
+.submission-account-grid > label.selected { border-color: #25815E; background: #F0F9F5; box-shadow: 0 0 0 1px #25815E inset; }
+.submission-account-grid > label > span { display: grid; min-width: 0; gap: 2px; }
+.submission-account-grid strong { overflow: hidden; color: #21483A; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.submission-account-grid small { color: #70837A; font-size: 9px; }
+
+@media (max-width: 720px) {
+  .handoff-row { grid-template-columns: auto minmax(0, 1fr); }
+  .handoff-status, .handoff-row .btn-primary, .handoff-readonly { grid-column: 2; justify-self: start; }
+  .submission-account-grid { grid-template-columns: 1fr; }
+}
 .composer-footer { min-height: 76px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 12px 25px; border-top: 1px solid #DCE6E1; background: #FFFFFF; }
 .composer-message { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 9px 11px; border-radius: 7px; font-size: 10px; font-weight: 700; }
 .composer-message.success { background: #E8F7F0; color: #167150; }

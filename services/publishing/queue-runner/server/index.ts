@@ -32,6 +32,7 @@ import {
 import {
   automationInput,
   createPlatformAccount,
+  createContentSubmission,
   createPublishingSchedule,
   createUpload,
   createUserProfile,
@@ -40,9 +41,12 @@ import {
   deletePlatformAccount,
   deletePublishingSchedule,
   deleteUpload,
+  completeContentSubmission,
+  getContentSubmission,
   getPlatformAccount,
   getUserProfile,
   listPlatformAccounts,
+  listContentSubmissions,
   listPublishingSchedules,
   listSocialMediaSchedules,
   listActivityLogs,
@@ -218,6 +222,30 @@ const stagedUnifiedPostSchema = z.object({
 const textUnifiedPostSchema = z.object({
   description: z.string().trim().min(1, "Write your post text."),
   destinations: unifiedPostDestinationsSchema
+});
+
+const stagedSubmissionSchema = z.object({
+  stagedUploadId: stagedUploadIdSchema,
+  title: z.string().trim().max(500).optional().default(""),
+  description: z.string().trim().min(1, "Enter a post description.")
+});
+
+const textSubmissionSchema = z.object({
+  description: z.string().trim().min(1, "Write your post text.")
+});
+
+const scheduleSubmissionSchema = z.object({
+  destinations: unifiedPostDestinationsSchema
+}).superRefine((value, context) => {
+  value.destinations.forEach((destination, index) => {
+    if (!destination.scheduledAt && !destination.scheduleId) {
+      context.addIssue({
+        code: "custom",
+        path: ["destinations", index],
+        message: "Choose an exact time or schedule template for every destination."
+      });
+    }
+  });
 });
 
 type StagedUploadRecord = {
@@ -491,6 +519,80 @@ async function createUnifiedPosts(
   }
 }
 
+async function scheduleContentSubmission(
+  submissionId: string,
+  user: UserProfile,
+  destinationsInput: unknown,
+) {
+  const createdUploads: PlatformUpload[] = [];
+  const submission = await getContentSubmission(submissionId, user.workspaceId);
+  if (!submission) throw new Error("Content submission not found.");
+  if (submission.status !== "awaiting_schedule") throw new Error("This content submission has already been scheduled.");
+
+  const file: StoredUploadFile = {
+    originalname: submission.originalName,
+    filename: submission.fileName,
+    mimetype: submission.mimeType,
+    size: submission.size,
+  };
+  const title = submission.title?.trim() || "";
+  const destinations = scheduleSubmissionSchema.parse({ destinations: destinationsInput }).destinations;
+  const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
+  if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
+
+  try {
+    const [allAccounts, allSchedules] = await Promise.all([
+      listPlatformAccounts(undefined, user.workspaceId),
+      listPublishingSchedules(user.workspaceId),
+    ]);
+    const accountById = new Map(allAccounts.map(account => [account.id, account]));
+    const scheduleById = new Map(allSchedules.map(schedule => [schedule.id, schedule]));
+    const destinationAccounts = destinations.map(destination => {
+      const account = accountById.get(destination.accountId);
+      if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
+      return { destination, account };
+    });
+
+    for (const { destination, account } of destinationAccounts) {
+      if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
+      assertPlatformPostCompatible(account.platform, file, title, submission.description);
+      if (destination.scheduleId) {
+        const schedule = scheduleById.get(destination.scheduleId);
+        if (!schedule) throw new Error(`Schedule #${destination.scheduleId} was not found.`);
+        assertScheduleCanReceivePosts(schedule);
+      }
+    }
+
+    for (const { destination, account } of destinationAccounts) {
+      const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
+      createdUploads.push(await createUpload(destination.accountId, {
+        originalName: submission.originalName,
+        fileName: submission.fileName,
+        mimeType: submission.mimeType,
+        postFormat: submission.postFormat,
+        size: submission.size,
+        url: submission.url,
+        title: account.platform === "youtube" && submission.postFormat === "video" ? title : undefined,
+        caption: submission.description,
+        scheduledAt,
+        scheduleId: destination.scheduleId,
+      }, user.id, user.workspaceId));
+    }
+
+    const completed = await completeContentSubmission(
+      submission.id,
+      createdUploads.map(upload => upload.id),
+      user.id,
+      user.workspaceId,
+    );
+    if (!completed) throw new Error("Content submission not found.");
+    return { submission: completed, uploads: createdUploads };
+  } catch (error) {
+    await Promise.all(createdUploads.map(upload => deleteUpload(upload.id, user.workspaceId).catch(() => undefined)));
+    throw error;
+  }
+}
+
 app.use(
   cors({
     origin(requestOrigin, callback) {
@@ -672,6 +774,14 @@ app.get("/api/dashboard", async (req: RequestWithUser, res, next) => {
   }
 });
 
+app.get("/api/submissions", async (req: RequestWithUser, res, next) => {
+  try {
+    res.json(await listContentSubmissions(currentUser(req).workspaceId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- LIST UPLOADS ---
 app.get("/api/uploads", async (req: RequestWithUser, res, next) => {
   try {
@@ -750,7 +860,7 @@ app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: 
   }
 });
 
-app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     if (process.env.SERVERLESS === "true" || process.env.NETLIFY === "true") {
       res.status(409).json({
@@ -931,7 +1041,84 @@ app.delete("/api/staged-uploads/:id", requireRoles("operations_manager", "post_u
   }
 });
 
-app.post("/api/posts/unified/text", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+  try {
+    const user = currentUser(req);
+    const payload = textSubmissionSchema.parse(req.body);
+    const submission = await createContentSubmission({
+      originalName: "Text post",
+      fileName: "",
+      mimeType: "text/plain",
+      postFormat: "text",
+      size: Buffer.byteLength(payload.description, "utf8"),
+      url: "",
+      description: payload.description,
+    }, user.workspaceId, user.id);
+    res.status(201).json(submission);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/submissions/staged", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+  let finalFileName: string | null = null;
+  try {
+    const user = currentUser(req);
+    const payload = stagedSubmissionSchema.parse(req.body);
+    const record = await readStagedUpload(payload.stagedUploadId);
+    if (record.workspaceId !== user.workspaceId || (record.userId !== user.id && user.role !== "operations_manager")) {
+      throw new Error("This staged upload belongs to another workspace.");
+    }
+    const stagedPath = stagedContentPath(record.id);
+    const receivedSize = (await fs.promises.stat(stagedPath)).size;
+    if (receivedSize !== record.size) throw new Error(`The media upload is incomplete (${receivedSize} of ${record.size} bytes received).`);
+    await assertStagedMediaSignature(record, stagedPath);
+
+    const postFormat = postFormatForFile({
+      originalname: record.originalName,
+      filename: record.fileName,
+      mimetype: record.mimeType,
+      size: record.size,
+    });
+    if (postFormat === "video" && !payload.title) {
+      throw new Error("Enter a video title so the scheduler can choose any supported platform.");
+    }
+
+    finalFileName = record.fileName;
+    await fs.promises.rename(stagedPath, path.join(uploadDir, record.fileName));
+    const submission = await createContentSubmission({
+      originalName: record.originalName,
+      fileName: record.fileName,
+      mimeType: record.mimeType,
+      postFormat,
+      size: record.size,
+      url: `/uploads/${record.fileName}`,
+      title: payload.title,
+      description: payload.description,
+    }, user.workspaceId, user.id);
+    await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
+    res.status(201).json(submission);
+  } catch (error) {
+    if (finalFileName) await removeStoredUploadFile(finalFileName);
+    next(error);
+  }
+});
+
+app.post("/api/submissions/:id/schedule", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
+  try {
+    const payload = scheduleSubmissionSchema.parse(req.body);
+    const result = await scheduleContentSubmission(
+      pathParam(req.params.id, "id"),
+      currentUser(req),
+      payload.destinations,
+    );
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/posts/unified/text", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
     const payload = textUnifiedPostSchema.parse(req.body);
@@ -947,7 +1134,7 @@ app.post("/api/posts/unified/text", requireRoles("operations_manager", "post_upl
   }
 });
 
-app.post("/api/posts/unified/staged", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   let finalFileName: string | null = null;
   try {
     const user = currentUser(req);
@@ -997,7 +1184,7 @@ app.patch("/api/uploads/:id/status", requireRoles("operations_manager"), async (
   }
 });
 
-app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader", "scheduler"), async (req: RequestWithUser, res, next) => {
+app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
     const uploadId = pathParam(req.params.id, "id");
@@ -1020,15 +1207,11 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"
       summaryDetail = "schedule";
     } else {
       const contentPayload = updateUploadDetailsSchema.parse(req.body);
-      if (user.role === "post_uploader" && ("scheduledAt" in req.body || "scheduleId" in req.body)) {
-        res.status(403).json({ message: "Post uploaders can edit content but cannot schedule posts." });
-        return;
-      }
       const scheduledAt = contentPayload.scheduledAt ? normalizeScheduledAt(contentPayload.scheduledAt) : contentPayload.scheduledAt;
       payload = {
         ...contentPayload,
         scheduledAt,
-        scheduleId: user.role === "operations_manager" ? contentPayload.scheduleId : undefined
+        scheduleId: contentPayload.scheduleId
       };
       action = scheduledAt || contentPayload.scheduleId ? "post.scheduled" : "post.updated";
       summaryDetail = scheduledAt || contentPayload.scheduleId ? "schedule" : "content";
@@ -1060,7 +1243,7 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"
 });
 
 // --- DELETE UPLOAD ---
-app.delete("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
+app.delete("/api/uploads/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
     const deleted = await deleteUpload(pathParam(req.params.id, "id"), user.workspaceId);

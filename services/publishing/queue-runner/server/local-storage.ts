@@ -7,6 +7,7 @@ import nodeCron from "node-cron";
 import {
   type ActivityLog,
   type AutomationInput,
+  type ContentSubmission,
   type CreateUserProfileInput,
   type DashboardSummary,
   type Platform,
@@ -52,6 +53,17 @@ type StoredFileInput = {
   scheduleId?: number;
 };
 
+type StoredSubmissionInput = {
+  originalName: string;
+  fileName: string;
+  mimeType: string;
+  postFormat: PostFormat;
+  size: number;
+  url: string;
+  title?: string;
+  description: string;
+};
+
 type BootstrapUser = {
   username: string;
   fullName: string;
@@ -92,6 +104,7 @@ type Store = {
   schedules: PublishingSchedule[];
   socialMediaSchedules: SocialMediaSchedule[];
   uploads: PlatformUpload[];
+  submissions: ContentSubmission[];
   activityLogs: ActivityLog[];
   automationRuns: AutomationRunRecord[];
   automationRunPosts: AutomationRunPostRecord[];
@@ -240,6 +253,7 @@ function emptyStore(): Store {
     schedules: [],
     socialMediaSchedules: [],
     uploads: [],
+    submissions: [],
     activityLogs: [],
     automationRuns: [],
     automationRunPosts: []
@@ -277,6 +291,13 @@ function normalizeStore(value: unknown): Store {
       }))
       : [],
     uploads,
+    submissions: Array.isArray(input.submissions)
+      ? input.submissions.map(submission => ({
+        ...submission,
+        workspaceId: submission.workspaceId || legacyWorkspaceId,
+        destinationUploadIds: Array.isArray(submission.destinationUploadIds) ? submission.destinationUploadIds : [],
+      }))
+      : [],
     activityLogs: Array.isArray(input.activityLogs)
       ? input.activityLogs.map(log => ({
         ...log,
@@ -845,6 +866,96 @@ export function isDueScheduledUpload(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued" || !upload.scheduledAt) return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt !== null && scheduledAt <= now;
+}
+
+export async function listContentSubmissions(workspaceId?: string) {
+  const store = await readStore();
+  return store.submissions
+    .filter(submission => !workspaceId || submission.workspaceId === workspaceId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function getContentSubmission(submissionId: string, workspaceId?: string) {
+  const store = await readStore();
+  return store.submissions.find(submission =>
+    submission.id === submissionId && (!workspaceId || submission.workspaceId === workspaceId)
+  ) ?? null;
+}
+
+export async function createContentSubmission(
+  input: StoredSubmissionInput,
+  workspaceId: string,
+  actorUserId: string
+) {
+  const submission = await mutateStore(store => {
+    const timestamp = nowIso();
+    const created: ContentSubmission = {
+      id: "submission_" + nanoid(12),
+      workspaceId,
+      postFormat: input.postFormat,
+      originalName: input.originalName,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      size: input.size,
+      url: input.url,
+      title: input.title?.trim() || undefined,
+      description: input.description.trim(),
+      status: "awaiting_schedule",
+      createdByUserId: actorUserId,
+      destinationUploadIds: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.submissions.unshift(created);
+    return created;
+  });
+  await logActivity(
+    actorUserId,
+    "submission.created",
+    "content_submission",
+    submission.id,
+    `${submission.title || submission.originalName} was handed to scheduling.`,
+    { postFormat: submission.postFormat }
+  );
+  return submission;
+}
+
+export async function completeContentSubmission(
+  submissionId: string,
+  destinationUploadIds: string[],
+  actorUserId: string,
+  workspaceId: string
+) {
+  const submission = await mutateStore(store => {
+    const index = store.submissions.findIndex(item =>
+      item.id === submissionId && item.workspaceId === workspaceId
+    );
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    if (existing.status !== "awaiting_schedule") {
+      throw new Error("This submission has already been scheduled.");
+    }
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "scheduled",
+      scheduledByUserId: actorUserId,
+      destinationUploadIds,
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
+  if (submission) {
+    await logActivity(
+      actorUserId,
+      "submission.scheduled",
+      "content_submission",
+      submission.id,
+      `${submission.title || submission.originalName} was scheduled for ${destinationUploadIds.length} destination${destinationUploadIds.length === 1 ? "" : "s"}.`,
+      { destinationUploadIds }
+    );
+  }
+  return submission;
 }
 
 export async function listPlatformAccounts(platform?: Platform, workspaceId?: string) {

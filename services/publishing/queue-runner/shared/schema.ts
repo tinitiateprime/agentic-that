@@ -3,6 +3,7 @@ import { z } from "zod";
 export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube"] as const;
 export const postFormats = ["image", "video", "text"] as const;
 export const uploadStatuses = ["queued", "processing", "posted", "failed"] as const;
+export const submissionStatuses = ["awaiting_schedule", "scheduled"] as const;
 export const scheduleFrequencies = ["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"] as const;
 export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
@@ -10,6 +11,7 @@ export const userRoles = ["operations_manager", "post_uploader", "scheduler", "v
 export const platformSchema = z.enum(platforms);
 export const postFormatSchema = z.enum(postFormats);
 export const uploadStatusSchema = z.enum(uploadStatuses);
+export const submissionStatusSchema = z.enum(submissionStatuses);
 export const scheduleFrequencySchema = z.enum(scheduleFrequencies);
 export const scheduleStatusSchema = z.enum(scheduleStatuses);
 export const userRoleSchema = z.enum(userRoles);
@@ -18,6 +20,7 @@ export const scheduleIdSchema = z.coerce.number().int().positive();
 export type Platform = (typeof platforms)[number];
 export type PostFormat = (typeof postFormats)[number];
 export type UploadStatus = (typeof uploadStatuses)[number];
+export type SubmissionStatus = (typeof submissionStatuses)[number];
 export type ScheduleFrequency = (typeof scheduleFrequencies)[number];
 export type ScheduleStatus = (typeof scheduleStatuses)[number];
 export type UserRole = (typeof userRoles)[number];
@@ -232,6 +235,25 @@ export const platformUploadSchema = z.object({
   automation: uploadAutomationSchema
 });
 
+export const contentSubmissionSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  postFormat: postFormatSchema,
+  originalName: z.string(),
+  fileName: z.string(),
+  mimeType: z.string(),
+  size: z.number(),
+  url: z.string(),
+  title: z.string().optional(),
+  description: z.string().min(1),
+  status: submissionStatusSchema,
+  createdByUserId: z.string(),
+  scheduledByUserId: z.string().optional(),
+  destinationUploadIds: z.array(z.string()),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
 export const updateUploadDetailsSchema = z.object({
   title: z.string().trim().optional(),
   caption: z.string().trim().min(1, "Caption is required"),
@@ -260,6 +282,7 @@ export const activityLogSchema = z.object({
 });
 
 export type PlatformUpload = z.infer<typeof platformUploadSchema>;
+export type ContentSubmission = z.infer<typeof contentSubmissionSchema>;
 export type PlatformAccount = z.infer<typeof platformAccountSchema>;
 export type PublishingSchedule = z.infer<typeof publishingScheduleSchema>;
 export type SocialMediaSchedule = z.infer<typeof socialMediaScheduleSchema>;

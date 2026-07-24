@@ -1174,6 +1174,50 @@
 .publish-queue-runner .composer-role-note > span { display: grid; gap: 3px; }
 .publish-queue-runner .composer-role-note strong { font-size: 10px; }
 .publish-queue-runner .composer-role-note small { color: #73857D; font-size: 9px; }
+
+.publish-queue-runner .workspace-access-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 10px; background: #EAF2EE; }
+.publish-queue-runner .workspace-access-switch button { padding: 9px 10px; border: 0; border-radius: 8px; color: #647A70; font-size: 10px; font-weight: 800; cursor: pointer; background: transparent; }
+.publish-queue-runner .workspace-access-switch button.active { color: #194E3B; background: #FFFFFF; box-shadow: 0 2px 8px rgba(35, 73, 58, .12); }
+
+.publish-queue-runner .handoff-queue { display: grid; gap: 12px; margin-top: 18px; padding: 18px; border: 1px solid #DDE7E2; border-radius: 14px; background: #FFFFFF; box-shadow: 0 10px 28px rgba(31, 61, 50, .06); }
+.publish-queue-runner .handoff-list { display: grid; gap: 8px; }
+.publish-queue-runner .handoff-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid #E1EAE6; border-radius: 10px; background: #F9FBFA; }
+.publish-queue-runner .handoff-row.scheduled { opacity: .78; }
+.publish-queue-runner .handoff-format { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 10px; color: #246B52; background: #E7F4EF; }
+.publish-queue-runner .handoff-copy { display: grid; min-width: 0; gap: 3px; }
+.publish-queue-runner .handoff-copy strong { overflow: hidden; color: #183D31; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .handoff-copy small { overflow: hidden; color: #70837B; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .handoff-status { padding: 5px 8px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.publish-queue-runner .handoff-status.awaiting_schedule { color: #8A5B00; background: #FFF2D4; }
+.publish-queue-runner .handoff-status.scheduled { color: #176B4D; background: #DDF3E9; }
+.publish-queue-runner .handoff-readonly { color: #7B8D85; font-size: 10px; }
+.publish-queue-runner .handoff-empty { display: flex; align-items: center; gap: 11px; padding: 17px; border: 1px dashed #CAD8D2; border-radius: 10px; color: #61786E; background: #FAFCFB; }
+.publish-queue-runner .handoff-empty > span { display: grid; gap: 3px; }
+.publish-queue-runner .handoff-empty strong { color: #294C40; font-size: 11px; }
+.publish-queue-runner .handoff-empty small { font-size: 9px; }
+
+.publish-queue-runner .submission-schedule-modal { width: min(760px, calc(100vw - 24px)); }
+.publish-queue-runner .submission-schedule-modal .modal-body { display: grid; gap: 18px; }
+.publish-queue-runner .submission-schedule-summary { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 11px; background: #F3F8F6; }
+.publish-queue-runner .submission-schedule-summary > span:last-child { display: grid; min-width: 0; gap: 4px; }
+.publish-queue-runner .submission-schedule-summary strong { color: #173D30; font-size: 13px; }
+.publish-queue-runner .submission-schedule-summary small { overflow: hidden; color: #657B72; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .submission-destination-section,
+.publish-queue-runner .submission-timing-section { display: grid; gap: 10px; }
+.publish-queue-runner .submission-account-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.publish-queue-runner .submission-account-grid > label { display: flex; align-items: center; gap: 9px; padding: 11px; border: 1px solid #DCE7E2; border-radius: 9px; cursor: pointer; background: #FFFFFF; }
+.publish-queue-runner .submission-account-grid > label.selected { border-color: #25815E; background: #F0F9F5; box-shadow: 0 0 0 1px #25815E inset; }
+.publish-queue-runner .submission-account-grid > label > span { display: grid; min-width: 0; gap: 2px; }
+.publish-queue-runner .submission-account-grid strong { overflow: hidden; color: #21483A; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .submission-account-grid small { color: #70837A; font-size: 9px; }
+
+@media (max-width: 720px) {
+  .publish-queue-runner .handoff-row { grid-template-columns: auto minmax(0, 1fr); }
+  .publish-queue-runner .handoff-status,
+.publish-queue-runner .handoff-row .btn-primary,
+.publish-queue-runner .handoff-readonly { grid-column: 2; justify-self: start; }
+  .publish-queue-runner .submission-account-grid { grid-template-columns: 1fr; }
+}
 .publish-queue-runner .composer-footer { min-height: 76px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 12px 25px; border-top: 1px solid #DCE6E1; background: #FFFFFF; }
 .publish-queue-runner .composer-message { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 9px 11px; border-radius: 7px; font-size: 10px; font-weight: 700; }
 .publish-queue-runner .composer-message.success { background: #E8F7F0; color: #167150; }

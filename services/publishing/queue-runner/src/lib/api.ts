@@ -1,6 +1,7 @@
 import type {
   ActivityLog,
   AutomationInput,
+  ContentSubmission,
   CreateUserProfileInput,
   DashboardSummary,
   LoginInput,
@@ -117,6 +118,8 @@ export const api = {
   me: () => request<UserProfile>("/api/auth/me"),
 
   dashboard: () => request<DashboardSummary>("/api/dashboard"),
+
+  submissions: () => request<ContentSubmission[]>("/api/submissions"),
   
   uploads: (platform?: Platform, accountId?: string) => {
     const query = new URLSearchParams();
@@ -206,6 +209,72 @@ export const api = {
       }
     }
   },
+
+  createSubmission: async (payload: {
+    postFormat: PostFormat;
+    file: File | null;
+    title: string;
+    description: string;
+  }) => {
+    if (payload.postFormat === "text") {
+      return request<ContentSubmission>("/api/submissions/text", {
+        method: "POST",
+        body: JSON.stringify({ description: payload.description }),
+      });
+    }
+
+    if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
+    let stagedUploadId: string | null = null;
+    try {
+      const session = await request<{ id: string; offset: number; chunkSize: number }>("/api/staged-uploads", {
+        method: "POST",
+        body: JSON.stringify({
+          originalName: payload.file.name,
+          mimeType: payload.file.type,
+          size: payload.file.size,
+        }),
+      });
+      stagedUploadId = session.id;
+      const chunkSize = Math.min(2 * 1024 * 1024, Math.max(64 * 1024, session.chunkSize || 2 * 1024 * 1024));
+      let offset = session.offset;
+      while (offset < payload.file.size) {
+        const chunk = payload.file.slice(offset, Math.min(payload.file.size, offset + chunkSize));
+        const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Upload-Offset": String(offset),
+          },
+          body: await chunk.arrayBuffer(),
+        });
+        if (!Number.isInteger(result.offset) || result.offset <= offset) {
+          throw new Error("The companion returned an invalid upload offset.");
+        }
+        offset = result.offset;
+      }
+
+      const submission = await request<ContentSubmission>("/api/submissions/staged", {
+        method: "POST",
+        body: JSON.stringify({
+          stagedUploadId: session.id,
+          title: payload.title,
+          description: payload.description,
+        }),
+      });
+      stagedUploadId = null;
+      return submission;
+    } finally {
+      if (stagedUploadId) {
+        await request<void>(`/api/staged-uploads/${stagedUploadId}`, { method: "DELETE" }).catch(() => undefined);
+      }
+    }
+  },
+
+  scheduleSubmission: (submissionId: string, destinations: UnifiedPostDestinationInput[]) =>
+    request<{ submission: ContentSubmission; uploads: PlatformUpload[] }>(`/api/submissions/${submissionId}/schedule`, {
+      method: "POST",
+      body: JSON.stringify({ destinations }),
+    }),
 
   accounts: (platform?: Platform) => request<PlatformAccount[]>(`/api/accounts${platform ? `?platform=${platform}` : ""}`),
 
