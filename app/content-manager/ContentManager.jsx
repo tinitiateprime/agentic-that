@@ -28,6 +28,8 @@ import { publishingFetch } from "../../lib/publishing-endpoint";
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
+const publishingExtensionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim()
+  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
   instagram: "Instagram",
@@ -630,9 +632,14 @@ function PublishingContent({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Publish Queue service is unavailable"
-        copy="The Publishing Companion did not respond. Confirm the Chrome extension is installed and the Companion app is open."
-        action={<button className="content-primary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>}
+        title="The website cannot reach the Companion"
+        copy="Confirm Local service says Connected in the Companion window, then install or repair the Chrome bridge."
+        action={
+          <div className="content-empty-actions">
+            <a className="content-primary" href={publishingExtensionDownloadUrl} target="_blank" rel="noreferrer">Download Chrome bridge<ExternalLink size={15} /></a>
+            <button className="content-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
       />
     );
   }

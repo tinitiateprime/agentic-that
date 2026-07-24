@@ -51,7 +51,8 @@ function postAndWait<T>(message: Record<string, unknown>, responseType: string, 
 
 export async function detectPublishingExtension(force = false) {
   if (typeof window === "undefined") return null;
-  if (!force && cachedDetails && Date.now() - lastDetectionAt < 30_000) return cachedDetails;
+  const cacheLifetime = cachedDetails ? 30_000 : 3_000;
+  if (!force && Date.now() - lastDetectionAt < cacheLifetime) return cachedDetails;
 
   const id = requestId();
   try {
@@ -125,7 +126,10 @@ export async function publishingExtensionFetch(path: string, init: RequestInit =
       message: response?.error || "The publishing companion is unavailable.",
     }), {
       status: response?.status || 503,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-AgenticThat-Bridge-Error": "1",
+      },
     });
   }
 

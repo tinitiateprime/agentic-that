@@ -64,6 +64,7 @@ type PlatformAccessStatus = {
   workspaceId: string;
   message?: string;
   upgradeRequired?: boolean;
+  connectionHelpRequired?: boolean;
 };
 
 type RolePermissions = {
@@ -84,7 +85,10 @@ type AutomationNotice = {
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip';
-const extensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
+const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
+const extensionInstallUrl = configuredExtensionInstallUrl
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip';
+const localCompanionHealthUrl = 'http://127.0.0.1:8792/api/health';
 
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [
   { role: 'operations_manager', username: 'operations.manager', description: 'Full workspace, users, audit, and automation access' },
@@ -167,6 +171,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
           setSession(null);
           const rawMessage = error instanceof Error ? error.message : 'The publishing workspace could not be opened.';
           const upgradeRequired = rawMessage === 'Sign in to continue.';
+          const connectionHelpRequired = /companion|extension|unavailable|failed to fetch/i.test(rawMessage);
           setPlatformStatus({
             state: 'error',
             configured: false,
@@ -176,6 +181,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
               ? 'This computer is running an older Publishing Companion that cannot open account-owned workspaces.'
               : rawMessage,
             upgradeRequired,
+            connectionHelpRequired,
           });
         });
       return () => {
@@ -307,6 +313,14 @@ function PlatformManagerAccess({
                 <a href={companionDownloadUrl}><Download size={15} />Download latest Companion</a>
                 <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
               </div>}
+              {status.connectionHelpRequired && !status.upgradeRequired && <>
+                <p className='temporary-access'>Confirm <strong>Local service: Connected</strong> in the Companion window. If it is connected, install or repair the Chrome bridge.</p>
+                <div className='publishing-setup-actions'>
+                  <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Download Chrome bridge</a>
+                  <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
+                  <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
+                </div>
+              </>}
             </>
           ) : (
             <form className='auth-form' onSubmit={event => { event.preventDefault(); void submit(); }}>
@@ -349,19 +363,17 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [connectionState, setConnectionState] = useState<'checking' | 'extension-missing' | 'companion-missing' | 'chrome-missing' | 'ready'>('checking');
+  const [extensionDetected, setExtensionDetected] = useState(false);
 
   const checkConnection = useCallback(async () => {
     setConnectionState('checking');
     const extension = await detectPublishingExtension(true);
-    if (!extension) {
-      setConnectionState('extension-missing');
-      return;
-    }
+    setExtensionDetected(Boolean(extension));
     try {
       const health = await api.health();
       setConnectionState(!health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
     } catch {
-      setConnectionState('companion-missing');
+      setConnectionState(extension ? 'companion-missing' : 'extension-missing');
     }
   }, []);
 
@@ -420,18 +432,18 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
           <div className='publishing-setup-card'>
             <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>One-time publishing setup</strong><small>Install both once. No project download or commands.</small></span></div>
             <div className='publishing-setup-checks'>
-              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>Chrome extension</b><small>{connectionState === 'extension-missing' ? 'Install required' : connectionState === 'checking' ? 'Checking…' : 'Ready'}</small></span>
-              <span className={connectionState === 'companion-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Windows companion</b><small>{connectionState === 'companion-missing' ? 'Install or open' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Waiting'}</small></span>
+              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>Chrome bridge</b><small>{connectionState === 'extension-missing' ? 'Install or repair' : connectionState === 'checking' ? 'Checking…' : extensionDetected ? 'Installed' : 'Direct connection'}</small></span>
+              <span className={connectionState === 'companion-missing' || connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Windows companion</b><small>{connectionState === 'companion-missing' ? 'Local service offline' : connectionState === 'extension-missing' ? 'Connection not confirmed' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Checking'}</small></span>
             </div>
             <div className='publishing-setup-actions'>
-              {extensionInstallUrl
-                ? <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Install extension</a>
-                : <button type='button' disabled title='Add NEXT_PUBLIC_PUBLISHING_EXTENSION_URL after Chrome Web Store approval'><Puzzle size={15} />Web Store approval pending</button>}
+              <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />{configuredExtensionInstallUrl ? 'Install extension' : 'Download Chrome bridge'}</a>
               <a href={companionDownloadUrl}><Download size={15} />Install Windows companion</a>
-              <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Check again</button>
+              <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
+              <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
             </div>
+            {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
             {connectionState === 'chrome-missing' && <p>Google Chrome is missing. Open the Companion app and choose <strong>Install Google Chrome</strong>.</p>}
-            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready. Copy the dashboard login from the Companion app.</p>}
+            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
           <div className='role-options' aria-label='Choose login type'>

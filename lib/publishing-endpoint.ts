@@ -70,7 +70,9 @@ export async function resolvePublishingOrigin() {
 export async function publishingFetch(path: string, init: RequestInit = {}) {
   if (!configuredPublishingOrigin && typeof window !== "undefined" && !(init.body instanceof FormData)) {
     const extensionResponse = await publishingExtensionFetch(path, init);
-    if (extensionResponse) return extensionResponse;
+    if (extensionResponse && extensionResponse.headers.get("X-AgenticThat-Bridge-Error") !== "1") {
+      return extensionResponse;
+    }
   }
 
   const origin = await resolvePublishingOrigin();
