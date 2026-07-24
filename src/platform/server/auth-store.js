@@ -32,13 +32,21 @@ function emptyStore() {
   return { version: 1, users: [], sessions: [] };
 }
 
+function safeText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function publicUser(user) {
+  const id = safeText(user?.id);
+  if (!id) throw new Error("Platform user data is missing a valid ID.");
+
+  const name = safeText(user.name);
   return {
-    id: user.id,
-    workspaceId: user.workspaceId || `workspace_${user.id}`,
-    name: user.name,
-    businessName: user.businessName,
-    email: user.email,
+    id,
+    workspaceId: safeText(user.workspaceId) || `workspace_${id}`,
+    name: name || "Workspace user",
+    businessName: safeText(user.businessName) || name || "Workspace",
+    email: safeText(user.email),
   };
 }
 
@@ -211,14 +219,22 @@ export async function getCurrentPlatformUser() {
   const token = cookieStore.get(PLATFORM_SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const store = await readStore();
-  const hash = tokenHash(token);
-  const session = store.sessions.find(
-    (candidate) => candidate.tokenHash === hash && new Date(candidate.expiresAt).getTime() > Date.now()
-  );
-  if (!session) return null;
-  const user = store.users.find((candidate) => candidate.id === session.userId);
-  return user ? publicUser(user) : null;
+  try {
+    const store = await readStore();
+    const hash = tokenHash(token);
+    const session = store.sessions.find(
+      (candidate) => candidate.tokenHash === hash && new Date(candidate.expiresAt).getTime() > Date.now()
+    );
+    if (!session) return null;
+    const user = store.users.find((candidate) => candidate.id === session.userId);
+    return user ? publicUser(user) : null;
+  } catch (error) {
+    console.error(
+      "Unable to restore the signed-in platform session:",
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
 }
 
 export async function createPublishingIdentityToken(user) {

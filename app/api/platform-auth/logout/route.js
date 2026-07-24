@@ -7,7 +7,14 @@ import {
 
 export async function POST() {
   const cookieStore = await cookies();
-  await destroyPlatformSession(cookieStore.get(PLATFORM_SESSION_COOKIE)?.value);
+  try {
+    await destroyPlatformSession(cookieStore.get(PLATFORM_SESSION_COOKIE)?.value);
+  } catch (error) {
+    console.error(
+      "Unable to remove the server-side platform session:",
+      error instanceof Error ? error.message : error
+    );
+  }
   const response = Response.json({ ok: true });
   response.headers.append("Set-Cookie", clearPlatformSessionCookieHeader());
   return response;
