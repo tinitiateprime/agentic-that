@@ -31,14 +31,17 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci --prefix apps/publishing-companion-desktop
 
-      - name: Prepare optional Windows signing certificate
+      - name: Require Windows signing certificate
         shell: pwsh
         env:
           CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)) {
-            Write-Host "No signing certificate configured; producing an unsigned test installer."
-            exit 0
+            throw "WINDOWS_CERTIFICATE_BASE64 is required. Public Companion releases must never be unsigned."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is required. Public Companion releases must never be unsigned."
           }
           $certificatePath = Join-Path $env:RUNNER_TEMP "agenticthat-signing.pfx"
           [System.IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
@@ -48,6 +51,10 @@ jobs:
         run: npm run publishing:release:windows
         env:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      - name: Verify trusted Windows signatures
+        shell: pwsh
+        run: ./scripts/verify-publishing-windows-signatures.ps1
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

@@ -7,9 +7,14 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const sourcePath = path.join(projectRoot, "apps", "publishing-companion-desktop", "assets", "app-icon-1024.png");
 const extensionIconDirectory = path.join(projectRoot, "extensions", "publishing-companion", "icons");
 const desktopAssetDirectory = path.join(projectRoot, "apps", "publishing-companion-desktop", "assets");
+const msixAssetDirectory = path.join(desktopAssetDirectory, "msix");
 const sizes = [16, 32, 48, 64, 128, 256];
 
-await Promise.all([mkdir(extensionIconDirectory, { recursive: true }), mkdir(desktopAssetDirectory, { recursive: true })]);
+await Promise.all([
+  mkdir(extensionIconDirectory, { recursive: true }),
+  mkdir(desktopAssetDirectory, { recursive: true }),
+  mkdir(msixAssetDirectory, { recursive: true }),
+]);
 const source = await readFile(sourcePath);
 const pngBySize = new Map();
 
@@ -48,5 +53,24 @@ await writeFile(
   path.join(desktopAssetDirectory, "app-icon.ico"),
   Buffer.concat([iconHeader, ...entries, ...sizes.map(size => pngBySize.get(size))]),
 );
+
+const msixAssets = [
+  ["icon.png", 50, 50],
+  ["LockScreenLogo.scale-200.png", 48, 48],
+  ["SplashScreen.scale-200.png", 1240, 600],
+  ["Square150x150Logo.png", 300, 300],
+  ["Square150x150Logo.scale-200.png", 300, 300],
+  ["Square44x44Logo.png", 88, 88],
+  ["Square44x44Logo.scale-200.png", 88, 88],
+  ["Square44x44Logo.targetsize-24_altform-unplated.png", 24, 24],
+  ["Wide310x150Logo.scale-200.png", 620, 300],
+];
+await Promise.all(msixAssets.map(async ([fileName, width, height]) => {
+  const image = await sharp(source)
+    .resize(width, height, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer();
+  await writeFile(path.join(msixAssetDirectory, fileName), image);
+}));
 
 console.log("Publishing companion brand assets generated.");
