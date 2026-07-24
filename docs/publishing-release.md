@@ -20,13 +20,13 @@ its password as `WINDOWS_CERTIFICATE_PASSWORD`. The release still builds without
 these secrets for internal testing, but Windows will identify it as an unknown
 publisher.
 
-## Publish version 1.1.0
+## Publish a version
 
 After the code is on `main`, create and push the release tag:
 
 ```text
-git tag publishing-v1.1.0
-git push origin publishing-v1.1.0
+git tag publishing-v1.1.1
+git push origin publishing-v1.1.1
 ```
 
 GitHub Actions builds the extension ZIP, signed Windows installer when signing

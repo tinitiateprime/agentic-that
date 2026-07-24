@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { createPublishingIdentityToken, getCurrentPlatformUser } from "@platform/server/auth-store";
 import { serviceEndpoints } from "@platform/service-catalog";
 import ContentManager from "./ContentManager";
 
@@ -31,6 +31,7 @@ export default async function ContentManagerPage({ searchParams }) {
       initialService={requestedService}
       initialMessagingPlatform={requestedMessagingPlatform}
       initialPublishingPlatform={requestedPublishingPlatform}
+      publishingIdentityToken={createPublishingIdentityToken(user)}
       user={{ name: user.name, email: user.email, businessName: user.businessName }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}
       publishQueueUrl={serviceEndpoints.publishQueue.consoleUrl}

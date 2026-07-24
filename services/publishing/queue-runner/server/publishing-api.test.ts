@@ -58,6 +58,51 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(accountResponse.status, 201);
   const account = await accountResponse.json() as { id: string };
 
+  const { signPublishingWorkspaceIdentity } = await import("../../../../lib/publishing-workspace-auth.js");
+  async function platformSession(platformUserId: string, workspaceId: string, email: string) {
+    const identityToken = signPublishingWorkspaceIdentity({
+      sub: platformUserId,
+      workspaceId,
+      name: platformUserId,
+      email,
+      businessName: workspaceId,
+    });
+    const response = await fetch(`${origin}/api/auth/platform`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken }),
+    });
+    assert.equal(response.status, 200);
+    return response.json() as Promise<{ token: string }>;
+  }
+  const [workspaceA, workspaceB] = await Promise.all([
+    platformSession("Owner A", "workspace_a", "owner-a@example.com"),
+    platformSession("Owner B", "workspace_b", "owner-b@example.com"),
+  ]);
+  const workspaceApi = (token: string, route: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    if (typeof init.body === "string") headers.set("Content-Type", "application/json");
+    return fetch(`${origin}${route}`, { ...init, headers });
+  };
+  const workspaceAccountResponse = await workspaceApi(workspaceA.token, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Workspace A Facebook", handle: "@private-a", enabled: true }),
+  });
+  assert.equal(workspaceAccountResponse.status, 201);
+  const workspaceAccount = await workspaceAccountResponse.json() as { id: string };
+  const workspaceBAccounts = await (await workspaceApi(workspaceB.token, "/api/accounts")).json() as unknown[];
+  assert.equal(workspaceBAccounts.length, 0);
+  const crossWorkspaceUpdate = await workspaceApi(workspaceB.token, `/api/accounts/${workspaceAccount.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ displayName: "Should fail", handle: "@private-a", enabled: true }),
+  });
+  assert.equal(crossWorkspaceUpdate.status, 404);
+  const workspaceAUsers = await (await workspaceApi(workspaceA.token, "/api/users")).json() as unknown[];
+  const workspaceBUsers = await (await workspaceApi(workspaceB.token, "/api/users")).json() as unknown[];
+  assert.equal(workspaceAUsers.length, 1);
+  assert.equal(workspaceBUsers.length, 1);
+
   const textPostResponse = await api("/api/posts/unified/text", {
     method: "POST",
     body: JSON.stringify({

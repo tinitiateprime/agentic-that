@@ -59,6 +59,7 @@ type BootstrapUser = {
 
 type AutomationRunRecord = {
   id: string;
+  workspaceId: string;
   trigger: AutomationRunTrigger;
   status: AutomationRunStatus;
   startedByUserId?: string;
@@ -69,6 +70,7 @@ type AutomationRunRecord = {
 
 type AutomationRunPostRecord = {
   id: string;
+  workspaceId: string;
   automationRunId: string;
   uploadId: string;
   accountId: string;
@@ -99,6 +101,7 @@ export type AutomationPostStatus = "processing" | "posted" | "failed";
 
 const passwordIterations = 120_000;
 const passwordAlgorithm = "pbkdf2_sha256";
+const legacyWorkspaceId = "workspace_legacy";
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localStoreFile = resolveFromRoot(process.env.PUBLISH_QUEUE_DATA_PATH ?? "./data/store.json");
 const useNetlifyBlobs = (
@@ -241,16 +244,53 @@ function emptyStore(): Store {
 
 function normalizeStore(value: unknown): Store {
   const input = value && typeof value === "object" ? value as Partial<Store> : {};
+  const users = Array.isArray(input.users)
+    ? input.users.map(user => ({ ...user, workspaceId: user.workspaceId || legacyWorkspaceId }))
+    : [];
+  const accounts = Array.isArray(input.accounts)
+    ? input.accounts.map(account => ({ ...account, workspaceId: account.workspaceId || legacyWorkspaceId }))
+    : [];
+  const accountWorkspaces = new Map(accounts.map(account => [account.id, account.workspaceId]));
+  const schedules = Array.isArray(input.schedules)
+    ? input.schedules.map(schedule => ({ ...schedule, workspaceId: schedule.workspaceId || legacyWorkspaceId }))
+    : [];
+  const userWorkspaces = new Map(users.map(user => [user.id, user.workspaceId]));
+  const uploads = Array.isArray(input.uploads)
+    ? input.uploads.map(upload => ({
+      ...upload,
+      workspaceId: upload.workspaceId || accountWorkspaces.get(upload.accountId) || legacyWorkspaceId
+    }))
+    : [];
   return {
     version: 1,
-    users: Array.isArray(input.users) ? input.users : [],
-    accounts: Array.isArray(input.accounts) ? input.accounts : [],
-    schedules: Array.isArray(input.schedules) ? input.schedules : [],
-    socialMediaSchedules: Array.isArray(input.socialMediaSchedules) ? input.socialMediaSchedules : [],
-    uploads: Array.isArray(input.uploads) ? input.uploads : [],
-    activityLogs: Array.isArray(input.activityLogs) ? input.activityLogs : [],
-    automationRuns: Array.isArray(input.automationRuns) ? input.automationRuns : [],
-    automationRunPosts: Array.isArray(input.automationRunPosts) ? input.automationRunPosts : []
+    users,
+    accounts,
+    schedules,
+    socialMediaSchedules: Array.isArray(input.socialMediaSchedules)
+      ? input.socialMediaSchedules.map(item => ({
+        ...item,
+        workspaceId: item.workspaceId || accountWorkspaces.get(item.accountId) || legacyWorkspaceId
+      }))
+      : [],
+    uploads,
+    activityLogs: Array.isArray(input.activityLogs)
+      ? input.activityLogs.map(log => ({
+        ...log,
+        workspaceId: log.workspaceId || (log.actorUserId ? userWorkspaces.get(log.actorUserId) : undefined) || legacyWorkspaceId
+      }))
+      : [],
+    automationRuns: Array.isArray(input.automationRuns)
+      ? input.automationRuns.map(run => ({
+        ...run,
+        workspaceId: run.workspaceId || (run.startedByUserId ? userWorkspaces.get(run.startedByUserId) : undefined) || legacyWorkspaceId
+      }))
+      : [],
+    automationRunPosts: Array.isArray(input.automationRunPosts)
+      ? input.automationRunPosts.map(run => ({
+        ...run,
+        workspaceId: run.workspaceId || accountWorkspaces.get(run.accountId) || legacyWorkspaceId
+      }))
+      : []
   };
 }
 
@@ -285,6 +325,7 @@ function addBootstrapUsers(store: Store) {
     const timestamp = nowIso();
     store.users.push({
       id: "user_" + nanoid(12),
+      workspaceId: legacyWorkspaceId,
       username: bootstrap.username,
       fullName: bootstrap.fullName,
       email: bootstrap.email,
@@ -394,8 +435,12 @@ export async function logActivity(
 ) {
   return mutateStore(store => {
     const actor = actorUserId ? store.users.find(user => user.id === actorUserId) : undefined;
+    const workspaceId = actor?.workspaceId
+      || (typeof metadata.workspaceId === "string" ? metadata.workspaceId : undefined)
+      || legacyWorkspaceId;
     const log: ActivityLog = {
       id: "activity_" + nanoid(12),
+      workspaceId,
       actorUserId: actorUserId || undefined,
       actorName: actor?.fullName,
       actorUsername: actor?.username,
@@ -423,14 +468,22 @@ function assertUniqueUser(store: Store, username: string, email: string, exceptI
 
 function assertCanChangeManager(store: Store, existing: StoredUser, nextRole: UserRole, nextActive: boolean) {
   if (existing.role !== "operations_manager" || (nextRole === "operations_manager" && nextActive)) return;
-  if (!store.users.some(user => user.id !== existing.id && user.role === "operations_manager" && user.isActive)) {
+  if (!store.users.some(user =>
+    user.id !== existing.id
+    && user.workspaceId === existing.workspaceId
+    && user.role === "operations_manager"
+    && user.isActive
+  )) {
     throw new Error("At least one active operations manager must remain.");
   }
 }
 
-export async function listUserProfiles() {
+export async function listUserProfiles(workspaceId?: string) {
   const store = await readStore();
-  return store.users.map(publicUser).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return store.users
+    .filter(user => !workspaceId || user.workspaceId === workspaceId)
+    .map(publicUser)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getUserProfile(userId: string) {
@@ -454,7 +507,56 @@ export async function loginUser(username: string, password: string) {
   return user;
 }
 
-export async function createUserProfile(input: CreateUserProfileInput, actorUserId?: string) {
+export async function ensurePlatformWorkspaceManager(identity: {
+  platformUserId: string;
+  workspaceId: string;
+  fullName: string;
+  email: string;
+}) {
+  return mutateStore(store => {
+    const existingIndex = store.users.findIndex(user =>
+      user.platformUserId === identity.platformUserId && user.workspaceId === identity.workspaceId
+    );
+    const timestamp = nowIso();
+    if (existingIndex >= 0) {
+      const existing = store.users[existingIndex];
+      const updated: StoredUser = {
+        ...existing,
+        fullName: identity.fullName,
+        email: identity.email.toLowerCase(),
+        role: "operations_manager",
+        isActive: true,
+        updatedAt: timestamp,
+      };
+      store.users[existingIndex] = updated;
+      return publicUser(updated);
+    }
+
+    const base = identity.email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, ".") || "manager";
+    let username = base;
+    let suffix = 1;
+    while (store.users.some(user => normalizeUsername(user.username) === username)) {
+      username = `${base}.${suffix++}`;
+    }
+    const stored: StoredUser = {
+      id: "user_" + nanoid(12),
+      workspaceId: identity.workspaceId,
+      platformUserId: identity.platformUserId,
+      username,
+      fullName: identity.fullName,
+      email: identity.email.toLowerCase(),
+      role: "operations_manager",
+      isActive: true,
+      passwordHash: hashPassword(randomBytes(32).toString("base64url")),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.users.push(stored);
+    return publicUser(stored);
+  });
+}
+
+export async function createUserProfile(input: CreateUserProfileInput, actorUserId?: string, workspaceId = legacyWorkspaceId) {
   const user = await mutateStore(store => {
     const username = normalizeUsername(input.username);
     const email = normalizeEmail(input.email, username);
@@ -462,6 +564,7 @@ export async function createUserProfile(input: CreateUserProfileInput, actorUser
     const timestamp = nowIso();
     const stored: StoredUser = {
       id: "user_" + nanoid(12),
+      workspaceId,
       username,
       fullName: input.fullName.trim(),
       email,
@@ -478,9 +581,9 @@ export async function createUserProfile(input: CreateUserProfileInput, actorUser
   return user;
 }
 
-export async function updateUserProfile(userId: string, input: UpdateUserProfileInput, actorUserId?: string) {
+export async function updateUserProfile(userId: string, input: UpdateUserProfileInput, actorUserId?: string, workspaceId?: string) {
   const user = await mutateStore(store => {
-    const index = store.users.findIndex(item => item.id === userId);
+    const index = store.users.findIndex(item => item.id === userId && (!workspaceId || item.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.users[index];
     const username = input.username === undefined ? existing.username : normalizeUsername(input.username);
@@ -508,14 +611,17 @@ export async function updateUserProfile(userId: string, input: UpdateUserProfile
   return user;
 }
 
-export async function deactivateUserProfile(userId: string, actorUserId?: string) {
-  return updateUserProfile(userId, { isActive: false }, actorUserId);
+export async function deactivateUserProfile(userId: string, actorUserId?: string, workspaceId?: string) {
+  return updateUserProfile(userId, { isActive: false }, actorUserId, workspaceId);
 }
 
-export async function listActivityLogs(limit = 100) {
+export async function listActivityLogs(limit = 100, workspaceId?: string) {
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 250);
   const store = await readStore();
-  return [...store.activityLogs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, safeLimit);
+  return store.activityLogs
+    .filter(log => !workspaceId || log.workspaceId === workspaceId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, safeLimit);
 }
 
 async function insertPostStatusHistory(
@@ -531,8 +637,12 @@ async function insertPostStatusHistory(
 
 export async function createAutomationRun(trigger: AutomationRunTrigger, startedByUserId?: string) {
   return mutateStore(store => {
+    const workspaceId = startedByUserId
+      ? store.users.find(user => user.id === startedByUserId)?.workspaceId || legacyWorkspaceId
+      : legacyWorkspaceId;
     const run: AutomationRunRecord = {
       id: "run_" + nanoid(12),
+      workspaceId,
       trigger,
       status: "running",
       startedByUserId,
@@ -560,6 +670,7 @@ export async function createAutomationRunPost(automationRunId: string, upload: P
   return mutateStore(store => {
     const post: AutomationRunPostRecord = {
       id: "run_post_" + nanoid(12),
+      workspaceId: upload.workspaceId,
       automationRunId,
       uploadId: upload.id,
       accountId: upload.accountId,
@@ -652,29 +763,34 @@ export function isDueScheduledUpload(upload: PlatformUpload, now = Date.now()) {
   return scheduledAt !== null && scheduledAt <= now;
 }
 
-export async function listPlatformAccounts(platform?: Platform) {
+export async function listPlatformAccounts(platform?: Platform, workspaceId?: string) {
   const store = await readStore();
   return store.accounts
-    .filter(account => !platform || account.platform === platform)
+    .filter(account => (!workspaceId || account.workspaceId === workspaceId) && (!platform || account.platform === platform))
     .sort((a, b) => a.platform.localeCompare(b.platform) || a.displayName.localeCompare(b.displayName));
 }
 
-export async function getPlatformAccount(accountId: string) {
+export async function getPlatformAccount(accountId: string, workspaceId?: string) {
   const store = await readStore();
-  return store.accounts.find(account => account.id === accountId) ?? null;
+  return store.accounts.find(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId)) ?? null;
 }
 
-export async function getPublishingAccount(accountId: string): Promise<PublishingAccount | null> {
-  return getPlatformAccount(accountId);
+export async function getPublishingAccount(accountId: string, workspaceId?: string): Promise<PublishingAccount | null> {
+  return getPlatformAccount(accountId, workspaceId);
 }
 
-export async function createPlatformAccount(platform: Platform, input: UpsertPlatformAccountInput) {
+export async function createPlatformAccount(platform: Platform, input: UpsertPlatformAccountInput, workspaceId = legacyWorkspaceId) {
   return mutateStore(store => {
-    const duplicate = store.accounts.some(account => account.platform === platform && account.handle.toLowerCase() === input.handle.toLowerCase());
+    const duplicate = store.accounts.some(account =>
+      account.workspaceId === workspaceId
+      && account.platform === platform
+      && account.handle.toLowerCase() === input.handle.toLowerCase()
+    );
     if (duplicate) throw new Error(platformLabels[platform] + " account " + input.handle + " already exists.");
     const timestamp = nowIso();
     const account: PlatformAccount = {
       id: "account_" + nanoid(12),
+      workspaceId,
       platform,
       displayName: input.displayName,
       handle: input.handle,
@@ -689,12 +805,17 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
   });
 }
 
-export async function updatePlatformAccount(accountId: string, input: UpsertPlatformAccountInput) {
+export async function updatePlatformAccount(accountId: string, input: UpsertPlatformAccountInput, workspaceId?: string) {
   return mutateStore(store => {
-    const index = store.accounts.findIndex(account => account.id === accountId);
+    const index = store.accounts.findIndex(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.accounts[index];
-    const duplicate = store.accounts.some(account => account.id !== accountId && account.platform === existing.platform && account.handle.toLowerCase() === input.handle.toLowerCase());
+    const duplicate = store.accounts.some(account =>
+      account.id !== accountId
+      && account.workspaceId === existing.workspaceId
+      && account.platform === existing.platform
+      && account.handle.toLowerCase() === input.handle.toLowerCase()
+    );
     if (duplicate) throw new Error(platformLabels[existing.platform] + " account " + input.handle + " already exists.");
     const updated: PlatformAccount = {
       ...existing,
@@ -724,9 +845,9 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
   });
 }
 
-export async function deletePlatformAccount(accountId: string) {
+export async function deletePlatformAccount(accountId: string, workspaceId?: string) {
   return mutateStore(store => {
-    const existing = store.accounts.find(account => account.id === accountId);
+    const existing = store.accounts.find(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId));
     if (!existing) return null;
     if (store.uploads.some(upload => upload.accountId === accountId)) {
       throw new Error("This account has post history and cannot be deleted. Disable it instead.");
@@ -785,17 +906,20 @@ function validateScheduleInput(input: UpsertPublishingScheduleInput) {
   }
 }
 
-export async function listPublishingSchedules() {
+export async function listPublishingSchedules(workspaceId?: string) {
   const store = await readStore();
-  return [...store.schedules].sort((a, b) => a.id - b.id);
+  return store.schedules
+    .filter(schedule => !workspaceId || schedule.workspaceId === workspaceId)
+    .sort((a, b) => a.id - b.id);
 }
 
-export async function listSocialMediaSchedules() {
+export async function listSocialMediaSchedules(workspaceId?: string) {
   const store = await readStore();
   return store.uploads
-    .filter(upload => upload.scheduleId)
+    .filter(upload => upload.scheduleId && (!workspaceId || upload.workspaceId === workspaceId))
     .map((upload, index) => ({
       id: index + 1,
+      workspaceId: upload.workspaceId,
       scheduleId: upload.scheduleId!,
       accountId: upload.accountId,
       platform: upload.platform,
@@ -805,12 +929,13 @@ export async function listSocialMediaSchedules() {
     .sort((a, b) => a.id - b.id);
 }
 
-export async function createPublishingSchedule(input: UpsertPublishingScheduleInput) {
+export async function createPublishingSchedule(input: UpsertPublishingScheduleInput, workspaceId = legacyWorkspaceId) {
   validateScheduleInput(input);
   return mutateStore(store => {
     const timestamp = nowIso();
     const schedule: PublishingSchedule = {
       id: nextNumericId(store.schedules),
+      workspaceId,
       name: input.name.trim(),
       time: input.time,
       frequency: input.frequency,
@@ -826,10 +951,10 @@ export async function createPublishingSchedule(input: UpsertPublishingScheduleIn
   });
 }
 
-export async function updatePublishingSchedule(scheduleId: number, input: UpsertPublishingScheduleInput) {
+export async function updatePublishingSchedule(scheduleId: number, input: UpsertPublishingScheduleInput, workspaceId?: string) {
   validateScheduleInput(input);
   return mutateStore(store => {
-    const index = store.schedules.findIndex(schedule => schedule.id === scheduleId);
+    const index = store.schedules.findIndex(schedule => schedule.id === scheduleId && (!workspaceId || schedule.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.schedules[index];
     const timestamp = nowIso();
@@ -849,11 +974,11 @@ export async function updatePublishingSchedule(scheduleId: number, input: Upsert
   });
 }
 
-export async function deletePublishingSchedule(scheduleId: number) {
+export async function deletePublishingSchedule(scheduleId: number, workspaceId?: string) {
   return mutateStore(store => {
-    const existing = store.schedules.find(schedule => schedule.id === scheduleId);
+    const existing = store.schedules.find(schedule => schedule.id === scheduleId && (!workspaceId || schedule.workspaceId === workspaceId));
     if (!existing) return null;
-    if (store.uploads.some(upload => upload.scheduleId === scheduleId)) {
+    if (store.uploads.some(upload => upload.workspaceId === existing.workspaceId && upload.scheduleId === scheduleId)) {
       throw new Error("Remove this schedule from posts before deleting it.");
     }
     store.schedules = store.schedules.filter(schedule => schedule.id !== scheduleId);
@@ -1002,9 +1127,11 @@ export async function markSchedulesTriggered(scheduleIds: number[], triggeredAt 
   });
 }
 
-export async function dashboardSummary(): Promise<DashboardSummary> {
+export async function dashboardSummary(workspaceId?: string): Promise<DashboardSummary> {
   const store = await readStore();
-  const uploads = [...store.uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  const uploads = store.uploads
+    .filter(upload => !workspaceId || upload.workspaceId === workspaceId)
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const scheduledIds = dueScheduleIds(store);
   return {
     totalUploads: uploads.length,
@@ -1026,19 +1153,25 @@ export async function dashboardSummary(): Promise<DashboardSummary> {
   };
 }
 
-export async function listUploads(platform?: Platform, accountId?: string) {
+export async function listUploads(platform?: Platform, accountId?: string, workspaceId?: string) {
   const store = await readStore();
   return store.uploads
-    .filter(upload => (!platform || upload.platform === platform) && (!accountId || upload.accountId === accountId))
+    .filter(upload =>
+      (!workspaceId || upload.workspaceId === workspaceId)
+      && (!platform || upload.platform === platform)
+      && (!accountId || upload.accountId === accountId)
+    )
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 
-export async function createUpload(accountId: string, file: StoredFileInput, actorUserId?: string) {
+export async function createUpload(accountId: string, file: StoredFileInput, actorUserId?: string, workspaceId?: string) {
   const upload = await mutateStore(store => {
-    const account = store.accounts.find(item => item.id === accountId);
+    const account = store.accounts.find(item => item.id === accountId && (!workspaceId || item.workspaceId === workspaceId));
     if (!account) throw new Error("Publishing account not found.");
     if (!account.enabled) throw new Error("This publishing account is disabled.");
-    if (file.scheduleId && !store.schedules.some(schedule => schedule.id === file.scheduleId)) {
+    if (file.scheduleId && !store.schedules.some(schedule =>
+      schedule.id === file.scheduleId && schedule.workspaceId === account.workspaceId
+    )) {
       throw new Error("Selected schedule was not found.");
     }
     const timestamp = nowIso();
@@ -1049,6 +1182,7 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       : file.title || file.caption;
     const created: PlatformUpload = {
       id,
+      workspaceId: account.workspaceId,
       platform: account.platform,
       postFormat: file.postFormat,
       accountId,
@@ -1082,13 +1216,14 @@ export async function updateUploadStatus(
   uploadId: string,
   status: UploadStatus,
   changeReason = "Post status updated",
-  actorUserId?: string
+  actorUserId?: string,
+  workspaceId?: string
 ) {
   let oldStatus: UploadStatus | null = null;
   let statusChanged = false;
   const changedAt = nowIso();
   const updated = await mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    const index = store.uploads.findIndex(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (index < 0) return null;
     oldStatus = store.uploads[index].status;
     statusChanged = oldStatus !== status;
@@ -1112,16 +1247,16 @@ export async function updateUploadStatus(
   return updated;
 }
 
-export async function deleteUpload(uploadId: string) {
+export async function deleteUpload(uploadId: string, workspaceId?: string) {
   return mutateStore(store => {
-    const existing = store.uploads.find(upload => upload.id === uploadId);
+    const existing = store.uploads.find(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (!existing) return null;
     store.uploads = store.uploads.filter(upload => upload.id !== uploadId);
     return existing;
   });
 }
 
-export async function updateUploadDetails(uploadId: string, input: UpdateUploadDetailsInput, actorUserId?: string) {
+export async function updateUploadDetails(uploadId: string, input: UpdateUploadDetailsInput, actorUserId?: string, workspaceId?: string) {
   const selectedScheduleId = input.scheduleId === null ? undefined : normalizeScheduleId(input.scheduleId);
   let oldStatus: UploadStatus | null = null;
   let statusChanged = false;
@@ -1129,7 +1264,7 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
   const scheduleTouched = input.scheduledAt !== undefined || input.scheduleId !== undefined;
 
   const updatedUpload = await mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    const index = store.uploads.findIndex(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.uploads[index];
     if (existing.status === "processing" || existing.status === "posted") {
@@ -1137,12 +1272,16 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
     }
     let accountId = existing.accountId;
     if (input.accountId && input.accountId !== accountId) {
-      const account = store.accounts.find(item => item.id === input.accountId);
+      const account = store.accounts.find(item =>
+        item.id === input.accountId && item.workspaceId === existing.workspaceId
+      );
       if (!account || account.platform !== existing.platform) throw new Error("Choose an account from the same platform.");
       if (!account.enabled) throw new Error("Choose an enabled publishing account.");
       accountId = account.id;
     }
-    if (selectedScheduleId && !store.schedules.some(schedule => schedule.id === selectedScheduleId)) {
+    if (selectedScheduleId && !store.schedules.some(schedule =>
+      schedule.id === selectedScheduleId && schedule.workspaceId === existing.workspaceId
+    )) {
       throw new Error("Selected schedule was not found.");
     }
     const nextScheduledAt = input.scheduledAt === null || selectedScheduleId ? undefined : input.scheduledAt ?? existing.scheduledAt;
@@ -1181,11 +1320,11 @@ export async function listDueScheduledUploads() {
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 
-export async function automationInput(platform?: Platform, mode: AutomationInputMode = "ready"): Promise<AutomationInput> {
+export async function automationInput(platform?: Platform, mode: AutomationInputMode = "ready", workspaceId?: string): Promise<AutomationInput> {
   const store = await readStore();
   const scheduledIds = dueScheduleIds(store);
   const uploads = store.uploads
-    .filter(upload => !platform || upload.platform === platform)
+    .filter(upload => (!workspaceId || upload.workspaceId === workspaceId) && (!platform || upload.platform === platform))
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const queued = uploads.filter(upload => isStoreUploadReadyForAutomation(store, upload, mode, Date.now(), scheduledIds));
   const channels = Object.fromEntries(platforms.map(channel => [

@@ -476,6 +476,7 @@ type RunAutomationOptions = {
   trigger?: AutomationRunTrigger;
   startedByUserId?: string;
   uploadIds?: string[];
+  workspaceId?: string;
 };
 
 let activeAutomationRun: Promise<void> | null = null;
@@ -510,9 +511,9 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-async function runAutomationOnce({ mode = "ready", trigger = "manual", startedByUserId, uploadIds }: RunAutomationOptions) {
+async function runAutomationOnce({ mode = "ready", trigger = "manual", startedByUserId, uploadIds, workspaceId }: RunAutomationOptions) {
   console.log(`Starting publisher automation (${trigger})...`);
-  const { channels } = await automationInput(undefined, mode);
+  const { channels } = await automationInput(undefined, mode, workspaceId);
   const requestedIds = uploadIds?.length ? new Set(uploadIds) : null;
   const uploads = Object.values(channels).flat().filter(upload => !requestedIds || requestedIds.has(upload.id));
   if (uploads.length === 0) {

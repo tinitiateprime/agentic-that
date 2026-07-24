@@ -313,7 +313,11 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
   };
 
   const signOut = async () => {
-    await fetch("/api/platform-auth/logout", { method: "POST" });
+    await Promise.allSettled([
+      fetch("/api/platform-auth/logout", { method: "POST" }),
+      fetch("/api/telegram/auth/session", { method: "DELETE" }),
+    ]);
+    window.sessionStorage.removeItem("agenticthat-publish-queue-session");
     setUser(null);
   };
 

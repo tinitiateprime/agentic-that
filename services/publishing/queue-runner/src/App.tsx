@@ -115,10 +115,31 @@ function readSavedSession(): AuthSession | null {
   }
 }
 
-export default function App() {
+export default function App({ publishingIdentityToken }: { publishingIdentityToken?: string }) {
   const [session, setSession] = useState<AuthSession | null>(null);
 
   useEffect(() => {
+    if (publishingIdentityToken) {
+      let cancelled = false;
+      api.platformLogin(publishingIdentityToken)
+        .then(response => {
+          if (cancelled) return;
+          const currentSession = { token: response.token, user: response.user };
+          setAuthToken(response.token);
+          window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentSession));
+          setSession(currentSession);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAuthToken(null);
+          window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+          setSession(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const savedSession = readSavedSession();
     if (!savedSession) return;
 
@@ -140,7 +161,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [publishingIdentityToken]);
 
   const signIn = (response: AuthResponse) => {
     const nextSession = { token: response.token, user: response.user };

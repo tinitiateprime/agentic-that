@@ -167,6 +167,7 @@ export default function ConfigManager({
   initialService,
   initialMessagingPlatform,
   initialPublishingPlatform,
+  publishingIdentityToken,
   user,
   telegramDashboardUrl,
   publishQueueUrl
@@ -225,8 +226,24 @@ export default function ConfigManager({
   }, []);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadPublishing()]);
-  }, [loadPublishing, loadTelegram]);
+    const connectPublishing = async () => {
+      if (!publishingIdentityToken) return loadPublishing();
+      try {
+        const session = await publishingRequest("/api/auth/platform", "", {
+          method: "POST",
+          body: JSON.stringify({ token: publishingIdentityToken })
+        });
+        window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(session));
+        return loadPublishing(session);
+      } catch {
+        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+        setPublishingSession(null);
+        setPublishingAccounts([]);
+        setPublishingStatus("offline");
+      }
+    };
+    void Promise.all([loadTelegram(), connectPublishing()]);
+  }, [loadPublishing, loadTelegram, publishingIdentityToken]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
   const activeDefinition = services.find(service => service.id === activeService) || services[0];

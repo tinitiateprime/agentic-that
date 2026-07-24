@@ -1,5 +1,5 @@
 import PublishQueueRunner from "../../services/publishing/queue-runner/src/App";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { createPublishingIdentityToken, getCurrentPlatformUser } from "@platform/server/auth-store";
 import { redirect } from "next/navigation";
 
 export const metadata = {
@@ -8,9 +8,10 @@ export const metadata = {
 };
 
 export default async function PublishingPage() {
-  if (!(await getCurrentPlatformUser())) {
+  const user = await getCurrentPlatformUser();
+  if (!user) {
     redirect("/?auth=login&next=/publishing");
   }
 
-  return <PublishQueueRunner />;
+  return <PublishQueueRunner publishingIdentityToken={createPublishingIdentityToken(user)} />;
 }

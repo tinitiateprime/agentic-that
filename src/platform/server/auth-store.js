@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { cookies } from "next/headers";
+import { signPublishingWorkspaceIdentity } from "../../../lib/publishing-workspace-auth";
 
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
@@ -34,6 +35,7 @@ function emptyStore() {
 function publicUser(user) {
   return {
     id: user.id,
+    workspaceId: user.workspaceId || `workspace_${user.id}`,
     name: user.name,
     businessName: user.businessName,
     email: user.email,
@@ -90,7 +92,13 @@ function normalizeStore(value) {
   if (value.version !== 1 || !Array.isArray(value.users) || !Array.isArray(value.sessions)) {
     throw new Error("Platform authentication data has an invalid structure.");
   }
-  return value;
+  return {
+    ...value,
+    users: value.users.map((user) => ({
+      ...user,
+      workspaceId: user.workspaceId || `workspace_${user.id}`,
+    })),
+  };
 }
 
 function getBlobStore() {
@@ -150,6 +158,7 @@ export async function registerPlatformUser({ name, businessName, email, password
     const now = new Date();
     const user = {
       id: crypto.randomUUID(),
+      workspaceId: `workspace_${crypto.randomUUID()}`,
       name: normalizedName,
       businessName: normalizedBusiness,
       email: normalizedEmail,
@@ -205,6 +214,17 @@ export async function getCurrentPlatformUser() {
   if (!session) return null;
   const user = store.users.find((candidate) => candidate.id === session.userId);
   return user ? publicUser(user) : null;
+}
+
+export function createPublishingIdentityToken(user) {
+  const publicIdentity = publicUser(user);
+  return signPublishingWorkspaceIdentity({
+    sub: publicIdentity.id,
+    workspaceId: publicIdentity.workspaceId,
+    name: publicIdentity.name,
+    email: publicIdentity.email,
+    businessName: publicIdentity.businessName,
+  });
 }
 
 export async function destroyPlatformSession(token) {

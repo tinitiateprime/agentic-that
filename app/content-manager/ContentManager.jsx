@@ -216,6 +216,7 @@ export default function ContentManager({
   initialService,
   initialMessagingPlatform,
   initialPublishingPlatform,
+  publishingIdentityToken,
   user,
   telegramDashboardUrl,
   publishQueueUrl
@@ -289,8 +290,26 @@ export default function ContentManager({
   }, []);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadPublishing()]);
-  }, [loadPublishing, loadTelegram]);
+    const connectPublishing = async () => {
+      if (!publishingIdentityToken) return loadPublishing();
+      try {
+        const session = await publishingRequest("/api/auth/platform", "", {
+          method: "POST",
+          body: JSON.stringify({ token: publishingIdentityToken })
+        });
+        window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(session));
+        return loadPublishing(session);
+      } catch {
+        window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+        setPublishingSession(null);
+        setPublishingAccounts([]);
+        setPublishingUploads([]);
+        setPublishingSchedules([]);
+        setPublishingStatus("offline");
+      }
+    };
+    void Promise.all([loadTelegram(), connectPublishing()]);
+  }, [loadPublishing, loadTelegram, publishingIdentityToken]);
 
   const connectedAccounts = telegramAccounts.length + publishingAccounts.length;
   const activePublishingAccounts = publishingAccounts.filter((account) => account.enabled).length;

@@ -7,6 +7,7 @@ import path from "node:path";
 import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
+import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import {
   createUserProfileSchema,
   loginInputSchema,
@@ -39,6 +40,8 @@ import {
   deletePlatformAccount,
   deletePublishingSchedule,
   deleteUpload,
+  ensurePlatformWorkspaceManager,
+  getPlatformAccount,
   getUserProfile,
   listPlatformAccounts,
   listPublishingSchedules,
@@ -213,6 +216,7 @@ const textUnifiedPostSchema = z.object({
 type StagedUploadRecord = {
   id: string;
   userId: string;
+  workspaceId: string;
   originalName: string;
   fileName: string;
   mimeType: string;
@@ -338,8 +342,8 @@ function canEditSchedule(role: UserRole) {
   return role === "operations_manager" || role === "scheduler";
 }
 
-async function findUploadOrThrow(uploadId: string): Promise<PlatformUpload> {
-  const uploads = await listUploads();
+async function findUploadOrThrow(uploadId: string, workspaceId?: string): Promise<PlatformUpload> {
+  const uploads = await listUploads(undefined, undefined, workspaceId);
   const upload = uploads.find(item => item.id === uploadId);
   if (!upload) throw new Error("Upload not found");
   return upload;
@@ -426,8 +430,8 @@ async function createUnifiedPosts(
     }
 
     const [allAccounts, allSchedules] = await Promise.all([
-      listPlatformAccounts(),
-      listPublishingSchedules(),
+      listPlatformAccounts(undefined, user.workspaceId),
+      listPublishingSchedules(user.workspaceId),
     ]);
     const accountById = new Map(allAccounts.map(account => [account.id, account]));
     const scheduleById = new Map(allSchedules.map(schedule => [schedule.id, schedule]));
@@ -464,7 +468,7 @@ async function createUnifiedPosts(
         caption: destination.description?.trim() || description,
         scheduledAt,
         scheduleId: destination.scheduleId,
-      }, user.id));
+      }, user.id, user.workspaceId));
     }
 
     await logActivity(user.id, "post.unified_created", "post_group", createdUploads[0]?.id, `${title || file.originalname} was prepared for ${createdUploads.length} publishing ${createdUploads.length === 1 ? "destination" : "destinations"}.`, {
@@ -475,7 +479,7 @@ async function createUnifiedPosts(
     });
     return createdUploads;
   } catch (error) {
-    await Promise.all(createdUploads.map(upload => deleteUpload(upload.id).catch(() => undefined)));
+    await Promise.all(createdUploads.map(upload => deleteUpload(upload.id, user.workspaceId).catch(() => undefined)));
     throw error;
   }
 }
@@ -545,6 +549,26 @@ app.post("/api/auth/login", async (req, res, next) => {
   }
 });
 
+app.post("/api/auth/platform", async (req, res, next) => {
+  try {
+    const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
+    const identity = verifyPublishingWorkspaceIdentity(token);
+    if (!identity) {
+      res.status(401).json({ message: "Your AgenticThat session is invalid or expired." });
+      return;
+    }
+    const user = await ensurePlatformWorkspaceManager({
+      platformUserId: identity.sub,
+      workspaceId: identity.workspaceId,
+      fullName: identity.name,
+      email: identity.email,
+    });
+    res.json({ user, token: signAuthToken(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use("/api", authenticateApi);
 
 app.get("/api/auth/me", (req: RequestWithUser, res) => {
@@ -553,7 +577,7 @@ app.get("/api/auth/me", (req: RequestWithUser, res) => {
 
 app.get("/api/users", requireRoles("operations_manager"), async (_req, res, next) => {
   try {
-    res.json(await listUserProfiles());
+    res.json(await listUserProfiles(currentUser(_req as RequestWithUser).workspaceId));
   } catch (error) {
     next(error);
   }
@@ -562,7 +586,8 @@ app.get("/api/users", requireRoles("operations_manager"), async (_req, res, next
 app.post("/api/users", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const payload = createUserProfileSchema.parse(req.body);
-    res.status(201).json(await createUserProfile(payload, currentUser(req).id));
+    const user = currentUser(req);
+    res.status(201).json(await createUserProfile(payload, user.id, user.workspaceId));
   } catch (error) {
     next(error);
   }
@@ -571,7 +596,8 @@ app.post("/api/users", requireRoles("operations_manager"), async (req: RequestWi
 app.patch("/api/users/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const payload = updateUserProfileSchema.parse(req.body);
-    const user = await updateUserProfile(pathParam(req.params.id, "id"), payload, currentUser(req).id);
+    const actor = currentUser(req);
+    const user = await updateUserProfile(pathParam(req.params.id, "id"), payload, actor.id, actor.workspaceId);
     if (!user) {
       res.status(404).json({ message: "User not found" });
       return;
@@ -584,7 +610,8 @@ app.patch("/api/users/:id", requireRoles("operations_manager"), async (req: Requ
 
 app.delete("/api/users/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
-    const user = await deactivateUserProfile(pathParam(req.params.id, "id"), currentUser(req).id);
+    const actor = currentUser(req);
+    const user = await deactivateUserProfile(pathParam(req.params.id, "id"), actor.id, actor.workspaceId);
     if (!user) {
       res.status(404).json({ message: "User not found" });
       return;
@@ -598,47 +625,47 @@ app.delete("/api/users/:id", requireRoles("operations_manager"), async (req: Req
 app.get("/api/activity-logs", requireRoles("operations_manager"), async (req, res, next) => {
   try {
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
-    res.json(await listActivityLogs(limit));
+    res.json(await listActivityLogs(limit, currentUser(req as RequestWithUser).workspaceId));
   } catch (error) {
     next(error);
   }
 });
 
 // --- DASHBOARD ---
-app.get("/api/dashboard", async (_req, res, next) => {
+app.get("/api/dashboard", async (req: RequestWithUser, res, next) => {
   try {
-    res.json(await dashboardSummary());
+    res.json(await dashboardSummary(currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
 });
 
 // --- LIST UPLOADS ---
-app.get("/api/uploads", async (req, res, next) => {
+app.get("/api/uploads", async (req: RequestWithUser, res, next) => {
   try {
     const platform = req.query.platform ? platformSchema.parse(req.query.platform) : undefined;
     const accountId = typeof req.query.accountId === "string" ? req.query.accountId : undefined;
-    res.json(await listUploads(platform, accountId));
+    res.json(await listUploads(platform, accountId, currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/platforms/:platform/uploads", async (req, res, next) => {
+app.get("/api/platforms/:platform/uploads", async (req: RequestWithUser, res, next) => {
   try {
     const platform = platformSchema.parse(req.params.platform);
     const accountId = typeof req.query.accountId === "string" ? req.query.accountId : undefined;
-    res.json(await listUploads(platform, accountId));
+    res.json(await listUploads(platform, accountId, currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
 });
 
 // --- PUBLISHING ACCOUNTS ---
-app.get("/api/accounts", async (req, res, next) => {
+app.get("/api/accounts", async (req: RequestWithUser, res, next) => {
   try {
     const platform = req.query.platform ? platformSchema.parse(req.query.platform) : undefined;
-    res.json(await listPlatformAccounts(platform));
+    res.json(await listPlatformAccounts(platform, currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
@@ -648,8 +675,9 @@ app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager")
   try {
     const platform = platformSchema.parse(req.params.platform);
     const payload = upsertPlatformAccountSchema.parse(req.body);
-    const account = await createPlatformAccount(platform, payload);
-    await logActivity(currentUser(req).id, "account.created", "publishing_account", account.id, `${account.displayName} account was added for ${platform}.`, { platform, handle: account.handle });
+    const user = currentUser(req);
+    const account = await createPlatformAccount(platform, payload, user.workspaceId);
+    await logActivity(user.id, "account.created", "publishing_account", account.id, `${account.displayName} account was added for ${platform}.`, { platform, handle: account.handle });
     res.status(201).json(account);
   } catch (error) {
     next(error);
@@ -659,12 +687,13 @@ app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager")
 app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const payload = upsertPlatformAccountSchema.parse(req.body);
-    const account = await updatePlatformAccount(pathParam(req.params.id, "id"), payload);
+    const user = currentUser(req);
+    const account = await updatePlatformAccount(pathParam(req.params.id, "id"), payload, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
-    await logActivity(currentUser(req).id, "account.updated", "publishing_account", account.id, `${account.displayName} account was updated.`, { platform: account.platform, handle: account.handle });
+    await logActivity(user.id, "account.updated", "publishing_account", account.id, `${account.displayName} account was updated.`, { platform: account.platform, handle: account.handle });
     res.json(account);
   } catch (error) {
     next(error);
@@ -673,7 +702,8 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
 
 app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
-    const account = await deletePlatformAccount(pathParam(req.params.id, "id"));
+    const user = currentUser(req);
+    const account = await deletePlatformAccount(pathParam(req.params.id, "id"), user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
@@ -681,7 +711,7 @@ app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: 
     await removeSavedAccountProfile(account).catch(error => {
       console.warn(`Could not remove the saved browser profile for ${account.handle}:`, error instanceof Error ? error.message : error);
     });
-    await logActivity(currentUser(req).id, "account.deleted", "publishing_account", account.id, `${account.displayName} account was deleted.`, { platform: account.platform, handle: account.handle });
+    await logActivity(user.id, "account.deleted", "publishing_account", account.id, `${account.displayName} account was deleted.`, { platform: account.platform, handle: account.handle });
     res.status(204).send();
   } catch (error) {
     next(error);
@@ -697,7 +727,12 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager", "p
       return;
     }
     const user = currentUser(req);
-    const { account, started } = await startManualAccountSession(pathParam(req.params.id, "id"));
+    const accountId = pathParam(req.params.id, "id");
+    if (!(await getPlatformAccount(accountId, user.workspaceId))) {
+      res.status(404).json({ message: "Publishing account not found" });
+      return;
+    }
+    const { account, started } = await startManualAccountSession(accountId);
     await logActivity(
       user.id,
       started ? "account.manual_login_started" : "account.manual_login_already_running",
@@ -720,9 +755,9 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager", "p
 });
 
 // --- REUSABLE SCHEDULES ---
-app.get("/api/schedules", async (_req, res, next) => {
+app.get("/api/schedules", async (req: RequestWithUser, res, next) => {
   try {
-    res.json(await listPublishingSchedules());
+    res.json(await listPublishingSchedules(currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
@@ -731,8 +766,9 @@ app.get("/api/schedules", async (_req, res, next) => {
 app.post("/api/schedules", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
   try {
     const payload = upsertPublishingScheduleSchema.parse(req.body);
-    const schedule = await createPublishingSchedule(payload);
-    await logActivity(currentUser(req).id, "schedule.created", "schedule_template", schedule.id, `${schedule.name} schedule was created.`, { frequency: schedule.frequency, time: schedule.time });
+    const user = currentUser(req);
+    const schedule = await createPublishingSchedule(payload, user.workspaceId);
+    await logActivity(user.id, "schedule.created", "schedule_template", schedule.id, `${schedule.name} schedule was created.`, { frequency: schedule.frequency, time: schedule.time });
     res.status(201).json(schedule);
   } catch (error) {
     next(error);
@@ -743,12 +779,13 @@ app.patch("/api/schedules/:id", requireRoles("operations_manager", "scheduler"),
   try {
     const scheduleId = scheduleIdSchema.parse(req.params.id);
     const payload = upsertPublishingScheduleSchema.parse(req.body);
-    const schedule = await updatePublishingSchedule(scheduleId, payload);
+    const user = currentUser(req);
+    const schedule = await updatePublishingSchedule(scheduleId, payload, user.workspaceId);
     if (!schedule) {
       res.status(404).json({ message: "Schedule not found" });
       return;
     }
-    await logActivity(currentUser(req).id, "schedule.updated", "schedule_template", schedule.id, `${schedule.name} schedule was updated.`, { frequency: schedule.frequency, time: schedule.time, status: schedule.status });
+    await logActivity(user.id, "schedule.updated", "schedule_template", schedule.id, `${schedule.name} schedule was updated.`, { frequency: schedule.frequency, time: schedule.time, status: schedule.status });
     res.json(schedule);
   } catch (error) {
     next(error);
@@ -758,21 +795,22 @@ app.patch("/api/schedules/:id", requireRoles("operations_manager", "scheduler"),
 app.delete("/api/schedules/:id", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
   try {
     const scheduleId = scheduleIdSchema.parse(req.params.id);
-    const schedule = await deletePublishingSchedule(scheduleId);
+    const user = currentUser(req);
+    const schedule = await deletePublishingSchedule(scheduleId, user.workspaceId);
     if (!schedule) {
       res.status(404).json({ message: "Schedule not found" });
       return;
     }
-    await logActivity(currentUser(req).id, "schedule.deleted", "schedule_template", schedule.id, `${schedule.name} schedule was deleted.`, { frequency: schedule.frequency, time: schedule.time });
+    await logActivity(user.id, "schedule.deleted", "schedule_template", schedule.id, `${schedule.name} schedule was deleted.`, { frequency: schedule.frequency, time: schedule.time });
     res.status(204).send();
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/social-media-schedules", async (_req, res, next) => {
+app.get("/api/social-media-schedules", async (req: RequestWithUser, res, next) => {
   try {
-    res.json(await listSocialMediaSchedules());
+    res.json(await listSocialMediaSchedules(currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
@@ -800,6 +838,7 @@ app.post("/api/staged-uploads", requireRoles("operations_manager", "post_uploade
     const record: StagedUploadRecord = {
       id,
       userId: user.id,
+      workspaceId: user.workspaceId,
       originalName: payload.originalName,
       fileName: safeUploadFileName(payload.originalName),
       mimeType: payload.mimeType,
@@ -823,7 +862,9 @@ app.post(
       const user = currentUser(req);
       const stagedUploadId = stagedUploadIdSchema.parse(pathParam(req.params.id, "id"));
       const record = await readStagedUpload(stagedUploadId);
-      if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+      if (record.workspaceId !== user.workspaceId || (record.userId !== user.id && user.role !== "operations_manager")) {
+        throw new Error("This staged upload belongs to another workspace.");
+      }
       const requestedOffset = Number(req.headers["x-upload-offset"]);
       if (!Number.isInteger(requestedOffset) || requestedOffset < 0) throw new Error("The upload offset is invalid.");
       const content = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
@@ -848,7 +889,9 @@ app.delete("/api/staged-uploads/:id", requireRoles("operations_manager", "post_u
     const user = currentUser(req);
     const stagedUploadId = stagedUploadIdSchema.parse(pathParam(req.params.id, "id"));
     const record = await readStagedUpload(stagedUploadId);
-    if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+    if (record.workspaceId !== user.workspaceId || (record.userId !== user.id && user.role !== "operations_manager")) {
+      throw new Error("This staged upload belongs to another workspace.");
+    }
     await removeStagedUpload(stagedUploadId);
     res.status(204).send();
   } catch (error) {
@@ -878,7 +921,9 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager", "post_u
     const user = currentUser(req);
     const payload = stagedUnifiedPostSchema.parse(req.body);
     const record = await readStagedUpload(payload.stagedUploadId);
-    if (record.userId !== user.id && user.role !== "operations_manager") throw new Error("This staged upload belongs to another user.");
+    if (record.workspaceId !== user.workspaceId || (record.userId !== user.id && user.role !== "operations_manager")) {
+      throw new Error("This staged upload belongs to another workspace.");
+    }
     const stagedPath = stagedContentPath(record.id);
     const receivedSize = (await fs.promises.stat(stagedPath)).size;
     if (receivedSize !== record.size) throw new Error(`The media upload is incomplete (${receivedSize} of ${record.size} bytes received).`);
@@ -906,7 +951,7 @@ app.patch("/api/uploads/:id/status", requireRoles("operations_manager"), async (
     const user = currentUser(req);
     const payload = updateUploadStatusSchema.parse(req.body);
     const uploadId = pathParam(req.params.id, "id");
-    const item = await updateUploadStatus(uploadId, payload.status, payload.failureReason ?? "Post status updated", user.id);
+    const item = await updateUploadStatus(uploadId, payload.status, payload.failureReason ?? "Post status updated", user.id, user.workspaceId);
 
     if (!item) {
       res.status(404).json({ message: "Upload not found" });
@@ -924,7 +969,7 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"
   try {
     const user = currentUser(req);
     const uploadId = pathParam(req.params.id, "id");
-    const existing = await findUploadOrThrow(uploadId);
+    const existing = await findUploadOrThrow(uploadId, user.workspaceId);
     let payload;
     let action = "post.updated";
     let summaryDetail = "details";
@@ -963,12 +1008,12 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"
     }
 
     if (payload.scheduleId) {
-      const schedule = (await listPublishingSchedules()).find(item => item.id === payload.scheduleId);
+      const schedule = (await listPublishingSchedules(user.workspaceId)).find(item => item.id === payload.scheduleId);
       if (!schedule) throw new Error(`Schedule #${payload.scheduleId} was not found.`);
       assertScheduleCanReceivePosts(schedule);
     }
 
-    const item = await updateUploadDetails(uploadId, payload, user.id);
+    const item = await updateUploadDetails(uploadId, payload, user.id, user.workspaceId);
 
     if (!item) {
       res.status(404).json({ message: "Upload not found" });
@@ -986,7 +1031,7 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"
 app.delete("/api/uploads/:id", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
-    const deleted = await deleteUpload(pathParam(req.params.id, "id"));
+    const deleted = await deleteUpload(pathParam(req.params.id, "id"), user.workspaceId);
 
     if (!deleted) {
       res.status(404).json({ message: "Upload not found" });
@@ -1004,18 +1049,18 @@ app.delete("/api/uploads/:id", requireRoles("operations_manager", "post_uploader
 });
 
 // --- AUTOMATION INPUT ---
-app.get("/api/automation/input", requireRoles("operations_manager"), async (_req, res, next) => {
+app.get("/api/automation/input", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
-    res.json(await automationInput());
+    res.json(await automationInput(undefined, "ready", currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/automation/platforms/:platform/input", requireRoles("operations_manager"), async (req, res, next) => {
+app.get("/api/automation/platforms/:platform/input", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const platform = platformSchema.parse(req.params.platform);
-    res.json(await automationInput(platform));
+    res.json(await automationInput(platform, "ready", currentUser(req).workspaceId));
   } catch (error) {
     next(error);
   }
@@ -1033,7 +1078,14 @@ app.post("/api/automation/run", requireRoles("operations_manager"), async (req: 
     const user = currentUser(req);
     const payload = automationRunRequestSchema.parse(req.body ?? {});
     await logActivity(user.id, "automation.started", "automation_run", null, "Manual publisher automation was started.", {});
-    runAutomation({ trigger: "manual", startedByUserId: user.id, uploadIds: payload.uploadIds })
+    if (payload.uploadIds?.length) {
+      const allowedIds = new Set((await listUploads(undefined, undefined, user.workspaceId)).map(upload => upload.id));
+      if (payload.uploadIds.some(id => !allowedIds.has(id))) {
+        res.status(404).json({ message: "One or more posts were not found in this workspace." });
+        return;
+      }
+    }
+    runAutomation({ trigger: "manual", startedByUserId: user.id, workspaceId: user.workspaceId, uploadIds: payload.uploadIds })
       .catch(err => console.error("Background error:", err));
     res.status(202).json({
       message: payload.uploadIds?.length

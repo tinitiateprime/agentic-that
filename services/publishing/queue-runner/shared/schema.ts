@@ -47,6 +47,8 @@ export const loginInputSchema = z.object({
 
 export const userProfileSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
+  platformUserId: z.string().optional(),
   username: z.string(),
   fullName: z.string(),
   email: z.string().optional(),
@@ -77,6 +79,7 @@ export const updateUserProfileSchema = z.object({
 
 export const platformAccountSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
   platform: platformSchema,
   displayName: z.string(),
   handle: z.string(),
@@ -96,6 +99,7 @@ export const upsertPlatformAccountSchema = z.object({
 
 export const publishingScheduleSchema = z.object({
   id: scheduleIdSchema,
+  workspaceId: z.string(),
   name: z.string(),
   time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use 24-hour HH:MI time"),
   frequency: scheduleFrequencySchema,
@@ -125,6 +129,7 @@ export const upsertPublishingScheduleSchema = z.object({
 
 export const socialMediaScheduleSchema = z.object({
   id: z.number().int().positive(),
+  workspaceId: z.string(),
   scheduleId: scheduleIdSchema,
   accountId: z.string(),
   platform: platformSchema,
@@ -200,6 +205,7 @@ export const uploadAutomationSchema = z.object({
 
 export const platformUploadSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
   platform: platformSchema,
   postFormat: postFormatSchema.optional(),
   accountId: z.string(),
@@ -241,6 +247,7 @@ export const updateUploadStatusSchema = z.object({
 
 export const activityLogSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
   actorUserId: z.string().optional(),
   actorName: z.string().optional(),
   actorUsername: z.string().optional(),

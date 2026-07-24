@@ -96,6 +96,9 @@ export const api = {
   login: (payload: LoginInput) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
 
+  platformLogin: (token: string) =>
+    request<AuthResponse>("/api/auth/platform", { method: "POST", body: JSON.stringify({ token }) }),
+
   me: () => request<UserProfile>("/api/auth/me"),
 
   dashboard: () => request<DashboardSummary>("/api/dashboard"),
