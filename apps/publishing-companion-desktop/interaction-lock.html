@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>Publishing in progress</title>
+    <link rel="stylesheet" href="interaction-lock.css" />
+  </head>
+  <body>
+    <div class="lock-banner">
+      <span class="pulse" aria-hidden="true"></span>
+      <div>
+        <strong id="lock-title">Publishing is controlling this page</strong>
+        <small>Your mouse is blocked only inside this live pane until the action finishes.</small>
+      </div>
+      <button id="emergency-stop" type="button">Emergency stop</button>
+    </div>
+    <div class="lock-shield" aria-hidden="true"></div>
+    <script src="interaction-lock.js"></script>
+  </body>
+</html>

@@ -349,7 +349,7 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
   } else if (savedSessionOnly) {
     throw new Error("LinkedIn saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
-    console.log("Complete the full LinkedIn login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full LinkedIn login manually in the visible browser; Companion will save the session after the account opens.");
     await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
   }
 

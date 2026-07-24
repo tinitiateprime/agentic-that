@@ -358,6 +358,14 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
   })).status, 403);
   assert.equal((await roleApi(viewerLogin.token, "/api/users")).status, 403);
+  assert.equal((await roleApi(viewerLogin.token, "/api/automation/stop", { method: "POST" })).status, 403);
+
+  const idleStopResponse = await api("/api/automation/stop", { method: "POST" });
+  assert.equal(idleStopResponse.status, 200);
+  assert.deepEqual(await idleStopResponse.json(), {
+    stopped: false,
+    message: "No publishing automation is running.",
+  });
 
   const processingResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",

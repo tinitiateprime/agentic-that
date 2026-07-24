@@ -582,7 +582,7 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
   } else if (savedSessionOnly) {
     throw new Error("Instagram saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
-    console.log("Complete the full Instagram login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full Instagram login manually in the visible browser; Companion will save the session after the account opens.");
     await clickLoginInterstitialLink(page);
     await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
   }

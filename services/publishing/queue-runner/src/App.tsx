@@ -364,14 +364,16 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
   const [loading, setLoading] = useState(false);
   const [connectionState, setConnectionState] = useState<'checking' | 'extension-missing' | 'companion-missing' | 'chrome-missing' | 'ready'>('checking');
   const [extensionDetected, setExtensionDetected] = useState(false);
+  const [desktopBridgeDetected, setDesktopBridgeDetected] = useState(false);
 
   const checkConnection = useCallback(async () => {
     setConnectionState('checking');
     const extension = await detectPublishingExtension(true);
     setExtensionDetected(Boolean(extension));
+    setDesktopBridgeDetected(extension?.version === 'desktop');
     try {
       const health = await api.health();
-      setConnectionState(!health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
+      setConnectionState(!health.embeddedBrowser && !health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
     } catch {
       setConnectionState(extension ? 'companion-missing' : 'extension-missing');
     }
@@ -430,20 +432,20 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
           </div>
 
           <div className='publishing-setup-card'>
-            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>One-time publishing setup</strong><small>Install both once. No project download or commands.</small></span></div>
+            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>{desktopBridgeDetected ? 'Companion publishing ready' : 'One-time publishing setup'}</strong><small>{desktopBridgeDetected ? 'Dashboard and live publishing browser are built into this app.' : 'Install both once. No project download or commands.'}</small></span></div>
             <div className='publishing-setup-checks'>
-              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>Chrome bridge</b><small>{connectionState === 'extension-missing' ? 'Install or repair' : connectionState === 'checking' ? 'Checking…' : extensionDetected ? 'Installed' : 'Direct connection'}</small></span>
+              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>{desktopBridgeDetected ? 'Companion bridge' : 'Chrome bridge'}</b><small>{desktopBridgeDetected ? 'Built in' : connectionState === 'extension-missing' ? 'Install or repair' : connectionState === 'checking' ? 'Checking…' : extensionDetected ? 'Installed' : 'Direct connection'}</small></span>
               <span className={connectionState === 'companion-missing' || connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Windows companion</b><small>{connectionState === 'companion-missing' ? 'Local service offline' : connectionState === 'extension-missing' ? 'Connection not confirmed' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Checking'}</small></span>
             </div>
-            <div className='publishing-setup-actions'>
+            {!desktopBridgeDetected && <div className='publishing-setup-actions'>
               <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />{configuredExtensionInstallUrl ? 'Install extension' : 'Download Chrome bridge'}</a>
               <a href={companionDownloadUrl}><Download size={15} />Install Windows companion</a>
               <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
               <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
-            </div>
+            </div>}
             {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Allow Local network access if Chrome asks. Otherwise extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
             {connectionState === 'chrome-missing' && <p>Google Chrome is missing. Open the Companion app and choose <strong>Install Google Chrome</strong>.</p>}
-            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
+            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{desktopBridgeDetected ? ' inside Companion' : extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
           <div className='role-options' aria-label='Choose login type'>
@@ -499,7 +501,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [schedules, setSchedules] = useState<PublishingSchedule[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [connectionMode, setConnectionMode] = useState<'extension' | 'direct' | 'checking'>('checking');
+  const [connectionMode, setConnectionMode] = useState<'desktop' | 'extension' | 'direct' | 'checking'>('checking');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -1306,7 +1308,7 @@ function Workboard({
   submissions: ContentSubmission[];
   accounts: PlatformAccount[];
   schedules: PublishingSchedule[];
-  connectionMode: 'extension' | 'direct' | 'checking';
+  connectionMode: 'desktop' | 'extension' | 'direct' | 'checking';
   users: UserProfile[];
   activityLogs: ActivityLog[];
   loading: boolean;
@@ -1447,7 +1449,7 @@ function Workboard({
           <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
         </nav>
         <div className='workboard-actions'>
-          <span className='workboard-status' title={connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
+          <span className='workboard-status' title={connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && <button className='workboard-run' onClick={onRun} disabled={isRunning}>{isRunning ? <Loader2 className='spin' size={16} /> : <Send size={16} />}{isRunning ? 'Publishing' : 'Run automation'}</button>}
           <button className='workboard-tool' title='Refresh workspace' onClick={onRefresh}><RefreshCw size={18} className={loading ? 'spin' : ''} /></button>
@@ -2071,7 +2073,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Chrome' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Companion' /></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
           </div>
           <div className='account-form-actions'>
@@ -2086,7 +2088,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Chrome login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Companion login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login

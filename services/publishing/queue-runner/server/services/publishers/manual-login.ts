@@ -61,7 +61,7 @@ export async function waitForLoginWithManualFallback({
       if (!ignoredLoginErrorLogged) {
         ignoredLoginErrorLogged = true;
         console.log(
-          `${platform} login page is showing: ${loginError}. Complete login manually in Chrome; bot will keep waiting for up to ${Math.round(
+          `${platform} login page is showing: ${loginError}. Complete login manually in the visible browser; publishing will keep waiting for up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -83,7 +83,7 @@ export async function waitForLoginWithManualFallback({
         manualDeadline = Date.now() + getManualActionTimeoutMs();
         manualLoginFallbackLogged = true;
         console.log(
-          `Complete the full ${platform} login manually in Chrome; bot will resume after the account opens. Waiting up to ${Math.round(
+          `Complete the full ${platform} login manually in the visible browser; publishing will resume after the account opens. Waiting up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -94,7 +94,7 @@ export async function waitForLoginWithManualFallback({
         manualActionLogged = true;
         manualWasVisible = true;
         console.log(
-          `${platform} needs manual verification. Complete it in Chrome; bot will resume automatically for up to ${Math.round(
+          `${platform} needs manual verification. Complete it in the visible browser; publishing will resume automatically for up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -108,7 +108,7 @@ export async function waitForLoginWithManualFallback({
         manualLoginFallbackLogged = true;
         manualDeadline ??= Date.now() + getManualActionTimeoutMs();
         console.log(
-          `${platform} still shows the login form after verification. Complete the full ${platform} login manually in Chrome; bot will resume after the account opens.`,
+          `${platform} still shows the login form after verification. Complete the full ${platform} login manually in the visible browser; publishing will resume after the account opens.`,
         );
       }
     }

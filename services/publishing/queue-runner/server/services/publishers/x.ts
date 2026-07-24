@@ -312,7 +312,7 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
     await page.waitForTimeout(1500);
     await dismissCookiePrompt(page);
 
-    console.log("Complete the full X login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full X login manually in the visible browser; Companion will save the session after the account opens.");
     await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
   }
 

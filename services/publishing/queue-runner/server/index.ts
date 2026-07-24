@@ -66,6 +66,7 @@ import {
   updateUserProfile,
 } from "./local-storage.js";
 import {
+  cancelAutomation,
   isAutomationRunning,
   publishingBrowserRuntimeHealth,
   reconcileSavedAccountSessions,
@@ -81,6 +82,7 @@ const app = publishingApp;
 const port = Number(process.env.PUBLISH_QUEUE_SERVICE_PORT ?? process.env.PORT ?? 8792);
 const host = process.env.PUBLISH_QUEUE_SERVICE_HOST?.trim() || "127.0.0.1";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const runtimeDesktopAssets = path.join(path.dirname(fileURLToPath(import.meta.url)), "desktop");
 const uploadDir = publishingUploadDirectory();
 const stagedUploadDir = path.join(uploadDir, ".staged");
 const allowedUploadExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"]);
@@ -615,6 +617,9 @@ app.use(
 );
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadDir));
+if (fs.existsSync(runtimeDesktopAssets)) {
+  app.use("/desktop", express.static(runtimeDesktopAssets));
+}
 
 // --- HEALTH ---
 app.get("/api/health", async (_req, res) => {
@@ -626,9 +631,10 @@ app.get("/api/health", async (_req, res) => {
       ok: true,
       service: "agenticthat-publish-queue-runner",
       storage: storage.storage,
-      automationReady: !serverless && browser.chromeInstalled,
+      automationReady: !serverless && browser.automationAvailable,
       automationRunning: isAutomationRunning(),
       chromeInstalled: browser.chromeInstalled,
+      embeddedBrowser: browser.embeddedBrowser,
       companionInstanceId: process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID?.trim() || null,
       extensionBridge: true,
       platforms,
@@ -887,7 +893,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     );
     res.status(202).json({
       message: started
-        ? "Manual login window opened. Complete login in Chrome; the session will be saved and the window will close."
+        ? "Manual login opened in Companion. Complete login there; the session will be saved and the live pane will close."
         : "Manual login is already running for this account.",
       started,
     });
@@ -1307,6 +1313,18 @@ app.post("/api/automation/run", requireRoles("operations_manager"), async (req: 
         ? `Publishing started for ${payload.uploadIds.length} ${payload.uploadIds.length === 1 ? "post" : "posts"}.`
         : "Publisher automation started.",
       uploadIds: payload.uploadIds ?? []
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/automation/stop", requireRoles("operations_manager"), async (_req, res, next) => {
+  try {
+    const stopped = await cancelAutomation();
+    res.json({
+      stopped,
+      message: stopped ? "Publishing automation is stopping." : "No publishing automation is running.",
     });
   } catch (error) {
     next(error);

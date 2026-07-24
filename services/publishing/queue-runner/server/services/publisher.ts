@@ -25,6 +25,11 @@ import { loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
 import type { AccountLogin } from "./publishers/manual-login.js";
 import { loginToYouTube, postToYouTube } from "./publishers/youtube.js";
 import { loginToX, postToX } from "./publishers/x.js";
+import {
+  publishingDesktopHost,
+  type DesktopBrowserActivity,
+  type DesktopBrowserPurpose,
+} from "./desktop-host.js";
 import { publishingBrowserDataDirectory } from "../runtime-paths.js";
 
 const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
@@ -124,9 +129,12 @@ function chromeExecutablePath() {
 
 export function publishingBrowserRuntimeHealth() {
   const executablePath = detectedChromeExecutablePath();
+  const embeddedBrowser = Boolean(publishingDesktopHost());
   return {
     chromeInstalled: Boolean(executablePath),
     chromeExecutablePath: executablePath,
+    embeddedBrowser,
+    automationAvailable: embeddedBrowser || Boolean(executablePath),
   };
 }
 
@@ -188,7 +196,65 @@ function prepareChromeProfile(profileDir: string) {
   writeJsonFile(preferencesPath, preferences);
 }
 
-async function launchAccountBrowser(account: PublishingAccount): Promise<BrowserContext> {
+type AccountBrowserSession = {
+  context: BrowserContext;
+  page: Page;
+  desktopSessionId?: string;
+  update(activity: DesktopBrowserActivity): Promise<void>;
+  close(): Promise<void>;
+};
+
+async function waitForDesktopPage(
+  browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>,
+  targetUrl: string,
+) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const pages = browser.contexts().flatMap(context => context.pages());
+    const page = pages.find(candidate => candidate.url() === targetUrl);
+    if (page) return page;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error("The Companion live browser view did not become available.");
+}
+
+async function launchAccountBrowser(
+  account: PublishingAccount,
+  purpose: DesktopBrowserPurpose,
+): Promise<AccountBrowserSession> {
+  const desktopHost = publishingDesktopHost();
+  if (desktopHost) {
+    const managed = await desktopHost.openBrowser({
+      accountId: account.id,
+      platform: account.platform,
+      displayName: account.displayName,
+      handle: account.handle,
+      purpose,
+    });
+    let connection: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+
+    try {
+      connection = await chromium.connectOverCDP(managed.debugEndpoint);
+      const page = await waitForDesktopPage(connection, managed.targetUrl);
+      const context = page.context();
+      await restoreAccountSessionState(account, context);
+      return {
+        context,
+        page,
+        desktopSessionId: managed.id,
+        update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
+        close: async () => {
+          await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
+          await connection?.close().catch(() => undefined);
+        },
+      };
+    } catch (error) {
+      await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
+      await connection?.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
   const profileDir = accountProfilePath(account);
   prepareChromeProfile(profileDir);
   const slowMoMs = Number(process.env.AUTOMATION_SLOW_MO_MS ?? 120);
@@ -203,7 +269,13 @@ async function launchAccountBrowser(account: PublishingAccount): Promise<Browser
       : [...commonArgs, "--disable-blink-features=AutomationControlled", "--disable-site-isolation-trials", "--disable-sync", "--disable-signin-promo", `--disable-features=${disabledChromeFeatures}`],
   });
   await restoreAccountSessionState(account, context);
-  return context;
+  const page = context.pages()[0] ?? await context.newPage();
+  return {
+    context,
+    page,
+    update: async () => undefined,
+    close: () => context.close(),
+  };
 }
 
 async function saveAccountSessionState(account: PublishingAccount, context: BrowserContext) {
@@ -343,6 +415,7 @@ async function runAccountQueue(
   trigger: AutomationRunTrigger,
   account: PublishingAccount,
   uploads: PlatformUpload[],
+  signal: AbortSignal,
   options: AccountLoginOptions = {},
 ) {
   console.log(`Publishing ${uploads.length} post(s) through ${account.platform} account ${account.handle} (${account.id}).`);
@@ -351,7 +424,7 @@ async function runAccountQueue(
     runPostIds.set(upload.id, await createAutomationRunPost(automationRunId, upload));
   }
 
-  let browser: BrowserContext | null = null;
+  let browser: AccountBrowserSession | null = null;
   let hadFailure = false;
   let sessionInvalidated = false;
 
@@ -370,18 +443,28 @@ async function runAccountQueue(
   }
 
   try {
-    browser = await launchAccountBrowser(account);
-    const page = browser.pages()[0] ?? await browser.newPage();
+    signal.throwIfAborted();
+    browser = await launchAccountBrowser(account, "publish");
+    const page = browser.page;
 
-    for (const upload of uploads) {
+    for (const [uploadIndex, upload] of uploads.entries()) {
+      signal.throwIfAborted();
       const runPostId = runPostIds.get(upload.id);
       await updateUploadStatus(upload.id, "processing", `Automation ${trigger} run ${automationRunId} started publishing`);
+      await browser.update({
+        state: "publishing",
+        detail: `Publishing ${uploadIndex + 1} of ${uploads.length}`,
+        currentItem: upload.title || upload.originalName || "Post",
+        currentIndex: uploadIndex + 1,
+        totalItems: uploads.length,
+      });
 
       try {
         await publishOne(page, upload, options);
+        signal.throwIfAborted();
       } catch (error) {
         hadFailure = true;
-        const message = errorMessage(error);
+        const message = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
         if (isSessionFailure(message)) {
           sessionInvalidated = true;
           clearSavedAccountSession(account);
@@ -389,12 +472,27 @@ async function runAccountQueue(
         }
         await updateUploadStatus(upload.id, "failed", `Automation ${trigger} run ${automationRunId} failed: ${message}`);
         if (runPostId) await finishAutomationRunPost(runPostId, "failed", message);
+        await browser.update({
+          state: signal.aborted ? "stopped" : "failed",
+          detail: message,
+          currentItem: upload.title || upload.originalName || "Post",
+          currentIndex: uploadIndex + 1,
+          totalItems: uploads.length,
+        });
         console.error(`Failed ${upload.id} through ${account.handle}:`, message);
+        if (signal.aborted) throw new Error(message);
         continue;
       }
 
       await updateUploadStatus(upload.id, "posted", `Automation ${trigger} run ${automationRunId} posted successfully`);
       if (runPostId) await finishAutomationRunPost(runPostId, "posted");
+      await browser.update({
+        state: "posted",
+        detail: `Published ${uploadIndex + 1} of ${uploads.length}`,
+        currentItem: upload.title || upload.originalName || "Post",
+        currentIndex: uploadIndex + 1,
+        totalItems: uploads.length,
+      });
       console.log(`Posted ${upload.id} through ${account.handle}.`);
     }
 
@@ -407,7 +505,7 @@ async function runAccountQueue(
     return hadFailure;
   } catch (error) {
     hadFailure = true;
-    const message = errorMessage(error);
+    const message = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
     if (isSessionFailure(message)) {
       sessionInvalidated = true;
       clearSavedAccountSession(account);
@@ -417,24 +515,28 @@ async function runAccountQueue(
     throw error;
   } finally {
     if (browser) {
-      if (!sessionInvalidated) await saveAccountSessionState(account, browser);
+      if (!sessionInvalidated) await saveAccountSessionState(account, browser.context);
       await browser.close().catch(() => undefined);
     }
   }
 }
 
 async function prepareManualAccountSession(account: PublishingAccount) {
-  if (account.platform === "x") {
+  if (account.platform === "x" && !publishingDesktopHost()) {
     await prepareXSessionInNormalChrome(account);
     return;
   }
 
   console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}).`);
-  const browser = await launchAccountBrowser(account);
+  const browser = await launchAccountBrowser(account, "login");
   try {
-    const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { ignoreLoginErrors: true });
-    await saveAccountSessionState(account, browser);
+    await browser.update({
+      state: "waiting",
+      detail: `Complete the ${account.platform} login in this Companion window.`,
+    });
+    await loginOnly(browser.page, account, { ignoreLoginErrors: true });
+    await browser.update({ state: "posted", detail: "Login confirmed and saved." });
+    await saveAccountSessionState(account, browser.context);
     console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
   } finally {
     await browser.close().catch(() => undefined);
@@ -480,6 +582,7 @@ type RunAutomationOptions = {
 };
 
 let activeAutomationRun: Promise<void> | null = null;
+let activeAutomationController: AbortController | null = null;
 const pendingAutomationRuns: Array<{
   options: RunAutomationOptions;
   resolve: () => void;
@@ -488,6 +591,16 @@ const pendingAutomationRuns: Array<{
 
 export function isAutomationRunning() {
   return activeAutomationRun !== null || pendingAutomationRuns.length > 0;
+}
+
+export async function cancelAutomation(reason = "Publishing was stopped by the user.") {
+  const cancellationError = new Error(reason);
+  const wasRunning = Boolean(activeAutomationRun || pendingAutomationRuns.length);
+  activeAutomationController?.abort(cancellationError);
+  const pending = pendingAutomationRuns.splice(0);
+  for (const run of pending) run.reject(cancellationError);
+  await Promise.resolve(publishingDesktopHost()?.stopPublishingBrowsers(reason)).catch(() => undefined);
+  return wasRunning;
 }
 
 function maxConcurrentAccounts() {
@@ -511,7 +624,11 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-async function runAutomationOnce({ mode = "ready", trigger = "manual", startedByUserId, uploadIds, workspaceId }: RunAutomationOptions) {
+async function runAutomationOnce(
+  { mode = "ready", trigger = "manual", startedByUserId, uploadIds, workspaceId }: RunAutomationOptions,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
   console.log(`Starting publisher automation (${trigger})...`);
   const { channels } = await automationInput(undefined, mode, workspaceId);
   const requestedIds = uploadIds?.length ? new Set(uploadIds) : null;
@@ -532,6 +649,7 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
   try {
     const accountQueues = [...queues.entries()];
     await runWithConcurrency(accountQueues, maxConcurrentAccounts(), async ([accountId, accountUploads]) => {
+      signal.throwIfAborted();
       const account = await getPublishingAccount(accountId);
       if (!account || !account.enabled) {
         const message = `Publishing account ${accountId} is missing or disabled.`;
@@ -545,7 +663,7 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
       }
 
       try {
-        const accountHadFailure = await runAccountQueue(automationRunId, trigger, account, accountUploads, {
+        const accountHadFailure = await runAccountQueue(automationRunId, trigger, account, accountUploads, signal, {
           useSavedSessionOnly: true,
         });
         if (accountHadFailure) {
@@ -559,6 +677,10 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
         console.error(`Could not run account ${account.handle}:`, message);
       }
     });
+  } catch (error) {
+    hadRunFailure = true;
+    runErrorMessage ??= signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+    throw error;
   } finally {
     await finishAutomationRun(
       automationRunId,
@@ -580,11 +702,13 @@ function startNextAutomationRun() {
   const next = pendingAutomationRuns.shift();
   if (!next) return;
 
-  activeAutomationRun = runAutomationOnce(next.options);
+  activeAutomationController = new AbortController();
+  activeAutomationRun = runAutomationOnce(next.options, activeAutomationController.signal);
   activeAutomationRun
     .then(next.resolve, next.reject)
     .finally(() => {
       activeAutomationRun = null;
+      activeAutomationController = null;
       startNextAutomationRun();
     });
 }

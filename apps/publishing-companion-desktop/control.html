@@ -8,36 +8,152 @@
     <link rel="stylesheet" href="control.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <img src="assets/app-icon-1024.png" alt="" />
-        <div><span>AgenticThat</span><h1>Publishing Companion</h1><p>Keep this app running for scheduled social publishing.</p></div>
-      </header>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="assets/app-icon-1024.png" alt="" />
+          <div><span>AgenticThat</span><strong>Companion</strong></div>
+        </div>
 
-      <section class="status-card">
-        <div class="status-heading"><i id="status-dot"></i><div><strong id="status-title">Starting companion…</strong><span id="status-detail">Preparing the local scheduler.</span></div><button id="refresh" type="button">Check again</button></div>
-        <div class="checks">
-          <div><span>Local service</span><strong id="service-check">Checking</strong></div>
-          <div><span>Google Chrome</span><strong id="chrome-check">Checking</strong></div>
-          <div><span>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
+        <nav aria-label="Companion navigation">
+          <button class="nav-item active" data-view="dashboard" type="button">
+            <span class="nav-icon">▦</span>
+            <span><strong>Publishing</strong><small>Dashboard workspace</small></span>
+          </button>
+          <button class="nav-item" data-view="activity" type="button">
+            <span class="nav-icon">◉</span>
+            <span><strong>Live activity</strong><small>Visible browser actions</small></span>
+            <b id="activity-badge" hidden>0</b>
+          </button>
+          <button class="nav-item" data-view="settings" type="button">
+            <span class="nav-icon">⚙</span>
+            <span><strong>Companion</strong><small>Status and settings</small></span>
+          </button>
+        </nav>
+
+        <div class="sidebar-status">
+          <i id="sidebar-status-dot"></i>
+          <div><strong id="sidebar-status-title">Starting</strong><small id="sidebar-status-detail">Preparing local services</small></div>
+        </div>
+        <div class="version-line">Desktop version <span id="version">1.0.0</span></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow" id="view-eyebrow">PUBLISHING WORKSPACE</span>
+            <h1 id="view-title">Publishing dashboard</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="secondary" id="refresh-current" type="button">Refresh</button>
+            <button class="danger" id="global-stop" type="button" disabled>Emergency stop</button>
+          </div>
+        </header>
+
+        <section class="view-panel active" id="dashboard-panel">
+          <div class="dashboard-note">
+            <div><strong>Everything stays inside Companion</strong><span>Create posts, manage accounts, sign in and watch publishing without opening another browser.</span></div>
+            <span class="secure-pill">Local secure bridge</span>
+          </div>
+          <div class="embedded-frame" id="dashboard-host">
+            <div class="frame-loading"><i></i><strong>Loading publishing dashboard…</strong><span>The online workspace will appear here.</span></div>
+          </div>
+        </section>
+
+        <section class="view-panel" id="activity-panel">
+          <div class="activity-intro">
+            <div>
+              <span class="eyebrow">LIVE, VISIBLE AUTOMATION</span>
+              <h2>Publishing activity</h2>
+              <p>Every active platform has its own live pane. Companion protects automated panes from accidental clicks while keeping the process visible.</p>
+            </div>
+            <div class="safety-note"><strong>Mouse protection</strong><span>Only the live publishing pane is locked. Your computer remains fully usable.</span></div>
+          </div>
+
+          <div class="live-grid" id="live-grid"></div>
+          <div class="activity-empty" id="activity-empty">
+            <span class="empty-icon">◎</span>
+            <strong>No publishing action is running</strong>
+            <p>Start a publish or account login from the dashboard. Its live browser will appear here automatically.</p>
+            <button class="primary" id="empty-open-dashboard" type="button">Open publishing dashboard</button>
+          </div>
+
+          <section class="recent-activity">
+            <div class="section-heading"><div><span class="eyebrow">RECENT ACTIONS</span><h3>Platform timeline</h3></div><span id="activity-summary">Waiting for activity</span></div>
+            <div class="timeline" id="activity-timeline"></div>
+          </section>
+        </section>
+
+        <section class="view-panel settings-view" id="settings-panel">
+          <div class="settings-grid">
+            <section class="settings-card service-card">
+              <div class="card-heading"><div><span class="eyebrow">LOCAL SERVICE</span><h2 id="status-title">Starting Companion…</h2></div><i id="status-dot"></i></div>
+              <p id="status-detail">Preparing the scheduler and embedded browser.</p>
+              <div class="checks">
+                <div><span>Local service</span><strong id="service-check">Checking</strong></div>
+                <div><span>Live browser</span><strong id="browser-check">Checking</strong></div>
+                <div><span>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
+              </div>
+            </section>
+
+            <section class="settings-card">
+              <span class="eyebrow">SAFETY</span>
+              <h2>Publishing interaction protection</h2>
+              <p>When automation controls a live pane, Companion places a transparent safety shield over that pane to prevent accidental clicks.</p>
+              <label class="setting-toggle">
+                <input id="interaction-consent" type="checkbox" />
+                <span><strong>Allow click protection during publishing</strong><small>This never disables the mouse outside Companion.</small></span>
+              </label>
+            </section>
+
+            <section class="settings-card">
+              <span class="eyebrow">STARTUP</span>
+              <h2>Scheduled publishing</h2>
+              <p>Keep Companion available after Windows starts so scheduled posts can publish at the selected time.</p>
+              <label class="setting-toggle">
+                <input id="auto-start" type="checkbox" />
+                <span><strong>Start automatically with Windows</strong><small>Recommended for scheduled posts.</small></span>
+              </label>
+            </section>
+
+            <section class="settings-card">
+              <span class="eyebrow">SUPPORT</span>
+              <h2>Local files and diagnostics</h2>
+              <p>Account sessions and publishing files remain in the Companion data folder on this computer.</p>
+              <div class="support-actions">
+                <button class="secondary" id="open-logs" type="button">View logs</button>
+                <button class="secondary" id="open-data" type="button">Open local data</button>
+                <button class="secondary" id="install-chrome" type="button">Install Chrome fallback</button>
+              </div>
+            </section>
+          </div>
+
+          <section class="log-card">
+            <div class="section-heading"><div><span class="eyebrow">SESSION LOG</span><h3>Latest Companion messages</h3></div><button class="secondary compact" id="clear-log" type="button">Clear view</button></div>
+            <div class="log-list" id="log-list"><span>Companion messages will appear here.</span></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="consent-backdrop" id="consent-backdrop" hidden>
+      <section class="consent-dialog" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+        <span class="consent-icon">◉</span>
+        <span class="eyebrow">ONE-TIME PERMISSION</span>
+        <h2 id="consent-title">Protect the live page while publishing?</h2>
+        <p>Companion will temporarily block your clicks only inside automated publishing panes. This prevents accidental interference while you can still watch every step.</p>
+        <ul>
+          <li>The rest of your computer stays fully usable.</li>
+          <li>Login panes remain interactive.</li>
+          <li>Emergency stop is always available.</li>
+        </ul>
+        <div class="consent-actions">
+          <button class="secondary" id="decline-consent" type="button">Not now</button>
+          <button class="primary" id="accept-consent" type="button">Allow and continue</button>
         </div>
       </section>
+    </div>
 
-      <section class="credentials-card">
-        <div><span>Dashboard login</span><strong id="username">operations.manager</strong><code id="password">Loading…</code></div>
-        <button id="copy-credentials" type="button">Copy login</button>
-      </section>
-
-      <section class="actions">
-        <button class="primary" id="open-dashboard" type="button">Open publishing dashboard</button>
-        <button id="install-chrome" type="button">Install Google Chrome</button>
-        <button id="open-logs" type="button">View logs</button>
-        <button id="open-data" type="button">Open local data</button>
-      </section>
-
-      <label class="auto-start"><input id="auto-start" type="checkbox" /><span><strong>Start automatically with Windows</strong><small>Required for scheduled posts while the dashboard is closed.</small></span></label>
-      <footer>Version <span id="version">1.0.0</span> · Social passwords are entered only on the social network's own Chrome page.</footer>
-    </main>
     <script src="control.js"></script>
   </body>
 </html>

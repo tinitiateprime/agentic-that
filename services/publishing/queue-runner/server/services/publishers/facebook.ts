@@ -547,7 +547,7 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
   } else if (savedSessionOnly) {
     throw new Error("Facebook saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
-    console.log("Complete the full Facebook login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full Facebook login manually in the visible browser; Companion will save the session after the account opens.");
     await page.goto(FACEBOOK_LOGIN_URL, { timeout: 60000 });
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(1000);

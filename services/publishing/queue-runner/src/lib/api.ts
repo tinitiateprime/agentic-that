@@ -20,6 +20,7 @@ import type {
   UserProfile
 } from "../../shared/schema.ts";
 import { isPublishingExtensionActive, publishingAssetUrl, publishingFetch } from "../../../../../lib/publishing-endpoint.ts";
+import { detectPublishingExtension } from "../../../../../lib/publishing-extension-bridge.ts";
 
 let authToken: string | null = null;
 
@@ -85,13 +86,22 @@ export const api = {
       automationReady: boolean;
       automationRunning: boolean;
       chromeInstalled?: boolean;
+      embeddedBrowser?: boolean;
       extensionBridge?: boolean;
       platforms?: Platform[];
     }>("/api/health");
     if (isPublishingExtensionActive() && !health.extensionBridge) {
       throw new Error("Restart Start Publishing Companion.cmd to load the extension-compatible publishing service.");
     }
-    return { ...health, transport: isPublishingExtensionActive() ? "extension" as const : "direct" as const };
+    const bridge = await detectPublishingExtension();
+    return {
+      ...health,
+      transport: bridge?.version === "desktop"
+        ? "desktop" as const
+        : isPublishingExtensionActive()
+          ? "extension" as const
+          : "direct" as const
+    };
   },
 
   login: (payload: LoginInput) =>
@@ -321,5 +331,9 @@ export const api = {
   runAutomation: (uploadIds?: string[]) => request<{ message: string; uploadIds: string[] }>("/api/automation/run", {
     method: "POST",
     body: JSON.stringify({ uploadIds: uploadIds?.length ? uploadIds : undefined })
+  }),
+
+  stopAutomation: () => request<{ stopped: boolean; message: string }>("/api/automation/stop", {
+    method: "POST"
   })
 };

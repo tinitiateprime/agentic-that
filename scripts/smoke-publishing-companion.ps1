@@ -34,7 +34,7 @@ try {
   if (-not $health) { throw "The packaged companion did not become healthy within 30 seconds." }
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
-  if (-not $health.chromeInstalled) { throw "Google Chrome was not detected." }
+  if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
@@ -62,7 +62,7 @@ try {
 
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
-  Write-Host "Chrome: detected"
+  Write-Host "Embedded live browser: enabled"
   Write-Host "Extension bridge: enabled"
   Write-Host "Production dashboard origin: allowed"
   Write-Host "Platforms: $($health.platforms -join ', ')"
