@@ -640,7 +640,16 @@ async function runAutomationOnce(
     return;
   }
 
-  const automationRunId = await createAutomationRun(trigger, startedByUserId);
+  const desktopHost = publishingDesktopHost();
+  if (desktopHost) await desktopHost.requestPublishingPermission();
+
+  let automationRunId: string;
+  try {
+    automationRunId = await createAutomationRun(trigger, startedByUserId);
+  } catch (error) {
+    await Promise.resolve(desktopHost?.finishPublishingRun()).catch(() => undefined);
+    throw error;
+  }
   let hadRunFailure = false;
   let runErrorMessage: string | undefined;
   const queues = new Map<string, PlatformUpload[]>();
@@ -682,11 +691,15 @@ async function runAutomationOnce(
     runErrorMessage ??= signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
     throw error;
   } finally {
-    await finishAutomationRun(
-      automationRunId,
-      hadRunFailure ? "failed" : "completed",
-      hadRunFailure ? runErrorMessage : undefined,
-    );
+    try {
+      await finishAutomationRun(
+        automationRunId,
+        hadRunFailure ? "failed" : "completed",
+        hadRunFailure ? runErrorMessage : undefined,
+      );
+    } finally {
+      await Promise.resolve(desktopHost?.finishPublishingRun()).catch(() => undefined);
+    }
   }
 }
 

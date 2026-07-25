@@ -25,6 +25,8 @@ export type DesktopBrowserActivity = {
 };
 
 export type PublishingDesktopHost = {
+  requestPublishingPermission(): Promise<void>;
+  finishPublishingRun(): Promise<void> | void;
   openBrowser(request: DesktopBrowserRequest): Promise<DesktopBrowserSession>;
   updateBrowser(sessionId: string, activity: DesktopBrowserActivity): Promise<void> | void;
   closeBrowser(sessionId: string): Promise<void> | void;

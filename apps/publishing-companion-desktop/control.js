@@ -1,14 +1,13 @@
 const api = window.publishingCompanion;
 const byId = id => document.getElementById(id);
 const views = {
-  dashboard: { panel: byId("dashboard-panel"), title: "Publishing dashboard", eyebrow: "PUBLISHING WORKSPACE" },
-  activity: { panel: byId("activity-panel"), title: "Live publishing activity", eyebrow: "VISIBLE AUTOMATION" },
+  activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
-let activeView = "dashboard";
+let activeView = "activity";
 let currentStatus = null;
-let currentWorkspace = { consentRequired: false, sessions: [] };
+let currentWorkspace = { sessions: [] };
 let logEntries = [];
 let layoutFrame = null;
 
@@ -59,7 +58,7 @@ function scheduleLayout() {
       .map(element => ({ id: element.dataset.browserSession, bounds: elementBounds(element) }))
       .filter(entry => entry.id && entry.bounds);
     void api.setLayout({
-      dashboard: activeView === "dashboard" ? elementBounds(byId("dashboard-host")) : null,
+      dashboard: null,
       browsers: activeView === "activity" ? browsers : [],
     });
   });
@@ -155,7 +154,6 @@ function renderWorkspace() {
   badge.hidden = active.length === 0;
   badge.textContent = String(active.length);
   byId("global-stop").disabled = active.length === 0;
-  byId("consent-backdrop").hidden = !currentWorkspace.consentRequired;
   scheduleLayout();
 }
 
@@ -163,7 +161,6 @@ function renderStatus(status) {
   currentStatus = status;
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
-  byId("interaction-consent").checked = status.publishingInteractionConsent;
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
   byId("browser-check").textContent = status.embeddedBrowser ? "Built in" : status.chromeInstalled ? "Chrome" : "Unavailable";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
@@ -173,7 +170,7 @@ function renderStatus(status) {
   byId("sidebar-status-dot").className = ready ? "ready" : "error";
   byId("status-title").textContent = ready ? "Ready for visible publishing" : "Companion needs attention";
   byId("status-detail").textContent = ready
-    ? "Dashboard, scheduler and live embedded publishing browser are available."
+    ? "AgenticThat stays in Chrome. Login and publishing pages will open here automatically."
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
@@ -190,7 +187,6 @@ async function refreshStatus() {
       automationReady: false,
       embeddedBrowser: true,
       autoStart: currentStatus?.autoStart ?? true,
-      publishingInteractionConsent: currentStatus?.publishingInteractionConsent ?? false,
       error: error instanceof Error ? error.message : "Companion status is unavailable.",
     });
   }
@@ -225,7 +221,6 @@ document.querySelectorAll(".nav-item").forEach(button => {
 });
 
 byId("refresh-current").addEventListener("click", async () => {
-  if (activeView === "dashboard") await api.reloadDashboard();
   await Promise.all([refreshStatus(), refreshWorkspace()]);
 });
 byId("global-stop").addEventListener("click", async event => {
@@ -236,26 +231,11 @@ byId("global-stop").addEventListener("click", async event => {
   button.textContent = "Emergency stop";
   await refreshWorkspace();
 });
-byId("empty-open-dashboard").addEventListener("click", () => setView("dashboard"));
+byId("empty-open-dashboard").addEventListener("click", () => api.openDashboard());
 byId("open-data").addEventListener("click", () => api.openData());
 byId("open-logs").addEventListener("click", () => api.openLogs());
 byId("install-chrome").addEventListener("click", () => api.installChrome());
 byId("auto-start").addEventListener("change", event => api.setAutoStart(event.currentTarget.checked));
-byId("interaction-consent").addEventListener("change", async event => {
-  const enabled = await api.setInteractionConsent(event.currentTarget.checked);
-  event.currentTarget.checked = enabled;
-  await refreshStatus();
-});
-byId("accept-consent").addEventListener("click", async () => {
-  await api.setInteractionConsent(true);
-  byId("consent-backdrop").hidden = true;
-  await Promise.all([refreshStatus(), refreshWorkspace()]);
-});
-byId("decline-consent").addEventListener("click", async () => {
-  await api.setInteractionConsent(false);
-  byId("consent-backdrop").hidden = true;
-  await refreshWorkspace();
-});
 byId("clear-log").addEventListener("click", () => {
   logEntries = [];
   renderLogs();
@@ -266,7 +246,7 @@ api.onWorkspaceState(state => {
   currentWorkspace = state;
   renderWorkspace();
 });
-api.onNavigate(section => setView(section));
+api.onNavigate(section => setView(views[section] ? section : "activity"));
 api.onLog(entry => {
   logEntries = [...logEntries.slice(-79), entry];
   renderLogs();

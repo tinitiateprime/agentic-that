@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -18,6 +19,10 @@ import { pathToFileURL } from "node:url";
 
 const DASHBOARD_URL = "https://agentic-that.netlify.app/publishing";
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
+// Temporarily keep the complete AgenticThat workspace out of Companion until
+// the product team approves that experience. The implementation remains below
+// so it can be restored without rebuilding the live-browser integration.
+const EMBED_FULL_PUBLISHING_WORKSPACE = false;
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const SERVICE_ORIGIN = "http://127.0.0.1:8792";
 const DESKTOP_DEBUG_PORT = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 8793);
@@ -47,9 +52,8 @@ let settings = null;
 let logPath = "";
 let dashboardBounds = null;
 let browserBounds = new Map();
-let consentPromise = null;
-let consentResolve = null;
-let consentReject = null;
+let publishingPermissionPromise = null;
+let publishingRunPermissionActive = false;
 
 function randomSecret(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
@@ -300,7 +304,6 @@ function publicBrowserSession(session) {
 
 function workspaceState() {
   return {
-    consentRequired: Boolean(consentPromise && !settings.publishingInteractionConsent),
     sessions: [...managedBrowsers.values()]
       .sort((left, right) => right.openedAt.localeCompare(left.openedAt))
       .slice(0, MAX_ACTIVITY_HISTORY)
@@ -314,12 +317,15 @@ function notifyWorkspaceState({ revealActivity = false } = {}) {
   if (revealActivity) mainWindow.webContents.send("companion:navigate", "activity");
 }
 
-function showCompanion(section = "dashboard", focus = true) {
+function showCompanion(section = "activity", focus = true) {
   if (!mainWindow) return;
+  const visibleSection = section === "dashboard" && !EMBED_FULL_PUBLISHING_WORKSPACE
+    ? "activity"
+    : section;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   if (focus) mainWindow.focus();
-  mainWindow.webContents.send("companion:navigate", section);
+  mainWindow.webContents.send("companion:navigate", visibleSection);
 }
 
 function chromiumUserAgent(webContents) {
@@ -375,21 +381,35 @@ function interactionLockPath() {
 }
 
 async function ensurePublishingInteractionConsent() {
-  if (settings.publishingInteractionConsent) return;
-  if (consentPromise) return consentPromise;
+  if (publishingRunPermissionActive) return;
+  if (publishingPermissionPromise) return publishingPermissionPromise;
 
   showCompanion("activity");
-  consentPromise = new Promise((resolve, reject) => {
-    consentResolve = resolve;
-    consentReject = reject;
+  publishingPermissionPromise = dialog.showMessageBox(mainWindow, {
+    type: "question",
+    title: "Publishing mouse protection",
+    message: "Allow protected publishing in Companion?",
+    detail: [
+      "While posting, Companion will block mouse and keyboard input only inside the live social-media publishing tabs.",
+      "Login tabs and the rest of your computer stay fully usable.",
+    ].join("\n\n"),
+    buttons: ["Allow", "Deny"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  }).then(result => {
+    if (result.response !== 0) {
+      throw new Error("Publishing was cancelled because mouse-protection permission was denied.");
+    }
+    publishingRunPermissionActive = true;
   }).finally(() => {
-    consentPromise = null;
-    consentResolve = null;
-    consentReject = null;
-    notifyWorkspaceState();
+    publishingPermissionPromise = null;
   });
-  notifyWorkspaceState({ revealActivity: true });
-  return consentPromise;
+  return publishingPermissionPromise;
+}
+
+function finishPublishingInteractionConsent() {
+  publishingRunPermissionActive = false;
 }
 
 function browserPartition(accountId) {
@@ -528,6 +548,8 @@ async function stopPublishingBrowsers(reason) {
 
 function installPublishingDesktopHost() {
   globalThis.__AGENTICTHAT_PUBLISHING_DESKTOP_HOST__ = {
+    requestPublishingPermission: ensurePublishingInteractionConsent,
+    finishPublishingRun: finishPublishingInteractionConsent,
     openBrowser: openManagedBrowser,
     updateBrowser: updateManagedBrowser,
     closeBrowser: closeManagedBrowser,
@@ -585,7 +607,9 @@ function createWindow() {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
   });
-  createDashboardView();
+  // Full dashboard embedding is deliberately paused. Account-login and
+  // publishing WebContentsViews continue to open inside this Companion window.
+  if (EMBED_FULL_PUBLISHING_WORKSPACE) createDashboardView();
 }
 
 function createTray() {
@@ -593,8 +617,8 @@ function createTray() {
   tray = new Tray(trayImage);
   tray.setToolTip("AgenticThat Publishing Companion");
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open Publishing Workspace", click: () => showCompanion("dashboard") },
-    { label: "View Live Activity", click: () => showCompanion("activity") },
+    { label: "Open AgenticThat Publishing", click: () => shell.openExternal(DASHBOARD_URL) },
+    { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
     { type: "separator" },
     {
       label: "Start with Windows",
@@ -612,7 +636,7 @@ function createTray() {
     } },
   ]));
   rebuildMenu();
-  tray.on("double-click", () => showCompanion("dashboard"));
+  tray.on("double-click", () => showCompanion("activity"));
 }
 
 function safeProxyPath(value) {
@@ -683,7 +707,7 @@ function registerIpc() {
   ipcMain.handle("companion:status", () => serviceStatus());
   ipcMain.handle("companion:workspace-state", () => workspaceState());
   ipcMain.handle("companion:set-layout", (_event, layout) => {
-    dashboardBounds = safeBounds(layout?.dashboard);
+    dashboardBounds = EMBED_FULL_PUBLISHING_WORKSPACE ? safeBounds(layout?.dashboard) : null;
     browserBounds = new Map(
       (Array.isArray(layout?.browsers) ? layout.browsers : [])
         .map(entry => [String(entry?.id || ""), safeBounds(entry?.bounds)])
@@ -693,7 +717,8 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle("companion:open-dashboard", () => {
-    showCompanion("dashboard");
+    if (EMBED_FULL_PUBLISHING_WORKSPACE) showCompanion("dashboard");
+    else void shell.openExternal(DASHBOARD_URL);
     return true;
   });
   ipcMain.handle("companion:reload-dashboard", () => {
@@ -711,17 +736,9 @@ function registerIpc() {
     saveAutoStart(Boolean(enabled));
     return settings.autoStart;
   });
-  ipcMain.handle("companion:set-interaction-consent", (_event, enabled) => {
-    settings.publishingInteractionConsent = Boolean(enabled);
-    writeSettings();
-    if (settings.publishingInteractionConsent) consentResolve?.();
-    else consentReject?.(new Error("Publishing permission was not granted."));
-    notifyWorkspaceState();
-    return settings.publishingInteractionConsent;
-  });
   ipcMain.handle("companion:emergency-stop", () => emergencyStop());
   ipcMain.handle("companion:dashboard-proxy", (event, message) => {
-    if (!dashboardView || event.sender.id !== dashboardView.webContents.id) {
+    if (!EMBED_FULL_PUBLISHING_WORKSPACE || !dashboardView || event.sender.id !== dashboardView.webContents.id) {
       return { ok: false, status: 403, error: "This page cannot use the publishing bridge." };
     }
     return proxyDashboardRequest(message);
@@ -733,7 +750,7 @@ if (started) {
 } else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => showCompanion("dashboard"));
+  app.on("second-instance", () => showCompanion("activity"));
 
   app.whenReady().then(async () => {
     settings = loadSettings();
@@ -756,7 +773,7 @@ if (started) {
 
   app.on("before-quit", () => {
     quitting = true;
-    consentReject?.(new Error("Companion is closing."));
+    publishingRunPermissionActive = false;
   });
   app.on("window-all-closed", () => {});
   app.on("will-quit", () => {

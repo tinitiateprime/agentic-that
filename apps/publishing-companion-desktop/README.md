@@ -4,11 +4,17 @@ This Electron application packages the persistent Publish Queue API, local JSON
 store, media uploads, scheduler, and isolated Chrome profiles into a normal
 Windows desktop installer.
 
-The Companion now provides the complete publishing workspace in one app. It
-embeds the online dashboard, opens each social account in an isolated live
-browser pane, displays concurrent platform actions in a clear activity grid,
-and protects automated panes from accidental mouse and keyboard input. Manual
-login panes remain interactive, and an emergency stop is always available.
+The Companion keeps AgenticThat itself in the user's normal browser. When the
+user clicks an account login key or a publishing run starts, Companion opens
+each required social account in an isolated live browser pane and displays
+concurrent platform actions in a clear activity grid. Before each publishing
+run, a native Allow/Deny popup asks permission to protect automated panes from
+accidental mouse and keyboard input. Manual login panes remain interactive, and
+an emergency stop is always available.
+
+The complete embedded AgenticThat dashboard implementation is preserved behind
+the `EMBED_FULL_PUBLISHING_WORKSPACE` flag in `main.js`, but is temporarily
+disabled pending product approval.
 
 On first launch it creates a local auth secret, protects it with Electron safe
 storage when available, starts the service on loopback port 8792, and enables

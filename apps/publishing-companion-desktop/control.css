@@ -298,6 +298,7 @@ h3 { margin: 4px 0 0; font-size: 15px; }
   background: #fff;
   box-shadow: 0 13px 35px rgba(38, 79, 68, .09);
 }
+.live-card:only-child { grid-column: 1 / -1; }
 
 .live-card-header {
   min-height: 62px;
@@ -332,6 +333,7 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 .state-pill.waiting { color: #795312; background: #fff0cf; }
 
 .live-browser-slot { height: clamp(310px, 47vh, 540px); border: 0; border-radius: 0; box-shadow: none; }
+.live-card:only-child .live-browser-slot { height: clamp(420px, 61vh, 680px); }
 .live-progress { height: 3px; background: #e1ebe7; }
 .live-progress i { display: block; height: 100%; background: linear-gradient(90deg, #22b58e, #50ddbb); transition: width .25s ease; }
 
@@ -400,6 +402,11 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 .setting-toggle small { display: block; }
 .setting-toggle strong { font-size: 10px; }
 .setting-toggle small { margin-top: 3px; color: #71837e; font-size: 8px; }
+.permission-mode { padding: 11px; border: 1px solid #bfe0d6; border-radius: 11px; background: #edf8f4; }
+.permission-mode strong,
+.permission-mode small { display: block; }
+.permission-mode strong { color: #12654f; font-size: 10px; }
+.permission-mode small { margin-top: 3px; color: #71837e; font-size: 8px; }
 .support-actions { flex-wrap: wrap; }
 
 .log-list {
@@ -417,25 +424,6 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 .log-list span { color: #8cb2a8; }
 .log-entry.warn { color: #f0cb7e; }
 .log-entry.error { color: #ff9ca7; }
-
-.consent-backdrop {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 30px;
-  background: rgba(4, 21, 18, .72);
-  backdrop-filter: blur(8px);
-}
-.consent-backdrop[hidden] { display: none; }
-.consent-dialog { width: min(460px, 100%); padding: 25px; border: 1px solid rgba(116, 225, 197, .45); border-radius: 19px; background: #fff; box-shadow: 0 30px 90px rgba(0, 0, 0, .35); }
-.consent-icon { display: grid; place-items: center; width: 45px; height: 45px; margin-bottom: 15px; border-radius: 13px; color: #08785f; background: #dcf5ed; font-size: 24px; }
-.consent-dialog h2 { margin-top: 7px; font-size: 22px; }
-.consent-dialog p,
-.consent-dialog li { color: #5f736d; font-size: 10px; line-height: 1.55; }
-.consent-dialog ul { margin: 14px 0 19px; padding-left: 18px; }
-.consent-actions { justify-content: flex-end; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
