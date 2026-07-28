@@ -736,6 +736,31 @@ function formatEventTime(value: string) {
   });
 }
 
+type DeliveryOutcomeTone = 'posted' | 'failed' | 'uncertain' | 'processing' | 'deferred' | 'scheduled' | 'queued';
+
+function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone; label: string; detail: string; timestamp: string } {
+  const timestamp = upload.postedAt ?? upload.lastAttemptAt ?? upload.updatedAt ?? upload.uploadedAt;
+  if (upload.status === 'posted') {
+    return { tone: 'posted', label: 'Posted', detail: `Confirmed delivered ${formatEventTime(timestamp)}`, timestamp };
+  }
+  if (upload.publishActionState === 'uncertain') {
+    return { tone: 'uncertain', label: 'Confirmation unclear', detail: upload.failureReason || 'The final action was not retried. Inspect the platform before trying again.', timestamp };
+  }
+  if (upload.status === 'failed') {
+    return { tone: 'failed', label: 'Failed', detail: upload.failureReason || 'Publishing stopped and needs review.', timestamp };
+  }
+  if (upload.status === 'processing') {
+    return { tone: 'processing', label: 'Publishing now', detail: 'The local Companion is working on this destination.', timestamp };
+  }
+  if (upload.safetyDeferredUntil) {
+    return { tone: 'deferred', label: 'Safety paused', detail: `${upload.safetyReason || 'Held by a safety limit.'} Resumes after ${formatEventTime(upload.safetyDeferredUntil)}.`, timestamp };
+  }
+  if (upload.scheduledAt) {
+    return { tone: 'scheduled', label: 'Scheduled', detail: `Will publish ${formatEventTime(upload.scheduledAt)}`, timestamp: upload.scheduledAt };
+  }
+  return { tone: 'queued', label: 'Waiting', detail: 'Ready, but no publishing time has been assigned.', timestamp };
+}
+
 function formatCalendarHeading(dayKey: string) {
   const date = new Date(`${dayKey}T12:00:00`);
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -1473,6 +1498,9 @@ function Workboard({
         return aTime - bTime || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
       });
   }, [uploads]);
+  const recentDeliveries = useMemo(() => [...uploads]
+    .sort((a, b) => Date.parse(b.postedAt ?? b.lastAttemptAt ?? b.updatedAt ?? b.uploadedAt) - Date.parse(a.postedAt ?? a.lastAttemptAt ?? a.updatedAt ?? a.uploadedAt))
+    .slice(0, 18), [uploads]);
   const deliveredTotal = broadcastMix.reduce((total, channel) => total + channel.value, 0);
   const broadcastSegments = useMemo(() => {
     if (!deliveredTotal) return [];
@@ -1555,10 +1583,53 @@ function Workboard({
         </div>
       </section>
 
+      <section className='safety-control-strip' aria-labelledby='safety-controls-heading'>
+        <header>
+          <span><ShieldCheck size={20} /></span>
+          <div><strong id='safety-controls-heading'>Publishing safeguards active</strong><small>Checks run at the stage where they matter. They reduce avoidable risk, but no browser publisher can guarantee zero platform restrictions.</small></div>
+          <em>5 layers on</em>
+        </header>
+        <div className='safety-control-grid'>
+          <article><CircleCheckBig size={15} /><span><strong>Pre-flight checks</strong><small>Before a post enters the queue</small></span></article>
+          <article><TimerReset size={15} /><span><strong>Dynamic pacing</strong><small>Immediately before publishing</small></span></article>
+          <article><LockKeyhole size={15} /><span><strong>One job per account</strong><small>While a browser job is active</small></span></article>
+          <article><CircleAlert size={15} /><span><strong>Stop on risk</strong><small>CAPTCHA, warning, checkpoint or 429</small></span></article>
+          <article><ShieldCheck size={15} /><span><strong>No blind final retry</strong><small>Unclear results require inspection</small></span></article>
+        </div>
+      </section>
+
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
           {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={user.role === 'post_uploader'} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
         </div>
+      </section>
+
+      <section className='delivery-ledger' aria-labelledby='delivery-ledger-heading'>
+        <header className='delivery-ledger-head'>
+          <div><p className='section-kicker'>Destination-by-destination proof</p><h2 id='delivery-ledger-heading'>Recent publishing results</h2><span>Each app and account has its own clear outcome. The same post sent to five apps appears as five results.</span></div>
+          <div className='delivery-ledger-summary' aria-label={`${metrics.posted} posted, ${metrics.failed} failed, ${metrics.total - metrics.posted - metrics.failed} open`}>
+            <span className='posted'><strong>{metrics.posted}</strong><small>Posted</small></span>
+            <span className='failed'><strong>{metrics.failed}</strong><small>Failed</small></span>
+            <span><strong>{metrics.total - metrics.posted - metrics.failed}</strong><small>Open</small></span>
+          </div>
+        </header>
+        {recentDeliveries.length === 0 ? (
+          <div className='delivery-ledger-empty'><Send size={24} /><span><strong>No destination results yet</strong><small>Create a post to see separate results for every selected app and account.</small></span></div>
+        ) : (
+          <div className='delivery-ledger-list'>
+            {recentDeliveries.map(upload => {
+              const outcome = getDeliveryOutcome(upload);
+              const account = accountById.get(upload.accountId);
+              return <button type='button' className={`delivery-ledger-row tone-${outcome.tone}`} key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
+                <span className='delivery-ledger-media'><PostMediaPreview upload={upload} compact /></span>
+                <span className='delivery-ledger-destination'><CustomIcon platform={upload.platform} size={20} /><span><strong>{account?.displayName || platformLabels[upload.platform]}</strong><small>{account?.handle || platformLabels[upload.platform]}</small></span></span>
+                <span className='delivery-ledger-content'><strong>{upload.title || upload.originalName}</strong><small title={outcome.detail}>{outcome.detail}</small></span>
+                <span className={`delivery-outcome tone-${outcome.tone}`}><StatusStateIcon state={outcome.tone} size={15} /><span><strong>{outcome.label}</strong><small>{upload.attemptCount ? `${upload.attemptCount} ${upload.attemptCount === 1 ? 'attempt' : 'attempts'}` : formatEventTime(outcome.timestamp)}</small></span></span>
+                {canEditPosts && <ChevronRight size={16} />}
+              </button>;
+            })}
+          </div>
+        )}
       </section>
 
       <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>

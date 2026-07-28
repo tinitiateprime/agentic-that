@@ -10,6 +10,8 @@ let currentStatus = null;
 let currentWorkspace = { sessions: [] };
 let logEntries = [];
 let layoutFrame = null;
+let liveLayoutMode = "focus";
+let focusedSessionId = null;
 
 function platformLabel(value) {
   const labels = {
@@ -26,7 +28,15 @@ function stateLabel(session) {
   const value = session.activity?.state || "opening";
   if (session.purpose === "login" && value === "waiting") return "Login needed";
   if (value === "posted" && session.purpose === "login") return "Login saved";
-  return value;
+  const labels = {
+    opening: "Opening",
+    waiting: "Waiting",
+    publishing: "Publishing",
+    posted: "Posted",
+    failed: "Needs review",
+    stopped: "Stopped",
+  };
+  return labels[value] || value;
 }
 
 function setView(view) {
@@ -68,6 +78,37 @@ function activeSessions() {
   return currentWorkspace.sessions.filter(session => session.active);
 }
 
+function platformMark(session) {
+  const mark = document.createElement("span");
+  mark.className = `platform-mark platform-${session.platform}`;
+  mark.textContent = session.platform === "x" ? "X" : platformLabel(session.platform).slice(0, 2);
+  return mark;
+}
+
+function createSessionTab(session) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `session-tab ${session.id === focusedSessionId && liveLayoutMode === "focus" ? "active" : ""}`;
+  button.dataset.sessionId = session.id;
+
+  const identity = document.createElement("span");
+  const name = document.createElement("strong");
+  name.textContent = session.displayName || session.handle || platformLabel(session.platform);
+  const detail = document.createElement("small");
+  detail.textContent = `${session.purpose === "login" ? "Login" : "Publishing"} · ${stateLabel(session)}`;
+  identity.append(name, detail);
+
+  const state = document.createElement("i");
+  state.className = session.activity?.state || "opening";
+  button.append(platformMark(session), identity, state);
+  button.addEventListener("click", () => {
+    focusedSessionId = session.id;
+    liveLayoutMode = "focus";
+    renderWorkspace();
+  });
+  return button;
+}
+
 function createLiveCard(session) {
   const card = document.createElement("article");
   card.className = "live-card";
@@ -75,28 +116,36 @@ function createLiveCard(session) {
   const header = document.createElement("div");
   header.className = "live-card-header";
 
-  const mark = document.createElement("span");
-  mark.className = "platform-mark";
-  mark.textContent = session.platform === "x" ? "X" : platformLabel(session.platform).slice(0, 2);
-
   const identity = document.createElement("div");
+  identity.className = "live-card-identity";
+  const purpose = document.createElement("span");
+  purpose.className = "live-purpose";
+  purpose.textContent = session.purpose === "login" ? "Interactive login" : "Protected publishing";
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
   detail.textContent = session.activity?.detail
     || (session.purpose === "login" ? "Complete login in this pane." : "Preparing the publishing page.");
-  identity.append(name, detail);
+  identity.append(purpose, name, detail);
 
   const state = document.createElement("span");
   state.className = `state-pill ${session.activity?.state || "opening"}`;
   state.textContent = stateLabel(session);
-  header.append(mark, identity, state);
+  const stateGroup = document.createElement("div");
+  stateGroup.className = "live-card-state";
+  const index = Number(session.activity?.currentIndex || 0);
+  const total = Number(session.activity?.totalItems || 0);
+  if (total > 0) {
+    const position = document.createElement("small");
+    position.textContent = `${Math.min(index, total)} of ${total}`;
+    stateGroup.append(position);
+  }
+  stateGroup.prepend(state);
+  header.append(platformMark(session), identity, stateGroup);
 
   const progress = document.createElement("div");
   progress.className = "live-progress";
   const progressFill = document.createElement("i");
-  const index = Number(session.activity?.currentIndex || 0);
-  const total = Number(session.activity?.totalItems || 0);
   progressFill.style.width = total > 0 ? `${Math.min(100, Math.round(index / total * 100))}%` : "8%";
   progress.append(progressFill);
 
@@ -133,8 +182,39 @@ function createTimelineItem(session) {
 
 function renderWorkspace() {
   const active = activeSessions();
+  if (!active.some(session => session.id === focusedSessionId)) focusedSessionId = active[0]?.id ?? null;
+  const canSplit = active.length > 1 && window.innerWidth >= 1200;
+  if (!canSplit) liveLayoutMode = "focus";
+
+  const activityPanel = byId("activity-panel");
+  activityPanel.classList.toggle("has-live", active.length > 0);
+  byId("live-command-bar").hidden = active.length === 0;
+  byId("session-switcher").hidden = active.length === 0;
+  byId("live-heading").textContent = active.length
+    ? `${active.length} live ${active.length === 1 ? "browser" : "browsers"}`
+    : "Login and publishing activity";
+  byId("live-description").textContent = active.length
+    ? "Use Focus view for a full-size website. Split view is available when you need to watch two accounts together."
+    : "Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.";
+  byId("live-run-title").textContent = active.length === 1 ? "One live account" : `${active.length} live accounts`;
+  byId("live-run-detail").textContent = liveLayoutMode === "focus"
+    ? "Full-size browser selected. Choose another account tab to switch."
+    : "Watching all live accounts together.";
+
+  const focusButton = byId("layout-focus");
+  const splitButton = byId("layout-split");
+  focusButton.classList.toggle("active", liveLayoutMode === "focus");
+  splitButton.classList.toggle("active", liveLayoutMode === "split");
+  splitButton.disabled = !canSplit;
+
+  const switcher = byId("session-switcher");
+  switcher.replaceChildren(...active.map(createSessionTab));
   const liveGrid = byId("live-grid");
-  liveGrid.replaceChildren(...active.map(createLiveCard));
+  liveGrid.dataset.layout = liveLayoutMode;
+  const visibleSessions = liveLayoutMode === "split"
+    ? active
+    : active.filter(session => session.id === focusedSessionId);
+  liveGrid.replaceChildren(...visibleSessions.map(createLiveCard));
   byId("activity-empty").hidden = active.length > 0;
 
   const timeline = byId("activity-timeline");
@@ -223,6 +303,15 @@ document.querySelectorAll(".nav-item").forEach(button => {
 byId("refresh-current").addEventListener("click", async () => {
   await Promise.all([refreshStatus(), refreshWorkspace()]);
 });
+byId("layout-focus").addEventListener("click", () => {
+  liveLayoutMode = "focus";
+  renderWorkspace();
+});
+byId("layout-split").addEventListener("click", () => {
+  if (activeSessions().length < 2 || window.innerWidth < 1200) return;
+  liveLayoutMode = "split";
+  renderWorkspace();
+});
 byId("global-stop").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;
@@ -253,7 +342,10 @@ api.onLog(entry => {
 });
 
 new ResizeObserver(scheduleLayout).observe(document.body);
-window.addEventListener("resize", scheduleLayout);
+window.addEventListener("resize", () => {
+  if (liveLayoutMode === "split" && window.innerWidth < 1200) renderWorkspace();
+  else scheduleLayout();
+});
 document.addEventListener("visibilitychange", scheduleLayout);
 
 void Promise.all([refreshStatus(), refreshWorkspace()]).then(() => {

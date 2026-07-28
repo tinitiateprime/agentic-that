@@ -68,12 +68,20 @@
           <div class="activity-intro">
             <div>
               <span class="eyebrow">LIVE, VISIBLE BROWSER</span>
-              <h2>Login and publishing activity</h2>
-              <p>Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.</p>
+              <h2 id="live-heading">Login and publishing activity</h2>
+              <p id="live-description">Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.</p>
             </div>
             <div class="safety-note"><strong>Clear permission first</strong><span>Login stays interactive. Before posting, an Allow/Deny popup asks whether Companion may protect the live publishing pane.</span></div>
           </div>
 
+          <div class="live-command-bar" id="live-command-bar" hidden>
+            <div class="live-run-summary"><i></i><span><strong id="live-run-title">Live browser active</strong><small id="live-run-detail">Choose an account below to focus its browser.</small></span></div>
+            <div class="live-layout-controls" role="group" aria-label="Live browser layout">
+              <button class="active" id="layout-focus" type="button">Focus view</button>
+              <button id="layout-split" type="button">Split view</button>
+            </div>
+          </div>
+          <div class="session-switcher" id="session-switcher" aria-label="Open publishing sessions" hidden></div>
           <div class="live-grid" id="live-grid"></div>
           <div class="activity-empty" id="activity-empty">
             <span class="empty-icon">◎</span>
