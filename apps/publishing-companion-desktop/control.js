@@ -50,6 +50,7 @@ function setView(view) {
   });
   byId("view-title").textContent = views[view].title;
   byId("view-eyebrow").textContent = views[view].eyebrow;
+  document.body.classList.toggle("immersive-live", view === "activity" && activeSessions().length === 1);
   scheduleLayout();
 }
 
@@ -184,27 +185,38 @@ function renderWorkspace() {
   const active = activeSessions();
   if (!active.some(session => session.id === focusedSessionId)) focusedSessionId = active[0]?.id ?? null;
   const canSplit = active.length > 1 && window.innerWidth >= 1200;
+  const simultaneousPublishing = active.filter(session => session.purpose === "publish").length > 1;
   if (!canSplit) liveLayoutMode = "focus";
+  else if (simultaneousPublishing) liveLayoutMode = "split";
 
   const activityPanel = byId("activity-panel");
   activityPanel.classList.toggle("has-live", active.length > 0);
+  activityPanel.classList.toggle("single-live", active.length === 1);
+  document.body.classList.toggle("immersive-live", activeView === "activity" && active.length === 1);
   byId("live-command-bar").hidden = active.length === 0;
-  byId("session-switcher").hidden = active.length === 0;
+  byId("session-switcher").hidden = active.length <= 1;
   byId("live-heading").textContent = active.length
     ? `${active.length} live ${active.length === 1 ? "browser" : "browsers"}`
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
     ? "Use Focus view for a full-size website. Split view is available when you need to watch two accounts together."
     : "Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.";
-  byId("live-run-title").textContent = active.length === 1 ? "One live account" : `${active.length} live accounts`;
-  byId("live-run-detail").textContent = liveLayoutMode === "focus"
-    ? "Full-size browser selected. Choose another account tab to switch."
-    : "Watching all live accounts together.";
+  const singleSession = active.length === 1 ? active[0] : null;
+  byId("live-run-title").textContent = singleSession
+    ? `${platformLabel(singleSession.platform)} · ${stateLabel(singleSession)}`
+    : `${active.length} live accounts`;
+  byId("live-run-detail").textContent = singleSession
+    ? singleSession.activity?.detail || (singleSession.purpose === "login" ? "Complete login in the browser above." : "Protected publishing is active.")
+    : liveLayoutMode === "focus"
+      ? "Full-size browser selected. Choose another account tab to switch."
+      : "Watching all live accounts together.";
+  byId("live-stop").textContent = singleSession?.purpose === "login" ? "Close login" : "Stop publishing";
 
   const focusButton = byId("layout-focus");
   const splitButton = byId("layout-split");
   focusButton.classList.toggle("active", liveLayoutMode === "focus");
   splitButton.classList.toggle("active", liveLayoutMode === "split");
+  focusButton.disabled = simultaneousPublishing;
   splitButton.disabled = !canSplit;
 
   const switcher = byId("session-switcher");
@@ -234,6 +246,7 @@ function renderWorkspace() {
   badge.hidden = active.length === 0;
   badge.textContent = String(active.length);
   byId("global-stop").disabled = active.length === 0;
+  byId("live-stop").disabled = active.length === 0;
   scheduleLayout();
 }
 
@@ -312,14 +325,17 @@ byId("layout-split").addEventListener("click", () => {
   liveLayoutMode = "split";
   renderWorkspace();
 });
-byId("global-stop").addEventListener("click", async event => {
+async function stopPublishing(event) {
   const button = event.currentTarget;
   button.disabled = true;
   button.textContent = "Stopping…";
   await api.emergencyStop();
-  button.textContent = "Emergency stop";
+  button.textContent = button.id === "live-stop" ? "Stop publishing" : "Emergency stop";
   await refreshWorkspace();
-});
+}
+
+byId("global-stop").addEventListener("click", stopPublishing);
+byId("live-stop").addEventListener("click", stopPublishing);
 byId("empty-open-dashboard").addEventListener("click", () => api.openDashboard());
 byId("open-data").addEventListener("click", () => api.openData());
 byId("open-logs").addEventListener("click", () => api.openLogs());

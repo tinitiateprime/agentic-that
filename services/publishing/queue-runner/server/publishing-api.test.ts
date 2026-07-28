@@ -440,6 +440,13 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.match(recoveredPost?.failureReason || "", /after the final publish action/i);
   assert.match(recoveredPost?.failureReason || "", /automatic retry is blocked/i);
 
+  const blockedRetryResponse = await api(`/api/uploads/${posts[0].id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "queued" }),
+  });
+  assert.equal(blockedRetryResponse.status, 400);
+  assert.match((await blockedRetryResponse.json() as { message: string }).message, /may already be published/i);
+
   const failedResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "failed", failureReason: "Test failure details" }),

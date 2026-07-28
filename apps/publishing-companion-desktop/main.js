@@ -26,7 +26,10 @@ const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 const EMBED_FULL_PUBLISHING_WORKSPACE = false;
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const SERVICE_ORIGIN = "http://127.0.0.1:8792";
-const DESKTOP_DEBUG_PORT = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 8793);
+const configuredDesktopDebugPort = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 0);
+const REQUESTED_DESKTOP_DEBUG_PORT = Number.isInteger(configuredDesktopDebugPort) && configuredDesktopDebugPort > 0
+  ? configuredDesktopDebugPort
+  : 0;
 const MAX_ACTIVITY_HISTORY = 20;
 
 const userDataOverride = process.env.AGENTICTHAT_COMPANION_DATA_DIR?.trim();
@@ -36,8 +39,11 @@ if (userDataOverride) {
   app.setPath("userData", resolvedUserData);
 }
 
+if (REQUESTED_DESKTOP_DEBUG_PORT === 0) {
+  fs.rmSync(path.join(app.getPath("userData"), "DevToolsActivePort"), { force: true });
+}
 app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
-app.commandLine.appendSwitch("remote-debugging-port", String(DESKTOP_DEBUG_PORT));
+app.commandLine.appendSwitch("remote-debugging-port", String(REQUESTED_DESKTOP_DEBUG_PORT));
 app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling");
 
 const APP_VERSION = app.getVersion();
@@ -55,6 +61,7 @@ let dashboardBounds = null;
 let browserBounds = new Map();
 let publishingPermissionPromise = null;
 let publishingRunPermissionActive = false;
+let resolvedDesktopDebugPort = REQUESTED_DESKTOP_DEBUG_PORT || null;
 
 function randomSecret(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
@@ -245,7 +252,6 @@ async function serviceStatus() {
       ...health,
       version: APP_VERSION,
       username: settings.username,
-      password: settings.passwordPlain,
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       dataDirectory: path.join(app.getPath("userData"), "publishing-data"),
@@ -258,7 +264,6 @@ async function serviceStatus() {
       chromeInstalled: false,
       version: APP_VERSION,
       username: settings.username,
-      password: settings.passwordPlain,
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       error: error instanceof Error ? error.message : "The publishing service is unavailable.",
@@ -433,6 +438,27 @@ function browserPartition(accountId) {
   return `persist:agenticthat-publishing-${digest}`;
 }
 
+async function desktopDebugEndpoint(timeoutMs = 10000) {
+  if (resolvedDesktopDebugPort) return `http://127.0.0.1:${resolvedDesktopDebugPort}`;
+  const activePortPath = path.join(app.getPath("userData"), "DevToolsActivePort");
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const port = Number(fs.readFileSync(activePortPath, "utf8").split(/\r?\n/, 1)[0]);
+      if (Number.isInteger(port) && port > 0 && port < 65536) {
+        resolvedDesktopDebugPort = port;
+        return `http://127.0.0.1:${port}`;
+      }
+    } catch {
+      // Chromium creates DevToolsActivePort shortly after Electron becomes ready.
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  throw new Error("The embedded browser debugging endpoint did not become ready.");
+}
+
 async function clearAccountBrowserData(accountId) {
   const accountSession = session.fromPartition(browserPartition(accountId));
   await accountSession.clearStorageData();
@@ -504,7 +530,7 @@ async function openManagedBrowser(request) {
 
   return {
     id,
-    debugEndpoint: `http://127.0.0.1:${DESKTOP_DEBUG_PORT}`,
+    debugEndpoint: await desktopDebugEndpoint(),
     targetUrl,
   };
 }
@@ -528,7 +554,13 @@ function removeManagedViews(session) {
     } catch {
       // The app may already be closing.
     }
-    if (!view.webContents.isDestroyed()) view.webContents.close();
+    if (!view.webContents.isDestroyed()) {
+      // Social composers commonly install beforeunload handlers. Waiting for
+      // those prompts blocks Electron's main thread, the local API, and every
+      // later account in the queue. These views are disposable and their
+      // session state is saved before this close runs.
+      view.webContents.close({ waitForBeforeUnload: false });
+    }
   }
   session.view = null;
   session.lockView = null;
@@ -789,6 +821,15 @@ if (started) {
       console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
     } catch (error) {
       console.error("Could not start publishing service:", error instanceof Error ? error.message : error);
+      await dialog.showMessageBox(mainWindow, {
+        type: "error",
+        title: "Companion could not start",
+        message: "Another AgenticThat Companion is already running.",
+        detail: "Close every older Companion version, then open this version again.",
+        buttons: ["Close"],
+      });
+      app.quit();
+      return;
     }
     mainWindow?.webContents.send("companion:status-changed");
     notifyWorkspaceState();

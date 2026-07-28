@@ -234,7 +234,17 @@ async function clickCreateButton(page: Page) {
   }
 
   await postOption.scrollIntoViewIfNeeded().catch(() => undefined);
-  await postOption.click({ force: true, timeout: 10000 });
+  try {
+    await postOption.click({ force: true, timeout: 10000 });
+  } catch (error) {
+    if (!/outside of the viewport/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    console.log("Instagram Post option is below the compact viewport; activating the visible menu item directly...");
+    await postOption.evaluate((element) => {
+      const target = element.closest<HTMLElement>('[role="menuitem"], [role="link"], [role="button"], a, button')
+        ?? element as HTMLElement;
+      target.click();
+    });
+  }
 
   if (!await waitForInstagramComposerReady(page, 20000)) {
     throw new Error("Instagram Post was selected, but the Create new post composer did not open.");
@@ -376,10 +386,9 @@ async function clickInstagramEditNext(page: Page) {
 
   const editReady = await waitForAnyVisible([
     page.getByText(/^Edit$/i),
-    page.getByText(/^New post$/i),
-    page.getByText(/^Create new post$/i),
-    page.getByRole("button", { name: /^Next$/i }),
-    page.getByText(/^Next$/i),
+    page.getByText(/^Edit video$/i),
+    page.getByText(/^Filters$/i),
+    page.getByText(/^Adjustments$/i),
   ], 60000);
 
   if (!editReady) throw new Error("Instagram edit screen did not appear.");
@@ -397,8 +406,9 @@ async function clickInstagramEditNext(page: Page) {
   const shareReady = await waitForAnyVisible([
     page.getByRole("button", { name: /^Share$/i }),
     page.getByText(/^Share$/i),
-    page.getByText(/^New reel$/i),
-    page.getByText(/^Create new post$/i),
+    page.getByPlaceholder(/Write a caption/i),
+    page.locator('textarea[aria-label*="caption" i]'),
+    page.locator('[contenteditable="true"][aria-label*="caption" i]'),
   ], 60000);
 
   if (!shareReady) throw new Error("Instagram share screen did not appear.");

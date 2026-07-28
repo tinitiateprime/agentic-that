@@ -925,12 +925,78 @@ async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, ac
   return { success: true };
 }
 
+async function attachYouTubeVideoFile(page: Page, videoPath: string) {
+  const inputSelector = 'ytcp-uploads-dialog input[type="file"], input[type="file"][accept*="video"], input[type="file"]';
+
+  const useExistingInput = async () => {
+    const inputs = page.locator(inputSelector);
+    if ((await inputs.count().catch(() => 0)) === 0) return false;
+    await inputs.last().setInputFiles(videoPath);
+    return true;
+  };
+
+  const clickUploadControl = async (control: Locator) => {
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
+    await control.click({ force: true, timeout: 10000 });
+    const chooser = await chooserPromise;
+    if (chooser) {
+      await chooser.setFiles(videoPath);
+      return true;
+    }
+    await page.waitForTimeout(700);
+    return useExistingInput();
+  };
+
+  if (await useExistingInput()) return;
+
+  const selectFiles = await waitForVisible([
+    page.getByRole("button", { name: /Select files/i }),
+    page.getByText(/^Select files$/i),
+    page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+  ], 5000);
+  if (selectFiles && await clickUploadControl(selectFiles)) return;
+
+  console.log("Opening the YouTube Studio upload dialog...");
+  const directUpload = await waitForVisible([
+    page.getByRole("button", { name: /^Upload videos$/i }),
+    page.getByText(/^Upload videos$/i),
+    page.locator("ytcp-button").filter({ hasText: /^Upload videos$/i }),
+  ], 8000);
+  if (directUpload && await clickUploadControl(directUpload)) return;
+
+  const createButton = await waitForVisible([
+    page.getByRole("button", { name: /^Create$/i }),
+    page.locator("ytcp-button#create-icon"),
+    page.locator("#create-icon").filter({ hasText: /Create/i }),
+    page.getByText(/^Create$/i),
+  ], 12000);
+  if (createButton) {
+    await createButton.click({ force: true, timeout: 10000 });
+    await page.waitForTimeout(500);
+    const uploadVideos = await waitForVisible([
+      page.getByRole("menuitem", { name: /Upload videos/i }),
+      page.locator('[role="menuitem"]').filter({ hasText: /Upload videos/i }),
+      page.getByText(/^Upload videos$/i),
+    ], 10000);
+    if (uploadVideos && await clickUploadControl(uploadVideos)) return;
+  }
+
+  const finalSelectFiles = await waitForVisible([
+    page.getByRole("button", { name: /Select files/i }),
+    page.getByText(/^Select files$/i),
+    page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+  ], 10000);
+  if (finalSelectFiles && await clickUploadControl(finalSelectFiles)) return;
+  if (await useExistingInput()) return;
+
+  throw new Error("YouTube Studio did not expose an Upload videos or Select files control.");
+}
+
 async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath: string, accountLogin?: AccountLogin) {
   await loginToYouTube(page, accountLogin);
 
   console.log("Uploading file...");
-  const fileInput = page.locator('input[type="file"]');
-  await fileInput.setInputFiles(videoPath);
+  await attachYouTubeVideoFile(page, videoPath);
 
   console.log("Waiting for title field...");
   await page.waitForSelector("#title-textarea", { timeout: 60000 });

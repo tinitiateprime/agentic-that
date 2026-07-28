@@ -893,12 +893,14 @@ function scheduledTime(upload: PlatformUpload) {
 
 export function isUploadReadyForAutomation(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued") return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt === null ? !upload.scheduledAt : scheduledAt <= now;
 }
 
 export function isDueScheduledUpload(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued" || !upload.scheduledAt) return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt !== null && scheduledAt <= now;
 }
@@ -1532,6 +1534,12 @@ export async function updateUploadStatus(
     oldStatus = store.uploads[index].status;
     statusChanged = oldStatus !== status;
     const existing = store.uploads[index];
+    if (
+      (status === "queued" || status === "processing")
+      && (existing.publishActionState === "submitted" || existing.publishActionState === "uncertain")
+    ) {
+      throw new Error("This post may already be published. Verify the platform and create a new post instead of retrying this job.");
+    }
     const next: PlatformUpload = {
       ...existing,
       status,

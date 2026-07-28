@@ -347,16 +347,22 @@ async function launchAccountBrowser(
         update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
         close: async () => {
           try {
+            await Promise.race([
+              connection?.close().catch(() => undefined),
+              new Promise(resolve => setTimeout(resolve, 3000)),
+            ]);
             await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
-            await connection?.close().catch(() => undefined);
           } finally {
             releaseAccount();
           }
         },
       };
     } catch (error) {
+      await Promise.race([
+        connection?.close().catch(() => undefined),
+        new Promise(resolve => setTimeout(resolve, 3000)),
+      ]);
       await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
-      await connection?.close().catch(() => undefined);
       releaseAccount();
       throw error;
     }
@@ -406,6 +412,14 @@ async function launchAccountBrowser(
 
 async function saveAccountSessionState(account: PublishingAccount, context: BrowserContext) {
   try {
+    // Electron's per-account persistent partition already saves cookies with
+    // Chromium/OS encryption. Asking CDP for cookies after a large media post
+    // can block the embedded service, so no duplicate export is needed here.
+    if (publishingDesktopHost()) {
+      fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+      console.log(`Retained protected Companion session for ${account.platform} account ${account.handle}.`);
+      return;
+    }
     const key = sessionEncryptionKey();
     fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
     if (!key) return;
@@ -422,6 +436,9 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
 }
 
 async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+  // The desktop WebContentsView uses a stable persist: partition per account,
+  // so its protected browser storage is already restored by Electron.
+  if (publishingDesktopHost()) return;
   migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
@@ -824,8 +841,12 @@ export async function cancelAutomation(reason = "Publishing was stopped by the u
 }
 
 function maxConcurrentAccounts() {
-  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 2);
-  return Number.isInteger(configured) ? Math.min(5, Math.max(1, configured)) : 2;
+  // A hidden WebContentsView has a zero-sized viewport, so the safest and most
+  // reliable desktop default is one fully visible publishing account at a time.
+  // Advanced deployments may opt into two panes, which the Companion renders
+  // side by side; more than two would make the live browser panes too small.
+  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 1);
+  return Number.isInteger(configured) ? Math.min(2, Math.max(1, configured)) : 1;
 }
 
 async function runWithConcurrency<T>(

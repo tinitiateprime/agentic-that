@@ -172,10 +172,22 @@ async function openPostComposer(page: Page) {
 }
 
 async function getPostComposer(page: Page) {
-  return waitForVisible([
+  const dialog = await waitForVisible([
     page.locator('[role="dialog"]').filter({ has: page.locator('[data-testid="tweetTextarea_0"]') }),
     page.locator('[role="dialog"]').filter({ has: page.getByRole("textbox", { name: /Post text|What's happening/i }) }),
-  ], 15000);
+  ], 4000);
+  if (dialog) return dialog;
+
+  const editor = await waitForVisible([
+    page.locator('[data-testid="tweetTextarea_0"]'),
+    page.getByRole("textbox", { name: /Post text|What's happening/i }),
+    page.locator('[contenteditable="true"][role="textbox"]'),
+  ], 11000);
+  if (!editor) return null;
+
+  const editorDialog = editor.locator("xpath=ancestor::*[@role='dialog'][1]");
+  if (await editorDialog.isVisible().catch(() => false)) return editorDialog;
+  return page.locator("body");
 }
 
 async function attachXMedia(page: Page, filePath: string) {

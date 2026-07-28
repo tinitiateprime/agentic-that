@@ -40,6 +40,19 @@ try {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
   }
 
+  $activePortFile = Join-Path $smokeRoot "DevToolsActivePort"
+  $debugPort = $null
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    if (Test-Path -LiteralPath $activePortFile) {
+      $debugPort = [int](Get-Content -LiteralPath $activePortFile -TotalCount 1)
+      if ($debugPort -gt 0) { break }
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $debugPort) { throw "The packaged Companion did not allocate an isolated browser-debug port." }
+  $debugStatus = Invoke-RestMethod -Uri "http://127.0.0.1:$debugPort/json/version" -TimeoutSec 5
+  if (-not $debugStatus.webSocketDebuggerUrl) { throw "The packaged Companion browser-debug endpoint is unavailable." }
+
   $productionOrigin = "https://agentic-that.netlify.app"
   $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "http://127.0.0.1:8792/api/health" -Headers @{
     Origin = $productionOrigin
@@ -63,6 +76,7 @@ try {
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
+  Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Extension bridge: enabled"
   Write-Host "Production dashboard origin: allowed"
   Write-Host "Platforms: $($health.platforms -join ', ')"
