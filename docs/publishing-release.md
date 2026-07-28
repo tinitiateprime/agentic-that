@@ -47,6 +47,19 @@ valid CA-trusted signature.
 
 ## Publish a version
 
+Before tagging a customer release:
+
+1. Run `npm run test:publishing` and `npm run build`.
+2. Confirm production dependency audits report no known vulnerabilities for
+   both the repository and desktop app.
+3. Test one account per supported app with visible manual login, a normal post,
+   a scheduled post, warning confirmation, account pause/resume, and emergency
+   stop.
+4. Verify the Account health dashboard and activity log show the expected
+   Green, Warning, Paused, or Restricted state.
+5. Confirm the release remains local-profile based and contains no stealth,
+   proxy-rotation, CAPTCHA-bypass, or automation-hiding browser flags.
+
 After the code is on `main`, create and push the release tag:
 
 ```text

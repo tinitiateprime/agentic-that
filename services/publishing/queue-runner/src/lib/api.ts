@@ -29,6 +29,25 @@ export type AuthResponse = {
   token: string;
 };
 
+export type ContentPreflightApiIssue = {
+  code: string;
+  severity: "block" | "warning";
+  message: string;
+  accountId?: string;
+};
+
+export class ContentPreflightApiError extends Error {
+  readonly code: "CONTENT_PREFLIGHT_BLOCKED" | "CONTENT_PREFLIGHT_WARNINGS";
+  readonly issues: ContentPreflightApiIssue[];
+
+  constructor(payload: { message?: string; code: "CONTENT_PREFLIGHT_BLOCKED" | "CONTENT_PREFLIGHT_WARNINGS"; issues?: ContentPreflightApiIssue[] }) {
+    super(payload.message || "Content pre-flight check failed.");
+    this.name = "ContentPreflightApiError";
+    this.code = payload.code;
+    this.issues = payload.issues ?? [];
+  }
+}
+
 export function setAuthToken(token: string | null) {
   authToken = token;
 }
@@ -60,9 +79,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ? payload.trim() || `Request failed with ${response.status}`
       : `The publishing API returned ${response.status} instead of JSON. Refresh the page or check the service connection.`;
     try {
-      const error = JSON.parse(payload) as { message?: string };
+      const error = JSON.parse(payload) as {
+        message?: string;
+        code?: string;
+        issues?: ContentPreflightApiIssue[];
+      };
       message = error?.message ?? message;
-    } catch {
+      if (error.code === "CONTENT_PREFLIGHT_BLOCKED" || error.code === "CONTENT_PREFLIGHT_WARNINGS") {
+        throw new ContentPreflightApiError({
+          message,
+          code: error.code,
+          issues: error.issues,
+        });
+      }
+    } catch (error) {
+      if (error instanceof ContentPreflightApiError) throw error;
       // Keep the plain response text when the server did not return JSON.
     }
     throw new Error(message);
@@ -161,6 +192,8 @@ export const api = {
     title: string;
     description: string;
     destinations: UnifiedPostDestinationInput[];
+    rightsConfirmed: boolean;
+    confirmWarnings?: boolean;
   }) => {
     if (payload.postFormat === "text") {
       return request<PlatformUpload[]>("/api/posts/unified/text", {
@@ -168,6 +201,7 @@ export const api = {
         body: JSON.stringify({
           description: payload.description,
           destinations: payload.destinations,
+          confirmWarnings: payload.confirmWarnings,
         }),
       });
     }
@@ -209,6 +243,8 @@ export const api = {
           title: payload.title,
           description: payload.description,
           destinations: payload.destinations,
+          rightsConfirmed: payload.rightsConfirmed,
+          confirmWarnings: payload.confirmWarnings,
         }),
       });
       stagedUploadId = null;
@@ -225,11 +261,13 @@ export const api = {
     file: File | null;
     title: string;
     description: string;
+    rightsConfirmed: boolean;
+    confirmWarnings?: boolean;
   }) => {
     if (payload.postFormat === "text") {
       return request<ContentSubmission>("/api/submissions/text", {
         method: "POST",
-        body: JSON.stringify({ description: payload.description }),
+        body: JSON.stringify({ description: payload.description, confirmWarnings: payload.confirmWarnings }),
       });
     }
 
@@ -269,6 +307,8 @@ export const api = {
           stagedUploadId: session.id,
           title: payload.title,
           description: payload.description,
+          rightsConfirmed: payload.rightsConfirmed,
+          confirmWarnings: payload.confirmWarnings,
         }),
       });
       stagedUploadId = null;
@@ -280,10 +320,10 @@ export const api = {
     }
   },
 
-  scheduleSubmission: (submissionId: string, destinations: UnifiedPostDestinationInput[]) =>
+  scheduleSubmission: (submissionId: string, destinations: UnifiedPostDestinationInput[], confirmWarnings = false) =>
     request<{ submission: ContentSubmission; uploads: PlatformUpload[] }>(`/api/submissions/${submissionId}/schedule`, {
       method: "POST",
-      body: JSON.stringify({ destinations }),
+      body: JSON.stringify({ destinations, confirmWarnings }),
     }),
 
   accounts: (platform?: Platform) => request<PlatformAccount[]>(`/api/accounts${platform ? `?platform=${platform}` : ""}`),

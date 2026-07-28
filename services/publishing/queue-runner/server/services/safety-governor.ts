@@ -1,0 +1,92 @@
+import type { AccountSafetyMode, PlatformUpload } from "../../shared/schema.js";
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+export type PublishingSafetyRule = {
+  hourlyLimit: number;
+  dailyLimit: number;
+  minimumGapMs: number;
+};
+
+export type PublishingSafetyAssessment = {
+  allowed: boolean;
+  retryAt?: string;
+  reason?: string;
+  rule: PublishingSafetyRule;
+  postsLastHour: number;
+  postsLastDay: number;
+};
+
+const platformRules = {
+  instagram: { hourlyLimit: 1, dailyLimit: 6, minimumGapMs: 60 * 60 * 1000 },
+  facebook: { hourlyLimit: 2, dailyLimit: 10, minimumGapMs: 30 * 60 * 1000 },
+  linkedin: { hourlyLimit: 1, dailyLimit: 3, minimumGapMs: 60 * 60 * 1000 },
+  x: { hourlyLimit: 4, dailyLimit: 30, minimumGapMs: 15 * 60 * 1000 },
+} satisfies Partial<Record<PlatformUpload["platform"], PublishingSafetyRule>>;
+
+export function publishingSafetyRule(upload: PlatformUpload, safetyMode: AccountSafetyMode = "standard"): PublishingSafetyRule {
+  const standardRule = upload.platform === "youtube"
+    ? upload.postFormat === "video"
+      ? { hourlyLimit: 1, dailyLimit: 3, minimumGapMs: 60 * 60 * 1000 }
+      : { hourlyLimit: 2, dailyLimit: 6, minimumGapMs: 30 * 60 * 1000 }
+    : platformRules[upload.platform];
+  if (safetyMode === "standard") return standardRule;
+  return {
+    hourlyLimit: Math.max(1, Math.floor(standardRule.hourlyLimit / 2)),
+    dailyLimit: Math.max(1, Math.floor(standardRule.dailyLimit / 2)),
+    minimumGapMs: Math.max(60 * 60 * 1000, standardRule.minimumGapMs * 2),
+  };
+}
+
+function postedTime(upload: PlatformUpload) {
+  if (upload.status !== "posted" || !upload.postedAt) return null;
+  const timestamp = Date.parse(upload.postedAt);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function assessPublishingSafety(
+  upload: PlatformUpload,
+  accountUploads: PlatformUpload[],
+  now = Date.now(),
+  safetyMode: AccountSafetyMode = "standard",
+): PublishingSafetyAssessment {
+  const rule = publishingSafetyRule(upload, safetyMode);
+  const postedTimes = accountUploads
+    .map(postedTime)
+    .filter((timestamp): timestamp is number => timestamp !== null && timestamp <= now)
+    .sort((left, right) => left - right);
+  const hourlyTimes = postedTimes.filter(timestamp => timestamp > now - HOUR_MS);
+  const dailyTimes = postedTimes.filter(timestamp => timestamp > now - DAY_MS);
+  const retryCandidates: Array<{ at: number; reason: string }> = [];
+  const latestPostAt = postedTimes.at(-1);
+
+  if (latestPostAt !== undefined && latestPostAt + rule.minimumGapMs > now) {
+    retryCandidates.push({
+      at: latestPostAt + rule.minimumGapMs,
+      reason: "Minimum spacing between posts is still active.",
+    });
+  }
+  if (hourlyTimes.length >= rule.hourlyLimit) {
+    retryCandidates.push({
+      at: hourlyTimes[hourlyTimes.length - rule.hourlyLimit] + HOUR_MS,
+      reason: `The ${rule.hourlyLimit}-post hourly safety limit was reached.`,
+    });
+  }
+  if (dailyTimes.length >= rule.dailyLimit) {
+    retryCandidates.push({
+      at: dailyTimes[dailyTimes.length - rule.dailyLimit] + DAY_MS,
+      reason: `The ${rule.dailyLimit}-post daily safety limit was reached.`,
+    });
+  }
+
+  const controllingLimit = retryCandidates.sort((left, right) => right.at - left.at)[0];
+  return {
+    allowed: !controllingLimit,
+    retryAt: controllingLimit ? new Date(controllingLimit.at).toISOString() : undefined,
+    reason: controllingLimit?.reason,
+    rule,
+    postsLastHour: hourlyTimes.length,
+    postsLastDay: dailyTimes.length,
+  };
+}

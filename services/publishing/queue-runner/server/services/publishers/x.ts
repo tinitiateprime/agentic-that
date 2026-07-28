@@ -218,7 +218,7 @@ async function fillXCaption(page: Page, caption: string) {
   console.log("X caption entered.");
 }
 
-async function clickXPostWhenReady(page: Page) {
+async function clickXPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer before publishing.");
 
@@ -233,6 +233,7 @@ async function clickXPostWhenReady(page: Page) {
     if (postButton && await postButton.isEnabled().catch(() => false)) {
       console.log("Clicking X Post button...");
       await postButton.click({ force: true, timeout: 10000 });
+      await onSubmitted?.();
       return composer;
     }
 
@@ -344,7 +345,7 @@ export async function postToX(page: Page, upload: PlatformUpload, accountLogin?:
   await openPostComposer(page);
   if (!isTextOnly) await attachXMedia(page, filePath);
   await fillXCaption(page, caption);
-  const composer = await clickXPostWhenReady(page);
+  const composer = await clickXPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForXPostComplete(page, composer);
 
   const holdTime = getPostHoldMs();

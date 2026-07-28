@@ -400,10 +400,11 @@ async function waitForFacebookSubmissionStart(page: Page, timeout = 3500) {
   return false;
 }
 
-async function clickFacebookPostWhenReady(page: Page) {
+async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
   const deadline = Date.now() + 120000;
+  let readyPostButton: Locator | null = null;
 
   while (Date.now() < deadline) {
     const postButton = await firstVisible([
@@ -417,20 +418,21 @@ async function clickFacebookPostWhenReady(page: Page) {
       await page.waitForTimeout(500);
       continue;
     }
-
-    console.log("Clicking the Facebook Post button...");
-    await postButton.click({ force: true, timeout: 10000 });
-
-    if (await waitForFacebookSubmissionStart(page, 2000)) {
-      console.log("Facebook accepted the Post click.");
-      return;
-    }
-
-    console.log("Facebook did not accept the click yet; clicking Post again...");
-    await page.waitForTimeout(500);
+    readyPostButton = postButton;
+    break;
   }
 
-  throw new Error("Facebook Post button did not become ready or accept the click within 120 seconds.");
+  if (!readyPostButton) throw new Error("Facebook Post button did not become ready within 120 seconds.");
+  console.log("Clicking the Facebook Post button once...");
+  await readyPostButton.click({ force: true, timeout: 10000 });
+  await onSubmitted?.();
+  if (await waitForFacebookSubmissionStart(page, 10000)) {
+    console.log("Facebook accepted the Post click.");
+    return;
+  }
+  throw new Error(
+    "Facebook final publish action was submitted, but confirmation is uncertain. Do not retry automatically; verify the Page before resuming.",
+  );
 }
 
 async function waitForFacebookPostComplete(page: Page) {
@@ -456,7 +458,9 @@ async function waitForFacebookPostComplete(page: Page) {
   }
 
   if (await createPostComposerIsVisible(page)) {
-    throw new Error("Facebook Create post dialog is still open 15 seconds after clicking Post.");
+    throw new Error(
+      "Facebook Create post dialog is still open 15 seconds after clicking Post; the final publish result is uncertain.",
+    );
   }
 
   console.log("Facebook post wait complete.");
@@ -587,7 +591,7 @@ export async function postToFacebook(page: Page, upload: PlatformUpload, account
   await waitForCreatePostComposerReady(page);
   await typeFacebookCaption(page, upload.caption.trim());
   if (!isTextOnly) await attachFacebookMedia(page, filePath);
-  await clickFacebookPostWhenReady(page);
+  await clickFacebookPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForFacebookPostComplete(page);
 
   return { success: true };

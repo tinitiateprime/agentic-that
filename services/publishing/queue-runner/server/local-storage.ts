@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
+import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
 import {
   type ActivityLog,
   type AutomationInput,
@@ -14,6 +15,7 @@ import {
   type PlatformAccount,
   type PlatformUpload,
   type PostFormat,
+  type PublishActionState,
   type PublishingSchedule,
   type SocialMediaSchedule,
   type UpdateUploadDetailsInput,
@@ -62,6 +64,7 @@ type StoredSubmissionInput = {
   url: string;
   title?: string;
   description: string;
+  rightsConfirmed: boolean;
 };
 
 type BootstrapUser = {
@@ -114,7 +117,7 @@ export type AutomationInputMode = "ready" | "scheduledOnly";
 export type PublishingAccount = PlatformAccount;
 export type AutomationRunTrigger = "manual" | "scheduler";
 export type AutomationRunStatus = "running" | "completed" | "failed";
-export type AutomationPostStatus = "processing" | "posted" | "failed";
+export type AutomationPostStatus = "processing" | "posted" | "failed" | "deferred";
 
 const passwordIterations = 120_000;
 const passwordAlgorithm = "pbkdf2_sha256";
@@ -266,7 +269,13 @@ function normalizeStore(value: unknown): Store {
     ? input.users.map(user => ({ ...user, workspaceId: user.workspaceId || legacyWorkspaceId }))
     : [];
   const accounts = Array.isArray(input.accounts)
-    ? input.accounts.map(account => ({ ...account, workspaceId: account.workspaceId || legacyWorkspaceId }))
+    ? input.accounts.map(account => ({
+      ...account,
+      workspaceId: account.workspaceId || legacyWorkspaceId,
+      safetyStatus: account.safetyStatus || (account.enabled ? "healthy" : "paused"),
+      safetyMode: account.safetyMode ?? "standard",
+      twoFactorEnabled: account.twoFactorEnabled ?? false,
+    }))
     : [];
   const accountWorkspaces = new Map(accounts.map(account => [account.id, account.workspaceId]));
   const schedules = Array.isArray(input.schedules)
@@ -295,6 +304,7 @@ function normalizeStore(value: unknown): Store {
       ? input.submissions.map(submission => ({
         ...submission,
         workspaceId: submission.workspaceId || legacyWorkspaceId,
+        rightsConfirmed: submission.rightsConfirmed ?? true,
         destinationUploadIds: Array.isArray(submission.destinationUploadIds) ? submission.destinationUploadIds : [],
       }))
       : [],
@@ -833,12 +843,18 @@ export async function recoverInterruptedPublishingWork() {
     store.uploads = store.uploads.map(upload => {
       if (upload.status !== "processing") return upload;
       recoveredUploads += 1;
+      const finalActionUncertain = upload.publishActionState === "submitted"
+        || upload.publishActionState === "uncertain";
+      const retryAllowed = recoveryMode === "retry" && !finalActionUncertain;
       return {
         ...upload,
-        status: recoveryMode === "retry" ? "queued" : "failed",
-        failureReason: recoveryMode === "retry"
+        status: retryAllowed ? "queued" : "failed",
+        publishActionState: finalActionUncertain ? "uncertain" : upload.publishActionState,
+        failureReason: retryAllowed
           ? undefined
-          : "The companion stopped during publishing. Verify the platform before retrying to prevent a duplicate post.",
+          : finalActionUncertain
+            ? "The companion stopped after the final publish action. Verify the platform; automatic retry is blocked to prevent a duplicate post."
+            : "The companion stopped during publishing. Verify the platform before retrying to prevent a duplicate post.",
         updatedAt: recoveredAt,
       };
     });
@@ -919,6 +935,7 @@ export async function createContentSubmission(
       url: input.url,
       title: input.title?.trim() || undefined,
       description: input.description.trim(),
+      rightsConfirmed: input.rightsConfirmed,
       status: "awaiting_schedule",
       createdByUserId: actorUserId,
       destinationUploadIds: [],
@@ -1011,6 +1028,9 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
+      safetyStatus: input.enabled === false ? "paused" : "healthy",
+      safetyMode: input.safetyMode ?? "protected",
+      twoFactorEnabled: input.twoFactorEnabled ?? false,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -1038,6 +1058,13 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: existing.credentialConfigured,
       enabled: input.enabled ?? existing.enabled,
+      safetyMode: input.safetyMode ?? existing.safetyMode ?? "standard",
+      twoFactorEnabled: input.twoFactorEnabled ?? existing.twoFactorEnabled ?? false,
+      safetyStatus: input.enabled === true
+        ? "healthy"
+        : input.enabled === false ? "paused" : existing.safetyStatus,
+      safetyReason: input.enabled === true ? undefined : existing.safetyReason,
+      safetyPausedAt: input.enabled === true ? undefined : existing.safetyPausedAt,
       updatedAt: nowIso()
     };
     store.accounts[index] = updated;
@@ -1057,6 +1084,39 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
     store.accounts[index] = updated;
     return updated;
   });
+}
+
+export async function pausePlatformAccountForSafety(
+  accountId: string,
+  status: "warning" | "paused" | "restricted",
+  reason: string,
+) {
+  const account = await mutateStore(store => {
+    const index = store.accounts.findIndex(account => account.id === accountId);
+    if (index < 0) return null;
+    const timestamp = nowIso();
+    const updated: PlatformAccount = {
+      ...store.accounts[index],
+      enabled: false,
+      safetyStatus: status,
+      safetyReason: reason,
+      safetyPausedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+  if (account) {
+    await logActivity(
+      undefined,
+      "account.safety_paused",
+      "publishing_account",
+      account.id,
+      `${account.displayName} was paused automatically for account safety.`,
+      { workspaceId: account.workspaceId, platform: account.platform, status, reason },
+    );
+  }
+  return account;
 }
 
 export async function deletePlatformAccount(accountId: string, workspaceId?: string) {
@@ -1309,6 +1369,12 @@ function isStoreUploadReadyForAutomation(
 ) {
   const account = store.accounts.find(item => item.id === upload.accountId);
   if (!account?.enabled) return false;
+  if (upload.safetyDeferredUntil) {
+    const deferredUntil = Date.parse(upload.safetyDeferredUntil);
+    if (Number.isFinite(deferredUntil)) {
+      return upload.status === "queued" && deferredUntil <= now;
+    }
+  }
   if (upload.scheduleId) return isDueByPostSchedule(upload, account, scheduledIds);
   if (mode === "scheduledOnly") return isDueScheduledUpload(upload, now);
   return isUploadReadyForAutomation(upload, now);
@@ -1388,6 +1454,29 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
     )) {
       throw new Error("Selected schedule was not found.");
     }
+    const duplicate = store.uploads.find(existing => isExactQueuedDuplicate({
+      postFormat: file.postFormat,
+      title: file.title,
+      description: file.caption,
+      originalName: file.originalName,
+      size: file.size,
+      rightsConfirmed: true,
+      destinations: [],
+    }, {
+      accountId,
+      platform: account.platform,
+      description: file.caption,
+      scheduledAt: file.scheduledAt,
+      scheduleId: file.scheduleId,
+    }, existing));
+    if (duplicate) {
+      throw new ContentPreflightError([{
+        code: "exact_queued_duplicate",
+        severity: "block",
+        accountId,
+        message: "This exact post is already queued for the same account and time.",
+      }]);
+    }
     const timestamp = nowIso();
     const id = "upload_" + nanoid(12);
     const extension = path.extname(file.originalName).replace(".", "").toLowerCase() || "unknown";
@@ -1410,6 +1499,7 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       caption: file.caption,
       status: "queued",
       attemptCount: 0,
+      publishActionState: "not_started",
       uploadedAt: timestamp,
       updatedAt: timestamp,
       scheduledAt: file.scheduledAt || undefined,
@@ -1446,6 +1536,9 @@ export async function updateUploadStatus(
       ...existing,
       status,
       failureReason: status === "failed" ? changeReason : undefined,
+      safetyDeferredUntil: status === "queued" ? existing.safetyDeferredUntil : undefined,
+      safetyReason: status === "queued" ? existing.safetyReason : undefined,
+      publishActionState: status === "posted" ? "confirmed" : existing.publishActionState,
       attemptCount: status === "processing" ? (existing.attemptCount ?? 0) + 1 : existing.attemptCount ?? 0,
       lastAttemptAt: status === "processing" ? changedAt : existing.lastAttemptAt,
       postedAt: status === "posted" ? changedAt : existing.postedAt,
@@ -1459,6 +1552,41 @@ export async function updateUploadStatus(
     await insertPostStatusHistory(uploadId, oldStatus, status, changeReason, changedAt, actorUserId);
   }
   return updated;
+}
+
+export async function updateUploadPublishActionState(uploadId: string, state: PublishActionState) {
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    if (index < 0) return null;
+    const updated: PlatformUpload = {
+      ...store.uploads[index],
+      publishActionState: state,
+      updatedAt: nowIso(),
+    };
+    store.uploads[index] = updated;
+    return updated;
+  });
+}
+
+export async function deferUploadForSafety(uploadId: string, retryAt: string, reason: string) {
+  const retryTimestamp = Date.parse(retryAt);
+  if (!Number.isFinite(retryTimestamp) || retryTimestamp <= Date.now()) {
+    throw new Error("A future safety retry time is required.");
+  }
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    if (index < 0) return null;
+    const existing = store.uploads[index];
+    if (existing.status !== "queued") return existing;
+    const updated: PlatformUpload = {
+      ...existing,
+      safetyDeferredUntil: retryAt,
+      safetyReason: reason,
+      updatedAt: nowIso(),
+    };
+    store.uploads[index] = updated;
+    return updated;
+  });
 }
 
 export async function deleteUpload(uploadId: string, workspaceId?: string) {
@@ -1483,6 +1611,9 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
     const existing = store.uploads[index];
     if (existing.status === "processing" || existing.status === "posted") {
       throw new Error("Cannot edit a " + existing.status + " post.");
+    }
+    if (existing.publishActionState === "uncertain" || existing.publishActionState === "submitted") {
+      throw new Error("This post may already be published. Verify the platform and create a new post instead of retrying this job.");
     }
     let accountId = existing.accountId;
     if (input.accountId && input.accountId !== accountId) {
@@ -1513,6 +1644,9 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
       lastUpdatedByUserId: actorUserId,
       status: "queued",
       failureReason: undefined,
+      safetyDeferredUntil: undefined,
+      safetyReason: undefined,
+      publishActionState: "not_started",
       updatedAt: changedAt,
       automation: createAutomation(existing.platform, accountId, existing.id, existing.url)
     };

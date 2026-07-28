@@ -1,5 +1,6 @@
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -8,12 +9,15 @@ import {
   automationInput,
   createAutomationRun,
   createAutomationRunPost,
+  deferUploadForSafety,
   finishAutomationRun,
   finishAutomationRunPost,
   getPublishingAccount,
   listPlatformAccounts,
   listUploads,
+  pausePlatformAccountForSafety,
   updatePlatformAccountCredentialState,
+  updateUploadPublishActionState,
   updateUploadStatus,
   type AutomationInputMode,
   type AutomationRunTrigger,
@@ -31,22 +35,20 @@ import {
   type DesktopBrowserPurpose,
 } from "./desktop-host.js";
 import { publishingBrowserDataDirectory } from "../runtime-paths.js";
+import { assessPublishingSafety, type PublishingSafetyAssessment } from "./safety-governor.js";
+import { classifyPublishingRisk } from "./risk-classifier.js";
 
 const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
 const X_LOGIN_URL = "https://x.com/i/flow/login";
+const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 
-const disabledChromeFeatures = [
-  "IsolateOrigins",
-  "site-per-process",
-  "ChromeWhatsNewUI",
-  "ChromeSignin",
-  "SigninInterception",
-  "DiceWebSigninInterception",
-  "SignInProfileCreation",
-  "IdentityDiscAccountMenu",
-  "AccountConsistency",
-  "PasswordManagerOnboarding"
-].join(",");
+type EncryptedSessionState = {
+  version: 1;
+  algorithm: typeof SESSION_STATE_ALGORITHM;
+  iv: string;
+  authTag: string;
+  ciphertext: string;
+};
 
 function readJsonFile(filePath: string) {
   try {
@@ -66,10 +68,82 @@ function accountProfilePath(account: PublishingAccount) {
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
+  return path.join(accountProfilePath(account), "automation-session-state.enc.json");
+}
+
+function legacyAccountSessionStatePath(account: PublishingAccount) {
   return path.join(accountProfilePath(account), "automation-session-state.json");
 }
 
+function sessionEncryptionKey() {
+  const configured = process.env.PUBLISH_QUEUE_SESSION_ENCRYPTION_KEY?.trim();
+  return configured ? createHash("sha256").update(configured, "utf8").digest() : null;
+}
+
+export function writeEncryptedSessionState(filePath: string, state: unknown, key: Buffer) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(SESSION_STATE_ALGORITHM, key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(state), "utf8"),
+    cipher.final(),
+  ]);
+  const envelope: EncryptedSessionState = {
+    version: 1,
+    algorithm: SESSION_STATE_ALGORITHM,
+    iv: iv.toString("base64"),
+    authTag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+  const temporaryPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(envelope)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, filePath);
+}
+
+export function readEncryptedSessionState(filePath: string, key: Buffer) {
+  const envelope = JSON.parse(fs.readFileSync(filePath, "utf8")) as EncryptedSessionState;
+  if (
+    envelope.version !== 1
+    || envelope.algorithm !== SESSION_STATE_ALGORITHM
+    || !envelope.iv
+    || !envelope.authTag
+    || !envelope.ciphertext
+  ) {
+    throw new Error("The saved publishing session has an unsupported encrypted format.");
+  }
+  const decipher = createDecipheriv(SESSION_STATE_ALGORITHM, key, Buffer.from(envelope.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(envelope.authTag, "base64"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(envelope.ciphertext, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+  return JSON.parse(plaintext) as { cookies?: Parameters<BrowserContext["addCookies"]>[0] };
+}
+
+function migrateLegacyAccountSessionState(account: PublishingAccount) {
+  const legacyPath = legacyAccountSessionStatePath(account);
+  if (!fs.existsSync(legacyPath)) return;
+
+  try {
+    const key = sessionEncryptionKey();
+    if (key) {
+      const legacyState = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+      writeEncryptedSessionState(accountSessionStatePath(account), legacyState, key);
+    }
+  } catch (error) {
+    console.warn(
+      `Could not migrate the legacy session export for ${account.platform} account ${account.handle}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    // Persistent Chromium profiles retain the actual browser session. Remove
+    // the old plaintext export even when OS-backed encryption is unavailable.
+    fs.rmSync(legacyPath, { force: true });
+  }
+}
+
 export async function removeSavedAccountProfile(account: PublishingAccount) {
+  await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
   const profilesRoot = path.resolve(accountProfilesDir);
   const profilePath = path.resolve(accountProfilePath(account));
   if (!profilePath.startsWith(`${profilesRoot}${path.sep}`)) {
@@ -80,6 +154,7 @@ export async function removeSavedAccountProfile(account: PublishingAccount) {
 
 export function hasSavedAccountSession(account: PublishingAccount) {
   try {
+    migrateLegacyAccountSessionState(account);
     const sessionPath = accountSessionStatePath(account);
     return fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 2;
   } catch {
@@ -90,6 +165,7 @@ export function hasSavedAccountSession(account: PublishingAccount) {
 function clearSavedAccountSession(account: PublishingAccount) {
   try {
     fs.rmSync(accountSessionStatePath(account), { force: true });
+    fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
   } catch {
     // A locked profile file should not hide the original login failure.
   }
@@ -97,6 +173,7 @@ function clearSavedAccountSession(account: PublishingAccount) {
 
 export async function reconcileSavedAccountSessions() {
   const accounts = await listPlatformAccounts();
+  accounts.forEach(migrateLegacyAccountSessionState);
   await Promise.all(accounts
     .filter(account => !account.credentialConfigured && hasSavedAccountSession(account))
     .map(account => updatePlatformAccountCredentialState(account.id, true)));
@@ -204,6 +281,24 @@ type AccountBrowserSession = {
   close(): Promise<void>;
 };
 
+const activeAccountBrowserOperations = new Map<string, { purpose: DesktopBrowserPurpose; token: symbol }>();
+
+function reserveAccountBrowser(account: PublishingAccount, purpose: DesktopBrowserPurpose) {
+  const existing = activeAccountBrowserOperations.get(account.id);
+  if (existing) {
+    throw new Error(
+      `${account.displayName} is already busy with a ${existing.purpose} session. Wait for it to finish before starting another account job.`,
+    );
+  }
+  const token = Symbol(account.id);
+  activeAccountBrowserOperations.set(account.id, { purpose, token });
+  return () => {
+    if (activeAccountBrowserOperations.get(account.id)?.token === token) {
+      activeAccountBrowserOperations.delete(account.id);
+    }
+  };
+}
+
 async function waitForDesktopPage(
   browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>,
   targetUrl: string,
@@ -222,15 +317,22 @@ async function launchAccountBrowser(
   account: PublishingAccount,
   purpose: DesktopBrowserPurpose,
 ): Promise<AccountBrowserSession> {
+  const releaseAccount = reserveAccountBrowser(account, purpose);
   const desktopHost = publishingDesktopHost();
   if (desktopHost) {
-    const managed = await desktopHost.openBrowser({
-      accountId: account.id,
-      platform: account.platform,
-      displayName: account.displayName,
-      handle: account.handle,
-      purpose,
-    });
+    let managed: Awaited<ReturnType<typeof desktopHost.openBrowser>>;
+    try {
+      managed = await desktopHost.openBrowser({
+        accountId: account.id,
+        platform: account.platform,
+        displayName: account.displayName,
+        handle: account.handle,
+        purpose,
+      });
+    } catch (error) {
+      releaseAccount();
+      throw error;
+    }
     let connection: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
 
     try {
@@ -244,13 +346,18 @@ async function launchAccountBrowser(
         desktopSessionId: managed.id,
         update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
         close: async () => {
-          await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
-          await connection?.close().catch(() => undefined);
+          try {
+            await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
+            await connection?.close().catch(() => undefined);
+          } finally {
+            releaseAccount();
+          }
         },
       };
     } catch (error) {
       await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
       await connection?.close().catch(() => undefined);
+      releaseAccount();
       throw error;
     }
   }
@@ -258,32 +365,54 @@ async function launchAccountBrowser(
   const profileDir = accountProfilePath(account);
   prepareChromeProfile(profileDir);
   const slowMoMs = Number(process.env.AUTOMATION_SLOW_MO_MS ?? 120);
-  const commonArgs = ["--no-first-run", "--no-default-browser-check", "--disable-notifications", "--deny-permission-prompts"];
-  const context = await chromium.launchPersistentContext(profileDir, {
-    headless: false,
-    executablePath: chromeExecutablePath(),
-    slowMo: slowMoMs,
-    viewport: null,
-    args: account.platform === "facebook"
-      ? commonArgs
-      : [...commonArgs, "--disable-blink-features=AutomationControlled", "--disable-site-isolation-trials", "--disable-sync", "--disable-signin-promo", `--disable-features=${disabledChromeFeatures}`],
-  });
-  await restoreAccountSessionState(account, context);
-  const page = context.pages()[0] ?? await context.newPage();
-  return {
-    context,
-    page,
-    update: async () => undefined,
-    close: () => context.close(),
-  };
+  const commonArgs = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-notifications",
+    "--deny-permission-prompts",
+    "--disable-sync",
+    "--disable-signin-promo",
+  ];
+  let context: BrowserContext | null = null;
+  try {
+    context = await chromium.launchPersistentContext(profileDir, {
+      headless: false,
+      executablePath: chromeExecutablePath(),
+      slowMo: slowMoMs,
+      viewport: null,
+      args: commonArgs,
+    });
+    await restoreAccountSessionState(account, context);
+    const launchedContext = context;
+    const page = launchedContext.pages()[0] ?? await launchedContext.newPage();
+    return {
+      context: launchedContext,
+      page,
+      update: async () => undefined,
+      close: async () => {
+        try {
+          await launchedContext.close();
+        } finally {
+          releaseAccount();
+        }
+      },
+    };
+  } catch (error) {
+    await context?.close().catch(() => undefined);
+    releaseAccount();
+    throw error;
+  }
 }
 
 async function saveAccountSessionState(account: PublishingAccount, context: BrowserContext) {
   try {
+    const key = sessionEncryptionKey();
+    fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+    if (!key) return;
     const statePath = accountSessionStatePath(account);
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    await context.storageState({ path: statePath });
-    console.log(`Saved browser session state for ${account.platform} account ${account.handle}.`);
+    const state = await context.storageState();
+    writeEncryptedSessionState(statePath, state, key);
+    console.log(`Saved encrypted browser session state for ${account.platform} account ${account.handle}.`);
   } catch (error) {
     console.warn(
       `Could not save browser session state for ${account.platform} account ${account.handle}:`,
@@ -293,11 +422,14 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
 }
 
 async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+  migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
 
   try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as { cookies?: Parameters<BrowserContext["addCookies"]>[0] };
+    const key = sessionEncryptionKey();
+    if (!key) return;
+    const state = readEncryptedSessionState(statePath, key);
     if (Array.isArray(state.cookies) && state.cookies.length > 0) {
       await context.addCookies(state.cookies);
     }
@@ -366,12 +498,14 @@ async function prepareXSessionInNormalChrome(account: PublishingAccount) {
 type AccountLoginOptions = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
 function accountLogin(options: AccountLoginOptions = {}): AccountLogin {
   return {
     useSavedSessionOnly: options.useSavedSessionOnly,
-    ignoreLoginErrors: options.ignoreLoginErrors
+    ignoreLoginErrors: options.ignoreLoginErrors,
+    onFinalActionSubmitted: options.onFinalActionSubmitted,
   };
 }
 
@@ -410,6 +544,22 @@ function isSessionFailure(message: string) {
   return /saved browser session is not active|sign in|log in|login|session (?:expired|invalid)|authentication/i.test(message);
 }
 
+async function visiblePublishingRiskSignal(page: Page) {
+  const candidates = [
+    page.locator('iframe[title*="captcha" i], iframe[src*="captcha" i], iframe[src*="arkoselabs" i]').first(),
+    page.getByText(/captcha|checkpoint|security verification|verify your identity|temporarily limited|too many requests|account (?:is |has been )?(?:restricted|suspended|disabled|locked)/i).first(),
+    page.locator('[role="alert"]').filter({
+      hasText: /rate.?limit|try again later|action blocked|verification|restricted|suspended|disabled|locked/i,
+    }).first(),
+  ];
+  for (const candidate of candidates) {
+    if (await candidate.isVisible().catch(() => false)) {
+      return (await candidate.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || "CAPTCHA verification";
+    }
+  }
+  return "";
+}
+
 async function runAccountQueue(
   automationRunId: string,
   trigger: AutomationRunTrigger,
@@ -442,13 +592,52 @@ async function runAccountQueue(
     }
   }
 
+  async function deferRemainingPosts(startIndex: number, assessment: PublishingSafetyAssessment) {
+    if (!assessment.retryAt) throw new Error("The publishing safety governor did not provide a retry time.");
+    const message = `${assessment.reason ?? "Publishing safety spacing is active"} Next safe attempt: ${assessment.retryAt}`;
+    for (const upload of uploads.slice(startIndex)) {
+      await deferUploadForSafety(upload.id, assessment.retryAt, message);
+      const runPostId = runPostIds.get(upload.id);
+      if (runPostId) await finishAutomationRunPost(runPostId, "deferred", message);
+    }
+    console.log(`Deferred ${uploads.length - startIndex} post(s) for ${account.handle}: ${message}`);
+  }
+
+  async function holdRemainingPostsForManualResume(startIndex: number, message: string) {
+    for (const upload of uploads.slice(startIndex)) {
+      const runPostId = runPostIds.get(upload.id);
+      if (runPostId) await finishAutomationRunPost(runPostId, "deferred", message);
+    }
+  }
+
   try {
     signal.throwIfAborted();
+    const initialHistory = await listUploads(account.platform, account.id);
+    const initialAssessment = assessPublishingSafety(uploads[0], initialHistory, Date.now(), account.safetyMode ?? "standard");
+    if (!initialAssessment.allowed) {
+      await deferRemainingPosts(0, initialAssessment);
+      return false;
+    }
     browser = await launchAccountBrowser(account, "publish");
     const page = browser.page;
 
     for (const [uploadIndex, upload] of uploads.entries()) {
       signal.throwIfAborted();
+      if (uploadIndex > 0) {
+        const accountHistory = await listUploads(account.platform, account.id);
+        const assessment = assessPublishingSafety(upload, accountHistory, Date.now(), account.safetyMode ?? "standard");
+        if (!assessment.allowed) {
+          await deferRemainingPosts(uploadIndex, assessment);
+          await browser.update({
+            state: "waiting",
+            detail: `Remaining posts were safely deferred until ${assessment.retryAt}.`,
+            currentItem: upload.title || upload.originalName || "Post",
+            currentIndex: uploadIndex + 1,
+            totalItems: uploads.length,
+          });
+          break;
+        }
+      }
       const runPostId = runPostIds.get(upload.id);
       await updateUploadStatus(upload.id, "processing", `Automation ${trigger} run ${automationRunId} started publishing`);
       await browser.update({
@@ -459,13 +648,37 @@ async function runAccountQueue(
         totalItems: uploads.length,
       });
 
+      let finalActionSubmitted = false;
       try {
-        await publishOne(page, upload, options);
+        await updateUploadPublishActionState(upload.id, "prepared");
+        await publishOne(page, upload, {
+          ...options,
+          onFinalActionSubmitted: async () => {
+            finalActionSubmitted = true;
+            await updateUploadPublishActionState(upload.id, "submitted");
+          },
+        });
         signal.throwIfAborted();
       } catch (error) {
         hadFailure = true;
         const message = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
-        if (isSessionFailure(message)) {
+        const visibleRisk = signal.aborted ? "" : await visiblePublishingRiskSignal(page).catch(() => "");
+        const risk = signal.aborted
+          ? null
+          : classifyPublishingRisk(
+            `${message} ${visibleRisk}${finalActionSubmitted ? " final publish result is uncertain" : ""}`,
+            page.url(),
+          );
+        if (risk) {
+          const safetyMessage = `${risk.reason} Original platform message: ${message}`;
+          await pausePlatformAccountForSafety(account.id, risk.accountStatus, safetyMessage);
+          if (risk.requiresLogin) {
+            await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
+          }
+          if (risk.kind === "uncertain_publish") {
+            await updateUploadPublishActionState(upload.id, "uncertain");
+          }
+        } else if (isSessionFailure(message)) {
           sessionInvalidated = true;
           clearSavedAccountSession(account);
           await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
@@ -481,6 +694,13 @@ async function runAccountQueue(
         });
         console.error(`Failed ${upload.id} through ${account.handle}:`, message);
         if (signal.aborted) throw new Error(message);
+        if (risk) {
+          await holdRemainingPostsForManualResume(
+            uploadIndex + 1,
+            `Account paused for manual review: ${risk.reason}`,
+          );
+          break;
+        }
         continue;
       }
 

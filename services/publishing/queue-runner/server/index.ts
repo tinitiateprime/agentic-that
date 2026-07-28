@@ -75,6 +75,11 @@ import {
   startManualAccountSession,
 } from "./services/publisher.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
+import {
+  assertContentPreflight,
+  ContentPreflightError,
+  evaluateContentPreflight,
+} from "./services/content-preflight.js";
 import { publishingUploadDirectory } from "./runtime-paths.js";
 
 export const publishingApp = express();
@@ -218,26 +223,33 @@ const stagedUnifiedPostSchema = z.object({
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
-  destinations: unifiedPostDestinationsSchema
+  destinations: unifiedPostDestinationsSchema,
+  rightsConfirmed: z.boolean().optional().default(false),
+  confirmWarnings: z.boolean().optional().default(false)
 });
 
 const textUnifiedPostSchema = z.object({
   description: z.string().trim().min(1, "Write your post text."),
-  destinations: unifiedPostDestinationsSchema
+  destinations: unifiedPostDestinationsSchema,
+  confirmWarnings: z.boolean().optional().default(false)
 });
 
 const stagedSubmissionSchema = z.object({
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().trim().max(500).optional().default(""),
-  description: z.string().trim().min(1, "Enter a post description.")
+  description: z.string().trim().min(1, "Enter a post description."),
+  rightsConfirmed: z.boolean().optional().default(false),
+  confirmWarnings: z.boolean().optional().default(false)
 });
 
 const textSubmissionSchema = z.object({
-  description: z.string().trim().min(1, "Write your post text.")
+  description: z.string().trim().min(1, "Write your post text."),
+  confirmWarnings: z.boolean().optional().default(false)
 });
 
 const scheduleSubmissionSchema = z.object({
-  destinations: unifiedPostDestinationsSchema
+  destinations: unifiedPostDestinationsSchema,
+  confirmWarnings: z.boolean().optional().default(false)
 }).superRefine((value, context) => {
   value.destinations.forEach((destination, index) => {
     if (!destination.scheduledAt && !destination.scheduleId) {
@@ -451,6 +463,7 @@ async function createUnifiedPosts(
   titleInput: string,
   descriptionInput: string,
   destinationsInput: unknown,
+  preflightOptions: { rightsConfirmed: boolean; confirmWarnings: boolean },
 ) {
   const createdUploads: PlatformUpload[] = [];
   const title = titleInput.trim();
@@ -492,6 +505,23 @@ async function createUnifiedPosts(
       }
     }
 
+    const preflightIssues = evaluateContentPreflight({
+      postFormat,
+      title,
+      description,
+      originalName: file.originalname,
+      size: file.size,
+      rightsConfirmed: preflightOptions.rightsConfirmed,
+      destinations: destinationAccounts.map(({ destination, account }) => ({
+        accountId: account.id,
+        platform: account.platform,
+        description: destination.description?.trim() || description,
+        scheduledAt: destination.scheduledAt,
+        scheduleId: destination.scheduleId,
+      })),
+    }, await listUploads(undefined, undefined, user.workspaceId));
+    assertContentPreflight(preflightIssues, preflightOptions.confirmWarnings);
+
     for (const { destination, account } of destinationAccounts) {
       const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
       createdUploads.push(await createUpload(destination.accountId, {
@@ -513,6 +543,7 @@ async function createUnifiedPosts(
       uploadIds: createdUploads.map(upload => upload.id),
       accountIds: destinations.map(destination => destination.accountId),
       platforms: [...new Set(createdUploads.map(upload => upload.platform))],
+      confirmedPreflightWarnings: preflightIssues.filter(issue => issue.severity === "warning").map(issue => issue.code),
     });
     return createdUploads;
   } catch (error) {
@@ -525,6 +556,7 @@ async function scheduleContentSubmission(
   submissionId: string,
   user: UserProfile,
   destinationsInput: unknown,
+  confirmWarnings: boolean,
 ) {
   const createdUploads: PlatformUpload[] = [];
   const submission = await getContentSubmission(submissionId, user.workspaceId);
@@ -564,6 +596,23 @@ async function scheduleContentSubmission(
         assertScheduleCanReceivePosts(schedule);
       }
     }
+
+    const preflightIssues = evaluateContentPreflight({
+      postFormat: submission.postFormat,
+      title,
+      description: submission.description,
+      originalName: submission.originalName,
+      size: submission.size,
+      rightsConfirmed: submission.rightsConfirmed,
+      destinations: destinationAccounts.map(({ destination, account }) => ({
+        accountId: account.id,
+        platform: account.platform,
+        description: submission.description,
+        scheduledAt: destination.scheduledAt,
+        scheduleId: destination.scheduleId,
+      })),
+    }, await listUploads(undefined, undefined, user.workspaceId));
+    assertContentPreflight(preflightIssues, confirmWarnings);
 
     for (const { destination, account } of destinationAccounts) {
       const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
@@ -1051,6 +1100,14 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
   try {
     const user = currentUser(req);
     const payload = textSubmissionSchema.parse(req.body);
+    const preflightIssues = evaluateContentPreflight({
+      postFormat: "text",
+      description: payload.description,
+      originalName: "Text post",
+      size: Buffer.byteLength(payload.description, "utf8"),
+      rightsConfirmed: true,
+    });
+    assertContentPreflight(preflightIssues, payload.confirmWarnings);
     const submission = await createContentSubmission({
       originalName: "Text post",
       fileName: "",
@@ -1059,6 +1116,7 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
       size: Buffer.byteLength(payload.description, "utf8"),
       url: "",
       description: payload.description,
+      rightsConfirmed: true,
     }, user.workspaceId, user.id);
     res.status(201).json(submission);
   } catch (error) {
@@ -1090,6 +1148,16 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       throw new Error("Enter a video title so the scheduler can choose any supported platform.");
     }
 
+    const preflightIssues = evaluateContentPreflight({
+      postFormat,
+      title: payload.title,
+      description: payload.description,
+      originalName: record.originalName,
+      size: record.size,
+      rightsConfirmed: payload.rightsConfirmed,
+    });
+    assertContentPreflight(preflightIssues, payload.confirmWarnings);
+
     finalFileName = record.fileName;
     await fs.promises.rename(stagedPath, path.join(uploadDir, record.fileName));
     const submission = await createContentSubmission({
@@ -1101,6 +1169,7 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       url: `/uploads/${record.fileName}`,
       title: payload.title,
       description: payload.description,
+      rightsConfirmed: payload.rightsConfirmed,
     }, user.workspaceId, user.id);
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(submission);
@@ -1117,6 +1186,7 @@ app.post("/api/submissions/:id/schedule", requireRoles("operations_manager", "sc
       pathParam(req.params.id, "id"),
       currentUser(req),
       payload.destinations,
+      payload.confirmWarnings,
     );
     res.status(201).json(result);
   } catch (error) {
@@ -1133,7 +1203,7 @@ app.post("/api/posts/unified/text", requireRoles("operations_manager"), async (r
       filename: "",
       mimetype: "text/plain",
       size: Buffer.byteLength(payload.description, "utf8"),
-    }, user, "", payload.description, payload.destinations);
+    }, user, "", payload.description, payload.destinations, { rightsConfirmed: true, confirmWarnings: payload.confirmWarnings });
     res.status(201).json(createdUploads);
   } catch (error) {
     next(error);
@@ -1161,7 +1231,10 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async 
       filename: record.fileName,
       mimetype: record.mimeType,
       size: record.size,
-    }, user, payload.title, payload.description, payload.destinations);
+    }, user, payload.title, payload.description, payload.destinations, {
+      rightsConfirmed: payload.rightsConfirmed,
+      confirmWarnings: payload.confirmWarnings,
+    });
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(createdUploads);
   } catch (error) {
@@ -1319,9 +1392,18 @@ app.post("/api/automation/run", requireRoles("operations_manager"), async (req: 
   }
 });
 
-app.post("/api/automation/stop", requireRoles("operations_manager"), async (_req, res, next) => {
+app.post("/api/automation/stop", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const stopped = await cancelAutomation();
+    const user = currentUser(req);
+    await logActivity(
+      user.id,
+      stopped ? "automation.emergency_stop" : "automation.stop_checked",
+      "automation_run",
+      null,
+      stopped ? "Emergency stop cancelled active and queued publishing work." : "Publishing stop was checked while automation was idle.",
+      { stopped },
+    );
     res.json({
       stopped,
       message: stopped ? "Publishing automation is stopping." : "No publishing automation is running.",
@@ -1333,6 +1415,15 @@ app.post("/api/automation/stop", requireRoles("operations_manager"), async (_req
 
 // --- ERROR HANDLER ---
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof ContentPreflightError) {
+    res.status(error.code === "CONTENT_PREFLIGHT_WARNINGS" ? 409 : 422).json({
+      message: error.message,
+      code: error.code,
+      issues: error.issues,
+    });
+    return;
+  }
+
   if (error instanceof ZodError) {
     res.status(400).json({
       message: "Validation failed",

@@ -25,7 +25,7 @@
     "publishing:release:windows": "npm run publishing:brand-assets && npm run publishing:extension:validate && npm run publishing:extension:package && npm run publishing:desktop:make && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect-publishing-release-artifacts.ps1",
     "publishing:install-startup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-publishing-startup.ps1",
     "publishing:uninstall-startup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-publishing-startup.ps1",
-    "test:publishing": "node --import tsx --test services/publishing/queue-runner/server/publishing-api.test.ts && npm run publishing:extension:validate && node scripts/build-publishing-companion-runtime.mjs",
+    "test:publishing": "node --import tsx --test services/publishing/queue-runner/server/content-preflight.test.ts services/publishing/queue-runner/server/publishing-api.test.ts services/publishing/queue-runner/server/risk-classifier.test.ts services/publishing/queue-runner/server/safety-governor.test.ts services/publishing/queue-runner/server/session-storage.test.ts && npm run publishing:extension:validate && node scripts/build-publishing-companion-runtime.mjs",
     "publishing:css": "node services/publishing/queue-runner/scripts/scope-css.mjs",
     "instagram:login": "node services/scraping/instagram/scripts/save-session.mjs",
     "services:install": "npm run services:telegram:install",
@@ -51,7 +51,7 @@
     "express": "^5.2.1",
     "lucide-react": "^0.468.0",
     "nanoid": "^5.1.16",
-    "next": "^15.5.19",
+    "next": "^15.5.21",
     "node-cron": "^4.6.0",
     "playwright-core": "^1.61.1",
     "postgres": "^3.4.9",
@@ -66,7 +66,8 @@
     "@opentelemetry/resources": "^2.8.0",
     "@opentelemetry/sdk-trace-base": "^2.8.0",
     "@opentelemetry/sdk-trace-node": "^2.8.0",
-    "postcss": "^8.5.10"
+    "postcss": "^8.5.10",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.15.12",
@@ -76,7 +77,7 @@
     "@types/node": "^26.1.1",
     "@types/react": "19.2.17",
     "concurrently": "^9.2.4",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.23.0",
     "typescript": "5.8.2"

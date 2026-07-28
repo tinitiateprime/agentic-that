@@ -17,7 +17,8 @@ the `EMBED_FULL_PUBLISHING_WORKSPACE` flag in `main.js`, but is temporarily
 disabled pending product approval.
 
 On first launch it creates a local auth secret, protects it with Electron safe
-storage when available, starts the service on loopback port 8792, and enables
+storage when available, encrypts exported publishing session state with a
+separate OS-protected key, starts the service on loopback port 8792, and enables
 launch at Windows sign-in. Each account keeps its own persistent browser
 partition and session. The standalone Chrome automation remains available as a
 fallback when the queue runner is used outside the desktop app.

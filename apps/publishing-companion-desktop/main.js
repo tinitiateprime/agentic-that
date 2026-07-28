@@ -7,6 +7,7 @@ import {
   Menu,
   nativeImage,
   safeStorage,
+  session,
   shell,
   Tray,
   WebContentsView,
@@ -81,6 +82,7 @@ function persistedSettings(value = settings) {
     username: value.username,
     password: value.password,
     authSecret: value.authSecret,
+    sessionEncryptionKey: value.sessionEncryptionKey,
     instanceId: value.instanceId,
     autoStart: value.autoStart,
     publishingInteractionConsent: Boolean(value.publishingInteractionConsent),
@@ -102,12 +104,20 @@ function loadSettings() {
     const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
     if (parsed.version === 1 && parsed.password?.value && parsed.authSecret?.value) {
       const instanceId = parsed.instanceId || randomSecret(18);
+      const protectedSessionKey = parsed.sessionEncryptionKey?.protected === true
+        && parsed.sessionEncryptionKey?.value;
+      const sessionEncryptionKeyPlain = protectedSessionKey
+        ? decryptedValue(parsed.sessionEncryptionKey)
+        : safeStorage.isEncryptionAvailable() ? randomSecret(32) : undefined;
       const normalized = {
         ...parsed,
         instanceId,
+        sessionEncryptionKey: protectedSessionKey
+          ? parsed.sessionEncryptionKey
+          : sessionEncryptionKeyPlain ? encryptedValue(sessionEncryptionKeyPlain) : undefined,
         publishingInteractionConsent: parsed.publishingInteractionConsent === true,
       };
-      if (!parsed.instanceId || parsed.publishingInteractionConsent === undefined) {
+      if (!parsed.instanceId || !protectedSessionKey || parsed.publishingInteractionConsent === undefined) {
         fs.writeFileSync(settingsPath, `${JSON.stringify(persistedSettings(normalized), null, 2)}\n`, {
           encoding: "utf8",
           mode: 0o600,
@@ -117,6 +127,7 @@ function loadSettings() {
         ...normalized,
         passwordPlain: decryptedValue(parsed.password),
         authSecretPlain: decryptedValue(parsed.authSecret),
+        sessionEncryptionKeyPlain,
       };
     }
   } catch {
@@ -125,11 +136,13 @@ function loadSettings() {
 
   const passwordPlain = `${randomSecret(9)}!Aa7`;
   const authSecretPlain = randomSecret(48);
+  const sessionEncryptionKeyPlain = safeStorage.isEncryptionAvailable() ? randomSecret(32) : undefined;
   const created = {
     version: 1,
     username: "operations.manager",
     password: encryptedValue(passwordPlain),
     authSecret: encryptedValue(authSecretPlain),
+    sessionEncryptionKey: sessionEncryptionKeyPlain ? encryptedValue(sessionEncryptionKeyPlain) : undefined,
     instanceId: randomSecret(18),
     autoStart: true,
     publishingInteractionConsent: false,
@@ -140,7 +153,7 @@ function loadSettings() {
     encoding: "utf8",
     mode: 0o600,
   });
-  return { ...created, passwordPlain, authSecretPlain };
+  return { ...created, passwordPlain, authSecretPlain, sessionEncryptionKeyPlain };
 }
 
 function configureRuntimeEnvironment() {
@@ -167,6 +180,9 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = browserDataDirectory;
   process.env.PUBLISH_QUEUE_LOCAL_AUTH_SECRET_PATH = path.join(dataDirectory, ".auth-token-secret");
   process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET = settings.authSecretPlain;
+  if (settings.sessionEncryptionKeyPlain) {
+    process.env.PUBLISH_QUEUE_SESSION_ENCRYPTION_KEY = settings.sessionEncryptionKeyPlain;
+  }
   process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID = settings.instanceId;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = settings.username;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = settings.passwordPlain;
@@ -343,7 +359,7 @@ function createDashboardView() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
-      allowRunningInsecureContent: true,
+      allowRunningInsecureContent: false,
       preload: path.join(app.getAppPath(), "dashboard-preload.cjs"),
     },
   });
@@ -415,6 +431,12 @@ function finishPublishingInteractionConsent() {
 function browserPartition(accountId) {
   const digest = createHash("sha256").update(accountId).digest("hex").slice(0, 24);
   return `persist:agenticthat-publishing-${digest}`;
+}
+
+async function clearAccountBrowserData(accountId) {
+  const accountSession = session.fromPartition(browserPartition(accountId));
+  await accountSession.clearStorageData();
+  await accountSession.clearCache();
 }
 
 async function openManagedBrowser(request) {
@@ -554,6 +576,7 @@ function installPublishingDesktopHost() {
     updateBrowser: updateManagedBrowser,
     closeBrowser: closeManagedBrowser,
     stopPublishingBrowsers,
+    clearAccountBrowserData,
   };
 }
 

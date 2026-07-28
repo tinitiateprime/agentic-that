@@ -269,7 +269,12 @@ async function waitForUploadDialogText(page: Page, text: RegExp, screenName: str
   console.log(`${screenName} page is visible.`);
 }
 
-async function clickDialogButtonWhenReady(page: Page, labels: string[], actionName: string) {
+async function clickDialogButtonWhenReady(
+  page: Page,
+  labels: string[],
+  actionName: string,
+  onClicked?: () => Promise<void> | void,
+) {
   const labelMatcher = new RegExp(labels.map(escapeRegExp).join("|"), "i");
   const button = page.locator("ytcp-uploads-dialog ytcp-button").filter({ hasText: labelMatcher }).last();
 
@@ -300,6 +305,7 @@ async function clickDialogButtonWhenReady(page: Page, labels: string[], actionNa
 
   console.log(`Clicking ${actionName}...`);
   await button.click({ timeout: 30000 });
+  await onClicked?.();
   await page.waitForTimeout(1800);
 }
 
@@ -383,7 +389,7 @@ async function waitForPublishComplete(page: Page) {
     }
   }
 
-  throw new Error("Publish confirmation appeared, but the Close button could not be clicked.");
+  console.warn("YouTube publish was confirmed, but the confirmation dialog could not be closed automatically.");
 }
 
 async function openYouTubeCreateMenu(page: Page) {
@@ -687,7 +693,11 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
   }
 }
 
-async function clickCommunityPostWhenReady(page: Page, requireImagePreview = true) {
+async function clickCommunityPostWhenReady(
+  page: Page,
+  requireImagePreview = true,
+  onSubmitted?: () => Promise<void> | void,
+) {
   console.log("Clicking YouTube Community Post button...");
   if (requireImagePreview) await waitForCommunityImagePreview(page, 30000);
   const composer = await getCommunityComposer(page);
@@ -735,7 +745,10 @@ async function clickCommunityPostWhenReady(page: Page, requireImagePreview = tru
   ];
 
   for (const postButton of postButtons) {
-    if (await clickIfVisible(postButton, 4000)) return;
+    if (await clickIfVisible(postButton, 4000)) {
+      await onSubmitted?.();
+      return;
+    }
   }
 
   const box = await composer.boundingBox();
@@ -743,6 +756,7 @@ async function clickCommunityPostWhenReady(page: Page, requireImagePreview = tru
 
   console.log("Clicking black Community Post button by mouse fallback...");
   await page.mouse.click(box.x + box.width - 86, box.y + box.height - 28);
+  await onSubmitted?.();
 }
 
 async function waitForCommunityPostComplete(page: Page) {
@@ -894,7 +908,7 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
   await fillCommunityPostDescription(page, upload.caption);
   await attachCommunityPostImage(page, imagePath);
   await waitForCommunityImagePreview(page, 30000);
-  await clickCommunityPostWhenReady(page);
+  await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
   await waitForCommunityPostComplete(page);
   console.log("Step completed: YouTube Community image post published.");
   return { success: true };
@@ -905,7 +919,7 @@ async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, ac
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
   await fillCommunityPostDescription(page, upload.caption);
-  await clickCommunityPostWhenReady(page, false);
+  await clickCommunityPostWhenReady(page, false, accountLogin?.onFinalActionSubmitted);
   await waitForCommunityPostComplete(page);
   console.log("Step completed: YouTube Community text post published.");
   return { success: true };
@@ -942,7 +956,7 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await clickNextWhenReady(page);
 
   await selectPublicVisibility(page);
-  await clickDialogButtonWhenReady(page, ["Publish"], "Publish");
+  await clickDialogButtonWhenReady(page, ["Publish"], "Publish", accountLogin?.onFinalActionSubmitted);
   await waitForPublishComplete(page);
 
   console.log("Step completed: video published.");

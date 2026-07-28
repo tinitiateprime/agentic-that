@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, assetUrl, setAuthToken, type AuthResponse } from "./lib/api.ts";
+import { api, assetUrl, ContentPreflightApiError, setAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -36,6 +36,18 @@ function StatusStateIcon({ state, size = 18 }: { state: string; size?: number })
   if (state === 'posted') return <CircleCheckBig size={size} />;
   return <CircleAlert size={size} />;
 }
+
+function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 'paused' | 'restricted' {
+  if (!account.enabled) return account.safetyStatus === 'restricted' ? 'restricted' : 'paused';
+  return account.safetyStatus ?? 'healthy';
+}
+
+const accountHealthLabels = {
+  healthy: 'Green',
+  warning: 'Warning',
+  paused: 'Paused',
+  restricted: 'Restricted',
+} as const;
 
 const platformColor: Record<Platform, string> = {
   youtube: '#FF0000',
@@ -525,6 +537,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       ] as const;
       const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
       setConnectionMode(health.transport);
+      setIsRunning(health.automationRunning);
       setUploads(latestUploads);
       setSubmissions(latestSubmissions);
       setAccounts(latestAccounts);
@@ -562,13 +575,32 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       });
       window.setTimeout(() => void refresh(false), 5000);
     } catch (e) {
+      setIsRunning(false);
       setAutomationNotice({
         variant: 'error',
         title: 'Automation could not start',
         message: e instanceof Error ? e.message : 'Unknown error',
       });
-    } finally {
+    }
+  };
+
+  const handleStop = async () => {
+    if (!permissions.canRunAutomation) return;
+    try {
+      const result = await api.stopAutomation();
       setIsRunning(false);
+      setAutomationNotice({
+        variant: 'success',
+        title: result.stopped ? 'Emergency stop requested' : 'Publishing is already stopped',
+        message: result.message,
+      });
+      window.setTimeout(() => void refresh(false), 750);
+    } catch (e) {
+      setAutomationNotice({
+        variant: 'error',
+        title: 'Publishing could not be stopped',
+        message: e instanceof Error ? e.message : 'Unknown error',
+      });
     }
   };
 
@@ -588,6 +620,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         error={error}
         isRunning={isRunning}
         onRun={handleRun}
+        onStop={handleStop}
         onRefresh={() => void refresh()}
         onSignOut={onSignOut}
         onOpenAccounts={(platform) => {
@@ -961,7 +994,9 @@ function UnifiedComposer({
   const [scheduleOverrides, setScheduleOverrides] = useState<Record<string, ComposerScheduleDraft>>({});
   const [dragActive, setDragActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -972,6 +1007,11 @@ function UnifiedComposer({
     setPreviewUrl(nextUrl);
     return () => URL.revokeObjectURL(nextUrl);
   }, [file]);
+
+  useEffect(() => {
+    setPendingPreflightWarnings([]);
+    setMessage(current => current?.type === 'warning' ? null : current);
+  }, [postFormat, file, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
@@ -1017,12 +1057,14 @@ function UnifiedComposer({
       return;
     }
     setFile(nextFile);
+    setRightsConfirmed(false);
   };
 
   const chooseFormat = (nextFormat: PostFormat) => {
     setMessage(null);
     setPostFormat(nextFormat);
     setFile(null);
+    setRightsConfirmed(false);
     if (nextFormat !== 'video') setTitle('');
   };
 
@@ -1083,14 +1125,17 @@ function UnifiedComposer({
     setPlatformDescriptions({});
     setCopyMode('preview');
     setSelectedAccountIds([]);
+    setRightsConfirmed(false);
+    setPendingPreflightWarnings([]);
     setScheduleOverrides({});
     setSharedSchedule(emptyComposerSchedule());
   };
 
-  const submit = async () => {
+  const submit = async (confirmWarnings = false) => {
     setMessage(null);
     if (!postFormat) return setMessage({ type: 'error', text: 'Choose an image, video, or text post format.' });
     if (postFormat !== 'text' && !file) return setMessage({ type: 'error', text: `Choose one ${postFormat} file.` });
+    if (postFormat !== 'text' && !rightsConfirmed) return setMessage({ type: 'error', text: 'Confirm that you own this media or have permission to publish it.' });
     if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: handoffOnly ? 'Enter a video title.' : 'Enter a YouTube title.' });
     if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (handoffOnly) {
@@ -1101,12 +1146,21 @@ function UnifiedComposer({
           file,
           title: selectedNeedsTitle ? title.trim() : '',
           description: description.trim(),
+          rightsConfirmed,
+          confirmWarnings,
         });
         resetComposer();
         setMessage({ type: 'success', text: 'Saved and sent to the scheduler. This submission remains available after you sign out.' });
         onCreated();
       } catch (error) {
-        setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The content could not be handed to scheduling.' });
+        if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+          const warnings = [...new Set(error.issues.map(issue => issue.message))];
+          setPendingPreflightWarnings(warnings);
+          setMessage({ type: 'warning', text: `Review before continuing: ${warnings.join(' ')}` });
+        } else {
+          setPendingPreflightWarnings([]);
+          setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The content could not be handed to scheduling.' });
+        }
       } finally {
         setSubmitting(false);
       }
@@ -1140,7 +1194,15 @@ function UnifiedComposer({
 
     setSubmitting(true);
     try {
-      const created = await api.createUnifiedPost({ postFormat, file, title: selectedNeedsTitle ? title.trim() : '', description: description.trim(), destinations });
+      const created = await api.createUnifiedPost({
+        postFormat,
+        file,
+        title: selectedNeedsTitle ? title.trim() : '',
+        description: description.trim(),
+        destinations,
+        rightsConfirmed,
+        confirmWarnings,
+      });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
       const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId);
       let publishingError = '';
@@ -1165,7 +1227,14 @@ function UnifiedComposer({
       }
       onCreated();
     } catch (error) {
-      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The post could not be created.' });
+      if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+        const warnings = [...new Set(error.issues.map(issue => issue.message))];
+        setPendingPreflightWarnings(warnings);
+        setMessage({ type: 'warning', text: `Review before publishing: ${warnings.join(' ')}` });
+      } else {
+        setPendingPreflightWarnings([]);
+        setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The post could not be created.' });
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1211,6 +1280,7 @@ function UnifiedComposer({
               <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
               {postFormat === 'text' && <small className='composer-text-support'><CircleCheckBig size={13} />Available for X, Facebook, LinkedIn, and YouTube Community. Instagram is excluded.</small>}
             </label>
+            {postFormat !== 'text' && <label className='composer-rights-confirmation'><input type='checkbox' checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)} /><ShieldCheck size={16} /><span><strong>Media rights confirmed</strong><small>I own this media or have permission to publish it.</small></span></label>}
           </div>}
 
           {!postFormat && <div className='composer-format-prompt'><span><ArrowRight size={18} /></span><div><strong>Select a format to continue</strong><small>The composer will reveal only the fields and channels that apply.</small></div></div>}
@@ -1269,8 +1339,8 @@ function UnifiedComposer({
       </div>
 
       <footer className='composer-footer'>
-        <div>{message && <p className={`composer-message ${message.type}`} role='status'>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || (!handoffOnly && !selectedAccounts.length)} onClick={submit}>{submitting ? <Loader2 className='spin' size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : handoffOnly ? 'Send to scheduler' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <div>{message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || (!handoffOnly && !selectedAccounts.length)} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? 'Send to scheduler' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );
@@ -1290,6 +1360,7 @@ function Workboard({
   error,
   isRunning,
   onRun,
+  onStop,
   onRefresh,
   onSignOut,
   onOpenAccounts,
@@ -1315,6 +1386,7 @@ function Workboard({
   error: string | null;
   isRunning: boolean;
   onRun: () => void;
+  onStop: () => void;
   onRefresh: () => void;
   onSignOut: () => void;
   onOpenAccounts: (platform: Platform) => void;
@@ -1417,11 +1489,12 @@ function Workboard({
   const awaitingSubmissions = submissions.filter(submission => submission.status === 'awaiting_schedule');
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
   const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
-  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length + awaitingSubmissions.length;
-  const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && account.enabled)).length;
+  const accountAttentionCount = accounts.filter(account => accountHealthStatus(account) !== 'healthy').length;
+  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length + awaitingSubmissions.length + accountAttentionCount;
+  const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && accountHealthStatus(account) === 'healthy')).length;
   const overviewCards = [
     { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
-    { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${reviewQueue.length + awaitingSubmissions.length} open items`, icon: <CircleAlert size={18} />, tone: 'attention' },
+    { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${accountAttentionCount} account alerts`, icon: <CircleAlert size={18} />, tone: 'attention' },
     { id: 'delivered', label: 'Delivered', value: metrics.posted, detail: `${metrics.failed} failed`, icon: <CircleCheckBig size={18} />, tone: 'success' },
     { id: 'channels', label: 'Channels', value: healthyChannelCount, detail: `${enabledAccountsCount} enabled accounts`, icon: <UsersRound size={18} />, tone: 'channels' },
   ];
@@ -1451,7 +1524,9 @@ function Workboard({
         <div className='workboard-actions'>
           <span className='workboard-status' title={connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
-          {permissions.canRunAutomation && <button className='workboard-run' onClick={onRun} disabled={isRunning}>{isRunning ? <Loader2 className='spin' size={16} /> : <Send size={16} />}{isRunning ? 'Publishing' : 'Run automation'}</button>}
+          {permissions.canRunAutomation && (isRunning
+            ? <button className='workboard-stop' onClick={onStop}><X size={16} />Emergency stop</button>
+            : <button className='workboard-run' onClick={onRun}><Send size={16} />Run automation</button>)}
           <button className='workboard-tool' title='Refresh workspace' onClick={onRefresh}><RefreshCw size={18} className={loading ? 'spin' : ''} /></button>
           <span className='workboard-user' title={`${user.fullName} - ${userRoleLabels[user.role]}`}>{roleInitials[user.role]}</span>
           <button className='workboard-tool signout-tool' title='Sign out' onClick={onSignOut}><LogOut size={18} /></button>
@@ -1525,6 +1600,18 @@ function Workboard({
               </article>
             );
           })}
+        </div>
+        <div className='account-health-dashboard' aria-label='Publishing account health'>
+          <div className='account-health-heading'><ShieldCheck size={17} /><span><strong>Account health</strong><small>Live safety state for every connected account</small></span></div>
+          <div className='account-health-list'>{accounts.length === 0 ? <span className='account-health-empty'>No publishing accounts connected.</span> : accounts.map(account => {
+            const health = accountHealthStatus(account);
+            return <article key={account.id} className={`account-health-row ${health}`}>
+              <CustomIcon platform={account.platform} size={18} />
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
+              <em>{accountHealthLabels[health]}</em>
+              {account.safetyReason && <small title={account.safetyReason}>{account.safetyReason}</small>}
+            </article>;
+          })}</div>
         </div>
       </section>
 
@@ -1698,14 +1785,16 @@ function ScheduleSubmissionModal({
   const [scheduleId, setScheduleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
 
   const toggleAccount = (accountId: string) => {
+    setPendingPreflightWarnings([]);
     setSelectedAccountIds(current => current.includes(accountId)
       ? current.filter(id => id !== accountId)
       : [...current, accountId]);
   };
 
-  const submit = async () => {
+  const submit = async (confirmWarnings = false) => {
     setError('');
     if (!selectedAccountIds.length) return setError('Choose at least one compatible publishing account.');
     const scheduleDraft: ComposerScheduleDraft = { mode: timingMode, exactAt, scheduleId };
@@ -1716,10 +1805,18 @@ function ScheduleSubmissionModal({
       await api.scheduleSubmission(
         submission.id,
         selectedAccountIds.map(accountId => ({ accountId, ...destinationSchedule(scheduleDraft) })),
+        confirmWarnings,
       );
       onSuccess();
     } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : 'The submission could not be scheduled.');
+      if (submissionError instanceof ContentPreflightApiError && submissionError.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+        const warnings = [...new Set(submissionError.issues.map(issue => issue.message))];
+        setPendingPreflightWarnings(warnings);
+        setError(`Review before scheduling: ${warnings.join(' ')}`);
+      } else {
+        setPendingPreflightWarnings([]);
+        setError(submissionError instanceof Error ? submissionError.message : 'The submission could not be scheduled.');
+      }
     } finally {
       setLoading(false);
     }
@@ -1749,14 +1846,14 @@ function ScheduleSubmissionModal({
           <section className='submission-timing-section'>
             <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Required publish time</h2></div><CalendarClock size={20} /></div>
             <div className='account-form-grid'>
-              <div className='field'><label>Timing type</label><select value={timingMode} onChange={event => setTimingMode(event.target.value as 'exact' | 'template')}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></div>
+              <div className='field'><label>Timing type</label><select value={timingMode} onChange={event => { setTimingMode(event.target.value as 'exact' | 'template'); setPendingPreflightWarnings([]); }}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></div>
               {timingMode === 'exact'
-                ? <div className='field'><label>Date and time</label><input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={exactAt} onChange={event => setExactAt(event.target.value)} /></div>
-                : <div className='field'><label>Schedule template</label><select value={scheduleId} onChange={event => setScheduleId(event.target.value)}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></div>}
+                ? <div className='field'><label>Date and time</label><input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={exactAt} onChange={event => { setExactAt(event.target.value); setPendingPreflightWarnings([]); }} /></div>
+                : <div className='field'><label>Schedule template</label><select value={scheduleId} onChange={event => { setScheduleId(event.target.value); setPendingPreflightWarnings([]); }}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></div>}
             </div>
           </section>
           {error && <div className='workspace-error' role='alert'><CircleAlert size={17} /><span><strong>Cannot schedule this content</strong><small>{error}</small></span></div>}
-          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={submit} disabled={loading || !compatibleAccounts.length}>{loading ? <Loader2 className='spin' size={17} /> : <CalendarClock size={17} />}Schedule {selectedAccountIds.length || ''} {selectedAccountIds.length === 1 ? 'destination' : 'destinations'}</button></div>
+          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || !compatibleAccounts.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedAccountIds.length || ''} ${selectedAccountIds.length === 1 ? 'destination' : 'destinations'}`}</button></div>
         </div>
       </div>
     </div>
@@ -1995,6 +2092,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [handle, setHandle] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [safetyMode, setSafetyMode] = useState<'standard' | 'protected'>('protected');
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
 
@@ -2004,6 +2103,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle(account?.handle ?? '');
     setLoginIdentifier(account?.loginIdentifier ?? '');
     setEnabled(account?.enabled ?? true);
+    setSafetyMode(account?.safetyMode ?? (account ? 'standard' : 'protected'));
+    setTwoFactorEnabled(account?.twoFactorEnabled ?? false);
   };
 
   const closeForm = () => {
@@ -2012,6 +2113,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle('');
     setLoginIdentifier('');
     setEnabled(true);
+    setSafetyMode('protected');
+    setTwoFactorEnabled(false);
   };
 
   const openManualLogin = async (account: PlatformAccount) => {
@@ -2037,6 +2140,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
         handle: handle.trim(),
         loginIdentifier: loginIdentifier.trim(),
         enabled,
+        safetyMode,
+        twoFactorEnabled,
       };
       const account = editing === 'new'
         ? await api.createAccount(platform, payload)
@@ -2074,7 +2179,9 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
             <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Companion' /></div>
+            <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
+            <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
           </div>
           <div className='account-form-actions'>
             <button className='btn-outline' onClick={closeForm}>Cancel</button>
@@ -2086,7 +2193,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='storage-access-list'>
             {accounts.length === 0 ? <div className='account-list-empty'><UsersRound size={27} /><strong>No publishing accounts yet</strong><span>Add an account, then open its login page and sign in manually.</span><button className='btn-primary' onClick={() => openForm()}>Add first account</button></div> : accounts.map(account => <article className='storage-access-row account-session-row' key={account.id}>
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
-              <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span>
+              <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
               <span className='storage-access-path'>{account.loginIdentifier || 'Manual Companion login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>

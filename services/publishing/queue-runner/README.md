@@ -32,6 +32,43 @@ must remain running for scheduled publishing.
 - Upload extension, MIME family, size, chunk offsets, and signature are checked.
 - Platform UI changes, CAPTCHA, restrictions, or outages surface as recoverable
   failures instead of silent success.
+- CAPTCHA, checkpoints, rate-limit responses, and uncertain final clicks pause
+  the account for manual review. The final publish action is never blindly
+  retried.
+- Content pre-flight blocks private or credential-bearing links and accidental
+  exact queue duplicates. Spam-like patterns and recent same-account repeats
+  require explicit confirmation.
+- Reusing the same campaign content across different apps is allowed without a
+  duplicate warning.
+- Media publishing requires the user to confirm ownership or permission.
+
+## Default account pacing
+
+These are conservative product defaults, not platform guarantees. The limits
+are rolling per account and successful posts are separated by a minimum gap.
+
+| App | Standard hourly | Standard daily | Minimum gap |
+| --- | ---: | ---: | ---: |
+| Instagram | 1 | 6 | 60 minutes |
+| Facebook | 2 | 10 | 30 minutes |
+| LinkedIn | 1 | 3 | 60 minutes |
+| X | 4 | 30 | 15 minutes |
+| YouTube video | 1 | 3 | 60 minutes |
+| YouTube Community | 2 | 6 | 30 minutes |
+
+Newly connected accounts default to **Protected** pacing: half the hourly and
+daily allowance (minimum one) and at least a 60-minute gap. This mode never
+rejects an account and can be changed to **Standard** for an established
+account. Accounts do not need likes or followers to be connected.
+
+## Safety boundary
+
+No browser publisher can be undetectable or ban-proof. This product uses the
+customer's visible local Chromium session, stable profiles, bounded pacing,
+manual login, transparent status, and stop-on-risk behavior. It does not use
+stealth patches, biometric impersonation, proxy rotation, CAPTCHA bypasses, or
+browser flags that hide automation. Customers remain responsible for each
+platform's terms and for the content they publish.
 
 ## Developer commands
 

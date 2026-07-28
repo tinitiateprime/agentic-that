@@ -31,6 +31,7 @@ export type PublishingDesktopHost = {
   updateBrowser(sessionId: string, activity: DesktopBrowserActivity): Promise<void> | void;
   closeBrowser(sessionId: string): Promise<void> | void;
   stopPublishingBrowsers(reason: string): Promise<void> | void;
+  clearAccountBrowserData(accountId: string): Promise<void> | void;
 };
 
 declare global {

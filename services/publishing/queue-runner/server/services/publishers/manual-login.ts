@@ -3,6 +3,7 @@ import type { Page } from "playwright-core";
 export type AccountLogin = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
 type ManualLoginFallbackOptions = {

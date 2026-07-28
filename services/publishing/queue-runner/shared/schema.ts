@@ -7,6 +7,9 @@ export const submissionStatuses = ["awaiting_schedule", "scheduled"] as const;
 export const scheduleFrequencies = ["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"] as const;
 export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
+export const accountSafetyStatuses = ["healthy", "warning", "paused", "restricted"] as const;
+export const accountSafetyModes = ["standard", "protected"] as const;
+export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
 
 export const platformSchema = z.enum(platforms);
 export const postFormatSchema = z.enum(postFormats);
@@ -15,6 +18,9 @@ export const submissionStatusSchema = z.enum(submissionStatuses);
 export const scheduleFrequencySchema = z.enum(scheduleFrequencies);
 export const scheduleStatusSchema = z.enum(scheduleStatuses);
 export const userRoleSchema = z.enum(userRoles);
+export const accountSafetyStatusSchema = z.enum(accountSafetyStatuses);
+export const accountSafetyModeSchema = z.enum(accountSafetyModes);
+export const publishActionStateSchema = z.enum(publishActionStates);
 export const scheduleIdSchema = z.coerce.number().int().positive();
 
 export type Platform = (typeof platforms)[number];
@@ -24,6 +30,9 @@ export type SubmissionStatus = (typeof submissionStatuses)[number];
 export type ScheduleFrequency = (typeof scheduleFrequencies)[number];
 export type ScheduleStatus = (typeof scheduleStatuses)[number];
 export type UserRole = (typeof userRoles)[number];
+export type AccountSafetyStatus = (typeof accountSafetyStatuses)[number];
+export type AccountSafetyMode = (typeof accountSafetyModes)[number];
+export type PublishActionState = (typeof publishActionStates)[number];
 
 export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
   daily: "Daily",
@@ -89,6 +98,11 @@ export const platformAccountSchema = z.object({
   loginIdentifier: z.string(),
   credentialConfigured: z.boolean(),
   enabled: z.boolean(),
+  safetyStatus: accountSafetyStatusSchema.optional(),
+  safetyMode: accountSafetyModeSchema.optional(),
+  twoFactorEnabled: z.boolean().optional(),
+  safetyReason: z.string().optional(),
+  safetyPausedAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string()
 });
@@ -97,7 +111,9 @@ export const upsertPlatformAccountSchema = z.object({
   displayName: z.string().trim().min(1, "Account name is required"),
   handle: z.string().trim().min(1, "Account handle is required"),
   loginIdentifier: z.string().trim().max(254).optional().default(""),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
+  safetyMode: accountSafetyModeSchema.optional(),
+  twoFactorEnabled: z.boolean().optional()
 });
 
 export const publishingScheduleSchema = z.object({
@@ -225,6 +241,9 @@ export const platformUploadSchema = z.object({
   attemptCount: z.number().int().nonnegative().optional(),
   lastAttemptAt: z.string().optional(),
   postedAt: z.string().optional(),
+  publishActionState: publishActionStateSchema.optional(),
+  safetyDeferredUntil: z.string().optional(),
+  safetyReason: z.string().optional(),
   uploadedAt: z.string(),
   updatedAt: z.string(),
   scheduledAt: z.string().optional(),
@@ -246,6 +265,7 @@ export const contentSubmissionSchema = z.object({
   url: z.string(),
   title: z.string().optional(),
   description: z.string().min(1),
+  rightsConfirmed: z.boolean(),
   status: submissionStatusSchema,
   createdByUserId: z.string(),
   scheduledByUserId: z.string().optional(),

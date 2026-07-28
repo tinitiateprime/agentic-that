@@ -238,7 +238,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
   console.log("LinkedIn media attached.");
 }
 
-async function clickPostWhenReady(page: Page) {
+async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
   const postButton = page.getByRole("button", { name: /^Post$/i }).last();
   await postButton.waitFor({ state: "visible", timeout: 60000 });
 
@@ -248,6 +248,7 @@ async function clickPostWhenReady(page: Page) {
       if (await postButton.isEnabled()) {
         console.log("Clicking LinkedIn Post button...");
         await postButton.click({ force: true, timeout: 10000 });
+        await onSubmitted?.();
         return;
       }
     } catch {
@@ -373,7 +374,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   await clickStartPost(page);
   if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
-  await clickPostWhenReady(page);
+  await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForPostComplete(page);
 
   const holdTime = getLoginHoldMs();

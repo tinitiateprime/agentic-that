@@ -534,7 +534,7 @@ async function fillInstagramCaption(page: Page, caption: string) {
   console.log("Instagram caption entered.");
 }
 
-async function clickInstagramShareAndWait(page: Page) {
+async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promise<void> | void) {
   console.log("Clicking Instagram Share button...");
 
   const shareButton = await firstVisible([
@@ -546,6 +546,7 @@ async function clickInstagramShareAndWait(page: Page) {
 
   await shareButton.scrollIntoViewIfNeeded();
   await shareButton.click({ force: true, timeout: 10000 });
+  await onSubmitted?.();
   await page.waitForTimeout(300);
 
   await clickDoneAfterInstagramShared(page);
@@ -615,7 +616,7 @@ export async function postToInstagram(page: Page, upload: PlatformUpload, accoun
   await selectOriginalAspectAndClickNext(page);
   await clickInstagramEditNext(page);
   await fillInstagramCaption(page, upload.caption);
-  await clickInstagramShareAndWait(page);
+  await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
 
   const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
   console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);

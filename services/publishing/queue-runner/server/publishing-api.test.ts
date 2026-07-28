@@ -56,7 +56,50 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     }),
   });
   assert.equal(accountResponse.status, 201);
-  const account = await accountResponse.json() as { id: string };
+  const account = await accountResponse.json() as { id: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  assert.equal(account.safetyMode, "protected");
+  assert.equal(account.twoFactorEnabled, false);
+
+  const { pausePlatformAccountForSafety } = await import("./local-storage.js");
+  await pausePlatformAccountForSafety(account.id, "warning", "Uncertain publish result requires review.");
+  const pausedAccounts = await (await api("/api/accounts?platform=facebook")).json() as Array<{
+    id: string;
+    enabled: boolean;
+    safetyStatus?: string;
+  }>;
+  const pausedAccount = pausedAccounts.find(item => item.id === account.id);
+  assert.equal(pausedAccount?.enabled, false);
+  assert.equal(pausedAccount?.safetyStatus, "warning");
+
+  const resumeResponse = await api(`/api/accounts/${account.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      displayName: "Facebook test account",
+      handle: "@agenticthat-test",
+      enabled: true,
+      safetyMode: "standard",
+      twoFactorEnabled: true,
+    }),
+  });
+  assert.equal(resumeResponse.status, 200);
+  const resumedAccount = await resumeResponse.json() as { enabled: boolean; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  assert.equal(resumedAccount.enabled, true);
+  assert.equal(resumedAccount.safetyStatus, "healthy");
+  assert.equal(resumedAccount.safetyReason, undefined);
+  assert.equal(resumedAccount.safetyMode, "standard");
+  assert.equal(resumedAccount.twoFactorEnabled, true);
+
+  const unsafeLinkResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Internal setup: http://admin:secret@192.168.1.5/setup",
+      destinations: [{ accountId: account.id }],
+    }),
+  });
+  assert.equal(unsafeLinkResponse.status, 422);
+  const unsafeLinkError = await unsafeLinkResponse.json() as { code?: string; issues?: Array<{ code: string }> };
+  assert.equal(unsafeLinkError.code, "CONTENT_PREFLIGHT_BLOCKED");
+  assert.equal(unsafeLinkError.issues?.some(issue => issue.code === "private_link"), true);
 
   const { signPublishingWorkspaceIdentity } = await import("../../../../lib/publishing-workspace-auth.js");
   async function platformSession(platformUserId: string, workspaceId: string, email: string) {
@@ -220,6 +263,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
       stagedUploadId: staged.id,
       title: "",
       description: "Publishing integration test",
+      rightsConfirmed: true,
       destinations: [{ accountId: account.id }],
     }),
   });
@@ -366,23 +410,35 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     stopped: false,
     message: "No publishing automation is running.",
   });
+  const stopAudit = await (await api("/api/activity-logs?limit=20")).json() as Array<{ action: string }>;
+  assert.equal(stopAudit.some(entry => entry.action === "automation.stop_checked"), true);
 
   const processingResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "processing" }),
   });
   assert.equal(processingResponse.status, 200);
-  const { recoverInterruptedPublishingWork } = await import("./local-storage.js");
+  const { recoverInterruptedPublishingWork, updateUploadPublishActionState } = await import("./local-storage.js");
+  await updateUploadPublishActionState(posts[0].id, "submitted");
+  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "retry";
   const recovery = await recoverInterruptedPublishingWork();
   assert.equal(recovery.recoveredUploads, 1);
-  assert.equal(recovery.recoveryMode, "review");
+  assert.equal(recovery.recoveryMode, "retry");
+  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
   const recoveredUploadsResponse = await api("/api/uploads");
-  const recoveredUploads = await recoveredUploadsResponse.json() as Array<{ id: string; status: string; failureReason?: string; attemptCount?: number }>;
+  const recoveredUploads = await recoveredUploadsResponse.json() as Array<{
+    id: string;
+    status: string;
+    failureReason?: string;
+    attemptCount?: number;
+    publishActionState?: string;
+  }>;
   const recoveredPost = recoveredUploads.find(upload => upload.id === posts[0].id);
   assert.equal(recoveredPost?.status, "failed");
   assert.equal(recoveredPost?.attemptCount, 1);
-  assert.match(recoveredPost?.failureReason || "", /stopped during publishing/i);
-  assert.match(recoveredPost?.failureReason || "", /prevent a duplicate/i);
+  assert.equal(recoveredPost?.publishActionState, "uncertain");
+  assert.match(recoveredPost?.failureReason || "", /after the final publish action/i);
+  assert.match(recoveredPost?.failureReason || "", /automatic retry is blocked/i);
 
   const failedResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",
