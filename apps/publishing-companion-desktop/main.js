@@ -59,6 +59,7 @@ let settings = null;
 let logPath = "";
 let dashboardBounds = null;
 let browserBounds = new Map();
+let browserZoomFactors = new Map();
 let publishingPermissionPromise = null;
 let publishingRunPermissionActive = false;
 let resolvedDesktopDebugPort = REQUESTED_DESKTOP_DEBUG_PORT || null;
@@ -289,6 +290,12 @@ function safeBounds(value) {
   return { x, y, width, height };
 }
 
+function safeZoomFactor(value) {
+  const zoomFactor = Number(value);
+  if (!Number.isFinite(zoomFactor)) return 1;
+  return Math.min(1, Math.max(0.4, zoomFactor));
+}
+
 function setViewBounds(view, bounds) {
   if (!view || view.webContents.isDestroyed()) return;
   if (!bounds) {
@@ -303,6 +310,9 @@ function applyWorkspaceLayout() {
   setViewBounds(dashboardView, dashboardBounds);
   for (const session of managedBrowsers.values()) {
     const bounds = browserBounds.get(session.id) ?? null;
+    if (session.view && !session.view.webContents.isDestroyed()) {
+      session.view.webContents.setZoomFactor(browserZoomFactors.get(session.id) ?? 1);
+    }
     setViewBounds(session.view, bounds);
     setViewBounds(session.lockView, session.request.purpose === "publish" ? bounds : null);
   }
@@ -401,18 +411,19 @@ function interactionLockPath() {
   return path.join(app.getAppPath(), "interaction-lock.html");
 }
 
-async function ensurePublishingInteractionConsent() {
-  if (publishingRunPermissionActive) return;
+async function requestPersistentPublishingInteractionConsent() {
+  if (settings.publishingInteractionConsent) return;
   if (publishingPermissionPromise) return publishingPermissionPromise;
 
   showCompanion("activity");
   publishingPermissionPromise = dialog.showMessageBox(mainWindow, {
     type: "question",
     title: "Publishing mouse protection",
-    message: "Allow protected publishing in Companion?",
+    message: "Allow scheduled publishing while you are away?",
     detail: [
       "While posting, Companion will block mouse and keyboard input only inside the live social-media publishing tabs.",
       "Login tabs and the rest of your computer stay fully usable.",
+      "This permission is saved for future scheduled posts and can be revoked at any time in Companion Settings.",
     ].join("\n\n"),
     buttons: ["Allow", "Deny"],
     defaultId: 0,
@@ -422,15 +433,31 @@ async function ensurePublishingInteractionConsent() {
     if (result.response !== 0) {
       throw new Error("Publishing was cancelled because mouse-protection permission was denied.");
     }
-    publishingRunPermissionActive = true;
+    settings.publishingInteractionConsent = true;
+    writeSettings();
+    mainWindow?.webContents.send("companion:status-changed");
   }).finally(() => {
     publishingPermissionPromise = null;
   });
   return publishingPermissionPromise;
 }
 
+async function ensurePublishingInteractionConsent() {
+  if (publishingRunPermissionActive) return;
+  await requestPersistentPublishingInteractionConsent();
+  publishingRunPermissionActive = true;
+}
+
 function finishPublishingInteractionConsent() {
   publishingRunPermissionActive = false;
+}
+
+function revokePublishingInteractionConsent() {
+  settings.publishingInteractionConsent = false;
+  publishingRunPermissionActive = false;
+  writeSettings();
+  mainWindow?.webContents.send("companion:status-changed");
+  return true;
 }
 
 function browserPartition(accountId) {
@@ -586,6 +613,7 @@ async function closeManagedBrowser(sessionId, forcedState) {
   }
   session.closedAt = new Date().toISOString();
   browserBounds.delete(sessionId);
+  browserZoomFactors.delete(sessionId);
   removeManagedViews(session);
   pruneActivityHistory();
   notifyWorkspaceState();
@@ -602,6 +630,7 @@ async function stopPublishingBrowsers(reason) {
 
 function installPublishingDesktopHost() {
   globalThis.__AGENTICTHAT_PUBLISHING_DESKTOP_HOST__ = {
+    requestPersistentPublishingPermission: requestPersistentPublishingInteractionConsent,
     requestPublishingPermission: ensurePublishingInteractionConsent,
     finishPublishingRun: finishPublishingInteractionConsent,
     openBrowser: openManagedBrowser,
@@ -768,6 +797,11 @@ function registerIpc() {
         .map(entry => [String(entry?.id || ""), safeBounds(entry?.bounds)])
         .filter(([id, bounds]) => id && bounds),
     );
+    browserZoomFactors = new Map(
+      (Array.isArray(layout?.browsers) ? layout.browsers : [])
+        .map(entry => [String(entry?.id || ""), safeZoomFactor(entry?.zoomFactor)])
+        .filter(([id]) => id),
+    );
     applyWorkspaceLayout();
     return true;
   });
@@ -791,6 +825,7 @@ function registerIpc() {
     saveAutoStart(Boolean(enabled));
     return settings.autoStart;
   });
+  ipcMain.handle("companion:revoke-publishing-consent", () => revokePublishingInteractionConsent());
   ipcMain.handle("companion:emergency-stop", () => emergencyStop());
   ipcMain.handle("companion:dashboard-proxy", (event, message) => {
     if (!EMBED_FULL_PUBLISHING_WORKSPACE || !dashboardView || event.sender.id !== dashboardView.webContents.id) {

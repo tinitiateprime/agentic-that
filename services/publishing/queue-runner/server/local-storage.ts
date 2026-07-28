@@ -1342,6 +1342,57 @@ function previousScheduleOccurrence(schedule: PublishingSchedule, now: Date) {
   return scheduleDateInMonth(now.getFullYear() - 1, anchor.getMonth(), anchor.getDate(), schedule.time);
 }
 
+export function nextPublishingScheduleOccurrence(schedule: PublishingSchedule, now = new Date()) {
+  if (schedule.status !== "active") return null;
+  const createdAt = new Date(schedule.createdAt);
+  const anchor = Number.isFinite(createdAt.getTime()) ? createdAt : now;
+  let occurrence: Date | null = null;
+
+  if (schedule.frequency === "custom") {
+    if (!schedule.customCronExpression || !nodeCron.validate(schedule.customCronExpression)) return null;
+    const task = nodeCron.createTask(schedule.customCronExpression, () => undefined);
+    try {
+      occurrence = task.getNextRun();
+    } finally {
+      void task.destroy();
+    }
+  } else if (schedule.frequency === "onetime") {
+    const runDate = localDateFromValue(schedule.endDate);
+    if (runDate) occurrence = localDateAt(runDate, schedule.time);
+  } else if (schedule.frequency === "daily") {
+    occurrence = localDateAt(now, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 1);
+  } else if (schedule.frequency === "weekly") {
+    const dayDiff = (anchor.getDay() - now.getDay() + 7) % 7;
+    const candidateDay = new Date(now);
+    candidateDay.setDate(candidateDay.getDate() + dayDiff);
+    occurrence = localDateAt(candidateDay, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 7);
+  } else if (schedule.frequency === "biweekly") {
+    const elapsedDays = Math.max(0, daysBetween(anchor, now));
+    const nextCycle = elapsedDays - (elapsedDays % 14);
+    const candidateDay = new Date(anchor);
+    candidateDay.setDate(candidateDay.getDate() + nextCycle);
+    occurrence = localDateAt(candidateDay, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 14);
+  } else if (schedule.frequency === "monthly") {
+    occurrence = scheduleDateInMonth(now.getFullYear(), now.getMonth(), anchor.getDate(), schedule.time);
+    if (occurrence.getTime() <= now.getTime()) {
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      occurrence = scheduleDateInMonth(nextMonth.getFullYear(), nextMonth.getMonth(), anchor.getDate(), schedule.time);
+    }
+  } else {
+    occurrence = scheduleDateInMonth(now.getFullYear(), anchor.getMonth(), anchor.getDate(), schedule.time);
+    if (occurrence.getTime() <= now.getTime()) {
+      occurrence = scheduleDateInMonth(now.getFullYear() + 1, anchor.getMonth(), anchor.getDate(), schedule.time);
+    }
+  }
+
+  if (!occurrence || occurrence.getTime() <= now.getTime()) return null;
+  const endAt = endOfLocalDate(schedule.endDate);
+  return endAt && occurrence.getTime() > endAt.getTime() ? null : occurrence;
+}
+
 function isScheduleDue(schedule: PublishingSchedule, now = new Date()) {
   if (schedule.status !== "active") return false;
   const occurrence = previousScheduleOccurrence(schedule, now);

@@ -1,4 +1,4 @@
-import type { AccountSafetyMode, PlatformUpload } from "../../shared/schema.js";
+import type { AccountSafetyMode, Platform, PlatformUpload, PostFormat } from "../../shared/schema.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -18,6 +18,11 @@ export type PublishingSafetyAssessment = {
   postsLastDay: number;
 };
 
+export type ScheduledPublishingSafetyAssessment = PublishingSafetyAssessment & {
+  requestedAt: string;
+  earliestAt: string;
+};
+
 const platformRules = {
   instagram: { hourlyLimit: 1, dailyLimit: 6, minimumGapMs: 60 * 60 * 1000 },
   facebook: { hourlyLimit: 2, dailyLimit: 10, minimumGapMs: 30 * 60 * 1000 },
@@ -25,18 +30,29 @@ const platformRules = {
   x: { hourlyLimit: 4, dailyLimit: 30, minimumGapMs: 15 * 60 * 1000 },
 } satisfies Partial<Record<PlatformUpload["platform"], PublishingSafetyRule>>;
 
-export function publishingSafetyRule(upload: PlatformUpload, safetyMode: AccountSafetyMode = "standard"): PublishingSafetyRule {
-  const standardRule = upload.platform === "youtube"
-    ? upload.postFormat === "video"
+export function publishingSafetyRuleFor(
+  platform: Platform,
+  postFormat: PostFormat | undefined,
+  safetyMode: AccountSafetyMode = "standard",
+): PublishingSafetyRule {
+  const standardRule = platform === "youtube"
+    ? postFormat === "video"
       ? { hourlyLimit: 1, dailyLimit: 3, minimumGapMs: 60 * 60 * 1000 }
       : { hourlyLimit: 2, dailyLimit: 6, minimumGapMs: 30 * 60 * 1000 }
-    : platformRules[upload.platform];
+    : platformRules[platform];
   if (safetyMode === "standard") return standardRule;
   return {
     hourlyLimit: Math.max(1, Math.floor(standardRule.hourlyLimit / 2)),
     dailyLimit: Math.max(1, Math.floor(standardRule.dailyLimit / 2)),
     minimumGapMs: Math.max(60 * 60 * 1000, standardRule.minimumGapMs * 2),
   };
+}
+
+export function publishingSafetyRule(
+  upload: Pick<PlatformUpload, "platform" | "postFormat">,
+  safetyMode: AccountSafetyMode = "standard",
+): PublishingSafetyRule {
+  return publishingSafetyRuleFor(upload.platform, upload.postFormat, safetyMode);
 }
 
 function postedTime(upload: PlatformUpload) {
@@ -85,6 +101,74 @@ export function assessPublishingSafety(
     allowed: !controllingLimit,
     retryAt: controllingLimit ? new Date(controllingLimit.at).toISOString() : undefined,
     reason: controllingLimit?.reason,
+    rule,
+    postsLastHour: hourlyTimes.length,
+    postsLastDay: dailyTimes.length,
+  };
+}
+
+function reservedPublishingTime(upload: PlatformUpload) {
+  const value = upload.status === "posted"
+    ? upload.postedAt
+    : upload.status === "queued"
+      ? upload.scheduledAt ?? upload.safetyDeferredUntil
+      : undefined;
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function assessScheduledPublishingSafety(
+  upload: Pick<PlatformUpload, "id" | "platform" | "postFormat">,
+  accountUploads: PlatformUpload[],
+  requestedAt: number,
+  safetyMode: AccountSafetyMode = "standard",
+): ScheduledPublishingSafetyAssessment {
+  if (!Number.isFinite(requestedAt)) throw new Error("A valid publishing time is required.");
+  const rule = publishingSafetyRule(upload, safetyMode);
+  const reservedTimes = accountUploads
+    .filter(item => item.id !== upload.id)
+    .map(reservedPublishingTime)
+    .filter((timestamp): timestamp is number => timestamp !== null)
+    .sort((left, right) => left - right);
+  let candidate = requestedAt;
+  let reason: string | undefined;
+
+  // Move forward until the requested slot satisfies spacing and rolling caps.
+  // Existing future schedules are reservations, so two accepted jobs cannot
+  // silently collide when the scheduler wakes up.
+  for (let iteration = 0; iteration < 100; iteration += 1) {
+    let nextCandidate = candidate;
+    const spacingConflict = reservedTimes.find(timestamp => Math.abs(timestamp - candidate) < rule.minimumGapMs);
+    if (spacingConflict !== undefined) {
+      nextCandidate = Math.max(nextCandidate, spacingConflict + rule.minimumGapMs);
+      reason ??= "Minimum spacing between posts is still active.";
+    }
+
+    const hourlyTimes = reservedTimes.filter(timestamp => timestamp <= candidate && timestamp > candidate - HOUR_MS);
+    if (hourlyTimes.length >= rule.hourlyLimit) {
+      nextCandidate = Math.max(nextCandidate, hourlyTimes[hourlyTimes.length - rule.hourlyLimit] + HOUR_MS);
+      reason ??= `The ${rule.hourlyLimit}-post hourly safety limit would be exceeded.`;
+    }
+
+    const dailyTimes = reservedTimes.filter(timestamp => timestamp <= candidate && timestamp > candidate - DAY_MS);
+    if (dailyTimes.length >= rule.dailyLimit) {
+      nextCandidate = Math.max(nextCandidate, dailyTimes[dailyTimes.length - rule.dailyLimit] + DAY_MS);
+      reason ??= `The ${rule.dailyLimit}-post daily safety limit would be exceeded.`;
+    }
+
+    if (nextCandidate <= candidate) break;
+    candidate = nextCandidate;
+  }
+
+  const hourlyTimes = reservedTimes.filter(timestamp => timestamp <= requestedAt && timestamp > requestedAt - HOUR_MS);
+  const dailyTimes = reservedTimes.filter(timestamp => timestamp <= requestedAt && timestamp > requestedAt - DAY_MS);
+  return {
+    allowed: candidate <= requestedAt,
+    requestedAt: new Date(requestedAt).toISOString(),
+    earliestAt: new Date(candidate).toISOString(),
+    retryAt: candidate > requestedAt ? new Date(candidate).toISOString() : undefined,
+    reason: candidate > requestedAt ? reason ?? "The selected time conflicts with another protected publishing slot." : undefined,
     rule,
     postsLastHour: hourlyTimes.length,
     postsLastDay: dailyTimes.length,

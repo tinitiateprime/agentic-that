@@ -71,14 +71,14 @@
               <h2 id="live-heading">Login and publishing activity</h2>
               <p id="live-description">Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.</p>
             </div>
-            <div class="safety-note"><strong>Clear permission first</strong><span>Login stays interactive. Before posting, an Allow/Deny popup asks whether Companion may protect the live publishing pane.</span></div>
+            <div class="safety-note"><strong>Approve once when scheduling</strong><span>The Allow/Deny popup appears immediately, so scheduled publishing can run unattended later.</span></div>
           </div>
 
           <div class="live-command-bar" id="live-command-bar" hidden>
             <div class="live-run-summary"><i></i><span><strong id="live-run-title">Live browser active</strong><small id="live-run-detail">Choose an account below to focus its browser.</small></span></div>
             <div class="live-layout-controls" role="group" aria-label="Live browser layout">
               <button class="active" id="layout-focus" type="button">Focus view</button>
-              <button id="layout-split" type="button">Split view</button>
+              <button id="layout-split" type="button">Grid view</button>
             </div>
             <button class="live-stop" id="live-stop" type="button">Stop publishing</button>
           </div>
@@ -111,9 +111,10 @@
 
             <section class="settings-card">
               <span class="eyebrow">SAFETY</span>
-              <h2>Permission appears as a popup</h2>
-              <p>Immediately before each publishing run, Companion shows a clear Allow/Deny popup. Allow protects only automated publishing tabs from accidental input; Deny cancels the run. Login tabs always remain interactive.</p>
-              <div class="permission-mode"><strong>Ask before every publishing run</strong><small>No permission is hidden in this settings screen.</small></div>
+              <h2>Scheduled publishing permission</h2>
+              <p>The first scheduling action shows a clear Allow/Deny popup immediately. Allow lets Companion publish while you are away and protects only the live publishing panes from accidental input.</p>
+              <div class="permission-mode"><strong id="permission-state">Permission not granted</strong><small id="permission-detail">Scheduling will ask before saving the first unattended post.</small></div>
+              <button class="secondary compact" id="revoke-consent" type="button" hidden>Revoke publishing permission</button>
             </section>
 
             <section class="settings-card">

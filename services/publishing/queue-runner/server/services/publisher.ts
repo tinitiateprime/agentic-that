@@ -841,12 +841,11 @@ export async function cancelAutomation(reason = "Publishing was stopped by the u
 }
 
 function maxConcurrentAccounts() {
-  // A hidden WebContentsView has a zero-sized viewport, so the safest and most
-  // reliable desktop default is one fully visible publishing account at a time.
-  // Advanced deployments may opt into two panes, which the Companion renders
-  // side by side; more than two would make the live browser panes too small.
-  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 1);
-  return Number.isInteger(configured) ? Math.min(2, Math.max(1, configured)) : 1;
+  // Different accounts can start together at the scheduled minute. Companion
+  // keeps every browser visible in a scaled grid, while the per-account lock
+  // still guarantees that one account never receives overlapping jobs.
+  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 5);
+  return Number.isInteger(configured) ? Math.min(5, Math.max(1, configured)) : 5;
 }
 
 async function runWithConcurrency<T>(

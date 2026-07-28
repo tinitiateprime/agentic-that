@@ -15,6 +15,7 @@ import {
   platformPostRules,
   platforms,
   platformSchema,
+  postFormatSchema,
   scheduleIdSchema,
   updateUploadDetailsSchema,
   updateUploadStatusSchema,
@@ -58,6 +59,7 @@ import {
   loginUser,
   platformWorkspaceManagerStatus,
   recoverInterruptedPublishingWork,
+  nextPublishingScheduleOccurrence,
   setupPlatformWorkspaceManager,
   updatePublishingSchedule,
   updatePlatformAccount,
@@ -74,6 +76,8 @@ import {
   runAutomation,
   startManualAccountSession,
 } from "./services/publisher.js";
+import { publishingDesktopHost } from "./services/desktop-host.js";
+import { assessScheduledPublishingSafety } from "./services/safety-governor.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import {
   assertContentPreflight,
@@ -174,6 +178,93 @@ function postFormatForFile(file: StoredUploadFile): PostFormat {
   throw new Error("Upload an image or video.");
 }
 
+type PublishingScheduleSafetyIssue = {
+  accountId: string;
+  platform: Platform;
+  accountName: string;
+  requestedAt: string;
+  earliestAt: string;
+  message: string;
+};
+
+class PublishingScheduleSafetyError extends Error {
+  readonly code = "PUBLISHING_SAFETY_SCHEDULE" as const;
+
+  constructor(readonly issues: PublishingScheduleSafetyIssue[]) {
+    super(issues.map(issue => issue.message).join(" "));
+    this.name = "PublishingScheduleSafetyError";
+  }
+}
+
+async function assessDestinationPublishingSafety(
+  user: UserProfile,
+  postFormat: PostFormat,
+  destinationsInput: unknown,
+  excludeUploadId?: string,
+) {
+  const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
+  const [accounts, schedules, uploads] = await Promise.all([
+    listPlatformAccounts(undefined, user.workspaceId),
+    listPublishingSchedules(user.workspaceId),
+    listUploads(undefined, undefined, user.workspaceId),
+  ]);
+  const accountById = new Map(accounts.map(account => [account.id, account]));
+  const scheduleById = new Map(schedules.map(schedule => [schedule.id, schedule]));
+  const safetyUploads = uploads.map(upload => {
+    if (!upload.scheduleId || upload.scheduledAt) return upload;
+    const schedule = scheduleById.get(upload.scheduleId);
+    const occurrence = schedule ? nextPublishingScheduleOccurrence(schedule) : null;
+    return occurrence ? { ...upload, scheduledAt: occurrence.toISOString() } : upload;
+  });
+  const issues: PublishingScheduleSafetyIssue[] = [];
+  const assessments = destinations.map(destination => {
+    const account = accountById.get(destination.accountId);
+    if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
+    let requestedAt = Date.now();
+    if (destination.scheduledAt) {
+      requestedAt = Date.parse(normalizeScheduledAt(destination.scheduledAt)!);
+    } else if (destination.scheduleId) {
+      const schedule = scheduleById.get(destination.scheduleId);
+      if (!schedule) throw new Error(`Schedule #${destination.scheduleId} was not found.`);
+      assertScheduleCanReceivePosts(schedule);
+      const occurrence = nextPublishingScheduleOccurrence(schedule);
+      if (!occurrence) throw new Error(`${schedule.name} has no future publishing time.`);
+      requestedAt = occurrence.getTime();
+    }
+
+    const assessment = assessScheduledPublishingSafety(
+      { id: excludeUploadId ?? `preview_${account.id}`, platform: account.platform, postFormat },
+      safetyUploads.filter(upload => upload.accountId === account.id && upload.id !== excludeUploadId),
+      requestedAt,
+      account.safetyMode ?? "standard",
+    );
+    if (!assessment.allowed) {
+      const earliest = new Date(assessment.earliestAt);
+      issues.push({
+        accountId: account.id,
+        platform: account.platform,
+        accountName: account.displayName,
+        requestedAt: assessment.requestedAt,
+        earliestAt: assessment.earliestAt,
+        message: `${account.displayName}: choose ${earliest.toLocaleString()} or later. ${assessment.reason ?? "A publishing safety limit is active."}`,
+      });
+    }
+    return { accountId: account.id, platform: account.platform, ...assessment };
+  });
+  return { allowed: issues.length === 0, issues, assessments };
+}
+
+async function assertDestinationPublishingSafety(
+  user: UserProfile,
+  postFormat: PostFormat,
+  destinationsInput: unknown,
+  excludeUploadId?: string,
+) {
+  const result = await assessDestinationPublishingSafety(user, postFormat, destinationsInput, excludeUploadId);
+  if (!result.allowed) throw new PublishingScheduleSafetyError(result.issues);
+  return result;
+}
+
 function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile, title: string, description: string) {
   const rules = platformPostRules[platform];
   const postFormat = postFormatForFile(file);
@@ -204,6 +295,11 @@ const scheduleOnlyUpdateSchema = z.object({
 
 const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
+});
+
+const publishingSafetyRequestSchema = z.object({
+  postFormat: postFormatSchema,
+  destinations: unifiedPostDestinationsSchema,
 });
 
 const platformPasswordSchema = z.object({
@@ -505,6 +601,8 @@ async function createUnifiedPosts(
       }
     }
 
+    await assertDestinationPublishingSafety(user, postFormat, destinations);
+
     const preflightIssues = evaluateContentPreflight({
       postFormat,
       title,
@@ -596,6 +694,8 @@ async function scheduleContentSubmission(
         assertScheduleCanReceivePosts(schedule);
       }
     }
+
+    await assertDestinationPublishingSafety(user, submission.postFormat, destinations);
 
     const preflightIssues = evaluateContentPreflight({
       postFormat: submission.postFormat,
@@ -762,6 +862,32 @@ app.use("/api", authenticateApi);
 
 app.get("/api/auth/me", (req: RequestWithUser, res) => {
   res.json(currentUser(req));
+});
+
+app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
+  try {
+    const user = currentUser(req);
+    const payload = publishingSafetyRequestSchema.parse(req.body);
+    res.json(await assessDestinationPublishingSafety(user, payload.postFormat, payload.destinations));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/automation/consent", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
+  try {
+    const desktopHost = publishingDesktopHost();
+    if (!desktopHost) {
+      res.status(409).json({ message: "Open Publishing Companion to approve protected unattended publishing." });
+      return;
+    }
+    await desktopHost.requestPersistentPublishingPermission();
+    const user = currentUser(req);
+    await logActivity(user.id, "automation.permission_granted", "automation_run", null, "Protected unattended publishing was approved in Companion.", {});
+    res.json({ granted: true, message: "Publishing permission saved. You do not need to return at the scheduled time." });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/users", requireRoles("operations_manager"), async (_req, res, next) => {
@@ -1307,6 +1433,20 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), a
       assertScheduleCanReceivePosts(schedule);
     }
 
+    if (payload.scheduledAt || payload.scheduleId) {
+      const postFormat = existing.postFormat ?? postFormatForFile({
+        originalname: existing.originalName,
+        filename: existing.fileName,
+        mimetype: existing.mimeType,
+        size: existing.size,
+      });
+      await assertDestinationPublishingSafety(user, postFormat, [{
+        accountId: payload.accountId ?? existing.accountId,
+        scheduledAt: payload.scheduledAt ?? undefined,
+        scheduleId: payload.scheduleId ?? undefined,
+      }], existing.id);
+    }
+
     const item = await updateUploadDetails(uploadId, payload, user.id, user.workspaceId);
 
     if (!item) {
@@ -1415,6 +1555,15 @@ app.post("/api/automation/stop", requireRoles("operations_manager"), async (req:
 
 // --- ERROR HANDLER ---
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof PublishingScheduleSafetyError) {
+    res.status(409).json({
+      message: error.message,
+      code: error.code,
+      issues: error.issues,
+    });
+    return;
+  }
+
   if (error instanceof ContentPreflightError) {
     res.status(error.code === "CONTENT_PREFLIGHT_WARNINGS" ? 409 : 422).json({
       message: error.message,

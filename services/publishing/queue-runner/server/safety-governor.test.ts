@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlatformUpload } from "../shared/schema.js";
-import { assessPublishingSafety, publishingSafetyRule } from "./services/safety-governor.js";
+import { assessPublishingSafety, assessScheduledPublishingSafety, publishingSafetyRule } from "./services/safety-governor.js";
 
 function upload(overrides: Partial<PlatformUpload> = {}): PlatformUpload {
   return {
@@ -85,4 +85,32 @@ test("publishing safety enforces rolling daily limits", () => {
   assert.equal(assessment.allowed, false);
   assert.equal(assessment.postsLastDay, 6);
   assert.match(assessment.reason ?? "", /daily safety limit/i);
+});
+
+test("schedule safety rejects a time inside the account gap and returns the earliest safe time", () => {
+  const requestedAt = Date.parse("2026-07-28T12:00:00.000Z");
+  const previous = upload({
+    id: "posted",
+    status: "posted",
+    postedAt: "2026-07-28T11:30:00.000Z",
+  });
+  const assessment = assessScheduledPublishingSafety(upload(), [previous], requestedAt);
+  assert.equal(assessment.allowed, false);
+  assert.equal(assessment.earliestAt, "2026-07-28T12:30:00.000Z");
+  assert.match(assessment.reason ?? "", /minimum spacing/i);
+});
+
+test("schedule safety reserves future jobs so accepted schedules cannot collide", () => {
+  const reserved = upload({
+    id: "reserved",
+    status: "queued",
+    scheduledAt: "2026-07-28T13:00:00.000Z",
+  });
+  const assessment = assessScheduledPublishingSafety(
+    upload(),
+    [reserved],
+    Date.parse("2026-07-28T12:30:00.000Z"),
+  );
+  assert.equal(assessment.allowed, false);
+  assert.equal(assessment.earliestAt, "2026-07-28T14:00:00.000Z");
 });

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, assetUrl, ContentPreflightApiError, setAuthToken, type AuthResponse } from "./lib/api.ts";
+import { api, assetUrl, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -1219,6 +1219,14 @@ function UnifiedComposer({
 
     setSubmitting(true);
     try {
+      const safety = await api.assessPublishingSafety(postFormat, destinations);
+      if (!safety.allowed) {
+        throw new PublishingSafetyApiError({
+          message: safety.issues.map(issue => issue.message).join(' '),
+          issues: safety.issues,
+        });
+      }
+      await api.authorizePublishing();
       const created = await api.createUnifiedPost({
         postFormat,
         file,
@@ -1252,7 +1260,10 @@ function UnifiedComposer({
       }
       onCreated();
     } catch (error) {
-      if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+      if (error instanceof PublishingSafetyApiError) {
+        setPendingPreflightWarnings([]);
+        setMessage({ type: 'warning', text: `Choose a safer time: ${error.issues.map(issue => issue.message).join(' ') || error.message}` });
+      } else if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
         const warnings = [...new Set(error.issues.map(issue => issue.message))];
         setPendingPreflightWarnings(warnings);
         setMessage({ type: 'warning', text: `Review before publishing: ${warnings.join(' ')}` });
@@ -1871,16 +1882,28 @@ function ScheduleSubmissionModal({
     const scheduleDraft: ComposerScheduleDraft = { mode: timingMode, exactAt, scheduleId };
     const timingError = scheduleDraftError(scheduleDraft, schedules);
     if (timingError) return setError(timingError);
+    const destinations = selectedAccountIds.map(accountId => ({ accountId, ...destinationSchedule(scheduleDraft) }));
     setLoading(true);
     try {
+      const safety = await api.assessPublishingSafety(submission.postFormat, destinations);
+      if (!safety.allowed) {
+        throw new PublishingSafetyApiError({
+          message: safety.issues.map(issue => issue.message).join(' '),
+          issues: safety.issues,
+        });
+      }
+      await api.authorizePublishing();
       await api.scheduleSubmission(
         submission.id,
-        selectedAccountIds.map(accountId => ({ accountId, ...destinationSchedule(scheduleDraft) })),
+        destinations,
         confirmWarnings,
       );
       onSuccess();
     } catch (submissionError) {
-      if (submissionError instanceof ContentPreflightApiError && submissionError.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+      if (submissionError instanceof PublishingSafetyApiError) {
+        setPendingPreflightWarnings([]);
+        setError(`Choose a safer time: ${submissionError.issues.map(issue => issue.message).join(' ') || submissionError.message}`);
+      } else if (submissionError instanceof ContentPreflightApiError && submissionError.code === 'CONTENT_PREFLIGHT_WARNINGS') {
         const warnings = [...new Set(submissionError.issues.map(issue => issue.message))];
         setPendingPreflightWarnings(warnings);
         setError(`Review before scheduling: ${warnings.join(' ')}`);
@@ -2579,11 +2602,27 @@ function EditPostModal({
         payload.scheduledAt = scheduleMode === 'exact' ? scheduledDate?.toISOString() ?? null : null;
         payload.scheduleId = scheduleMode === 'template' ? Number(scheduleId) : null;
       }
+      if (canEditSchedule && scheduleMode !== 'none') {
+        const destinations: UnifiedPostDestinationInput[] = [{
+          accountId,
+          ...(scheduleMode === 'exact'
+            ? { scheduledAt: scheduledDate!.toISOString() }
+            : { scheduleId: Number(scheduleId) }),
+        }];
+        const safety = await api.assessPublishingSafety(postFormat, destinations);
+        if (!safety.allowed) {
+          throw new PublishingSafetyApiError({
+            message: safety.issues.map(issue => issue.message).join(' '),
+            issues: safety.issues,
+          });
+        }
+        await api.authorizePublishing();
+      }
       await api.updateUploadDetails(upload.id, payload as any);
       onSuccess();
       onClose();
     } catch (error) {
-      alert("Error: " + (error instanceof Error ? error.message : "Could not save post"));
+      alert((error instanceof PublishingSafetyApiError ? "Safety warning: " : "Error: ") + (error instanceof Error ? error.message : "Could not save post"));
     } finally {
       setLoading(false);
     }

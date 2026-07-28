@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   openLogs: () => ipcRenderer.invoke("companion:open-logs"),
   copyCredentials: () => ipcRenderer.invoke("companion:copy-credentials"),
   setAutoStart: enabled => ipcRenderer.invoke("companion:set-auto-start", enabled),
+  revokePublishingConsent: () => ipcRenderer.invoke("companion:revoke-publishing-consent"),
   emergencyStop: () => ipcRenderer.invoke("companion:emergency-stop"),
   onStatusChanged: callback => ipcRenderer.on("companion:status-changed", callback),
   onWorkspaceState: callback => ipcRenderer.on("companion:workspace-state", (_event, state) => callback(state)),

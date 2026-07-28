@@ -228,6 +228,49 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   const unsupportedText = await unsupportedTextResponse.json() as { message: string };
   assert.match(unsupportedText.message, /Instagram does not support text posts/i);
 
+  const consentWithoutCompanion = await api("/api/automation/consent", { method: "POST" });
+  assert.equal(consentWithoutCompanion.status, 409);
+  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open Publishing Companion/i);
+
+  const xAccountResponse = await api("/api/platforms/x/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "X safety account", handle: "@agenticthat-safety", enabled: true }),
+  });
+  assert.equal(xAccountResponse.status, 201);
+  const xAccount = await xAccountResponse.json() as { id: string };
+  const firstXPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "First X safety post", destinations: [{ accountId: xAccount.id }] }),
+  });
+  assert.equal(firstXPostResponse.status, 201);
+  const [firstXPost] = await firstXPostResponse.json() as Array<{ id: string }>;
+  assert.equal((await api(`/api/uploads/${firstXPost.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "posted" }),
+  })).status, 200);
+
+  const safetyAssessmentResponse = await api("/api/publishing-safety/assess", {
+    method: "POST",
+    body: JSON.stringify({ postFormat: "text", destinations: [{ accountId: xAccount.id }] }),
+  });
+  assert.equal(safetyAssessmentResponse.status, 200);
+  const safetyAssessment = await safetyAssessmentResponse.json() as {
+    allowed: boolean;
+    issues: Array<{ accountId: string; earliestAt: string }>;
+  };
+  assert.equal(safetyAssessment.allowed, false);
+  assert.equal(safetyAssessment.issues[0]?.accountId, xAccount.id);
+  assert.ok(Date.parse(safetyAssessment.issues[0]?.earliestAt) > Date.now());
+
+  const blockedEarlyPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Second X safety post", destinations: [{ accountId: xAccount.id }] }),
+  });
+  assert.equal(blockedEarlyPostResponse.status, 409);
+  const blockedEarlyPost = await blockedEarlyPostResponse.json() as { code?: string; issues?: unknown[] };
+  assert.equal(blockedEarlyPost.code, "PUBLISHING_SAFETY_SCHEDULE");
+  assert.equal((blockedEarlyPost.issues?.length ?? 0) > 0, true);
+
   const media = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const stagedResponse = await api("/api/staged-uploads", {
     method: "POST",

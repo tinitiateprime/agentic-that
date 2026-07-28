@@ -50,7 +50,9 @@ function setView(view) {
   });
   byId("view-title").textContent = views[view].title;
   byId("view-eyebrow").textContent = views[view].eyebrow;
-  document.body.classList.toggle("immersive-live", view === "activity" && activeSessions().length === 1);
+  const liveCount = activeSessions().length;
+  document.body.classList.toggle("immersive-live", view === "activity" && liveCount === 1);
+  document.body.classList.toggle("immersive-grid", view === "activity" && liveCount > 1);
   scheduleLayout();
 }
 
@@ -65,8 +67,11 @@ function scheduleLayout() {
   if (layoutFrame) cancelAnimationFrame(layoutFrame);
   layoutFrame = requestAnimationFrame(() => {
     layoutFrame = null;
-    const browsers = [...document.querySelectorAll("[data-browser-session]")]
-      .map(element => ({ id: element.dataset.browserSession, bounds: elementBounds(element) }))
+    const browserElements = [...document.querySelectorAll("[data-browser-session]")];
+    const visibleCount = browserElements.length;
+    const zoomFactor = visibleCount <= 1 ? 1 : visibleCount === 2 ? 0.72 : visibleCount <= 4 ? 0.55 : 0.45;
+    const browsers = browserElements
+      .map(element => ({ id: element.dataset.browserSession, bounds: elementBounds(element), zoomFactor }))
       .filter(entry => entry.id && entry.bounds);
     void api.setLayout({
       dashboard: null,
@@ -184,22 +189,21 @@ function createTimelineItem(session) {
 function renderWorkspace() {
   const active = activeSessions();
   if (!active.some(session => session.id === focusedSessionId)) focusedSessionId = active[0]?.id ?? null;
-  const canSplit = active.length > 1 && window.innerWidth >= 1200;
-  const simultaneousPublishing = active.filter(session => session.purpose === "publish").length > 1;
-  if (!canSplit) liveLayoutMode = "focus";
-  else if (simultaneousPublishing) liveLayoutMode = "split";
+  const canSplit = active.length > 1;
+  liveLayoutMode = canSplit ? "split" : "focus";
 
   const activityPanel = byId("activity-panel");
   activityPanel.classList.toggle("has-live", active.length > 0);
   activityPanel.classList.toggle("single-live", active.length === 1);
   document.body.classList.toggle("immersive-live", activeView === "activity" && active.length === 1);
+  document.body.classList.toggle("immersive-grid", activeView === "activity" && active.length > 1);
   byId("live-command-bar").hidden = active.length === 0;
   byId("session-switcher").hidden = active.length <= 1;
   byId("live-heading").textContent = active.length
     ? `${active.length} live ${active.length === 1 ? "browser" : "browsers"}`
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
-    ? "Use Focus view for a full-size website. Split view is available when you need to watch two accounts together."
+    ? "Every simultaneous account stays visible in the live grid. Different accounts publish together; each account still runs only one job at a time."
     : "Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.";
   const singleSession = active.length === 1 ? active[0] : null;
   byId("live-run-title").textContent = singleSession
@@ -209,14 +213,14 @@ function renderWorkspace() {
     ? singleSession.activity?.detail || (singleSession.purpose === "login" ? "Complete login in the browser above." : "Protected publishing is active.")
     : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
-      : "Watching all live accounts together.";
+      : "Publishing all scheduled accounts together in the visible grid.";
   byId("live-stop").textContent = singleSession?.purpose === "login" ? "Close login" : "Stop publishing";
 
   const focusButton = byId("layout-focus");
   const splitButton = byId("layout-split");
   focusButton.classList.toggle("active", liveLayoutMode === "focus");
   splitButton.classList.toggle("active", liveLayoutMode === "split");
-  focusButton.disabled = simultaneousPublishing;
+  focusButton.disabled = canSplit;
   splitButton.disabled = !canSplit;
 
   const switcher = byId("session-switcher");
@@ -226,6 +230,7 @@ function renderWorkspace() {
   const visibleSessions = liveLayoutMode === "split"
     ? active
     : active.filter(session => session.id === focusedSessionId);
+  liveGrid.dataset.count = String(visibleSessions.length);
   liveGrid.replaceChildren(...visibleSessions.map(createLiveCard));
   byId("activity-empty").hidden = active.length > 0;
 
@@ -257,6 +262,12 @@ function renderStatus(status) {
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
   byId("browser-check").textContent = status.embeddedBrowser ? "Built in" : status.chromeInstalled ? "Chrome" : "Unavailable";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
+  const consentGranted = status.publishingInteractionConsent === true;
+  byId("permission-state").textContent = consentGranted ? "Unattended publishing allowed" : "Permission not granted";
+  byId("permission-detail").textContent = consentGranted
+    ? "Scheduled posts can publish without asking again at their scheduled time."
+    : "Scheduling will show an Allow/Deny popup before the post is saved.";
+  byId("revoke-consent").hidden = !consentGranted;
 
   const ready = Boolean(status.automationReady);
   byId("status-dot").className = ready ? "ready" : "error";
@@ -321,7 +332,7 @@ byId("layout-focus").addEventListener("click", () => {
   renderWorkspace();
 });
 byId("layout-split").addEventListener("click", () => {
-  if (activeSessions().length < 2 || window.innerWidth < 1200) return;
+  if (activeSessions().length < 2) return;
   liveLayoutMode = "split";
   renderWorkspace();
 });
@@ -341,6 +352,12 @@ byId("open-data").addEventListener("click", () => api.openData());
 byId("open-logs").addEventListener("click", () => api.openLogs());
 byId("install-chrome").addEventListener("click", () => api.installChrome());
 byId("auto-start").addEventListener("change", event => api.setAutoStart(event.currentTarget.checked));
+byId("revoke-consent").addEventListener("click", async event => {
+  event.currentTarget.disabled = true;
+  await api.revokePublishingConsent();
+  await refreshStatus();
+  event.currentTarget.disabled = false;
+});
 byId("clear-log").addEventListener("click", () => {
   logEntries = [];
   renderLogs();
@@ -359,8 +376,7 @@ api.onLog(entry => {
 
 new ResizeObserver(scheduleLayout).observe(document.body);
 window.addEventListener("resize", () => {
-  if (liveLayoutMode === "split" && window.innerWidth < 1200) renderWorkspace();
-  else scheduleLayout();
+  scheduleLayout();
 });
 document.addEventListener("visibilitychange", scheduleLayout);
 

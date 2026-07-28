@@ -48,6 +48,26 @@ export class ContentPreflightApiError extends Error {
   }
 }
 
+export type PublishingSafetyApiIssue = {
+  accountId: string;
+  platform: Platform;
+  accountName: string;
+  requestedAt: string;
+  earliestAt: string;
+  message: string;
+};
+
+export class PublishingSafetyApiError extends Error {
+  readonly code = "PUBLISHING_SAFETY_SCHEDULE" as const;
+  readonly issues: PublishingSafetyApiIssue[];
+
+  constructor(payload: { message?: string; issues?: PublishingSafetyApiIssue[] }) {
+    super(payload.message || "The selected publishing time is inside an account safety window.");
+    this.name = "PublishingSafetyApiError";
+    this.issues = payload.issues ?? [];
+  }
+}
+
 export function setAuthToken(token: string | null) {
   authToken = token;
 }
@@ -82,18 +102,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const error = JSON.parse(payload) as {
         message?: string;
         code?: string;
-        issues?: ContentPreflightApiIssue[];
+        issues?: ContentPreflightApiIssue[] | PublishingSafetyApiIssue[];
       };
       message = error?.message ?? message;
       if (error.code === "CONTENT_PREFLIGHT_BLOCKED" || error.code === "CONTENT_PREFLIGHT_WARNINGS") {
         throw new ContentPreflightApiError({
           message,
           code: error.code,
-          issues: error.issues,
+          issues: error.issues as ContentPreflightApiIssue[] | undefined,
+        });
+      }
+      if (error.code === "PUBLISHING_SAFETY_SCHEDULE") {
+        throw new PublishingSafetyApiError({
+          message,
+          issues: error.issues as PublishingSafetyApiIssue[] | undefined,
         });
       }
     } catch (error) {
-      if (error instanceof ContentPreflightApiError) throw error;
+      if (error instanceof ContentPreflightApiError || error instanceof PublishingSafetyApiError) throw error;
       // Keep the plain response text when the server did not return JSON.
     }
     throw new Error(message);
@@ -134,6 +160,26 @@ export const api = {
           : "direct" as const
     };
   },
+
+  assessPublishingSafety: (postFormat: PostFormat, destinations: UnifiedPostDestinationInput[]) =>
+    request<{
+      allowed: boolean;
+      issues: PublishingSafetyApiIssue[];
+      assessments: Array<{
+        accountId: string;
+        platform: Platform;
+        allowed: boolean;
+        requestedAt: string;
+        earliestAt: string;
+      }>;
+    }>("/api/publishing-safety/assess", {
+      method: "POST",
+      body: JSON.stringify({ postFormat, destinations }),
+    }),
+
+  authorizePublishing: () => request<{ granted: boolean; message: string }>("/api/automation/consent", {
+    method: "POST",
+  }),
 
   login: (payload: LoginInput) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),

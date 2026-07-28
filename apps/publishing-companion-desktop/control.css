@@ -383,6 +383,10 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 }
 .live-grid[data-layout="focus"] { grid-template-columns: minmax(0, 1fr); }
 .live-grid[data-layout="split"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.live-grid[data-layout="split"][data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.live-grid[data-layout="split"][data-count="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.live-grid[data-layout="split"][data-count="5"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.live-grid[data-layout="split"] { grid-auto-rows: minmax(0, 1fr); }
 #activity-panel.has-live .live-grid { height: 100%; margin-top: 0; }
 
 .live-card {
@@ -581,14 +585,64 @@ body.immersive-live .live-layout-controls { display: none; }
 body.immersive-live .live-run-summary strong { font-size: 10px; }
 body.immersive-live .live-run-summary small { font-size: 8px; }
 
+/* Parallel publishing keeps every account visible and gives the social panes
+   the full application window. Page zoom is reduced by the main process so
+   responsive platform controls remain available inside each grid tile. */
+body.immersive-grid .app-shell { grid-template-columns: minmax(0, 1fr); }
+body.immersive-grid .sidebar,
+body.immersive-grid .topbar { display: none; }
+body.immersive-grid .view-panel { inset: 0; padding: 0; }
+body.immersive-grid #activity-panel.active.has-live {
+  grid-template-areas:
+    "browser"
+    "safety";
+  grid-template-rows: minmax(0, 1fr) 44px;
+  gap: 0;
+  padding: 0;
+}
+body.immersive-grid #activity-panel .activity-intro,
+body.immersive-grid #activity-panel .session-switcher,
+body.immersive-grid #activity-panel .activity-empty,
+body.immersive-grid #activity-panel .recent-activity { display: none; }
+body.immersive-grid .live-grid {
+  grid-area: browser;
+  height: 100%;
+  margin: 0;
+  gap: 5px;
+  padding: 5px;
+  background: #dfe8e5;
+}
+body.immersive-grid .live-card {
+  grid-template-rows: 42px 2px minmax(0, 1fr);
+  border-radius: 7px;
+  box-shadow: none;
+}
+body.immersive-grid .live-card-header { min-height: 42px; padding: 5px 7px; gap: 6px; }
+body.immersive-grid .live-card-header .platform-mark { width: 27px; height: 27px; border-radius: 7px; font-size: 8px; }
+body.immersive-grid .live-purpose { margin-bottom: 1px; font-size: 6px; }
+body.immersive-grid .live-card-header strong { font-size: 9px; }
+body.immersive-grid .live-card-header small { margin-top: 1px; font-size: 7px; }
+body.immersive-grid .state-pill { padding: 3px 5px; font-size: 7px; }
+body.immersive-grid .live-browser-slot { height: auto; min-height: 0; }
+body.immersive-grid .live-command-bar {
+  grid-area: safety;
+  min-height: 44px;
+  padding: 5px 8px 5px 12px;
+  border: 0;
+  border-top: 1px solid #cad8d4;
+  border-radius: 0;
+  box-shadow: 0 -4px 16px rgba(24, 58, 49, .08);
+}
+body.immersive-grid .live-layout-controls { display: none; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1150px) {
   .app-shell { grid-template-columns: 205px minmax(0, 1fr); }
   .sidebar { padding-inline: 10px; }
-  .live-grid { grid-template-columns: 1fr; }
+  body:not(.immersive-grid) .live-grid { grid-template-columns: 1fr; }
   .live-browser-slot { height: 420px; }
-  .live-layout-controls #layout-split { display: none; }
+  body:not(.immersive-grid) .live-layout-controls #layout-split { display: none; }
 }
 
 @media (max-width: 850px) {
