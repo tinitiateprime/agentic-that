@@ -40,7 +40,10 @@ export default function AllContactsCRM({ contacts }) {
               <Link href={`/contacts/${c.id}`} className="block px-3 py-2 hover:bg-slate-50">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{c.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-medium">{c.name}</p>
+                      <ProviderBadge contact={c} />
+                    </div>
                     <p className="text-xs text-slate-400">{c.phone}</p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-0.5">
@@ -66,5 +69,22 @@ export default function AllContactsCRM({ contacts }) {
         </ul>
       )}
     </section>
+  );
+}
+
+function ProviderBadge({ contact }) {
+  const provider =
+    contact.last_message_provider ||
+    (String(contact.tags || "").toLowerCase().split(",").includes("wati") ? "wati" : null);
+  if (!provider || !["meta", "wati"].includes(provider)) return null;
+  const meta = provider === "meta";
+  return (
+    <span
+      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+        meta ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700"
+      }`}
+    >
+      {meta ? "Meta" : "WATI"}
+    </span>
   );
 }

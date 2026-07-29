@@ -282,7 +282,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
   const openWhatsAppDashboard = () => {
     if (!serviceEndpoints.whatsapp.dashboardUrl) {
       window.alert(
-        "WhatsApp console is not configured. Set VITE_WHATSAPP_DASHBOARD_URL to the deployed WhatsApp service URL."
+        "WhatsApp console is not configured. Set NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL to the deployed WhatsApp service URL."
       );
       return;
     }

@@ -17,8 +17,8 @@ export function normalizeWaNumber(phone) {
 // Normalize WATI_ACCESS_TOKEN regardless of how it was pasted: tolerate
 // surrounding quotes and a leading "Bearer " (the WATI dashboard shows it both
 // ways). We always send exactly one "Bearer <token>".
-export function watiToken() {
-  let t = (process.env.WATI_ACCESS_TOKEN || "").trim();
+export function watiToken(value = process.env.WATI_ACCESS_TOKEN || "") {
+  let t = String(value || "").trim();
   if (
     (t.startsWith('"') && t.endsWith('"')) ||
     (t.startsWith("'") && t.endsWith("'"))
@@ -27,6 +27,15 @@ export function watiToken() {
   }
   if (/^bearer\s+/i.test(t)) t = t.replace(/^bearer\s+/i, "").trim();
   return t;
+}
+
+function watiApiUrl(creds = null) {
+  const value = creds ? creds.serviceUrl : process.env.WATI_API_URL;
+  return String(value || "").replace(/\/$/, "");
+}
+
+function watiAccessToken(creds = null) {
+  return creds ? creds.accessToken || "" : process.env.WATI_ACCESS_TOKEN || "";
 }
 
 // --- Mock (default) --------------------------------------------------------
@@ -60,12 +69,13 @@ const mock = {
 //        sendInteractiveButtonsMessage)
 const wati = {
   name: "wati",
+  creds: null,
   base() {
-    return (process.env.WATI_API_URL || "").replace(/\/$/, "");
+    return watiApiUrl(this.creds);
   },
   headers(extra = {}) {
     return {
-      Authorization: `Bearer ${watiToken()}`,
+      Authorization: `Bearer ${watiToken(watiAccessToken(this.creds))}`,
       "Content-Type": "application/json",
       ...extra,
     };
@@ -175,21 +185,21 @@ const wati = {
 // Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages
 const meta = {
   name: "meta",
+  // Bound to one tenant's credentials by getProvider(creds). `creds` is null for
+  // the legacy env-configured deployment, in which case withCreds() supplies the
+  // environment values.
+  creds: null,
   // Every send can target a specific sender number (multi-number WABAs);
-  // omitted, it falls back to the default META_PHONE_NUMBER_ID.
+  // omitted, it falls back to the tenant's default number.
   base(phoneNumberId) {
-    const version = process.env.META_API_VERSION || "v21.0";
-    const phoneId = phoneNumberId || process.env.META_PHONE_NUMBER_ID || "";
-    return `https://graph.facebook.com/${version}/${phoneId}`;
+    const c = withCreds(this.creds);
+    const phoneId = phoneNumberId || c.defaultPhoneNumberId || "";
+    return `https://graph.facebook.com/${c.apiVersion}/${phoneId}`;
   },
   async _post(path, body, phoneNumberId) {
-    const token = (process.env.META_ACCESS_TOKEN || "").trim();
     const res = await fetch(`${this.base(phoneNumberId)}${path}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      headers: metaAuthHeaders(this.creds),
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
@@ -270,23 +280,21 @@ const meta = {
 // All sender numbers on the WABA — powers the multi-number picker and the
 // per-message "via <number>" labels. Live discovery: adding a number in Meta
 // Business Manager makes it appear here with no code/env change.
-export async function metaListPhoneNumbers() {
-  if (!metaTemplatesConfigured()) return [];
-  const version = process.env.META_API_VERSION || "v21.0";
-  const url = new URL(
-    `https://graph.facebook.com/${version}/${process.env.META_WABA_ID}/phone_numbers`
-  );
-  url.searchParams.set("fields", "id,display_phone_number,verified_name");
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${(process.env.META_ACCESS_TOKEN || "").trim()}` },
-  });
+export async function metaListPhoneNumbers(creds = null) {
+  const c = withCreds(creds);
+  if (!metaTemplatesConfigured(c)) return [];
+  const url = new URL(metaGraphUrl(`/${c.wabaId}/phone_numbers`, c));
+  url.searchParams.set("fields", "id,display_phone_number,verified_name,quality_rating,status");
+  const res = await fetch(url, { headers: metaAuthHeaders(c) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(metaErrorMessage(data, res.status));
   return (data.data || []).map((n) => ({
     id: n.id,
     number: n.display_phone_number || "",
     name: n.verified_name || "",
-    isDefault: n.id === process.env.META_PHONE_NUMBER_ID,
+    quality_rating: n.quality_rating || null,
+    status: n.status || null,
+    isDefault: n.id === c.defaultPhoneNumberId,
   }));
 }
 
@@ -295,23 +303,52 @@ export async function metaListPhoneNumbers() {
 // A phone number is added to the WABA in Meta Business Manager first (which
 // gives it a Phone Number ID); these calls request/confirm the SMS or voice
 // verification code for that ID, and fetch its live status.
-function metaGraphUrl(path) {
-  const version = process.env.META_API_VERSION || "v21.0";
-  return `https://graph.facebook.com/${version}${path}`;
+// --- Per-tenant credentials -------------------------------------------------
+// Every Meta helper takes an optional `creds` ({ accessToken, wabaId, apiVersion,
+// appId, defaultPhoneNumberId }). When omitted it falls back to the environment,
+// so the original single-tenant deployment keeps working while tenants are
+// migrated into whatsapp_accounts. In SaaS mode the caller resolves creds for
+// the signed-in tenant (lib/tenant.js → credsForBusiness).
+export function metaEnvCreds() {
+  return {
+    accessToken: (process.env.META_ACCESS_TOKEN || "").trim() || null,
+    wabaId: (process.env.META_WABA_ID || "").trim() || null,
+    appId: (process.env.META_APP_ID || "").trim() || null,
+    apiVersion: process.env.META_API_VERSION || "v21.0",
+    defaultPhoneNumberId: (process.env.META_PHONE_NUMBER_ID || "").trim() || null,
+  };
 }
 
-function metaAuthHeaders() {
+function withCreds(creds) {
+  const env = metaEnvCreds();
+  if (!creds) return env;
+  // Never fill tenant secrets or identifiers from the deployment owner's env.
+  // Only the non-secret API version receives a default.
   return {
-    Authorization: `Bearer ${(process.env.META_ACCESS_TOKEN || "").trim()}`,
+    accessToken: creds.accessToken || null,
+    wabaId: creds.wabaId || null,
+    appId: creds.appId || null,
+    apiVersion: creds.apiVersion || "v21.0",
+    defaultPhoneNumberId: creds.defaultPhoneNumberId || null,
+  };
+}
+
+function metaGraphUrl(path, creds) {
+  return `https://graph.facebook.com/${withCreds(creds).apiVersion}${path}`;
+}
+
+function metaAuthHeaders(creds) {
+  return {
+    Authorization: `Bearer ${withCreds(creds).accessToken || ""}`,
     "Content-Type": "application/json",
   };
 }
 
-export async function metaRequestVerificationCode({ phoneNumberId, codeMethod = "SMS", language = "en" }) {
+export async function metaRequestVerificationCode({ phoneNumberId, codeMethod = "SMS", language = "en", creds = null }) {
   if (!phoneNumberId) throw new Error("Phone Number ID is required");
-  const res = await fetch(metaGraphUrl(`/${phoneNumberId}/request_code`), {
+  const res = await fetch(metaGraphUrl(`/${phoneNumberId}/request_code`, creds), {
     method: "POST",
-    headers: metaAuthHeaders(),
+    headers: metaAuthHeaders(creds),
     body: JSON.stringify({ code_method: codeMethod, language }),
   });
   const data = await res.json().catch(() => ({}));
@@ -319,12 +356,12 @@ export async function metaRequestVerificationCode({ phoneNumberId, codeMethod = 
   return data;
 }
 
-export async function metaVerifyCode({ phoneNumberId, code }) {
+export async function metaVerifyCode({ phoneNumberId, code, creds = null }) {
   if (!phoneNumberId) throw new Error("Phone Number ID is required");
   if (!code) throw new Error("Verification code is required");
-  const res = await fetch(metaGraphUrl(`/${phoneNumberId}/verify_code`), {
+  const res = await fetch(metaGraphUrl(`/${phoneNumberId}/verify_code`, creds), {
     method: "POST",
-    headers: metaAuthHeaders(),
+    headers: metaAuthHeaders(creds),
     body: JSON.stringify({ code }),
   });
   const data = await res.json().catch(() => ({}));
@@ -335,14 +372,60 @@ export async function metaVerifyCode({ phoneNumberId, code }) {
 // Live status for a phone number: verification state, display number, quality
 // rating. Works for any Phone Number ID on the WABA the token can access, not
 // just the one configured for sending (META_PHONE_NUMBER_ID).
-export async function metaGetPhoneNumberStatus({ phoneNumberId }) {
+export async function metaGetPhoneNumberStatus({ phoneNumberId, creds = null }) {
   if (!phoneNumberId) throw new Error("Phone Number ID is required");
-  const url = new URL(metaGraphUrl(`/${phoneNumberId}`));
+  const url = new URL(metaGraphUrl(`/${phoneNumberId}`, creds));
   url.searchParams.set(
     "fields",
     "display_phone_number,verified_name,code_verification_status,quality_rating,platform_type"
   );
-  const res = await fetch(url, { headers: metaAuthHeaders() });
+  const res = await fetch(url, { headers: metaAuthHeaders(creds) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(metaErrorMessage(data, res.status));
+  return data;
+}
+
+// --- WhatsApp Business Calling API ------------------------------------------
+// Docs: https://developers.facebook.com/documentation/business-messaging/whatsapp/calling
+// Calling is OFF by default on a business number and requires a messaging limit
+// of 2000+. Once enabled, Meta posts call events to the `calls` webhook field.
+
+// Current calling config for a number: { status, call_icon_visibility,
+// callback_permission_status }.
+export async function metaGetCallSettings({ phoneNumberId, creds = null }) {
+  if (!phoneNumberId) throw new Error("Phone Number ID is required");
+  const url = new URL(metaGraphUrl(`/${phoneNumberId}/settings`, creds));
+  url.searchParams.set("fields", "calling");
+  const res = await fetch(url, { headers: metaAuthHeaders(creds) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(metaErrorMessage(data, res.status));
+  return data?.calling || {};
+}
+
+// Turn calling on/off and control the call button + callback requests.
+//   status:                   ENABLED | DISABLED
+//   callIconVisibility:       DEFAULT (show call button) | DISABLE_ALL (hide it)
+//   callbackPermissionStatus: ENABLED | DISABLED  (lets users request a callback
+//                             when you don't pick up)
+export async function metaUpdateCallSettings({
+  phoneNumberId,
+  status,
+  callIconVisibility,
+  callbackPermissionStatus,
+  creds = null,
+}) {
+  if (!phoneNumberId) throw new Error("Phone Number ID is required");
+  const calling = {};
+  if (status) calling.status = status;
+  if (callIconVisibility) calling.call_icon_visibility = callIconVisibility;
+  if (callbackPermissionStatus) calling.callback_permission_status = callbackPermissionStatus;
+  if (!Object.keys(calling).length) throw new Error("Nothing to update");
+
+  const res = await fetch(metaGraphUrl(`/${phoneNumberId}/settings`, creds), {
+    method: "POST",
+    headers: metaAuthHeaders(creds),
+    body: JSON.stringify({ calling }),
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(metaErrorMessage(data, res.status));
   return data;
@@ -355,38 +438,34 @@ function metaErrorMessage(data, status) {
   return `Meta Cloud API: ${detail}`;
 }
 
-// Is the direct Meta Cloud API adapter configured?
-export function metaConfigured() {
-  return Boolean(
-    (process.env.META_ACCESS_TOKEN || "").trim() &&
-      (process.env.META_PHONE_NUMBER_ID || "").trim()
-  );
+// Is the Meta Cloud API usable for this tenant (or from env when creds omitted)?
+export function metaConfigured(creds = null) {
+  const c = withCreds(creds);
+  return Boolean(c.accessToken && c.defaultPhoneNumberId);
 }
 
-// Fetching templates additionally needs the WhatsApp Business Account id
-// (different from the phone number id) — Meta App Dashboard > WhatsApp >
-// API Setup > "WhatsApp Business Account ID".
-export function metaTemplatesConfigured() {
-  return Boolean(metaConfigured() && (process.env.META_WABA_ID || "").trim());
+// Templates/numbers additionally need the WhatsApp Business Account id
+// (different from the phone number id).
+export function metaTemplatesConfigured(creds = null) {
+  const c = withCreds(creds);
+  return Boolean(c.accessToken && c.wabaId);
 }
 
 // Fetch WhatsApp message templates straight from Meta's Graph API — the direct
 // equivalent of watiGetTemplates() below, for when WA_PROVIDER=meta. Only
 // APPROVED templates can message a contact outside the 24h session window.
-export async function metaGetTemplates({ approvedOnly = true } = {}) {
-  if (!metaTemplatesConfigured()) {
+export async function metaGetTemplates({ approvedOnly = true, creds = null } = {}) {
+  const c = withCreds(creds);
+  if (!metaTemplatesConfigured(c)) {
     throw new Error(
-      "Meta templates not configured — set META_WABA_ID (and META_ACCESS_TOKEN) in .env.local"
+      "Meta templates not configured — connect a WhatsApp Business Account (WABA id + access token) for this workspace."
     );
   }
-  const version = process.env.META_API_VERSION || "v21.0";
-  const wabaId = process.env.META_WABA_ID;
-  const token = (process.env.META_ACCESS_TOKEN || "").trim();
-  const url = new URL(`https://graph.facebook.com/${version}/${wabaId}/message_templates`);
+  const url = new URL(metaGraphUrl(`/${c.wabaId}/message_templates`, c));
   url.searchParams.set("fields", "id,name,status,category,language,components,rejected_reason");
   url.searchParams.set("limit", "100");
 
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(url, { headers: metaAuthHeaders(c) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(metaErrorMessage(data, res.status));
 
@@ -491,9 +570,11 @@ export async function metaCreateTemplate({
   headerImageHandle,
   footerText,
   buttons,
+  creds = null,
 }) {
-  if (!metaTemplatesConfigured()) {
-    throw new Error("Meta templates not configured — set META_WABA_ID (and META_ACCESS_TOKEN) in .env.local");
+  const c = withCreds(creds);
+  if (!metaTemplatesConfigured(c)) {
+    throw new Error("Meta templates not configured — connect a WhatsApp Business Account for this workspace.");
   }
   if (!/^[a-z0-9_]+$/.test(name || "")) {
     throw new Error("Template name must be lowercase letters, numbers, and underscores only");
@@ -501,10 +582,9 @@ export async function metaCreateTemplate({
 
   const components = buildTemplateComponents({ bodyText, headerText, headerImageHandle, footerText, buttons });
 
-  const wabaId = process.env.META_WABA_ID;
-  const res = await fetch(metaGraphUrl(`/${wabaId}/message_templates`), {
+  const res = await fetch(metaGraphUrl(`/${c.wabaId}/message_templates`, c), {
     method: "POST",
-    headers: metaAuthHeaders(),
+    headers: metaAuthHeaders(c),
     body: JSON.stringify({ name, category, language, components }),
   });
   const data = await res.json().catch(() => ({}));
@@ -515,9 +595,10 @@ export async function metaCreateTemplate({
 // Edit an existing template (Meta allows editing APPROVED, REJECTED, or PAUSED
 // templates; name and language are immutable). An edited APPROVED template
 // goes back to PENDING review before the changes go live.
-export async function metaEditTemplate({ templateId, category, bodyText, headerText, headerImageHandle, footerText, buttons }) {
-  if (!metaTemplatesConfigured()) {
-    throw new Error("Meta templates not configured — set META_WABA_ID (and META_ACCESS_TOKEN) in .env.local");
+export async function metaEditTemplate({ templateId, category, bodyText, headerText, headerImageHandle, footerText, buttons, creds = null }) {
+  const c = withCreds(creds);
+  if (!metaTemplatesConfigured(c)) {
+    throw new Error("Meta templates not configured — connect a WhatsApp Business Account for this workspace.");
   }
   if (!templateId) throw new Error("Template id is required");
 
@@ -525,9 +606,9 @@ export async function metaEditTemplate({ templateId, category, bodyText, headerT
   const payload = { components };
   if (category) payload.category = category;
 
-  const res = await fetch(metaGraphUrl(`/${templateId}`), {
+  const res = await fetch(metaGraphUrl(`/${templateId}`, c), {
     method: "POST",
-    headers: metaAuthHeaders(),
+    headers: metaAuthHeaders(c),
     body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
@@ -539,21 +620,21 @@ export async function metaEditTemplate({ templateId, category, bodyText, headerT
 // API. Two steps: (1) create an upload session against the app id, (2) push
 // the file bytes to that session to get back a reusable "handle".
 // Docs: https://developers.facebook.com/docs/graph-api/guides/upload
-export async function metaUploadTemplateImage({ buffer, mimeType }) {
-  const appId = process.env.META_APP_ID;
-  if (!appId) throw new Error("META_APP_ID is required to upload template images");
-  const token = (process.env.META_ACCESS_TOKEN || "").trim();
-  const version = process.env.META_API_VERSION || "v21.0";
+export async function metaUploadTemplateImage({ buffer, mimeType, creds = null }) {
+  const c = withCreds(creds);
+  const appId = c.appId;
+  if (!appId) throw new Error("A Meta App ID is required to upload template images");
+  const token = c.accessToken || "";
 
   const sessionRes = await fetch(
-    metaGraphUrl(`/${appId}/uploads?file_length=${buffer.length}&file_type=${encodeURIComponent(mimeType)}`),
+    metaGraphUrl(`/${appId}/uploads?file_length=${buffer.length}&file_type=${encodeURIComponent(mimeType)}`, c),
     { method: "POST", headers: { Authorization: `Bearer ${token}` } }
   );
   const sessionData = await sessionRes.json().catch(() => ({}));
   if (!sessionRes.ok) throw new Error(metaErrorMessage(sessionData, sessionRes.status));
   const uploadSessionId = sessionData.id; // "upload:<id>"
 
-  const uploadRes = await fetch(`https://graph.facebook.com/${version}/${uploadSessionId}`, {
+  const uploadRes = await fetch(`https://graph.facebook.com/${c.apiVersion}/${uploadSessionId}`, {
     method: "POST",
     headers: {
       // This endpoint authenticates with "OAuth", not "Bearer" — Meta's
@@ -568,6 +649,29 @@ export async function metaUploadTemplateImage({ buffer, mimeType }) {
   if (!uploadRes.ok) throw new Error(metaErrorMessage(uploadData, uploadRes.status));
   return uploadData.h; // the header_handle
 }
+
+// --- Baileys (unofficial, one WhatsApp-app number via a linked device) -----
+// Read-only by design: this only ever reports inbound messages/calls (see
+// app/api/webhooks/baileys/[businessId]/route.js) — it never sends. Sending
+// is what tends to draw WhatsApp's abuse detection to an unofficial linked
+// device, so a number linked here keeps working normally in the WhatsApp app
+// and replies go out from there, not through this adapter. Enforced twice:
+// the connection service itself refuses POST /api/send when READ_ONLY=true,
+// and these methods refuse before ever making that call at all.
+const baileys = {
+  name: "baileys",
+  // Bound to one tenant's creds by getProvider(creds), same as meta.
+  creds: null,
+  async sendText() {
+    throw new Error("This WhatsApp Web connection is read-only — reply from the phone's WhatsApp app instead.");
+  },
+  async sendTemplate() {
+    return this.sendText();
+  },
+  async sendButtons() {
+    return this.sendText();
+  },
+};
 
 // --- Twilio (WhatsApp) -----------------------------------------------------
 const twilio = {
@@ -676,32 +780,38 @@ function watiDirectSendDisabled(err) {
 
 // Is WATI configured with a real endpoint + token? (the example file ships a
 // "YOUR_TENANT_ID" placeholder, which we treat as unconfigured.)
-export function watiConfigured() {
-  const url = process.env.WATI_API_URL || "";
-  const token = process.env.WATI_ACCESS_TOKEN || "";
+export function watiConfigured(creds = null) {
+  const url = watiApiUrl(creds);
+  const token = watiAccessToken(creds);
   return Boolean(url && token && !url.includes("YOUR_TENANT_ID"));
 }
 
 // Fetch the business's primary contacts straight from WATI (read-only).
 // Returns a normalized list independent of WA_PROVIDER, so it works even while
 // messaging stays on the mock provider.
-export async function watiGetContacts({ pageSize = 100, pageNumber = 1 } = {}) {
-  if (!watiConfigured()) {
+export async function watiGetContacts({ pageSize = 100, pageNumber = 1 } = {}, creds = null) {
+  if (!watiConfigured(creds)) {
     throw new Error(
       "WATI not configured — set WATI_API_URL (with your tenant id) and WATI_ACCESS_TOKEN in .env.local"
     );
   }
-  const base = process.env.WATI_API_URL.replace(/\/$/, "");
+  const base = watiApiUrl(creds);
   const url = new URL(base + "/api/v1/getContacts");
   url.searchParams.set("pageSize", pageSize);
   url.searchParams.set("pageNumber", pageNumber);
 
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${watiToken()}` },
+    headers: { Authorization: `Bearer ${watiToken(watiAccessToken(creds))}` },
   });
-  const data = await res.json().catch(() => ({}));
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     throw new Error(data?.message || data?.error || `WATI getContacts failed (HTTP ${res.status})`);
+  }
+  if (!data) {
+    throw new Error(
+      "WATI_API_URL returned a web page instead of API JSON. Copy the API endpoint exactly from WATI → API Docs."
+    );
   }
 
   const list = data.contact_list || data.contacts || data.result?.contact_list || [];
@@ -715,21 +825,107 @@ export async function watiGetContacts({ pageSize = 100, pageNumber = 1 } = {}) {
   }));
 }
 
+// Pull one contact's WATI conversation history. WATI's V1 response wraps the
+// actual rows in messages.items; normalize that provider-specific shape here
+// so the CRM sync path only deals with its own message model.
+export async function watiGetMessages(phone, { pageSize = 100, pageNumber = 1 } = {}, creds = null) {
+  if (!watiConfigured(creds)) throw new Error("WATI not configured.");
+  const target = normalizeWaNumber(phone);
+  if (!target) throw new Error("A valid WhatsApp number is required.");
+
+  const base = watiApiUrl(creds);
+  const url = new URL(`${base}/api/v1/getMessages/${encodeURIComponent(target)}`);
+  url.searchParams.set("pageSize", Math.min(Math.max(Number(pageSize) || 100, 1), 100));
+  url.searchParams.set("pageNumber", Math.max(Number(pageNumber) || 1, 1));
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${watiToken(watiAccessToken(creds))}` } });
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
+  if (!res.ok) {
+    throw new Error(data?.message || data?.error || `WATI getMessages failed (HTTP ${res.status})`);
+  }
+  if (!data) throw new Error("WATI getMessages returned a non-JSON response.");
+
+  const envelope = data.messages || data;
+  const items = Array.isArray(envelope) ? envelope : envelope.items || data.items || [];
+  return {
+    messages: items.map(normalizeWatiMessage),
+    pageNumber: Number(envelope.pageNumber || pageNumber),
+    pageSize: Number(envelope.pageSize || pageSize),
+    total: Number(envelope.total || envelope.grandTotal || items.length),
+    hasNextPage: Boolean(envelope.hasNextPage),
+  };
+}
+
+function normalizeWatiMessage(message) {
+  const type = String(message.type || "text").toLowerCase();
+  const direction = message.owner === true ? "out" : "in";
+  const buttonText =
+    message.interactiveButtonReply?.text ||
+    message.listReply?.title ||
+    message.buttonReply?.text ||
+    message.replyButtonViewModel?.text;
+  const text = buttonText || stringField(message.text) || stringField(message.translationText);
+  const body = text || watiMediaLabel(type, message.data);
+  const providerId =
+    stringField(message.whatsappMessageId) ||
+    stringField(message.id) ||
+    stringField(message.localMessageId) ||
+    null;
+  const createdAt = normalizeWatiTimestamp(message.created || message.timestamp);
+  const status = String(message.statusString || (direction === "in" ? "delivered" : "sent")).toLowerCase();
+  const interactive = ["button", "interactive", "list"].includes(type);
+
+  return {
+    body,
+    direction,
+    status,
+    providerId,
+    createdAt,
+    kind: interactive ? (direction === "in" ? "button_reply" : "interactive_buttons") : type,
+  };
+}
+
+function stringField(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function watiMediaLabel(type, data) {
+  const caption = data && typeof data === "object" ? stringField(data.caption || data.fileName) : null;
+  return caption || `[${type || "message"}]`;
+}
+
+function normalizeWatiTimestamp(value) {
+  if (value == null || value === "") return new Date().toISOString();
+  const raw = String(value);
+  const numeric = Number(raw);
+  const date = Number.isFinite(numeric) && /^\d+(\.\d+)?$/.test(raw)
+    ? new Date(numeric < 1e12 ? numeric * 1000 : numeric)
+    : new Date(raw);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
 // Fetch WhatsApp message templates from WATI. Only APPROVED templates can be
 // used to message contacts proactively (outside the 24h session window).
-export async function watiGetTemplates({ approvedOnly = true } = {}) {
-  if (!watiConfigured()) {
+export async function watiGetTemplates({ approvedOnly = true } = {}, creds = null) {
+  if (!watiConfigured(creds)) {
     throw new Error("WATI not configured.");
   }
-  const base = process.env.WATI_API_URL.replace(/\/$/, "");
+  const base = watiApiUrl(creds);
   const url = new URL(base + "/api/v1/getMessageTemplates");
   url.searchParams.set("pageSize", 100);
   url.searchParams.set("pageNumber", 1);
 
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${watiToken()}` } });
-  const data = await res.json().catch(() => ({}));
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${watiToken(watiAccessToken(creds))}` } });
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     throw new Error(data?.message || `WATI getMessageTemplates failed (HTTP ${res.status})`);
+  }
+  if (!data) {
+    throw new Error(
+      "WATI_API_URL returned a web page instead of API JSON. Copy the API endpoint exactly from WATI → API Docs."
+    );
   }
 
   const list =
@@ -761,7 +957,7 @@ export async function watiGetTemplates({ approvedOnly = true } = {}) {
     : mapped;
 }
 
-const ADAPTERS = { mock, wati, meta, twilio, gupshup, dialog360 };
+const ADAPTERS = { mock, wati, meta, baileys, twilio, gupshup, dialog360 };
 
 function watiErrorMessage(data, status) {
   // `sendSessionMessage` reports failures asynchronously-shaped: the real reason
@@ -780,7 +976,18 @@ function watiErrorMessage(data, status) {
   return raw;
 }
 
-export function getProvider() {
-  const name = (process.env.WA_PROVIDER || "mock").toLowerCase();
-  return ADAPTERS[name] || mock;
+// Resolve the messaging adapter for a tenant. Pass the tenant's creds (from
+// lib/tenant.js → credsForBusiness) to send via their own WABA/token; omit it
+// and the env-configured provider is used (legacy single-tenant path).
+//
+// The meta adapter is credential-bound, so it's cloned per call — sharing one
+// mutable module-level object across tenants would leak credentials between
+// concurrent requests.
+export function getProvider(creds = null) {
+  const name = (creds?.provider || process.env.WA_PROVIDER || "mock").toLowerCase();
+  const adapter = ADAPTERS[name] || mock;
+  if (adapter === meta) return { ...meta, creds };
+  if (adapter === wati) return { ...wati, creds };
+  if (adapter === baileys) return { ...baileys, creds };
+  return adapter;
 }

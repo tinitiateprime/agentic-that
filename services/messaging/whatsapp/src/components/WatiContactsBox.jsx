@@ -3,13 +3,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-// A box that loads the business's primary contacts directly from WATI and lets
-// you import them into the CRM (per-row or all-new).
+// Loads WATI contacts, imports them into the CRM, and pulls their conversation
+// history into the same threads used by live webhook messages.
 export default function WatiContactsBox() {
   const router = useRouter();
   const [state, setState] = useState({ loading: true, contacts: [], error: "", configured: true });
   const [working, setWorking] = useState(false);
   const [flash, setFlash] = useState("");
+  const [syncOffset, setSyncOffset] = useState(0);
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: "" }));
@@ -54,6 +55,33 @@ export default function WatiContactsBox() {
     setWorking(false);
   }
 
+  async function syncMessages() {
+    setWorking(true);
+    setFlash("");
+    try {
+      const res = await fetch("/api/wati/messages/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phones: state.contacts.map((contact) => contact.phone),
+          offset: syncOffset,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Message sync failed");
+      const remaining = data.remaining ? ` ${data.remaining} contacts remain for the next sync.` : "";
+      setFlash(
+        `Synced ${data.syncedContacts} chats: ${data.importedMessages} new messages, ${data.updatedMessages} statuses updated.${remaining}`
+      );
+      setSyncOffset(data.nextOffset || 0);
+      await load();
+      router.refresh();
+    } catch (err) {
+      setFlash(err.message || "Message sync failed");
+    }
+    setWorking(false);
+  }
+
   const { loading, contacts, error, configured } = state;
   const newCount = contacts.filter((c) => !c.inCrm).length;
 
@@ -74,11 +102,20 @@ export default function WatiContactsBox() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {!loading && !error && contacts.length > 0 && (
+            <button
+              onClick={syncMessages}
+              disabled={working}
+              className="rounded-lg bg-[var(--brand-dark)] px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {working ? "Syncing…" : syncOffset ? "Sync more messages" : "Sync messages"}
+            </button>
+          )}
           {!loading && !error && newCount > 0 && (
             <button
               onClick={() => importContacts(null)}
               disabled={working}
-              className="rounded-lg bg-[var(--brand-dark)] px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+              className="rounded-lg border border-[var(--brand)] px-2.5 py-1 text-xs font-medium text-[var(--brand-dark)] disabled:opacity-50"
             >
               {working ? "Importing…" : `Import all new (${newCount})`}
             </button>

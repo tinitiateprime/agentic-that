@@ -4,8 +4,16 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SenderSelect from "@whatsapp/components/SenderSelect";
+import { timeUntil } from "@whatsapp/lib/format";
 
-export default function GroupDetail({ group, members, available, templates, phoneNumbers = [] }) {
+export default function GroupDetail({
+  group,
+  members,
+  available,
+  templates,
+  phoneNumbers = [],
+  newMemberCount = 0,
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(null); // { type, text }
@@ -21,6 +29,9 @@ export default function GroupDetail({ group, members, available, templates, phon
   const [botBody, setBotBody] = useState("Hi {{name}}, how can we help you today?");
   const [botButtons, setBotButtons] = useState(["Sales", "Support", "Catalog"]);
   const [wati, setWati] = useState({ loading: false, configured: true, approved: [], all: [] });
+  // Restrict the send to members we've never messaged (the welcome audience).
+  const [onlyNew, setOnlyNew] = useState(false);
+  const recipientCount = onlyNew ? newMemberCount : members.length;
 
   // Load approved-template list when the broadcast panel opens — live wiring
   // is Meta Cloud API. Kept for reference / rollback (inactive while
@@ -77,7 +88,11 @@ export default function GroupDetail({ group, members, available, templates, phon
     const res = await fetch(`/api/groups/${group.id}/broadcast`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, phoneNumberId: fromPhoneId || undefined }),
+      body: JSON.stringify({
+        ...payload,
+        phoneNumberId: fromPhoneId || undefined,
+        onlyNew: onlyNew || undefined,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
@@ -90,6 +105,7 @@ export default function GroupDetail({ group, members, available, templates, phon
       setBcastBody("");
       setBcastTpl("");
       setWatiTemplate("");
+      setOnlyNew(false);
       setShowBroadcast(false);
       router.refresh();
     } else {
@@ -145,12 +161,39 @@ export default function GroupDetail({ group, members, available, templates, phon
       {/* Header */}
       <div className="flex items-start justify-between gap-3 rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
         <div>
-          <h1 className="text-lg font-semibold">{group.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-semibold">{group.name}</h1>
+            {group.is_temp && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-800">
+                Temporary
+              </span>
+            )}
+          </div>
           <p className="text-sm text-slate-500">
             {members.length} member{members.length !== 1 ? "s" : ""}
+            {newMemberCount > 0 && ` · ${newMemberCount} new`}
           </p>
+          {group.is_temp && group.expires_at && (
+            <p className="text-xs text-amber-700">
+              Auto-deletes {timeUntil(group.expires_at)} — members stay in your CRM.
+            </p>
+          )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          {newMemberCount > 0 && (
+            <button
+              onClick={() => {
+                setShowBroadcast(true);
+                setMode("template");
+                setOnlyNew(true);
+                setFlash(null);
+                setResults(null);
+              }}
+              className="rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-white"
+            >
+              👋 Welcome {newMemberCount} new
+            </button>
+          )}
           <button
             onClick={() => { setShowBroadcast((v) => !v); setFlash(null); setResults(null); }}
             className="rounded-lg bg-[var(--brand-dark)] px-3 py-2 text-sm font-medium text-white"
@@ -205,6 +248,23 @@ export default function GroupDetail({ group, members, available, templates, phon
           <p className="text-sm font-medium text-[var(--brand-dark)]">
             Broadcast — sends an individual DM to each member
           </p>
+
+          {/* Audience — a welcome should only reach contacts we've never
+              messaged, so they aren't greeted a second time. */}
+          {newMemberCount > 0 && (
+            <label className="flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={onlyNew}
+                onChange={(e) => setOnlyNew(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Only the <b>{newMemberCount} new</b> contact{newMemberCount !== 1 ? "s" : ""} — people
+                who wrote in but have never been messaged. Ideal for a welcome template.
+              </span>
+            </label>
+          )}
 
           {/* Mode tabs */}
           <div className="flex gap-2 text-xs">
@@ -355,7 +415,11 @@ export default function GroupDetail({ group, members, available, templates, phon
                 }
                 className="rounded-lg bg-[var(--brand-dark)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
               >
-                {busy ? "Sending…" : `Send to ${members.length} member${members.length !== 1 ? "s" : ""}`}
+                {busy
+                  ? "Sending…"
+                  : `Send to ${recipientCount} ${onlyNew ? "new contact" : "member"}${
+                      recipientCount !== 1 ? "s" : ""
+                    }`}
               </button>
             </div>
           </div>

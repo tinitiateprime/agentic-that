@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@whatsapp/lib/auth";
-import { getBusiness, getGroup, listGroupMembers, listTemplates } from "@whatsapp/lib/data";
+import { getBusiness, getGroup, listGroupMembers, listNewGroupMembers, listTemplates } from "@whatsapp/lib/data";
 import { sendToContact, sendTemplateToContact, sendButtonsToContact, renderTemplate } from "@whatsapp/lib/wa/messaging";
 
 // Broadcast to every member of a group — one individual DM each.
@@ -24,12 +24,19 @@ export async function POST(req, { params }) {
   const group = await getGroup(user.business_id, id);
   if (!group) return Response.json({ error: "Group not found" }, { status: 404 });
 
-  const members = await listGroupMembers(group.id);
-  if (!members.length) return Response.json({ error: "Group has no members" }, { status: 400 });
-
-  const { body, templateId, watiTemplate, templateParams, language, buttons, phoneNumberId } =
+  const { body, templateId, watiTemplate, templateParams, language, buttons, phoneNumberId, onlyNew } =
     await req.json();
   const fromPhoneId = phoneNumberId || undefined;
+
+  // `onlyNew` narrows the send to contacts we have never messaged — the
+  // welcome-template audience, so established contacts aren't greeted twice.
+  const members = onlyNew ? await listNewGroupMembers(group.id) : await listGroupMembers(group.id);
+  if (!members.length) {
+    return Response.json(
+      { error: onlyNew ? "No new contacts in this group" : "Group has no members" },
+      { status: 400 }
+    );
+  }
 
   const results = [];
 

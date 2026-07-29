@@ -1,9 +1,9 @@
 import { getSql } from "@whatsapp/lib/db";
-import { verifyPassword, createSession, sessionCookieHeader } from "@whatsapp/lib/auth";
+import { verifyPassword, createSession, setSessionCookie } from "@whatsapp/lib/auth";
 
-export async function POST(request) {
+export async function POST(req) {
   try {
-    const { email, password } = await request.json();
+    const { email, password } = await req.json();
     const normalizedEmail = String(email || "").trim().toLowerCase();
     const sql = await getSql();
     const [user] = await sql`SELECT * FROM users WHERE LOWER(email) = ${normalizedEmail}`;
@@ -11,11 +11,10 @@ export async function POST(request) {
       return Response.json({ error: "Invalid email or password" }, { status: 401 });
     }
     const token = await createSession(user.id);
-    const response = Response.json({ ok: true });
-    response.headers.append("Set-Cookie", sessionCookieHeader(token));
-    return response;
+    await setSessionCookie(token);
+    return Response.json({ ok: true });
   } catch (error) {
     console.error("WhatsApp login failed", error);
-    return Response.json({ error: "Login failed" }, { status: 500 });
+    return Response.json({ error: "Sign in failed" }, { status: 500 });
   }
 }

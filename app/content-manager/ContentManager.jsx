@@ -510,7 +510,7 @@ function MessagingContent({ platform, onPlatformChange, status, user, accounts, 
           >
             <img src={messagingLogos[item]} alt="" />
             <span>{messagingLabels[item]}</span>
-            <i className={item === "whatsapp" ? "soon" : ""}>{item === "telegram" ? accounts.length : "Soon"}</i>
+            <i>{item === "telegram" ? accounts.length : "Live"}</i>
           </button>
         ))}
       </div>
@@ -518,14 +518,27 @@ function MessagingContent({ platform, onPlatformChange, status, user, accounts, 
       {platform === "telegram" ? (
         <TelegramAccounts status={status} user={user} accounts={accounts} dashboardUrl={dashboardUrl} onReload={onReload} />
       ) : (
-        <PlaceholderPanel
-          icon={MessageCircle}
-          title="WhatsApp account data will appear here"
-          copy="The WhatsApp app is reserved as a placeholder for now. Once account adding is enabled in Config Manager, connected WhatsApp senders will be shown in this section."
-          link="/config-manager?service=messaging&platform=whatsapp"
-        />
+        <WhatsAppContent />
       )}
     </>
+  );
+}
+
+function WhatsAppContent() {
+  return (
+    <div className="content-placeholder">
+      <span><MessageCircle size={32} /></span>
+      <p>Live service</p>
+      <h3>WhatsApp contacts and conversations are ready</h3>
+      <div>
+        The WhatsApp workspace now includes connected senders, CRM contacts,
+        inbox threads, templates, groups, calling events, and provider settings.
+      </div>
+      <div className="content-empty-actions">
+        <a className="content-primary" href="/dashboard">Open WhatsApp dashboard<ExternalLink size={15} /></a>
+        <a href="/settings">Manage connection<Settings2 size={15} /></a>
+      </div>
+    </div>
   );
 }
 

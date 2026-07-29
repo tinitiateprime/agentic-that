@@ -5,11 +5,20 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { timeAgo } from "@whatsapp/lib/format";
 import SenderSelect from "@whatsapp/components/SenderSelect";
+import AllContactsCRM from "@whatsapp/components/AllContactsCRM";
+import WatiContactsBox from "@whatsapp/components/WatiContactsBox";
 
 const DEFAULT_BUTTONS = ["Sales", "Support", "Catalog"];
 
-export default function NotificationCenter({ contacts, provider, phoneNumbers = [] }) {
-  const [tab, setTab] = useState("messages");
+export default function NotificationCenter({
+  contacts,
+  provider,
+  phoneNumbers = [],
+  calls = [],
+  callSummary = null,
+  connections = { meta: false, wati: false },
+}) {
+  const [tab, setTab] = useState("crm");
   const [query, setQuery] = useState("");
   const isWati = provider === "wati";
   const isMeta = provider === "meta";
@@ -26,11 +35,22 @@ export default function NotificationCenter({ contacts, provider, phoneNumbers = 
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Notification Center</h1>
-        <p className="text-sm text-slate-500">Read customer messages or start a quick-button chat.</p>
+        <h1 className="text-xl font-semibold">Customer CRM</h1>
+        <p className="text-sm text-slate-500">Meta Cloud API and WATI contacts in one workspace.</p>
       </div>
 
-      <div className="grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm">
+      <ConnectionStatus connections={connections} />
+
+      <div className="grid grid-cols-4 rounded-lg bg-slate-100 p-1 text-sm">
+        <button
+          type="button"
+          onClick={() => setTab("crm")}
+          className={`rounded-md px-3 py-2 font-medium ${
+            tab === "crm" ? "bg-white text-[var(--brand-dark)] shadow-sm" : "text-slate-600"
+          }`}
+        >
+          CRM
+        </button>
         <button
           type="button"
           onClick={() => setTab("messages")}
@@ -39,6 +59,21 @@ export default function NotificationCenter({ contacts, provider, phoneNumbers = 
           }`}
         >
           Messages
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("calls")}
+          className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-2 font-medium ${
+            tab === "calls" ? "bg-white text-[var(--brand-dark)] shadow-sm" : "text-slate-600"
+          }`}
+        >
+          Calls
+          {/* Unseen missed calls — the missed-call alert. */}
+          {callSummary?.unacknowledged > 0 && (
+            <span className="rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+              {callSummary.unacknowledged}
+            </span>
+          )}
         </button>
         <button
           type="button"
@@ -51,11 +86,39 @@ export default function NotificationCenter({ contacts, provider, phoneNumbers = 
         </button>
       </div>
 
-      {tab === "messages" ? (
+      {tab === "crm" ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <AllContactsCRM contacts={contacts} />
+          <WatiContactsBox />
+        </div>
+      ) : tab === "messages" ? (
         <MessagesTab contacts={filtered} query={query} setQuery={setQuery} />
+      ) : tab === "calls" ? (
+        <CallsTab calls={calls} summary={callSummary} />
       ) : (
         <NewMessageTab isWati={isWati} isMeta={isMeta} phoneNumbers={phoneNumbers} />
       )}
+    </div>
+  );
+}
+
+function ConnectionStatus({ connections }) {
+  return (
+    <div className="flex flex-wrap gap-2 text-xs">
+      {[
+        ["Meta Cloud API", connections.meta],
+        ["WATI", connections.wati],
+      ].map(([label, connected]) => (
+        <span
+          key={label}
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${
+            connected ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-amber-500"}`} />
+          {label}: {connected ? "configured" : "not configured"}
+        </span>
+      ))}
     </div>
   );
 }
@@ -106,6 +169,115 @@ function MessagesTab({ contacts, query, setQuery }) {
               </Link>
             </li>
           ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// WhatsApp call log. Status comes from the `calls` webhook:
+//   missed    — terminate with Meta status FAILED (customer's call went unanswered)
+//   completed — terminate with COMPLETED
+//   ringing   — call_created / connect seen, no terminate yet
+const CALL_STATUS = {
+  missed: { label: "Missed", cls: "bg-red-50 text-red-700" },
+  completed: { label: "Completed", cls: "bg-green-50 text-green-700" },
+  ringing: { label: "Ringing", cls: "bg-amber-50 text-amber-800" },
+};
+
+function formatDuration(seconds) {
+  const s = Number(seconds) || 0;
+  if (!s) return "—";
+  const m = Math.floor(s / 60);
+  return m ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
+function CallsTab({ calls, summary }) {
+  const router = useRouter();
+  const [busyId, setBusyId] = useState(null);
+
+  // Clear a missed call from the alert list once it's been dealt with.
+  async function acknowledge(callId) {
+    setBusyId(callId);
+    try {
+      await fetch("/api/calls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callId }),
+      });
+      router.refresh();
+    } catch {
+      // leave it in the list; user can retry
+    }
+    setBusyId(null);
+  }
+
+  return (
+    <div className="space-y-3">
+      {summary && (
+        <div className="grid grid-cols-4 gap-2 text-center">
+          {[
+            ["Total", summary.total, "text-slate-800"],
+            ["Missed", summary.missed, "text-red-600"],
+            ["Completed", summary.completed, "text-green-600"],
+            ["Unseen", summary.unacknowledged, "text-amber-600"],
+          ].map(([label, value, cls]) => (
+            <div key={label} className="rounded-lg bg-white p-2 shadow-sm ring-1 ring-slate-200">
+              <div className={`text-lg font-semibold ${cls}`}>{value ?? 0}</div>
+              <div className="text-[11px] text-slate-500">{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {calls.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+          No calls yet. Enable WhatsApp calling in Settings, then calls appear here.
+        </div>
+      ) : (
+        <ul className="divide-y divide-slate-100 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
+          {calls.map((call) => {
+            const meta = CALL_STATUS[call.status] || CALL_STATUS.ringing;
+            const unseen = call.status === "missed" && !call.acknowledged_at;
+            return (
+              <li key={call.id} className={`p-3 ${unseen ? "bg-red-50/40" : ""}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      <span className="mr-1 text-slate-400">
+                        {call.direction === "out" ? "↗" : "↙"}
+                      </span>
+                      {call.contact_name}
+                    </p>
+                    <p className="text-xs text-slate-400">{call.contact_phone}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>
+                      {meta.label}
+                    </span>
+                    <p className="mt-1 text-[11px] text-slate-400">{timeAgo(call.created_at)}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                  <span>{call.direction === "out" ? "Outgoing" : "Incoming"}</span>
+                  <span>Duration: {formatDuration(call.duration)}</span>
+                  <Link href={`/contacts/${call.contact_id}`} className="text-[var(--brand-dark)] underline">
+                    Open chat
+                  </Link>
+                  {unseen && (
+                    <button
+                      type="button"
+                      disabled={busyId === call.id}
+                      onClick={() => acknowledge(call.id)}
+                      className="ml-auto rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 disabled:opacity-50"
+                    >
+                      {busyId === call.id ? "…" : "Mark seen"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@whatsapp/lib/auth";
 import { metaEditTemplate, metaTemplatesConfigured } from "@whatsapp/lib/wa/provider";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 // Edit an existing WhatsApp template on Meta. Body: { category?, bodyText,
 // headerText?, headerImageHandle?, footerText?, buttons? }. Name and language
@@ -7,8 +8,9 @@ import { metaEditTemplate, metaTemplatesConfigured } from "@whatsapp/lib/wa/prov
 export async function PATCH(req, { params }) {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const creds = await credsForBusiness(user.business_id);
 
-  if (!metaTemplatesConfigured()) {
+  if (!metaTemplatesConfigured(creds)) {
     return Response.json(
       { error: "Meta isn't configured — set META_WABA_ID and META_ACCESS_TOKEN in .env.local." },
       { status: 400 }
@@ -30,8 +32,7 @@ export async function PATCH(req, { params }) {
       headerText,
       headerImageHandle,
       footerText,
-      buttons,
-    });
+      buttons, creds });
     return Response.json({ ok: true, ...result });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 502 });

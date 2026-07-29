@@ -2,15 +2,18 @@ import Link from "next/link";
 import { requireUser } from "@whatsapp/lib/auth";
 import { getBusiness, unreadContacts, readContacts } from "@whatsapp/lib/data";
 import ResponsesList from "@whatsapp/components/ResponsesList";
+import GroupUnread from "./GroupUnread";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 export const metadata = { title: "Inbox — Tinitiate WA" };
 
 export default async function InboxPage({ searchParams }) {
   const user = await requireUser();
   const business = await getBusiness(user.business_id);
+  const creds = await credsForBusiness(user.business_id);
   const sp = await searchParams;
   const tab = sp?.tab === "read" ? "read" : "unread";
-  const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
+  const provider = creds.provider;
 
   const unread = (await unreadContacts(business.id)).map((c) => ({
     ...c,
@@ -56,6 +59,13 @@ export default async function InboxPage({ searchParams }) {
           📖 Read ({read.length})
         </Link>
       </div>
+
+      {tab === "unread" && (
+        <GroupUnread
+          unreadCount={unread.length}
+          newCount={unread.filter((c) => c.is_new).length}
+        />
+      )}
 
       <ResponsesList
         contacts={active}

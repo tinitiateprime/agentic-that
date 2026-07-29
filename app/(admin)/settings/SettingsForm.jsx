@@ -2,26 +2,51 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import TemplatesCard from "@whatsapp/components/TemplatesCard";
+import WhatsAppConnectionCard from "@whatsapp/components/WhatsAppConnectionCard";
+import WhatsAppMonitoringCard from "@whatsapp/components/WhatsAppMonitoringCard";
+import WatiConnectionCard from "@whatsapp/components/WatiConnectionCard";
 
-export default function SettingsForm({ business, templates, provider }) {
+// Display labels only — never show the internal provider id (e.g. "baileys")
+// on screen.
+const PROVIDER_LABELS = {
+  meta: "Meta Cloud API",
+  baileys: "WhatsApp Web",
+  wati: "WATI",
+  mock: "Mock (simulated)",
+};
+
+export default function SettingsForm({
+  business,
+  provider,
+  metaWabaId,
+  hasMetaToken,
+  baileysServiceUrl,
+  hasBaileysSecret,
+  metaAppId,
+  metaConfigId,
+  watiApiUrl,
+  hasWatiToken,
+  hasWatiWebhookSecret,
+}) {
   const router = useRouter();
   const [biz, setBiz] = useState({
     name: business.name,
     admin_number: business.admin_number || "",
     currency: business.currency,
+    active_wa_provider: business.active_wa_provider || provider || "mock",
   });
   const [savedMsg, setSavedMsg] = useState("");
   const setB = (k) => (e) => setBiz((b) => ({ ...b, [k]: e.target.value }));
 
   async function saveBiz(e) {
     e.preventDefault();
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(biz),
     });
-    setSavedMsg("Saved");
+    const body = await res.json().catch(() => ({}));
+    setSavedMsg(res.ok ? "Saved" : body.error || "Save failed");
     setTimeout(() => setSavedMsg(""), 1500);
     router.refresh();
   }
@@ -49,11 +74,27 @@ export default function SettingsForm({ business, templates, provider }) {
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </label>
           </div>
+          <label className="block text-sm">
+            <span className="text-slate-500">Default outbound provider</span>
+            <select
+              value={biz.active_wa_provider}
+              onChange={setB("active_wa_provider")}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              {hasMetaToken && <option value="meta">Meta Cloud API</option>}
+              {hasWatiToken && <option value="wati">WATI</option>}
+              <option value="mock">Mock (simulated)</option>
+            </select>
+          </label>
           <div className="flex items-center gap-3">
             <button type="submit" className="rounded-lg bg-[var(--brand-dark)] px-3 py-2 text-sm font-medium text-white">
               Save
             </button>
-            {savedMsg && <span className="text-sm text-green-600">{savedMsg}</span>}
+            {savedMsg && (
+              <span className={`text-sm ${savedMsg === "Saved" ? "text-green-600" : "text-red-600"}`}>
+                {savedMsg}
+              </span>
+            )}
           </div>
         </form>
       </section>
@@ -62,12 +103,8 @@ export default function SettingsForm({ business, templates, provider }) {
       <section className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
         <h2 className="mb-1 font-medium">Messaging provider</h2>
         <p className="text-sm text-slate-500">
-          Active provider: <span className="font-mono font-medium text-slate-700">{provider}</span>
+          Active provider: <span className="font-medium text-slate-700">{PROVIDER_LABELS[provider] || provider}</span>
           {provider === "mock" && " — messages are simulated and stored locally."}
-        </p>
-        <p className="mt-1 text-xs text-slate-400">
-          Change via the <span className="font-mono">WA_PROVIDER</span> env var
-          (mock · wati · meta · twilio · gupshup · dialog360). Credentials go in your <span className="font-mono">.env</span>.
         </p>
         {provider === "wati" && (
           <p className="mt-1 text-xs text-slate-400">
@@ -86,7 +123,19 @@ export default function SettingsForm({ business, templates, provider }) {
         )}
       </section>
 
-      <TemplatesCard templates={templates} />
+      <WhatsAppConnectionCard
+        metaWabaId={metaWabaId}
+        hasMetaToken={hasMetaToken}
+        metaAppId={metaAppId}
+        metaConfigId={metaConfigId}
+      />
+      <WatiConnectionCard
+        apiUrl={watiApiUrl}
+        hasAccessToken={hasWatiToken}
+        hasWebhookSecret={hasWatiWebhookSecret}
+        active={provider === "wati"}
+      />
+      <WhatsAppMonitoringCard serviceUrl={baileysServiceUrl} hasSecret={hasBaileysSecret} />
     </div>
   );
 }

@@ -1,10 +1,9 @@
 import { cookies } from "next/headers";
-import { destroySession, clearSessionCookieHeader, COOKIE_NAME } from "@whatsapp/lib/auth";
+import { destroySession, clearSessionCookie, COOKIE_NAME } from "@whatsapp/lib/auth";
 
 export async function POST() {
-  const cookieStore = await cookies();
-  await destroySession(cookieStore.get(COOKIE_NAME)?.value);
-  const response = Response.json({ ok: true });
-  response.headers.append("Set-Cookie", clearSessionCookieHeader());
-  return response;
+  const store = await cookies();
+  await destroySession(store.get(COOKIE_NAME)?.value);
+  await clearSessionCookie();
+  return Response.json({ ok: true });
 }

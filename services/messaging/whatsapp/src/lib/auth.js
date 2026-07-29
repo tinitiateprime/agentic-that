@@ -7,25 +7,6 @@ export { hashPassword, verifyPassword } from "./password.js";
 
 const COOKIE_NAME = "session";
 
-function cookieAttributes(maxAge) {
-  const attrs = [
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${maxAge}`,
-  ];
-  if (process.env.NODE_ENV === "production") attrs.push("Secure");
-  return attrs.join("; ");
-}
-
-export function sessionCookieHeader(token) {
-  return `${COOKIE_NAME}=${encodeURIComponent(token)}; ${cookieAttributes(60 * 60 * 24 * 30)}`;
-}
-
-export function clearSessionCookieHeader() {
-  return `${COOKIE_NAME}=; ${cookieAttributes(0)}`;
-}
-
 // --- Sessions --------------------------------------------------------------
 export async function createSession(userId) {
   const sql = await getSql();
@@ -53,7 +34,8 @@ export async function getCurrentUser() {
   return user || null;
 }
 
-// Guard for WhatsApp server components / layouts.
+// Guard for WhatsApp server components / layouts. Keep this separate from the
+// AgenticThat platform login route, which owns /login.
 export async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect("/whatsapp/login");

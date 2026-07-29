@@ -2,7 +2,14 @@ import { getSql } from "@whatsapp/lib/db";
 import { getCurrentUser } from "@whatsapp/lib/auth";
 import { getBusiness } from "@whatsapp/lib/data";
 import { sendToContact, sendTemplateToContact, renderTemplate } from "@whatsapp/lib/wa/messaging";
-import { normalizeWaNumber, metaGetTemplates, metaTemplatesConfigured } from "@whatsapp/lib/wa/provider";
+import {
+  normalizeWaNumber,
+  metaGetTemplates,
+  metaTemplatesConfigured,
+  watiGetTemplates,
+  watiConfigured,
+} from "@whatsapp/lib/wa/provider";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 // Meta's onboarding sample templates — never auto-pick these as the opener
 // (hello_world only works on the public test numbers anyway).
@@ -18,6 +25,7 @@ const SAMPLE_TEMPLATES = new Set(["hello_world", "3p_direct_integration_test_tem
 export async function POST(req) {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const creds = await credsForBusiness(user.business_id);
 
   const { phone, name, body, phoneNumberId } = await req.json();
   const waId = normalizeWaNumber(phone);
@@ -41,24 +49,29 @@ export async function POST(req) {
       RETURNING *`;
   }
 
-  const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
+  const provider = creds.provider;
 
   // Number not found in contacts -> open the chat with an approved template.
-  if (provider === "meta" && isNewNumber) {
-    if (!metaTemplatesConfigured()) {
+  if (["meta", "wati"].includes(provider) && isNewNumber) {
+    const templatesConfigured = provider === "meta" ? metaTemplatesConfigured(creds) : watiConfigured(creds);
+    if (!templatesConfigured) {
       return Response.json(
-        { error: "New number needs an approved template, but Meta templates aren't configured." },
+        { error: `New number needs an approved template, but ${provider === "meta" ? "Meta" : "WATI"} isn't configured.` },
         { status: 400 }
       );
     }
     let approved = [];
     try {
-      approved = await metaGetTemplates({ approvedOnly: true });
+      approved = provider === "meta"
+        ? await metaGetTemplates({ approvedOnly: true, creds })
+        : await watiGetTemplates({ approvedOnly: true }, creds);
     } catch (err) {
       return Response.json({ error: err.message }, { status: 502 });
     }
     // Prefer a real template over Meta's onboarding samples.
-    const tpl = approved.find((t) => !SAMPLE_TEMPLATES.has(t.name)) || approved[0];
+    const tpl = provider === "meta"
+      ? approved.find((t) => !SAMPLE_TEMPLATES.has(t.name)) || approved[0]
+      : approved[0];
     if (!tpl) {
       return Response.json(
         { error: "No approved WhatsApp template available — approve one under Dashboard → WhatsApp templates first." },

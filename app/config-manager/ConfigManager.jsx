@@ -435,7 +435,7 @@ function MessagingManager({
           >
             <img src={messagingPlatformLogos[item]} alt="" />
             <span>{messagingPlatformLabels[item]}</span>
-            <i className={item === "whatsapp" ? "planned" : ""}>{item === "telegram" ? accounts.length : "Soon"}</i>
+            <i>{item === "telegram" ? accounts.length : "Live"}</i>
           </button>
         ))}
       </div>
@@ -450,13 +450,28 @@ function MessagingManager({
           setNotice={setNotice}
         />
       ) : (
-        <PlaceholderService
-          icon={MessageCircle}
-          title="WhatsApp configuration is reserved"
-          copy="WhatsApp Business numbers, provider credentials, templates, and sender selection will be configured from this shared messaging area when the connector is enabled."
-        />
+        <WhatsAppManager />
       )}
     </>
+  );
+}
+
+function WhatsAppManager() {
+  return (
+    <div className="config-placeholder">
+      <span><MessageCircle size={32} /></span>
+      <p>Live connector</p>
+      <h3>WhatsApp configuration is active</h3>
+      <div>
+        Connect Meta Embedded Signup/coexistence, Cloud API credentials, WATI,
+        sender numbers, calling, and optional read-only monitoring from the
+        dedicated WhatsApp settings workspace.
+      </div>
+      <div className="config-form-actions">
+        <a className="config-primary" href="/settings">Open WhatsApp settings<ExternalLink size={15} /></a>
+        <a className="config-secondary" href="/dashboard">Open dashboard<ArrowRight size={15} /></a>
+      </div>
+    </div>
   );
 }
 

@@ -36,7 +36,10 @@ META_ACCESS_TOKEN=replace_me
 META_PHONE_NUMBER_ID=replace_me
 META_WABA_ID=replace_me
 META_APP_ID=replace_me
+META_APP_SECRET=replace_me
+META_CONFIGURATION_ID=replace_me
 META_WEBHOOK_VERIFY_TOKEN=replace_me
+CREDENTIAL_ENCRYPTION_KEY=replace_with_64_hex_characters
 DATABASE_URL=replace_me
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me
@@ -54,7 +57,9 @@ Configure this callback in Meta for Developers:
 https://<whatsapp-service-domain>/api/webhooks/meta
 ```
 
-Subscribe to the `messages` field and use the same `META_WEBHOOK_VERIFY_TOKEN` value from the service env.
+Subscribe to the `messages` and `calls` fields and use the same
+`META_WEBHOOK_VERIFY_TOKEN` value from the service env. `META_APP_SECRET`
+enables signature verification for incoming webhook requests.
 
 ## Capabilities
 
@@ -66,3 +71,8 @@ Subscribe to the `messages` field and use the same `META_WEBHOOK_VERIFY_TOKEN` v
 - Groups and broadcasts
 - Inbound webhook recording
 - Read/unread and replied/unreplied views
+- Self-serve workspace signup and encrypted tenant credentials
+- Meta Embedded Signup/coexistence onboarding
+- WhatsApp calling events and call settings
+- WATI onboarding and authenticated webhooks
+- Optional read-only WhatsApp Web monitoring
