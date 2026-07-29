@@ -184,7 +184,24 @@ async function migrateLegacyEnvAccount(sql) {
        ${process.env.META_API_VERSION || "v21.0"},
        ${encryptSecret((process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim() || null)},
        'env-import', 'active')
-    ON CONFLICT (waba_id) DO NOTHING
+    ON CONFLICT (waba_id) DO UPDATE SET
+      access_token = EXCLUDED.access_token,
+      app_id = COALESCE(EXCLUDED.app_id, whatsapp_accounts.app_id),
+      app_secret = COALESCE(EXCLUDED.app_secret, whatsapp_accounts.app_secret),
+      api_version = EXCLUDED.api_version,
+      webhook_verify_token = COALESCE(
+        EXCLUDED.webhook_verify_token,
+        whatsapp_accounts.webhook_verify_token
+      ),
+      onboarding_source = 'env-import',
+      status = 'active',
+      updated_at = now()
+    -- A WABA is globally unique. Refresh only the deployment owner's existing
+    -- row; never let environment credentials take an account from another
+    -- tenant. Besides keeping env changes current, this re-encrypts legacy
+    -- credentials after an encryption-key rotation instead of crashing every
+    -- authenticated page while trying to decrypt stale ciphertext.
+    WHERE whatsapp_accounts.business_id = EXCLUDED.business_id
     RETURNING id`;
 
   const [storedAccount] = account
