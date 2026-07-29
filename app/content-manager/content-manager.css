@@ -11,7 +11,7 @@
   background:
     radial-gradient(circle at 8% 0%, rgba(25, 151, 123, 0.1), transparent 27rem),
     linear-gradient(180deg, #f7faf8 0, #eef4f1 100%);
-  font-family: Roboto, Arial, sans-serif;
+  font-family: "Inter", sans-serif;
 }
 
 .content-manager-scope *,

@@ -1,5 +1,5 @@
 :root {
-  font-family: Inter, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: "Inter", sans-serif;
   color: #f6f5ef;
   background: #030303;
   font-synthesis: none;
@@ -22,11 +22,15 @@ body {
   min-height: 100vh;
   margin: 0;
   background: #030303;
+  font-family: "Inter", sans-serif;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
+  font-family: "Inter", sans-serif;
 }
 
 button {

@@ -1,0 +1,279 @@
+.productShell,
+.productShell * {
+  box-sizing: border-box;
+}
+
+.productShell {
+  min-height: 100vh;
+  background: #fff;
+  color: #191c20;
+}
+
+.productShell a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar {
+  position: fixed;
+  z-index: 60;
+  inset: 0 auto 0 0;
+  display: flex;
+  width: 228px;
+  flex-direction: column;
+  padding: 20px 14px 16px;
+  border-right: 1px solid #dae6e1;
+  background: #f1f6f4;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 40px;
+  padding: 0 7px;
+}
+
+.brandMark,
+.mobileBrand > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 10px 4px 10px 4px;
+  background: #123a33;
+  color: white;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: -0.03em;
+}
+
+.brand > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.brand strong {
+  font-size: 16px;
+  font-weight: 780;
+  letter-spacing: -0.02em;
+}
+
+.brand small {
+  margin-top: 3px;
+  color: #6d7c77;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sidebarNav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 42px;
+}
+
+.sidebarNav > span {
+  margin: 0 11px 8px;
+  color: #7c8985;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sidebarNav a {
+  position: relative;
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  gap: 11px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #44504c;
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.sidebarNav a:hover {
+  background: rgba(255, 255, 255, 0.65);
+  color: #14241f;
+}
+
+.sidebarNav .navActive {
+  border-color: #dbe6e2;
+  background: white;
+  box-shadow: 0 5px 15px rgba(35, 65, 56, 0.06);
+  color: #13231e;
+  font-weight: 760;
+}
+
+.sidebarNav .navActive::before {
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: -1px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #0a7b68;
+  content: "";
+}
+
+.sidebarNav .navActive svg {
+  color: #08715f;
+}
+
+.sidebarFooter {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid #d9e4df;
+}
+
+.account {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 34px;
+  gap: 9px;
+  align-items: center;
+  padding: 5px 4px;
+}
+
+.accountAvatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 50%;
+  background: #d8eae4;
+  color: #0a6254;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.accountCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.accountCopy strong,
+.accountCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountCopy strong {
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.accountCopy small {
+  margin-top: 3px;
+  color: #71807a;
+  font-size: 11px;
+}
+
+.signOut {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7873;
+  cursor: pointer;
+}
+
+.signOut:hover {
+  background: white;
+  color: #17231f;
+}
+
+.productContent {
+  min-height: 100vh;
+  margin-left: 228px;
+}
+
+.mobileHeader,
+.sidebarBackdrop {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .mobileHeader {
+    position: sticky;
+    z-index: 55;
+    top: 0;
+    display: flex;
+    height: 60px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid #dfe7e4;
+    background: rgba(247, 250, 249, 0.97);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobileBrand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .mobileBrand > span {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+
+  .mobileBrand strong {
+    font-size: 15px;
+  }
+
+  .mobileHeader > button {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    place-items: center;
+    border: 0;
+    background: transparent;
+    color: #4d5a55;
+    cursor: pointer;
+  }
+
+  .sidebar {
+    width: min(286px, calc(100vw - 54px));
+    transform: translateX(-102%);
+    box-shadow: 18px 0 38px rgba(19, 38, 32, 0.16);
+    transition: transform 180ms ease;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .sidebarBackdrop {
+    position: fixed;
+    z-index: 58;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(17, 29, 25, 0.35);
+  }
+
+  .productContent {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}
