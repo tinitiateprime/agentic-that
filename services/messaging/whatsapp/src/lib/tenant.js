@@ -28,6 +28,29 @@ function credsFrom(account) {
   };
 }
 
+function isCredentialDecryptionFailure(error) {
+  const message = String(error?.message || "");
+  return /unable to authenticate data|invalid authentication tag|bad decrypt/i.test(message);
+}
+
+// A deployment encryption key can be rotated accidentally while old optional
+// provider rows (WATI/Baileys) still exist. Those credentials cannot be
+// recovered without the old key, but they also must not take down every admin
+// page. Treat only authenticated-cipher failures as a disconnected account;
+// unexpected programming/database errors still surface normally.
+function readableCredsFrom(account) {
+  try {
+    return credsFrom(account);
+  } catch (error) {
+    if (!isCredentialDecryptionFailure(error)) throw error;
+    console.warn(
+      `WhatsApp ${account?.provider || "provider"} account ${account?.id || "unknown"} ` +
+        "uses an obsolete encryption key and must be reconnected."
+    );
+    return null;
+  }
+}
+
 // Credentials from environment — the pre-SaaS single-tenant path.
 export function envCreds() {
   const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
@@ -158,12 +181,20 @@ export async function resolveTenantByWatiWebhookSecret(secret) {
     SELECT * FROM whatsapp_accounts WHERE provider = 'wati' AND webhook_verify_token IS NOT NULL`;
   const supplied = Buffer.from(String(secret));
   const account = accounts.find((row) => {
-    const expected = Buffer.from(String(decryptSecret(row.webhook_verify_token) || ""));
+    let expectedSecret;
+    try {
+      expectedSecret = decryptSecret(row.webhook_verify_token);
+    } catch (error) {
+      if (!isCredentialDecryptionFailure(error)) throw error;
+      return false;
+    }
+    const expected = Buffer.from(String(expectedSecret || ""));
     return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
   });
   if (!account) return null;
   const [business] = await sql`SELECT * FROM businesses WHERE id = ${account.business_id}`;
-  return business ? { business, account, creds: credsFrom(account) } : null;
+  const creds = readableCredsFrom(account);
+  return business && creds ? { business, account, creds } : null;
 }
 
 // Account row + its default sender number, for one tenant. A business can
@@ -190,7 +221,10 @@ export async function getAccountForBusiness(businessId) {
 // account row.
 export async function credsForBusiness(businessId) {
   const account = await getAccountForBusiness(businessId);
-  if (account) return credsFrom(account);
+  if (account) {
+    const creds = readableCredsFrom(account);
+    if (creds) return creds;
+  }
   if (await isLegacyEnvBusiness(businessId)) {
     return { ...envCreds(), businessId };
   }
@@ -211,7 +245,10 @@ export async function credsForProvider(businessId, provider) {
       FROM whatsapp_accounts a
      WHERE a.business_id = ${businessId} AND a.provider = ${provider}
      LIMIT 1`;
-  if (row) return credsFrom(row);
+  if (row) {
+    const creds = readableCredsFrom(row);
+    if (creds) return creds;
+  }
   if (await isLegacyEnvBusiness(businessId)) {
     const creds = envCredsForProvider(provider);
     return creds ? { ...creds, businessId } : null;
@@ -235,7 +272,12 @@ export async function resolveTenantByWabaId(wabaId) {
   if (!row) return null;
   const [business] = await sql`SELECT * FROM businesses WHERE id = ${row.business_id}`;
   if (!business) return null;
-  return { business, creds: credsFrom(row), account: row };
+  let creds = readableCredsFrom(row);
+  if (!creds && (await isLegacyEnvBusiness(row.business_id))) {
+    const fallback = envCredsForProvider(row.provider);
+    if (fallback) creds = { ...fallback, businessId: row.business_id };
+  }
+  return creds ? { business, creds, account: row } : null;
 }
 
 // Numbers belonging to a tenant (drives the "Send from" pickers without an API
