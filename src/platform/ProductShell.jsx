@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Boxes, Database, LogOut, Menu, Settings2, X } from "lucide-react";
 import { useState } from "react";
-import styles from "./apps.module.css";
+import styles from "./marketplace.module.css";
 
 const navigation = [
   { href: "/apps", label: "Apps", icon: Boxes, id: "apps" },

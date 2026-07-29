@@ -42,10 +42,23 @@ const publishingSteps = (platform) => [
   { title: "Review delivery", description: "Follow the queue and confirm what was posted or what needs attention." },
 ];
 
-const publishingService = ({ slug, name, logo, accent, tint, summary, formats, idealFor }) => ({
+const publishingService = ({
+  slug,
+  name,
+  logo,
+  accent,
+  tint,
+  summary,
+  formats,
+  idealFor,
+  capabilities = publishingCapabilities,
+  outcomes,
+  detailHeading,
+  detailDescription,
+}) => ({
   slug,
   category: "publishing",
-  name: `${name} Publisher`,
+  name: `${name} Publishing`,
   platformName: name,
   provider: "AgenticThat Publishing",
   logo,
@@ -59,7 +72,9 @@ const publishingService = ({ slug, name, logo, accent, tint, summary, formats, i
   formatLabel: formats,
   configHref: `/config-manager?service=publishing&platform=${slug}`,
   dashboardHref: `/publishing?platform=${slug}`,
-  capabilities: publishingCapabilities,
+  detailHeading,
+  detailDescription,
+  capabilities,
   steps: publishingSteps(name),
   useCases: idealFor,
   requirements: [
@@ -67,7 +82,7 @@ const publishingService = ({ slug, name, logo, accent, tint, summary, formats, i
     "The AgenticThat Publishing Companion and browser extension",
     "A one-time browser sign-in for the publishing account",
   ],
-  outcomes: ["Scheduled and queued posts", "Per-account delivery status", "Platform-ready previews", "Publishing activity history"],
+  outcomes: outcomes || ["Scheduled and queued posts", "Per-account delivery status", "Platform-ready previews", "Publishing activity history"],
   note: "Browser publishing keeps credentials on the computer running the companion. AgenticThat stores the account reference and workflow state, not your social password.",
 });
 
@@ -84,6 +99,8 @@ const engagementService = ({ slug, name, logo, accent, tint, description }) => (
   connectionKind: "unavailable",
   shortDescription: description,
   promise: `A safer, reviewable way to coordinate ${name} post engagement without losing human oversight.`,
+  detailHeading: `${name} engagement designed around review, pacing, and accountable action`,
+  detailDescription: `The planned ${name} workspace will keep conversation context, proposed actions, approvals, and final outcomes together instead of turning engagement into an unattended volume task.`,
   capabilities: [
     { title: "Reply workspace", description: "Review post conversations and prepare relevant responses in one queue." },
     { title: "Approval controls", description: "Keep sensitive or high-impact actions behind a human confirmation step." },
@@ -105,7 +122,7 @@ export const productServices = [
   {
     slug: "whatsapp",
     category: "messaging",
-    name: "WhatsApp Workflows",
+    name: "WhatsApp Messaging",
     platformName: "WhatsApp",
     provider: "AgenticThat Messaging",
     logo: "/whatsapp-logo.svg",
@@ -115,6 +132,8 @@ export const productServices = [
     connectionKind: "whatsapp",
     shortDescription: "Manage customer conversations, contacts, templates, broadcasts, and follow-ups through your WhatsApp Business account.",
     promise: "Give your team one clear place to manage WhatsApp conversations and customer outreach.",
+    detailHeading: "Customer conversations, outreach, and delivery control in one operational view",
+    detailDescription: "Move between the shared inbox, contact records, approved templates, and sender configuration without losing the context of the customer relationship.",
     formatLabel: "Cloud API · WATI · Coexistence",
     configHref: "/whatsapp/onboarding",
     dashboardHref: "/dashboard",
@@ -137,7 +156,7 @@ export const productServices = [
   {
     slug: "telegram",
     category: "messaging",
-    name: "Telegram Workflows",
+    name: "Telegram Messaging",
     platformName: "Telegram",
     provider: "AgenticThat Messaging",
     logo: "/telegram-logo.svg",
@@ -147,6 +166,8 @@ export const productServices = [
     connectionKind: "telegram",
     shortDescription: "Connect Telegram accounts securely, send direct messages, and manage reusable messaging sessions from one console.",
     promise: "Turn repeat Telegram communication into a dependable, account-aware workflow.",
+    detailHeading: "A direct messaging console built around the account you intend to use",
+    detailDescription: "Keep account verification, reusable sessions, recipient selection, and message delivery inside one guided Telegram operation.",
     formatLabel: "Direct messaging · Account sessions",
     configHref: "/config-manager?service=messaging&platform=telegram",
     dashboardHref: process.env.NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL || "/console",
@@ -175,6 +196,15 @@ export const productServices = [
     summary: "Prepare image and video posts, tailor captions, preview the result, and schedule delivery to connected Instagram accounts.",
     formats: "Images · Video · Captions",
     idealFor: ["Campaign calendars", "Reels and post scheduling", "Multi-account brands", "Caption review"],
+    detailHeading: "Visual publishing that keeps the asset, caption, account, and timing together",
+    detailDescription: "Prepare Instagram work in the format it will be reviewed: media first, platform-ready copy beside it, and the destination account and schedule clearly identified.",
+    capabilities: [
+      { title: "Feed and Reel preparation", description: "Bring image or video assets together with the caption intended for the Instagram destination." },
+      { title: "Visual review", description: "Check the selected media and final copy before the post enters the delivery queue." },
+      { title: "Account-aware scheduling", description: "Choose the connected Instagram account and give the post a deliberate publishing time." },
+      { title: "Delivery trace", description: "Follow the item from queued to processing, posted, or failed with the reason kept visible." },
+    ],
+    outcomes: ["Instagram-ready post package", "Scheduled delivery time", "Account-specific queue state", "Publishing result history"],
   }),
   publishingService({
     slug: "youtube",
@@ -185,6 +215,15 @@ export const productServices = [
     summary: "Prepare videos and community content with titles, descriptions, previews, schedules, and a clear delivery trail.",
     formats: "Video · Images · Community text",
     idealFor: ["Video release planning", "Channel calendars", "Community posts", "Multi-channel operations"],
+    detailHeading: "Release planning for YouTube content, from upload material to channel delivery",
+    detailDescription: "Keep the video or community asset, audience-facing metadata, destination channel, and release timing in one reviewable workflow.",
+    capabilities: [
+      { title: "Release asset preparation", description: "Select the video, image, or community-post material that should be delivered to YouTube." },
+      { title: "Title and description review", description: "Keep the audience-facing text visible beside the asset before it reaches the queue." },
+      { title: "Channel scheduling", description: "Choose the intended connected channel and reserve the appropriate release time." },
+      { title: "Upload outcome", description: "See whether the publish completed or needs attention without searching through browser sessions." },
+    ],
+    outcomes: ["Channel-ready release package", "Scheduled publication", "Queue and processing state", "YouTube delivery result"],
   }),
   publishingService({
     slug: "facebook",
@@ -195,6 +234,15 @@ export const productServices = [
     summary: "Create and schedule Facebook posts with account-specific copy, media previews, and delivery monitoring.",
     formats: "Text · Images · Video",
     idealFor: ["Page publishing", "Campaign scheduling", "Community updates", "Cross-channel launches"],
+    detailHeading: "Page publishing with the message, media, destination, and schedule kept in view",
+    detailDescription: "Prepare Facebook updates without mixing page identities or losing track of which version of a campaign is scheduled where.",
+    capabilities: [
+      { title: "Page-ready post creation", description: "Compose the final message for Facebook and pair it with the intended image or video." },
+      { title: "Destination clarity", description: "Keep the selected Facebook account visible throughout preparation and queue review." },
+      { title: "Timed publishing", description: "Schedule an update for the moment it belongs in the campaign rather than relying on a manual reminder." },
+      { title: "Delivery visibility", description: "Review completed and failed page deliveries from the same operational history." },
+    ],
+    outcomes: ["Facebook-ready post", "Selected destination account", "Scheduled queue entry", "Page publishing result"],
   }),
   publishingService({
     slug: "x",
@@ -205,6 +253,15 @@ export const productServices = [
     summary: "Write concise posts, validate character limits, attach media, and schedule delivery to connected X accounts.",
     formats: "Text · Images · Video",
     idealFor: ["Announcements", "Editorial calendars", "Campaign coordination", "Multi-account publishing"],
+    detailHeading: "Concise publishing with account, media, and timing decisions made explicit",
+    detailDescription: "Prepare X posts in a focused composer that keeps copy length, attached media, the chosen account, and queue state easy to verify.",
+    capabilities: [
+      { title: "Character-aware writing", description: "Prepare concise platform copy and resolve length issues before the post is queued." },
+      { title: "Media pairing", description: "Review the image or video alongside the exact text it will accompany." },
+      { title: "Account-specific scheduling", description: "Select the intended X identity and control when the item should be delivered." },
+      { title: "Posting history", description: "Keep a clear record of queued, processing, completed, and failed publishing attempts." },
+    ],
+    outcomes: ["Validated X post copy", "Media-ready post package", "Scheduled account delivery", "Posting activity history"],
   }),
   publishingService({
     slug: "linkedin",
@@ -215,6 +272,15 @@ export const productServices = [
     summary: "Prepare professional updates with platform-specific copy, media, scheduling, and reviewable publishing history.",
     formats: "Text · Images · Video",
     idealFor: ["Company updates", "Thought leadership", "Hiring campaigns", "B2B content calendars"],
+    detailHeading: "Professional publishing with the message and organizational context protected",
+    detailDescription: "Review LinkedIn copy and media as a complete update, confirm the intended account, and schedule it without losing the approval context.",
+    capabilities: [
+      { title: "Professional post preparation", description: "Compose the final LinkedIn message with the tone and context visible before delivery." },
+      { title: "Media and message review", description: "Evaluate the selected asset together with the copy rather than as separate workflow pieces." },
+      { title: "Account selection", description: "Keep the intended connected LinkedIn identity explicit from drafting through scheduling." },
+      { title: "Publishing history", description: "Return to a reliable record of what was queued, delivered, or stopped for attention." },
+    ],
+    outcomes: ["LinkedIn-ready update", "Confirmed destination account", "Scheduled publication", "Reviewable delivery history"],
   }),
   {
     slug: "instagram-public-data",
@@ -229,6 +295,8 @@ export const productServices = [
     connectionKind: "none",
     shortDescription: "Collect recent public Instagram posts and reels from a profile, keyword, hashtag, or direct URL and export clean results.",
     promise: "Move from a public Instagram signal to a useful, reviewable dataset in a few clicks.",
+    detailHeading: "Public Instagram research that begins with a simple target and ends with structured data",
+    detailDescription: "Choose the kind of signal you have—a profile, keyword, hashtag, post, or Reel URL—then review consistent fields and export the results without connecting an Instagram account.",
     formatLabel: "Profile · Keyword · URL",
     dashboardHref: "/scraper/instagram",
     capabilities: [
