@@ -376,7 +376,7 @@ export default function ContentManager({
   return (
     <main className="content-shell">
       <header className="content-topbar">
-        <a className="content-brand" href="/">
+        <a className="content-brand" href="/apps">
           <span>AT</span>
           <strong>AgenticThat</strong>
           <small>Content Manager</small>
@@ -387,7 +387,7 @@ export default function ContentManager({
         </div>
         <div className="content-top-actions">
           <a className="content-secondary" href="/config-manager"><Settings2 size={15} />Config Manager</a>
-          <a className="content-back" href="/"><ArrowLeft size={16} />Back to services</a>
+          <a className="content-back" href="/apps"><ArrowLeft size={16} />Back to apps</a>
         </div>
       </header>
 

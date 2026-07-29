@@ -297,7 +297,7 @@ function PlatformManagerAccess({
     <main className='auth-page'>
       <section className='auth-visual' aria-label='Social publishing workspace'>
         <div className='auth-visual-content'>
-          <a className='auth-brand' href='/'>AgenticThat<span> / Publish Queue</span></a>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
           <div className='auth-message'>
             <p className='auth-kicker'>Your private publishing workspace</p>
             <h1>{firstSetup ? 'Create your manager access.' : 'Welcome back.'}</h1>
@@ -423,7 +423,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
     <main className='auth-page'>
       <section className='auth-visual' aria-label='Social publishing workspace'>
         <div className='auth-visual-content'>
-          <a className='auth-brand' href='/'>AgenticThat<span> / Publish Queue</span></a>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
           <div className='auth-message'>
             <p className='auth-kicker'>Social publishing operations</p>
             <h1>Plan the work. Publish at the right moment.</h1>
@@ -1553,7 +1553,7 @@ function Workboard({
     <main className='workboard-app'>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/' title='Back to AgenticThat'><span>AT</span><div><strong>AgenticThat</strong><small>Publish Queue</small></div></a>
+        <a className='workboard-brand' href='/apps' title='Back to AgenticThat Apps'><span>AT</span><div><strong>AgenticThat</strong><small>Publish Queue</small></div></a>
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>

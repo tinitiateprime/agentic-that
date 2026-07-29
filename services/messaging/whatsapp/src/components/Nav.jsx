@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 const LINKS = [
   { href: "/dashboard",           label: "Dashboard", icon: "📊" },
@@ -14,12 +14,16 @@ const LINKS = [
 
 export default function Nav({ businessName }) {
   const pathname = usePathname();
-  const router = useRouter();
 
   async function logout() {
-    await fetch("/api/whatsapp/auth/logout", { method: "POST" });
-    router.push("/whatsapp/login");
-    router.refresh();
+    await Promise.allSettled([
+      fetch("/api/platform-auth/logout", { method: "POST" }),
+      fetch("/api/whatsapp/auth/logout", { method: "POST" }),
+      fetch("/api/telegram/auth/session", { method: "DELETE" }),
+    ]);
+    window.sessionStorage.removeItem("agenticthat-publish-queue-session");
+    window.sessionStorage.removeItem("agenticthat-publish-account-summary");
+    window.location.href = "/";
   }
 
   // "/dashboard" itself shouldn't also light up for the more-specific
@@ -33,12 +37,12 @@ export default function Nav({ businessName }) {
     <>
       {/* Left sidebar (desktop) */}
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col bg-[var(--brand-dark)] text-white sm:flex">
-        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-4">
+        <Link href="/apps" className="flex items-center gap-2 border-b border-white/10 px-4 py-4" title="Back to AgenticThat Apps">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-sm font-bold">
             T
           </span>
           <span className="truncate text-sm font-semibold">{businessName || "Tinitiate WA"}</span>
-        </div>
+        </Link>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
           {LINKS.map((l) => (

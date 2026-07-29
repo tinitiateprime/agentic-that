@@ -257,6 +257,12 @@ async function migrate(sql) {
       role          TEXT NOT NULL DEFAULT 'admin',
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+    // Stable bridge to the AgenticThat account. Existing WhatsApp-only users
+    // are claimed by matching their unique email the first time they enter
+    // from the main product; new AgenticThat users receive a workspace lazily.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_user_id
+       ON users(platform_user_id) WHERE platform_user_id IS NOT NULL`,
     `CREATE TABLE IF NOT EXISTS sessions (
       token      TEXT PRIMARY KEY,
       user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

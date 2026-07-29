@@ -303,7 +303,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
     setUser(authenticatedUser);
     setAuthOpen(false);
     window.history.replaceState({}, "", window.location.pathname);
-    if (pendingDestination) window.location.href = pendingDestination;
+    window.location.href = pendingDestination || "/apps";
   };
 
   const closeAuth = () => {

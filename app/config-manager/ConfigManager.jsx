@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
+import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
@@ -208,6 +209,7 @@ export default function ConfigManager({
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
+      rememberPublishingAccounts([]);
       setPublishingStatus("needs-login");
       return;
     }
@@ -217,13 +219,16 @@ export default function ConfigManager({
       const accounts = await publishingRequest("/api/accounts", session.token);
       const current = { token: session.token, user: me };
       setPublishingSession(current);
-      setPublishingAccounts(Array.isArray(accounts) ? accounts : []);
+      const accountList = Array.isArray(accounts) ? accounts : [];
+      setPublishingAccounts(accountList);
+      rememberPublishingAccounts(accountList);
       setPublishingStatus(me.role === "operations_manager" ? "ready" : "needs-manager");
     } catch (error) {
       if (error.status === 401) {
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
         setPublishingAccounts([]);
+        rememberPublishingAccounts([]);
         setPublishingStatus("needs-login");
       } else {
         setPublishingStatus("offline");
@@ -298,7 +303,7 @@ export default function ConfigManager({
   return (
     <main className="config-shell">
       <header className="config-topbar">
-        <a className="config-brand" href="/">
+        <a className="config-brand" href="/apps">
           <span>AT</span>
           <strong>AgenticThat</strong>
           <small>Config Manager</small>
@@ -309,7 +314,7 @@ export default function ConfigManager({
         </div>
         <div className="config-top-actions">
           <a className="config-secondary" href="/content-manager"><Database size={15} />Content Manager</a>
-          <a className="config-back" href="/"><ArrowLeft size={16} />Back to services</a>
+          <a className="config-back" href="/apps"><ArrowLeft size={16} />Back to apps</a>
         </div>
       </header>
 
