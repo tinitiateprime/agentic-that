@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +14,8 @@ import ProductShell from "./ProductShell";
 import { serviceDetailHref } from "./product-catalog";
 import { useProductStatus } from "./use-product-status";
 import styles from "./marketplace.module.css";
+
+const WhatsAppServiceDetail = dynamic(() => import("./WhatsAppServiceDetail"));
 
 function actionFor(service, status) {
   if (status.state === "coming-soon") return { label: "Coming soon", disabled: true };
@@ -38,7 +41,7 @@ function DetailStatus({ status }) {
   );
 }
 
-export default function ServiceDetail({ user, service, category, related }) {
+function StandardServiceDetail({ user, service, category, related }) {
   const { statusFor } = useProductStatus();
   const status = statusFor(service);
   const action = actionFor(service, status);
@@ -160,4 +163,11 @@ export default function ServiceDetail({ user, service, category, related }) {
       </main>
     </ProductShell>
   );
+}
+
+export default function ServiceDetail(props) {
+  if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
+    return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
+  }
+  return <StandardServiceDetail {...props} />;
 }

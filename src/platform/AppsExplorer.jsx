@@ -7,17 +7,17 @@ import {
   Cloud,
   Eye,
   FileText,
-  HeartHandshake,
+  Heart,
   Image,
   KeyRound,
   Link as LinkIcon,
   Link2,
-  MessageCircle,
+  MessageCircleMore,
   MessagesSquare,
-  ScanSearch,
   Search,
   Send,
   ShieldCheck,
+  SquarePen,
   Type,
   UserRound,
   Video,
@@ -29,10 +29,10 @@ import ProductShell from "./ProductShell";
 import styles from "./app-store.module.css";
 
 const categoryPresentation = {
-  messaging: { icon: MessageCircle, accent: "#087360", tint: "#e6f4f0" },
-  publishing: { icon: Send, accent: "#245fc2", tint: "#eaf1fc" },
-  scraping: { icon: ScanSearch, accent: "#7552b8", tint: "#f1ecfa" },
-  engagement: { icon: HeartHandshake, accent: "#b53d68", tint: "#faeaf0" },
+  messaging: { icon: MessageCircleMore, accent: "#087360", tint: "#e6f4f0" },
+  publishing: { icon: SquarePen, accent: "#7857e8", tint: "#f1edff" },
+  scraping: { icon: Search, accent: "#2378d4", tint: "#eaf3ff" },
+  engagement: { icon: Heart, accent: "#e43f73", tint: "#fff0f5" },
 };
 
 const capabilityIcons = {
@@ -124,12 +124,30 @@ export default function AppsExplorer({ user }) {
     <ProductShell user={user} active="apps">
       <main className={styles.appStoreMain}>
         <section className={styles.storeHeader}>
-          <div className={styles.storeTitle}><span>AT</span><h1>AgenticThat Store</h1></div>
+          <div className={styles.storeTitle}><h1>AgenticThat Store</h1></div>
+          <p className={styles.storeIntro}>Discover powerful apps and workflows to automate, engage, and grow your business—all in one place.</p>
           <label className={styles.storeSearch}>
             <Search size={19} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find an app or workflow" aria-label="Search the AgenticThat Store" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search apps, tools or workflows..." aria-label="Search the AgenticThat Store" />
             {query ? <button type="button" onClick={() => setQuery("")}>Clear</button> : <span className={styles.searchAction}><ArrowRight size={17} /></span>}
           </label>
+          <nav className={styles.categoryShortcuts} aria-label="Browse popular categories">
+            <span>Popular:</span>
+            {productCategories.map((category) => {
+              const presentation = categoryPresentation[category.id];
+              const ShortcutIcon = presentation.icon;
+              return (
+                <a
+                  href={`#category-${category.id}`}
+                  style={{ "--category-accent": presentation.accent, "--category-tint": presentation.tint }}
+                  key={category.id}
+                >
+                  <ShortcutIcon size={16} strokeWidth={2} aria-hidden="true" />
+                  {category.label}
+                </a>
+              );
+            })}
+          </nav>
         </section>
 
         <div className={styles.categoryStack}>
@@ -137,7 +155,7 @@ export default function AppsExplorer({ user }) {
             const categoryPresentationItem = categoryPresentation[category.id];
             const CategoryIcon = categoryPresentationItem.icon;
             return (
-              <section className={styles.categorySection} key={category.id}>
+              <section className={styles.categorySection} id={`category-${category.id}`} key={category.id}>
                 <div className={styles.categoryHeading}>
                   <span
                     className={styles.categoryIcon}
