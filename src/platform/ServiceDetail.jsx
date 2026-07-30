@@ -16,6 +16,7 @@ import { useProductStatus } from "./use-product-status";
 import styles from "./marketplace.module.css";
 
 const WhatsAppServiceDetail = dynamic(() => import("./WhatsAppServiceDetail"));
+const PremiumServiceDetail = dynamic(() => import("./PremiumServiceDetail"));
 
 function actionFor(service, status) {
   if (status.state === "coming-soon") return { label: "Coming soon", disabled: true };
@@ -168,6 +169,9 @@ function StandardServiceDetail({ user, service, category, related }) {
 export default function ServiceDetail(props) {
   if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
     return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
+  }
+  if (props.service?.availability === "live" && props.category?.id !== "engagement") {
+    return <PremiumServiceDetail {...props} />;
   }
   return <StandardServiceDetail {...props} />;
 }

@@ -11,11 +11,8 @@ import {
   ChevronRight,
   CircleCheck,
   Clock3,
-  ContactRound,
   FileCheck2,
-  FileText,
   Inbox,
-  Link2,
   LockKeyhole,
   Megaphone,
   MessageCircleMore,
@@ -24,56 +21,63 @@ import {
   Search,
   Send,
   ShieldCheck,
-  Tags,
   UsersRound,
   Workflow,
-  Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { FaMeta } from "react-icons/fa6";
+import {
+  PiAddressBookBold,
+  PiBriefcaseBold,
+  PiChartLineUpBold,
+  PiChatsCircleBold,
+  PiClockCountdownBold,
+  PiFingerprintBold,
+  PiHeadsetBold,
+  PiLockKeyBold,
+  PiMegaphoneBold,
+} from "react-icons/pi";
+import { useEffect, useState } from "react";
 import ProductShell from "./ProductShell";
 import { useProductStatus } from "./use-product-status";
 import styles from "./whatsapp-service-detail.module.css";
 
-const workspaceViews = [
+const demoViews = [
+  { id: "inbox", label: "Inbox", icon: Inbox },
+  { id: "campaigns", label: "Campaigns", icon: Megaphone },
+  { id: "templates", label: "Templates", icon: FileCheck2 },
+  { id: "automations", label: "Automations", icon: Workflow },
+];
+
+const connectionModes = [
   {
-    id: "inbox",
-    label: "Shared inbox",
-    icon: Inbox,
-    eyebrow: "One inbox. Complete context.",
-    title: "Keep every customer conversation moving",
-    description: "Read, assign, and reply without losing the history behind the customer. The team works from one current conversation record.",
+    id: "cloud",
+    label: "Meta business account",
+    shortLabel: "Cloud API",
+    mark: "M",
+    eyebrow: "DIRECT META CONNECTION",
+    title: "Connect directly with Meta",
+    description: "Choose this if you set up WhatsApp through your Facebook or Meta business account.",
+    account: "Meta WhatsApp account",
   },
   {
-    id: "campaigns",
-    label: "Campaigns",
-    icon: Megaphone,
-    eyebrow: "Controlled audience delivery",
-    title: "Prepare outreach without juggling spreadsheets",
-    description: "Choose an audience, select an approved template, and review the send plan before the campaign enters delivery.",
+    id: "wati",
+    label: "WATI account",
+    shortLabel: "WATI",
+    mark: "W",
+    eyebrow: "EXISTING PROVIDER CONNECTION",
+    title: "Connect your WATI account",
+    description: "Choose this if your business already sends and receives WhatsApp messages through WATI.",
+    account: "Your WATI account",
   },
   {
-    id: "templates",
-    label: "Templates",
-    icon: FileCheck2,
-    eyebrow: "Approved messages, ready to use",
-    title: "Turn repeat communication into dependable templates",
-    description: "Find the right approved message, confirm its language and variables, and preview exactly what the customer will receive.",
-  },
-  {
-    id: "contacts",
-    label: "Contacts",
-    icon: UsersRound,
-    eyebrow: "A useful customer directory",
-    title: "Organize people around the work your team does",
-    description: "Keep customer details, groups, consent context, and recent activity together so every workflow starts with the right audience.",
-  },
-  {
-    id: "automations",
-    label: "Automations",
-    icon: Workflow,
-    eyebrow: "Repeatable follow-up, kept visible",
-    title: "Build clear actions around real conversation events",
-    description: "Connect a trigger to a reviewed response and an owner. Every step remains visible, understandable, and easy to pause.",
+    id: "coexistence",
+    label: "WhatsApp Business app",
+    shortLabel: "Business app",
+    mark: "A",
+    eyebrow: "APP + API TOGETHER",
+    title: "Keep using the WhatsApp Business app",
+    description: "Choose this if you want to keep using the mobile app while AgenticThat helps with team work and automation.",
+    account: "WhatsApp Business app",
   },
 ];
 
@@ -84,262 +88,340 @@ function actionFor(status, service) {
   return { label: "Connect WhatsApp", href: service.configHref };
 }
 
-function Avatar({ tone = "green", children }) {
-  return <span className={`${styles.avatar} ${styles[`avatar_${tone}`]}`}>{children}</span>;
+function DemoAvatar({ tone = "green", src, alt = "" }) {
+  return <span className={`${styles.demoAvatar} ${styles[`demoAvatar_${tone}`]}`}><img src={src} alt={alt} /></span>;
 }
 
-function InboxPreview() {
-  return (
-    <div className={styles.inboxPreview}>
-      <aside className={styles.conversationList}>
-        <div className={styles.previewSearch}><Search size={14} /><span>Search conversations</span></div>
-        <div className={`${styles.conversationRow} ${styles.conversationActive}`}>
-          <Avatar>MR</Avatar><span><strong>Maya Rao</strong><small>Is my appointment confirmed?</small></span><time>10:24</time>
-        </div>
-        <div className={styles.conversationRow}>
-          <Avatar tone="blue">OU</Avatar><span><strong>Order Updates</strong><small>Thank you! We’ll share the details.</small></span><time>Yesterday</time>
-        </div>
-        <div className={styles.conversationRow}>
-          <Avatar tone="sand">AK</Avatar><span><strong>Arjun Kumar</strong><small>I need help with my order.</small></span><time>Mon</time>
-        </div>
-      </aside>
-      <section className={styles.chatPanel}>
-        <header><Avatar>MR</Avatar><span><strong>Maya Rao</strong><small>WhatsApp Business</small></span><MoreHorizontal size={17} /></header>
-        <div className={styles.chatMessages}>
-          <div className={styles.incomingMessage}>Is my appointment confirmed?<small>10:24 AM</small></div>
-          <div className={styles.outgoingMessage}>Yes—your appointment is confirmed for 4:00 PM.<small>10:25 AM <Check size={12} /></small></div>
-        </div>
-        <div className={styles.previewComposer}><Paperclip size={16} /><span>Connect your account to send messages</span><Send size={16} /></div>
-      </section>
-    </div>
-  );
+function ConnectionBrand({ id }) {
+  if (id === "cloud") return <FaMeta aria-hidden="true" />;
+  if (id === "wati") return <img src="/wati-logo.svg" alt="" />;
+  return <img src="/whatsapp-logo.svg" alt="" />;
 }
 
-function CampaignPreview() {
-  return (
-    <div className={styles.campaignPreview}>
-      <section className={styles.campaignBuilder}>
-        <header><span><small>CAMPAIGN</small><strong>Appointment reminders</strong></span><span className={styles.draftBadge}>Draft</span></header>
-        <div className={styles.builderRow}><span className={styles.builderIcon}><UsersRound size={18} /></span><span><small>Audience</small><strong>Upcoming appointments</strong></span><ChevronRight size={17} /></div>
-        <div className={styles.builderRow}><span className={styles.builderIcon}><FileCheck2 size={18} /></span><span><small>Template</small><strong>appointment_confirmation</strong></span><BadgeCheck size={17} /></div>
-        <div className={styles.builderRow}><span className={styles.builderIcon}><CalendarClock size={18} /></span><span><small>Delivery</small><strong>Tomorrow at 9:00 AM</strong></span><ChevronRight size={17} /></div>
-        <div className={styles.campaignReady}><CircleCheck size={17} /><span>Ready for review</span><strong>Review campaign <ArrowRight size={15} /></strong></div>
-      </section>
-      <aside className={styles.phonePreview}>
-        <div className={styles.phoneHeader}><MessageCircleMore size={16} /><span>Message preview</span></div>
-        <div className={styles.phoneMessage}>Hi Maya, your appointment is confirmed for tomorrow at 4:00 PM. Reply HELP if you need assistance.<small>Approved template</small></div>
-      </aside>
-    </div>
-  );
-}
-
-function TemplatesPreview() {
-  const templates = [
-    ["appointment_confirmation", "Approved", "green"],
-    ["order_ready", "Approved", "green"],
-    ["payment_follow_up", "In review", "amber"],
+function InboxDemo() {
+  const chats = [
+    { id: "maya", avatar: "/avatars/maya-rao.svg", tone: "green", name: "Maya Rao", preview: "Is my appointment confirmed?", time: "10:24", incoming: "Is my appointment confirmed for today?", outgoing: "Yes—your appointment is confirmed for 4:00 PM." },
+    { id: "arjun", avatar: "/avatars/arjun-kumar.svg", tone: "sand", name: "Arjun Kumar", preview: "Can you share the tracking link?", time: "9:48", incoming: "Can you share the tracking link for my order?", outgoing: "Of course. Your order is on the way—I’ve shared the live link." },
+    { id: "priya", avatar: "/avatars/priya-shah.svg", tone: "blue", name: "Priya Shah", preview: "I need help choosing a plan.", time: "Mon", incoming: "Which plan works best for a five-person team?", outgoing: "The Team plan will give everyone a shared inbox and clear ownership." },
   ];
+  const [selectedId, setSelectedId] = useState("maya");
+  const [sent, setSent] = useState(false);
+  const selected = chats.find((chat) => chat.id === selectedId) || chats[0];
+
+  useEffect(() => {
+    const currentIndex = chats.findIndex((chat) => chat.id === selectedId);
+    const timer = window.setTimeout(() => {
+      setSelectedId(chats[(currentIndex + 1) % chats.length].id);
+      setSent(false);
+    }, 3900);
+    return () => window.clearTimeout(timer);
+  }, [selectedId]);
+
   return (
-    <div className={styles.templatesPreview}>
-      <aside className={styles.templateList}>
-        <header><strong>Message templates</strong><span><Search size={15} /></span></header>
-        {templates.map(([name, status, tone], index) => (
-          <div className={`${styles.templateRow} ${index === 0 ? styles.templateActive : ""}`} key={name}>
-            <FileText size={17} /><span><strong>{name}</strong><small>English · Utility</small></span><em className={styles[`template_${tone}`]}>{status}</em>
-          </div>
+    <div className={styles.inboxDemo}>
+      <aside className={styles.demoConversationList}>
+        <div className={styles.demoSearch}><Search size={14} /><span>Search conversations</span></div>
+        <div className={styles.demoFilters}><span>All <b>126</b></span><span>Unread 15</span><span>Mine 8</span></div>
+        {chats.map((chat) => (
+          <button className={selectedId === chat.id ? styles.demoConversationActive : ""} type="button" onClick={() => { setSelectedId(chat.id); setSent(false); }} key={chat.id}>
+            <DemoAvatar src={chat.avatar} alt={chat.name} tone={chat.tone} />
+            <span><strong>{chat.name}</strong><small>{chat.preview}</small></span>
+            <time>{chat.time}</time>
+          </button>
         ))}
       </aside>
-      <section className={styles.templateDetail}>
-        <header><span><small>APPROVED TEMPLATE</small><strong>Appointment confirmation</strong></span><BadgeCheck size={20} /></header>
-        <div className={styles.templateCanvas}>
-          <div className={styles.templateBubble}>Hi {"{{1}}"}, your appointment is confirmed for {"{{2}}"}. Reply HELP if you need assistance.</div>
-          <div className={styles.variableRail}><Tags size={16} /><span><small>{"{{1}}"}</small> Customer name</span><span><small>{"{{2}}"}</small> Appointment time</span></div>
+      <section className={styles.demoChat}>
+        <header><DemoAvatar src={selected.avatar} alt={selected.name} tone={selected.tone} /><span><strong>{selected.name}</strong><small>Online</small></span><MoreHorizontal size={17} /></header>
+        <div className={styles.demoMessages} key={selected.id}>
+          <div>{selected.incoming}<small>10:24 AM</small></div>
+          <div>{selected.outgoing}<small>10:25 AM <Check size={11} /></small></div>
+          {sent ? <div>Anything else I can help you with?<small>Just now <Check size={11} /></small></div> : null}
         </div>
+        <div className={styles.demoComposer}><Paperclip size={16} /><span>Type a message…</span><button type="button" aria-label="Send sample reply" onClick={() => setSent(true)}><Send size={15} /></button></div>
       </section>
     </div>
   );
 }
 
-function ContactsPreview() {
-  const contacts = [
-    ["Maya Rao", "+91 98765 43210", "Appointments", "Today", "MR", "green"],
-    ["Arjun Kumar", "+91 98450 12210", "Customers", "Yesterday", "AK", "sand"],
-    ["Priya Shah", "+91 98100 44621", "Follow-up", "Mon", "PS", "blue"],
+function CampaignsDemo() {
+  const stages = [
+    { id: "audience", label: "Audience", icon: UsersRound },
+    { id: "message", label: "Message", icon: FileCheck2 },
+    { id: "schedule", label: "Schedule", icon: CalendarClock },
   ];
-  return (
-    <div className={styles.contactsPreview}>
-      <header><span><small>CONTACTS</small><strong>Customer directory</strong></span><div className={styles.contactTools}><span><Search size={15} />Search</span><span className={styles.contactAdd}><ContactRound size={15} />Add contact</span></div></header>
-      <div className={styles.contactTable}>
-        <div className={styles.contactHead}><span>Customer</span><span>Group</span><span>Last activity</span><span>Status</span></div>
-        {contacts.map(([name, phone, group, activity, initials, tone]) => (
-          <div className={styles.contactRow} key={phone}>
-            <span><Avatar tone={tone}>{initials}</Avatar><span><strong>{name}</strong><small>{phone}</small></span></span>
-            <span><Tags size={14} />{group}</span><span>{activity}</span><span><i />Ready</span>
-          </div>
-        ))}
-      </div>
-      <footer><UsersRound size={16} /><span>Groups stay reusable across inbox and campaign workflows.</span></footer>
-    </div>
-  );
-}
+  const [stage, setStage] = useState("audience");
+  const [ready, setReady] = useState(false);
 
-function AutomationsPreview() {
-  return (
-    <div className={styles.automationPreview}>
-      <header><span><small>AUTOMATION</small><strong>New enquiry follow-up</strong></span><span className={styles.activeBadge}><i />Active</span></header>
-      <div className={styles.flowCanvas}>
-        <div className={`${styles.flowNode} ${styles.flowTrigger}`}><span><MessageCircleMore size={20} /></span><div><small>WHEN</small><strong>New message received</strong><p>Any WhatsApp conversation</p></div></div>
-        <ArrowRight className={styles.flowArrow} size={22} />
-        <div className={styles.flowNode}><span><Bot size={20} /></span><div><small>THEN</small><strong>Send quick reply</strong><p>Welcome and response-time note</p></div></div>
-        <ArrowRight className={styles.flowArrow} size={22} />
-        <div className={styles.flowNode}><span><ContactRound size={20} /></span><div><small>ASSIGN</small><strong>Customer care</strong><p>Keep ownership visible</p></div></div>
-      </div>
-      <footer><Clock3 size={16} /><span>Runs during business hours</span><ShieldCheck size={16} /><span>Can be paused at any time</span></footer>
-    </div>
-  );
-}
+  useEffect(() => {
+    const currentIndex = stages.findIndex((item) => item.id === stage);
+    const timer = window.setTimeout(() => setStage(stages[(currentIndex + 1) % stages.length].id), 3900);
+    return () => window.clearTimeout(timer);
+  }, [stage]);
 
-function WorkspacePreview({ activeView }) {
-  const viewMap = {
-    inbox: <InboxPreview />,
-    campaigns: <CampaignPreview />,
-    templates: <TemplatesPreview />,
-    contacts: <ContactsPreview />,
-    automations: <AutomationsPreview />,
-  };
   return (
-    <div className={styles.previewWindow}>
-      <div className={styles.previewTopbar}>
-        <span className={styles.previewBrand}><i>AT</i><strong>WhatsApp workspace</strong></span>
-        <span className={styles.previewMode}><LockKeyhole size={13} />Interactive preview</span>
-      </div>
-      <div className={styles.previewShell}>
-        <nav className={styles.previewRail} aria-label="Preview workspace sections">
-          {workspaceViews.map((item) => {
+    <div className={styles.campaignsDemo}>
+      <section className={styles.demoCampaignBuilder}>
+        <header><span><small>CAMPAIGN DRAFT</small><strong>Appointment reminders</strong></span><em className={ready ? styles.demoReady : ""}>{ready ? "Ready" : "Draft"}</em></header>
+        <nav>
+          {stages.map((item, index) => {
             const Icon = item.icon;
-            return <span className={item.id === activeView ? styles.previewRailActive : ""} title={item.label} key={item.id}><Icon size={18} /></span>;
+            return <button className={stage === item.id ? styles.demoStageActive : ""} type="button" onClick={() => setStage(item.id)} key={item.id}><i>{index + 1}</i><Icon size={15} />{item.label}</button>;
           })}
         </nav>
-        <div className={styles.previewCanvas}>{viewMap[activeView]}</div>
-      </div>
+        <div className={styles.demoCampaignCanvas} key={stage}>
+          {stage === "audience" ? <div className={styles.demoAudience}><span><UsersRound size={21} /></span><div><small>SELECTED AUDIENCE</small><strong>Upcoming appointments</strong><p>Confirmed customers in the next 24 hours.</p></div><b>248<small>recipients</small></b></div> : null}
+          {stage === "message" ? <div className={styles.demoMessageEditor}><span><BadgeCheck size={16} />Approved template</span><strong>appointment_confirmation</strong><p>Hi {"{{1}}"}, your appointment is confirmed for {"{{2}}"}. Reply HELP if you need assistance.</p></div> : null}
+          {stage === "schedule" ? <div className={styles.demoSchedule}><div><CalendarClock size={21} /><span><small>DELIVERY TIME</small><strong>Tomorrow, 9:00 AM</strong></span></div><div><ShieldCheck size={21} /><span><small>SEND MODE</small><strong>Controlled delivery</strong></span></div></div> : null}
+        </div>
+        <footer><span><CircleCheck size={16} />Required details complete</span><button type="button" onClick={() => setReady(true)}>{ready ? "Campaign ready" : "Review campaign"}<ArrowRight size={14} /></button></footer>
+      </section>
+      <aside className={styles.demoDeliveryPanel}>
+        <span>LIVE DELIVERY</span>
+        <strong>85%</strong>
+        <p>Appointment reminder</p>
+        <div><i /><i /><i /><i /><i /></div>
+        <dl><div><dt>Delivered</dt><dd>212</dd></div><div><dt>Read</dt><dd>176</dd></div><div><dt>Pending</dt><dd>36</dd></div></dl>
+      </aside>
     </div>
   );
 }
 
-function ConnectionMap({ connected }) {
-  const unlocked = [Inbox, Megaphone, FileCheck2, UsersRound, Workflow];
+function TemplatesDemo() {
+  const templates = [
+    { id: "appointment", name: "Appointment confirmation", code: "appointment_confirmation", body: "Hi Maya, your appointment is confirmed for tomorrow at 4:00 PM." },
+    { id: "order", name: "Order ready", code: "order_ready", body: "Good news, Maya. Order #45692 is ready for collection." },
+    { id: "followup", name: "Service follow-up", code: "service_follow_up", body: "Hi Maya, how was your recent appointment with our team?" },
+  ];
+  const [selectedId, setSelectedId] = useState("appointment");
+  const [chosen, setChosen] = useState(false);
+  const selected = templates.find((item) => item.id === selectedId) || templates[0];
+
+  useEffect(() => {
+    const currentIndex = templates.findIndex((item) => item.id === selectedId);
+    const timer = window.setTimeout(() => {
+      setSelectedId(templates[(currentIndex + 1) % templates.length].id);
+      setChosen(false);
+    }, 3900);
+    return () => window.clearTimeout(timer);
+  }, [selectedId]);
+
   return (
-    <aside className={styles.connectionMap} aria-label="WhatsApp connection overview">
-      <header><span>ONE SECURE CONNECTION</span><h2>WhatsApp in. Your workspace ready.</h2></header>
-      <div className={styles.connectionBridge}>
-        <div className={styles.connectionNode}><img src="/whatsapp-logo.svg" alt="" /><span><strong>WhatsApp</strong><small>Business account</small></span></div>
-        <div className={styles.secureLink}><i /><span><LockKeyhole size={16} />Encrypted link</span><i /></div>
-        <div className={styles.connectionNode}><b>AT</b><span><strong>AgenticThat</strong><small>Messaging workspace</small></span></div>
-      </div>
-      <div className={styles.unlockDock}>
-        {unlocked.map((Icon, index) => <span key={index}><Icon size={19} /></span>)}
-        <small>Inbox, outreach, templates, contacts and follow-ups—kept together.</small>
-      </div>
-      <footer><span className={connected ? styles.connectionReady : ""}><i />{connected ? "Connection ready" : "Ready when you connect"}</span><ShieldCheck size={17} /></footer>
-    </aside>
+    <div className={styles.templatesDemo}>
+      <aside className={styles.demoTemplateList}>
+        <div className={styles.demoSearch}><Search size={14} /><span>Search templates</span></div>
+        {templates.map((template) => (
+          <button className={selectedId === template.id ? styles.demoTemplateActive : ""} type="button" onClick={() => { setSelectedId(template.id); setChosen(false); }} key={template.id}>
+            <FileCheck2 size={17} /><span><strong>{template.name}</strong><small>{template.code}</small></span><BadgeCheck size={14} />
+          </button>
+        ))}
+      </aside>
+      <section className={styles.demoTemplatePreview} key={selected.id}>
+        <header><span><small>APPROVED · UTILITY</small><strong>{selected.name}</strong></span><em>English</em></header>
+        <div className={styles.demoTemplatePhone}><div>{selected.body}<small>10:25 AM <Check size={11} /></small></div></div>
+        <div className={styles.demoVariables}><span>{"{{1}}"} Customer name</span><span>{"{{2}}"} Dynamic value</span></div>
+        <button type="button" onClick={() => setChosen(true)}>{chosen ? "Template selected" : "Use this template"}<ArrowRight size={14} /></button>
+      </section>
+    </div>
   );
 }
 
-export default function WhatsAppServiceDetail({ user, service, category }) {
+function AutomationsDemo() {
+  const steps = [
+    { id: "trigger", label: "New message received", detail: "Any WhatsApp conversation", icon: MessageCircleMore },
+    { id: "reply", label: "Send welcome reply", detail: "Approved quick response", icon: Bot },
+    { id: "owner", label: "Assign customer care", detail: "Round-robin ownership", icon: UsersRound },
+  ];
+  const [selectedId, setSelectedId] = useState("trigger");
+  const [active, setActive] = useState(true);
+  const selected = steps.find((item) => item.id === selectedId) || steps[0];
+  const SelectedIcon = selected.icon;
+
+  useEffect(() => {
+    const currentIndex = steps.findIndex((item) => item.id === selectedId);
+    const timer = window.setTimeout(() => setSelectedId(steps[(currentIndex + 1) % steps.length].id), 3900);
+    return () => window.clearTimeout(timer);
+  }, [selectedId]);
+
+  return (
+    <div className={styles.automationsDemo}>
+      <section className={styles.demoAutomationFlow}>
+        <header><span><small>AUTOMATION</small><strong>New enquiry follow-up</strong></span><button className={active ? styles.demoToggleOn : ""} type="button" onClick={() => setActive(!active)}><i />{active ? "Active" : "Paused"}</button></header>
+        <div>
+          {steps.map((step, index) => {
+            const Icon = step.icon;
+            return <div className={styles.demoFlowGroup} key={step.id}><button className={selectedId === step.id ? styles.demoFlowActive : ""} type="button" onClick={() => setSelectedId(step.id)}><span><Icon size={18} /></span><div><strong>{step.label}</strong><small>{step.detail}</small></div><ChevronRight size={15} /></button>{index < steps.length - 1 ? <i /> : null}</div>;
+          })}
+        </div>
+      </section>
+      <aside className={styles.demoInspector} key={selected.id}><span><SelectedIcon size={22} /></span><small>SELECTED STEP</small><strong>{selected.label}</strong><p>{selected.detail}. The team can review and change this step at any time.</p><dl><div><dt>Channel</dt><dd>WhatsApp</dd></div><div><dt>Control</dt><dd>Team managed</dd></div></dl></aside>
+    </div>
+  );
+}
+
+function HeroProductDemo() {
   const [activeView, setActiveView] = useState("inbox");
+  const activeIndex = demoViews.findIndex((item) => item.id === activeView);
+  const activeItem = demoViews[activeIndex] || demoViews[0];
+  const content = {
+    inbox: <InboxDemo />,
+    campaigns: <CampaignsDemo />,
+    templates: <TemplatesDemo />,
+    automations: <AutomationsDemo />,
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextIndex = (activeIndex + 1) % demoViews.length;
+      setActiveView(demoViews[nextIndex].id);
+    }, 9400);
+    return () => window.clearTimeout(timer);
+  }, [activeIndex]);
+
+  return (
+    <div className={styles.heroDemo}>
+      <aside className={styles.demoRail} aria-label="WhatsApp product views">
+        <img src="/whatsapp-logo.svg" alt="" />
+        {demoViews.map((view) => {
+          const Icon = view.icon;
+          return <button className={activeView === view.id ? styles.demoRailActive : ""} type="button" aria-label={`Show ${view.label}`} aria-pressed={activeView === view.id} onClick={() => setActiveView(view.id)} key={view.id}><Icon size={18} strokeWidth={1.9} /><span>{view.label}</span></button>;
+        })}
+        <span className={styles.demoSecure}><LockKeyhole size={17} /></span>
+      </aside>
+      <section className={styles.demoWorkspace}>
+        <header>
+          <div><strong>WhatsApp</strong><span><i />Live workspace</span></div>
+          <aside><button type="button" onClick={() => setActiveView("templates")}>Templates</button><button type="button" onClick={() => setActiveView("campaigns")}>New campaign</button></aside>
+        </header>
+        <div className={styles.demoViewTitle}><span>{activeItem.label}</span><small>Live product preview</small></div>
+        <div className={styles.demoViewport}>
+          {demoViews.map((view) => (
+            <div className={`${styles.demoScene} ${activeView === view.id ? styles.demoSceneActive : ""}`} aria-hidden={activeView !== view.id} key={view.id}>
+              {content[view.id]}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ServiceOverview() {
+  const uses = [
+    [PiChatsCircleBold, "Reply to customers", "Read and answer customer messages together from one shared inbox."],
+    [PiMegaphoneBold, "Send useful updates", "Send reminders, order updates, announcements, and approved campaigns."],
+    [PiAddressBookBold, "Keep contacts organized", "See each customer’s name, number, message history, and follow-up details."],
+    [PiClockCountdownBold, "Save time on repeat work", "Use simple automatic replies and follow-ups for common customer questions."],
+  ];
+
+  return (
+    <section className={styles.overviewSection} id="capabilities">
+      <header className={styles.sectionIntro}>
+        <h2>Everything you need to manage customer messages.</h2>
+        <p>Instead of checking different phones, contact lists, and tools, your team can handle everyday WhatsApp work in one place.</p>
+      </header>
+      <div className={styles.useGrid}>
+        {uses.map(([Icon, title, description]) => <article key={title}><span><Icon size={23} strokeWidth={1.9} /></span><h3>{title}</h3><p>{description}</p></article>)}
+      </div>
+    </section>
+  );
+}
+
+function AudienceGuide() {
+  const audiences = [
+    [PiBriefcaseBold, "Business owners", "Manage enquiries and customer updates without sharing one phone."],
+    [PiHeadsetBold, "Customer support teams", "See who is replying and keep every conversation in one place."],
+    [PiChartLineUpBold, "Sales and marketing teams", "Follow up with leads and send approved messages to the right people."],
+  ];
+
+  return (
+    <section className={styles.guideSection}>
+      <div className={styles.audiencePanel}>
+        <header><h2>Who can use it?</h2><p>Any business that talks to customers on WhatsApp. If your team can use WhatsApp, they can use this workspace.</p></header>
+        <div className={styles.audienceList}>
+          {audiences.map(([Icon, title, description]) => <article key={title}><i><Icon size={24} /></i><strong>{title}</strong><span>{description}</span></article>)}
+        </div>
+      </div>
+      <div className={styles.startPanel}>
+        <header><h2>How do you start?</h2><p>No coding or technical setup knowledge is required.</p></header>
+        <ol>
+          <li><span>1</span><div><strong>Connect your WhatsApp account</strong><p>Choose Meta, WATI, or your existing business app setup.</p></div></li>
+          <li><span>2</span><div><strong>Choose what you want to do</strong><p>Reply to messages, send an update, or prepare a follow-up.</p></div></li>
+          <li><span>3</span><div><strong>Start working with your team</strong><p>Everyone can see the message, owner, and delivery status.</p></div></li>
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+function ConnectionSection() {
+  const [modeId, setModeId] = useState("cloud");
+  const mode = connectionModes.find((item) => item.id === modeId) || connectionModes[0];
+
+  return (
+    <section className={styles.simpleConnection} id="connections">
+      <header className={styles.sectionIntro}><h2>How is your WhatsApp set up?</h2><p>Pick the option your business already uses. The setup page will guide you through everything else.</p></header>
+      <div className={styles.connectionChooser}>
+        <nav aria-label="Connection options">
+          {connectionModes.map((item) => <button className={modeId === item.id ? styles.connectionChoiceActive : ""} type="button" onClick={() => setModeId(item.id)} key={item.id}><span className={styles.connectionBrand}><ConnectionBrand id={item.id} /></span><strong>{item.label}</strong></button>)}
+        </nav>
+        <article className={styles.connectionAnswer} key={mode.id}>
+          <span className={styles.connectionMark}><ConnectionBrand id={mode.id} /></span>
+          <div><small>Choose this option if it matches your current setup</small><h3>{mode.title}</h3><p>{mode.description}</p></div>
+          <p className={styles.connectionResult}><span>{mode.account}</span><ArrowRight size={18} /><strong>AgenticThat ready</strong></p>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function SecuritySection() {
+  return (
+    <section className={styles.simpleTrust}>
+      <span><PiFingerprintBold size={32} /></span>
+      <div><h2>Your WhatsApp account stays protected.</h2><p>Your login details are encrypted and kept private. Your team can use the workspace without seeing or sharing sensitive account information.</p></div>
+      <strong><PiLockKeyBold size={18} />Encrypted and private</strong>
+    </section>
+  );
+}
+
+export default function WhatsAppServiceDetail({ user, service }) {
   const { statusFor } = useProductStatus();
   const status = statusFor(service);
   const action = actionFor(status, service);
-  const activeItem = workspaceViews.find((item) => item.id === activeView) || workspaceViews[0];
-  const ActiveIcon = activeItem.icon;
   const connected = status.state === "connected";
 
   return (
     <ProductShell user={user} active="apps">
       <main className={styles.page}>
         <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-          <span><Link href="/apps">Store</Link><ChevronRight size={14} /><Link href="/apps#category-messaging">Messaging</Link><ChevronRight size={14} /><strong>WhatsApp Messaging</strong></span>
-          <Link href="/apps"><ArrowLeft size={16} />Back to store</Link>
+          <span><Link href="/apps">Store</Link><ChevronRight size={15} /><Link href="/apps#category-messaging">Messaging</Link><ChevronRight size={15} /><strong>WhatsApp Messaging</strong></span>
+          <Link href="/apps"><ArrowLeft size={17} />Back to store</Link>
         </nav>
 
-        <section className={styles.hero} id="overview">
+        <section className={styles.hero}>
           <div className={styles.heroCopy}>
-            <div className={styles.heroIdentity}><img src={service.logo} alt="WhatsApp" /><span><small>MESSAGING</small><strong>AgenticThat for WhatsApp</strong></span></div>
-            <div className={styles.heroTitleRow}><h1>WhatsApp Messaging</h1><span className={`${styles.heroStatus} ${connected ? styles.heroStatusReady : ""}`}><i />{status.label}</span></div>
-            <p>Manage customer conversations, campaigns, templates, contacts, and follow-ups from one secure workspace.</p>
+            <h1>WhatsApp <em>Messaging</em></h1>
+            <p>Answer customers, send updates, organize contacts, and follow up from one simple workspace. No technical knowledge is needed.</p>
             <div className={styles.heroActions}>
-              {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
-              <a href="#workspace-tour">Explore the workspace<ChevronRight size={17} /></a>
+              {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+              <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>
             </div>
-            <div className={styles.heroTrust}><span><MessageCircleMore size={16} />WhatsApp Business</span><span><ShieldCheck size={16} />Secure connection</span><span><Clock3 size={16} />Guided setup</span></div>
+            <div className={styles.heroAssurances}><span><BadgeCheck size={18} strokeWidth={1.9} />Simple setup</span><span><ShieldCheck size={18} strokeWidth={1.9} />Works with Meta or WATI</span><span><UsersRound size={18} strokeWidth={1.9} />Easy for your team</span></div>
           </div>
-          <ConnectionMap connected={connected} />
+          <HeroProductDemo />
         </section>
 
-        <nav className={styles.sectionNav} aria-label="Service page sections">
-          <a href="#overview">Overview</a><a href="#workspace-tour">Workspace tour</a><a href="#connection-flow">How it works</a><a href="#security">Security</a>
-        </nav>
+        <ServiceOverview />
 
-        <section className={styles.workspaceTour} id="workspace-tour">
-          <header className={styles.sectionHeader}>
-            <span>INTERACTIVE WORKSPACE TOUR</span>
-            <h2>See the work before you connect</h2>
-            <p>Choose an area to see how AgenticThat turns WhatsApp activity into a clear, usable workspace.</p>
-          </header>
+        <AudienceGuide />
 
-          <div className={styles.tourTabs} role="tablist" aria-label="WhatsApp workspace previews">
-            {workspaceViews.map((item) => {
-              const Icon = item.icon;
-              const selected = activeView === item.id;
-              return (
-                <button
-                  className={selected ? styles.tourTabActive : ""}
-                  id={`tour-tab-${item.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls="workspace-tour-panel"
-                  onClick={() => setActiveView(item.id)}
-                  key={item.id}
-                >
-                  <Icon size={19} /><span>{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
+        <ConnectionSection />
 
-          <div className={styles.tourStage} id="workspace-tour-panel" role="tabpanel" aria-labelledby={`tour-tab-${activeView}`}>
-            <div className={styles.tourNarrative}>
-              <span className={styles.tourNarrativeIcon}><ActiveIcon size={24} /></span>
-              <small>{activeItem.eyebrow}</small>
-              <h3>{activeItem.title}</h3>
-              <p>{activeItem.description}</p>
-              <div className={styles.tourContext}><Link2 size={17} /><span>The same connected account powers every workspace shown here.</span></div>
-            </div>
-            <WorkspacePreview activeView={activeView} />
-          </div>
-        </section>
-
-        <section className={styles.connectionFlow} id="connection-flow">
-          <header><span>FROM CONNECTION TO DAILY WORK</span><h2>One clear path into every WhatsApp workflow</h2></header>
-          <div className={styles.flowTrack}>
-            <article><span><Link2 size={21} /></span><div><small>CONNECT</small><strong>Link the business account you manage</strong></div></article>
-            <ArrowRight size={20} />
-            <article><span><BadgeCheck size={21} /></span><div><small>CONFIRM</small><strong>Choose the sender and bring in contacts</strong></div></article>
-            <ArrowRight size={20} />
-            <article><span><Zap size={21} /></span><div><small>WORK</small><strong>Open the exact workspace you need</strong></div></article>
-          </div>
-        </section>
-
-        <section className={styles.securitySection} id="security">
-          <ShieldCheck size={30} />
-          <div><span>SECURITY BY DEFAULT</span><h2>Your connection stays protected behind the work.</h2><p>{service.note}</p></div>
-          <div className={styles.securitySeal}><LockKeyhole size={18} /><span><strong>Encrypted credentials</strong><small>Never displayed back in the browser</small></span></div>
-        </section>
+        <SecuritySection />
 
         <section className={styles.launchSection}>
-          <div><span>{connected ? "YOUR WORKSPACE IS READY" : "READY TO START"}</span><h2>{connected ? "Continue where your WhatsApp work happens." : "Connect once, then choose the work you want to do."}</h2></div>
-          {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
+          <div><h2>{connected ? "Continue where your WhatsApp work happens." : "Bring WhatsApp into a workspace your whole team can understand."}</h2></div>
+          {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
         </section>
       </main>
     </ProductShell>
