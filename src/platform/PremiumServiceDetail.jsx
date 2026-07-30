@@ -6,6 +6,7 @@ import {
   ArrowRight,
   AtSign,
   BarChart3,
+  Bookmark,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -16,6 +17,7 @@ import {
   FileText,
   Globe2,
   Hash,
+  Heart,
   Image as ImageIcon,
   Link2,
   LockKeyhole,
@@ -27,6 +29,7 @@ import {
   Send,
   ShieldCheck,
   Smile,
+  Sparkles,
   UploadCloud,
   Users,
 } from "lucide-react";
@@ -43,6 +46,7 @@ import {
   PiEyeBold,
   PiFileTextBold,
   PiFunnelBold,
+  PiFingerprintBold,
   PiHeadsetBold,
   PiImageBold,
   PiLinkSimpleBold,
@@ -64,12 +68,14 @@ import styles from "./premium-service-detail.module.css";
 
 const publishingProfiles = {
   instagram: {
-    account: "@northstar.studio",
-    heroTitle: "Plan Instagram posts without the last-minute rush.",
-    heroDescription: "Keep the visual, caption, destination account, and publish time together from the first draft to delivery.",
+    account: "@agenticthat",
+    heroTitle: "Instagram Publishing",
+    heroDescription: "Create the post, see exactly how it will look, and choose the right publish time—all in one clear workflow.",
     headline: "Make every launch feel considered.",
     body: "A first look at our summer collection. Designed for slower days and brighter plans.",
     mediaLabel: "Summer collection",
+    postType: "Instagram feed post · 4:5",
+    scheduleTime: "4:00 PM",
     mediaClass: styles.instagramMedia,
     audience: [
       ["Brands and businesses", "Keep campaign posts consistent across every connected account."],
@@ -78,12 +84,14 @@ const publishingProfiles = {
     ],
   },
   youtube: {
-    account: "Northstar Studio",
-    heroTitle: "Give every YouTube release a clear path to publish.",
-    heroDescription: "Prepare the video, audience-facing details, destination channel, and release time in one reviewable workflow.",
-    headline: "How we designed a calmer workspace",
-    body: "Go behind the scenes of our latest workspace redesign—from first sketch to final launch.",
-    mediaLabel: "Studio story · 08:42",
+    account: "AgenticThat",
+    heroTitle: "YouTube Publishing",
+    heroDescription: "Prepare the video, title, description, channel, and release time in one clear publishing workflow.",
+    headline: "Inside AgenticThat: a simpler way to run content operations",
+    body: "See how one connected workspace takes a campaign from first draft to a confident, scheduled release.",
+    mediaLabel: "Product walkthrough",
+    postType: "Public video · 16:9",
+    scheduleTime: "6:30 PM",
     mediaClass: styles.youtubeMedia,
     audience: [
       ["Creators and studios", "Prepare the video, title, description, and release time together."],
@@ -92,12 +100,14 @@ const publishingProfiles = {
     ],
   },
   facebook: {
-    account: "Northstar Home",
-    heroTitle: "Keep every Facebook page update polished and on schedule.",
-    heroDescription: "Bring the final message, media, destination page, and campaign timing into one controlled publishing view.",
-    headline: "A new space for better everyday work",
-    body: "Our redesigned studio is now open. Visit this weekend and explore the full collection.",
-    mediaLabel: "Studio opening",
+    account: "AgenticThat",
+    heroTitle: "Facebook Publishing",
+    heroDescription: "Create page-ready updates, confirm the right account, preview the post, and schedule it with confidence.",
+    headline: "One workspace for every customer-facing update",
+    body: "Plan the message, review the final creative, and keep every scheduled Facebook update visible to your team.",
+    mediaLabel: "Product announcement",
+    postType: "Facebook Page post",
+    scheduleTime: "11:30 AM",
     mediaClass: styles.facebookMedia,
     audience: [
       ["Local businesses", "Schedule page updates, announcements, and campaign posts."],
@@ -106,12 +116,14 @@ const publishingProfiles = {
     ],
   },
   x: {
-    account: "@northstar",
-    heroTitle: "Move from a sharp idea to a timely X post.",
-    heroDescription: "Check the copy, media, sending identity, and schedule before a post enters the delivery queue.",
-    headline: "Our new workspace is live.",
-    body: "One place to prepare, review, and schedule the updates your audience needs—without losing the details.",
-    mediaLabel: "Product update",
+    account: "@AgenticThat",
+    heroTitle: "X Publishing",
+    heroDescription: "Write concise updates, verify the publishing account, preview every detail, and send at the right moment.",
+    headline: "Your content operation, finally in one place.",
+    body: "Compose, review, and schedule updates across your connected channels from one focused AgenticThat workspace.",
+    mediaLabel: "Launch update",
+    postType: "X post · 223 characters",
+    scheduleTime: "2:15 PM",
     mediaClass: styles.xMedia,
     audience: [
       ["Product teams", "Prepare launches and updates while keeping every post concise."],
@@ -120,12 +132,14 @@ const publishingProfiles = {
     ],
   },
   linkedin: {
-    account: "Northstar Studio",
-    heroTitle: "Publish LinkedIn updates with the right context intact.",
-    heroDescription: "Review the message and media, confirm the correct account, and protect the approval context through delivery.",
-    headline: "A better way to run content operations",
-    body: "Today we are sharing the system behind our new publishing workspace—and what our team learned while building it.",
-    mediaLabel: "Company update",
+    account: "AgenticThat",
+    heroTitle: "LinkedIn Publishing",
+    heroDescription: "Prepare professional updates, preserve review context, and schedule every company post from one workspace.",
+    headline: "Building a clearer operating system for content teams",
+    body: "Today we are sharing how AgenticThat helps teams prepare, approve, and publish high-quality updates without losing context.",
+    mediaLabel: "Company insight",
+    postType: "Company Page update",
+    scheduleTime: "9:30 AM",
     mediaClass: styles.linkedinMedia,
     audience: [
       ["Company teams", "Prepare polished updates for the right company or personal account."],
@@ -303,66 +317,191 @@ function TelegramAccounts() {
   );
 }
 
-function PublishingDemo({ service }) {
-  const profile = publishingProfiles[service.slug];
-  const tabs = ["Compose", "Preview", "Schedule"];
-  const [active, setActive] = useAutoIndex(tabs.length, 7800);
+const publishingWorkflowViews = [
+  { id: "compose", label: "Compose", note: "Build the post", icon: FileText },
+  { id: "preview", label: "Preview", note: "See the final post", icon: Eye },
+  { id: "schedule", label: "Schedule", note: "Choose the time", icon: CalendarDays },
+];
+
+function PublishingWorkspaceDemo({ service, profile }) {
+  const [active, setActive] = useAutoIndex(publishingWorkflowViews.length, 9400);
+
   return (
-    <div className={`${styles.productDemo} ${styles.publishingDemo}`} aria-label={`${service.platformName} publishing preview`}>
+    <div className={`${styles.productDemo} ${styles.instagramPublishingDemo} ${styles.publishingWorkspaceDemo}`} aria-label={`${service.platformName} publishing workspace preview`}>
       <div className={styles.demoTopbar}>
         <span className={styles.demoProduct}><img src={service.logo} alt="" /><strong>{service.platformName}</strong><i />Connected</span>
         <span className={styles.demoAccount}>{profile.account}</span>
       </div>
-      <div className={styles.publishTabs}>{tabs.map((tab, index) => <button type="button" key={tab} className={active === index ? styles.publishTabActive : ""} onClick={() => setActive(index)}>{index === 0 ? <FileText size={15} /> : index === 1 ? <Eye size={15} /> : <CalendarDays size={15} />}{tab}</button>)}</div>
-      <div className={styles.publishTransition} key={tabs[active]}>
-        {active === 0 && <PublishComposer service={service} profile={profile} />}
-        {active === 1 && <PublishPreview service={service} profile={profile} />}
-        {active === 2 && <PublishSchedule service={service} profile={profile} />}
+      <div className={styles.instagramDemoBody}>
+        <nav className={styles.instagramWorkflowRail} aria-label={`${service.platformName} publishing stages`}>
+          {publishingWorkflowViews.map((view, index) => {
+            const Icon = view.icon;
+            return (
+              <button type="button" className={active === index ? styles.instagramWorkflowActive : ""} onClick={() => setActive(index)} aria-pressed={active === index} key={view.id}>
+                <span><Icon size={16} /></span>
+                <strong>{view.label}</strong>
+                <small>{view.note}</small>
+              </button>
+            );
+          })}
+        </nav>
+        <div className={styles.instagramViewport}>
+          <div className={`${styles.instagramScene} ${active === 0 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 0}>{service.slug === "instagram" ? <InstagramComposeScene profile={profile} /> : <PlatformComposeScene service={service} profile={profile} />}</div>
+          <div className={`${styles.instagramScene} ${active === 1 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 1}>{service.slug === "instagram" ? <InstagramPreviewScene profile={profile} /> : <PlatformPreviewScene service={service} profile={profile} />}</div>
+          <div className={`${styles.instagramScene} ${active === 2 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 2}><PublishingScheduleScene service={service} profile={profile} /></div>
+        </div>
       </div>
     </div>
   );
 }
 
-function MediaArtwork({ profile, service, compact = false }) {
-  return <div className={`${styles.mediaArtwork} ${profile.mediaClass} ${compact ? styles.mediaCompact : ""}`}><span><img src={service.logo} alt="" />{profile.mediaLabel}</span>{service.slug === "youtube" ? <Play size={compact ? 22 : 30} fill="currentColor" /> : <span className={styles.mediaMonogram}>AT</span>}</div>;
+function CampaignImage({ className = "" }) {
+  return <img className={className} src="/instagram-summer-campaign.webp" alt="Blush skincare campaign prepared for Instagram" />;
 }
 
-function PublishComposer({ service, profile }) {
+function publishingImageFor(service) {
+  return service.slug === "instagram" ? "/instagram-summer-campaign.webp" : "/publish-queue-runner/operations-desk.png";
+}
+
+function platformFieldLabel(service) {
+  if (service.slug === "youtube") return "Publishing channel";
+  if (service.slug === "facebook") return "Publishing page";
+  if (service.slug === "x") return "Posting as";
+  return "Publishing as";
+}
+
+function PlatformArtwork({ service, profile, compact = false }) {
   return (
-    <div className={styles.publishComposer}>
-      <MediaArtwork profile={profile} service={service} />
-      <section>
-        <label><span>Publishing to</span><strong><img src={service.logo} alt="" />{profile.account}<ChevronRight size={14} /></strong></label>
-        <label><span>{service.slug === "youtube" ? "Video title" : "Post copy"}</span><strong>{profile.headline}</strong></label>
-        <div className={styles.captionField}>{profile.body}<small>{profile.body.length} characters</small></div>
-        <footer><button type="button"><ImageIcon size={15} />Media ready</button><button type="button">Save draft</button><button className={styles.accentButton} type="button">Continue<ArrowRight size={15} /></button></footer>
+    <div className={`${styles.platformArtwork} ${styles[`platformArtwork_${service.slug}`] || ""} ${compact ? styles.platformArtworkCompact : ""}`}>
+      <img src={publishingImageFor(service)} alt={`${profile.mediaLabel} prepared for ${service.platformName}`} />
+      <span className={styles.platformArtworkShade} />
+      <span className={styles.platformArtworkBrand}><img src={service.logo} alt="" />AgenticThat</span>
+      <div className={styles.platformArtworkCopy}>
+        {service.slug === "youtube" ? <span className={styles.platformPlay}><Play size={compact ? 16 : 21} fill="currentColor" /></span> : null}
+        <strong>{profile.mediaLabel}</strong>
+        <small>{service.slug === "x" ? "A focused launch update" : profile.headline}</small>
+      </div>
+      {service.slug === "youtube" ? <em>08:42</em> : null}
+    </div>
+  );
+}
+
+function InstagramComposeScene({ profile }) {
+  return (
+    <div className={styles.instagramComposeScene}>
+      <section className={styles.instagramMediaPicker}>
+        <div className={styles.instagramMainAsset}><CampaignImage /><span><ImageIcon size={13} />4:5 feed post</span></div>
+        <div className={styles.instagramThumbnails}><button type="button" className={styles.instagramThumbnailActive}><CampaignImage /></button><button type="button"><CampaignImage /></button><button type="button"><span>+</span></button></div>
+        <small><CheckCircle2 size={13} />Media ready</small>
+      </section>
+      <section className={styles.instagramComposerForm}>
+        <label><span>Publishing to</span><strong><img src="/instagram-logo.svg" alt="" />{profile.account}<ChevronRight size={14} /></strong></label>
+        <div className={styles.instagramCaption}><span>Caption</span><strong>{profile.headline}</strong><p>{profile.body}</p><small>{profile.body.length} / 2,200</small></div>
+        <div className={styles.instagramAssist}><span><Sparkles size={13} />Assist</span><button type="button">Improve</button><button type="button">Shorten</button><button type="button">Hashtags</button></div>
+        <footer><button type="button">Save draft</button><button type="button">Continue<ArrowRight size={14} /></button></footer>
       </section>
     </div>
   );
 }
 
-function PublishPreview({ service, profile }) {
+function PlatformComposeScene({ service, profile }) {
+  const usedCharacters = profile.body.length + profile.headline.length + 1;
+  const formatCopy = service.slug === "youtube" ? "Video · 16:9" : service.slug === "x" ? `${usedCharacters} / 280 characters` : "Image and text";
+  const visibilityCopy = service.slug === "linkedin" ? "Anyone on LinkedIn" : service.slug === "facebook" ? "Public Page post" : service.slug === "youtube" ? "Public release" : "Public post";
   return (
-    <div className={styles.previewView}>
-      <aside><span>Post preview</span><h3>See the complete post before your audience does.</h3><p>Confirm the destination, copy, media, and format in one final view.</p><div><CheckCircle2 size={16} />Platform checks passed</div></aside>
-      <article className={styles.socialPreview}>
-        <header><img src={service.logo} alt="" /><span><strong>{profile.account}</strong><small>Sponsored preview · Just now</small></span><MoreHorizontal size={17} /></header>
-        <p><strong>{profile.headline}</strong> {profile.body}</p>
-        <MediaArtwork profile={profile} service={service} compact />
-        <footer><span>♡ Like</span><span>◯ Comment</span><span>↗ Share</span></footer>
-      </article>
+    <div className={`${styles.instagramComposeScene} ${styles.platformComposeScene}`}>
+      <section className={styles.instagramMediaPicker}>
+        <PlatformArtwork service={service} profile={profile} />
+        <div className={styles.instagramThumbnails}><button type="button" className={styles.instagramThumbnailActive}><img src={publishingImageFor(service)} alt="" /></button><button type="button"><img src={publishingImageFor(service)} alt="" /></button><button type="button"><span>+</span></button></div>
+        <small><CheckCircle2 size={14} />{service.slug === "youtube" ? "Video checks passed" : "Media ready"}</small>
+      </section>
+      <section className={styles.instagramComposerForm}>
+        <label><span>{platformFieldLabel(service)}</span><strong><img src={service.logo} alt="" />{profile.account}<ChevronRight size={15} /></strong></label>
+        <div className={styles.instagramCaption}><span>{service.slug === "youtube" ? "Title and description" : service.slug === "x" ? "Post copy" : "Post message"}</span><strong>{profile.headline}</strong><p>{profile.body}</p><small>{profile.body.length} characters</small></div>
+        <div className={styles.platformComposeOptions}><span><Eye size={14} />{visibilityCopy}</span><span><ImageIcon size={14} />{formatCopy}</span></div>
+        <footer><button type="button">Save draft</button><button type="button">Continue<ArrowRight size={15} /></button></footer>
+      </section>
     </div>
   );
 }
 
-function PublishSchedule({ service, profile }) {
+function InstagramPreviewScene({ profile }) {
   return (
-    <div className={styles.scheduleView}>
-      <section><span className={styles.scheduleDay}>24<small>SEP</small></span><div><small>Scheduled publication</small><strong>Wednesday at 4:00 PM</strong><span>Local workspace time · Asia/Kolkata</span></div></section>
-      <div className={styles.queueLine}><i /><span><small>Draft complete</small><strong>{profile.headline}</strong></span><CheckCircle2 size={18} /><i /><span><small>Destination</small><strong>{profile.account}</strong></span><CheckCircle2 size={18} /><i /><span><small>Next</small><strong>Publish to {service.platformName}</strong></span><Clock3 size={18} /></div>
-      <footer><span><ShieldCheck size={16} />Final checks run before delivery</span><button type="button">Edit schedule</button><button className={styles.accentButton} type="button">Schedule post</button></footer>
+    <div className={styles.instagramPreviewScene}>
+      <article className={styles.instagramPhonePreview}>
+        <header><img src="/instagram-logo.svg" alt="" /><span><strong>agenticthat</strong><small>Sponsored preview</small></span><MoreHorizontal size={16} /></header>
+        <CampaignImage />
+        <div className={styles.instagramPostActions}><span><Heart size={16} /><MessageCircle size={16} /><Send size={16} /></span><Bookmark size={16} /></div>
+        <p><strong>agenticthat</strong> {profile.headline}</p>
+      </article>
+      <aside className={styles.instagramPostDetails}>
+        <span>POST DETAILS</span>
+        <h3>Review the post your audience will see.</h3>
+        <dl><div><dt>Publishing to</dt><dd><img src="/instagram-logo.svg" alt="" />{profile.account}</dd></div><div><dt>Post type</dt><dd>Feed post · 4:5</dd></div><div><dt>Caption</dt><dd>{profile.body}</dd></div></dl>
+        <p><CheckCircle2 size={14} />Instagram checks passed</p>
+        <footer><button type="button">Back</button><button type="button">Continue to schedule<ArrowRight size={13} /></button></footer>
+      </aside>
     </div>
   );
+}
+
+function PlatformPostPreview({ service, profile }) {
+  if (service.slug === "youtube") {
+    return (
+      <article className={`${styles.platformPostPreview} ${styles.youtubePostPreview}`}>
+        <PlatformArtwork service={service} profile={profile} compact />
+        <div className={styles.youtubePreviewMeta}><span className={styles.publisherBrandAvatar}>AT</span><span><strong>{profile.headline}</strong><small>AgenticThat · Premieres 24 Sep 2026</small></span><MoreHorizontal size={17} /></div>
+      </article>
+    );
+  }
+  return (
+    <article className={`${styles.platformPostPreview} ${styles[`platformPostPreview_${service.slug}`] || ""}`}>
+      <header><span className={styles.publisherBrandAvatar}>AT</span><span><strong>AgenticThat</strong><small>{service.slug === "x" ? "@AgenticThat" : service.slug === "linkedin" ? "12,480 followers" : "Sponsored preview"}</small></span><MoreHorizontal size={17} /></header>
+      <p><strong>{profile.headline}</strong>{profile.body}</p>
+      <PlatformArtwork service={service} profile={profile} compact />
+      <footer>{service.slug === "x" ? <><span><MessageCircle size={14} />48</span><span><Send size={14} />126</span><span><Heart size={14} />1.8K</span><span><Bookmark size={14} /></span></> : <><span><Heart size={14} />Like</span><span><MessageCircle size={14} />Comment</span><span><Send size={14} />Share</span></>}</footer>
+    </article>
+  );
+}
+
+function PlatformPreviewScene({ service, profile }) {
+  return (
+    <div className={`${styles.instagramPreviewScene} ${styles.platformPreviewScene}`}>
+      <PlatformPostPreview service={service} profile={profile} />
+      <aside className={styles.instagramPostDetails}>
+        <span>FINAL PREVIEW</span>
+        <h3>Review exactly what your audience will see.</h3>
+        <dl><div><dt>{platformFieldLabel(service)}</dt><dd><img src={service.logo} alt="" />{profile.account}</dd></div><div><dt>Content format</dt><dd>{profile.postType}</dd></div><div><dt>Post copy</dt><dd>{profile.body}</dd></div></dl>
+        <p><CheckCircle2 size={15} />{service.platformName} checks passed</p>
+        <footer><button type="button">Back</button><button type="button">Continue to schedule<ArrowRight size={14} /></button></footer>
+      </aside>
+    </div>
+  );
+}
+
+function PublishingScheduleScene({ service, profile }) {
+  const days = Array.from({ length: 30 }, (_, index) => index + 1);
+  return (
+    <div className={styles.instagramScheduleScene}>
+      <section className={styles.instagramCalendar}>
+        <header><button type="button">‹</button><strong>September 2026</strong><button type="button">›</button></header>
+        <div className={styles.instagramWeek}><span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span></div>
+        <div className={styles.instagramDays}><i /><i />{days.map((day) => <button type="button" className={day === 24 ? styles.instagramSelectedDay : ""} key={day}>{day}</button>)}</div>
+        <div className={styles.instagramTime}><span><Clock3 size={15} />{profile.scheduleTime || "4:00 PM"}</span><small>Asia/Kolkata</small></div>
+      </section>
+      <aside className={styles.instagramQueuePreview}>
+        <span>QUEUE PREVIEW</span>
+        <article><img src={publishingImageFor(service)} alt="" /><div><small>Thu, 24 Sep · {profile.scheduleTime || "4:00 PM"}</small><strong>{profile.headline}</strong><span>{profile.account}</span></div><CheckCircle2 size={17} /></article>
+        <div className={styles.instagramBestTime}><Sparkles size={18} /><span><strong>A strong time to publish</strong><small>The release time is clear and the post will stay visible in your queue.</small></span></div>
+        <footer><button type="button">Edit</button><button type="button">Add to queue<ArrowRight size={15} /></button></footer>
+      </aside>
+    </div>
+  );
+}
+
+function PublishingDemo({ service }) {
+  const profile = publishingProfiles[service.slug];
+  return <PublishingWorkspaceDemo service={service} profile={profile} />;
 }
 
 function ScraperDemo() {
@@ -442,14 +581,15 @@ function TelegramProof() {
 function PublishingProof({ service }) {
   const profile = publishingProfiles[service.slug];
   return (
-    <section className={styles.proofSection}>
-      <div className={styles.proofCopy}><span>VISIBLE FROM START TO FINISH</span><h2>Know exactly where every {service.platformName} post stands.</h2><p>Drafting, review, scheduling, delivery, and any problem stay visible in one understandable publishing history.</p></div>
-      <div className={styles.deliveryPath}>
-        <article><span><PiPencilSimpleBold /></span><div><small>Draft</small><strong>{profile.headline}</strong></div><CheckCircle2 size={18} /></article>
-        <i />
-        <article><span><PiCalendarDotsBold /></span><div><small>Scheduled</small><strong>Wednesday · 4:00 PM</strong></div><CheckCircle2 size={18} /></article>
-        <i />
-        <article><span><img src={service.logo} alt="" /></span><div><small>Destination</small><strong>{profile.account}</strong></div><Clock3 size={18} /></article>
+    <section className={`${styles.proofSection} ${styles.instagramProofSection}`}>
+      <div className={styles.proofCopy}><h2>From draft to delivery, nothing gets lost.</h2><p>See the final creative, destination account, publish time, and delivery state together instead of checking separate tools.</p></div>
+      <div className={styles.instagramDeliveryRecord}>
+        <header><img src={publishingImageFor(service)} alt="" /><span><strong>{profile.headline}</strong><small>{profile.account} · {profile.postType}</small></span><em>On schedule</em></header>
+        <ol>
+          <li><span><PiPencilSimpleBold /></span><div><strong>Draft approved</strong><small>Copy and media are ready</small></div><CheckCircle2 size={17} /></li>
+          <li><span><PiCalendarDotsBold /></span><div><strong>Scheduled for 24 September</strong><small>{profile.scheduleTime || "4:00 PM"} · Asia/Kolkata</small></div><CheckCircle2 size={17} /></li>
+          <li><span><img src={service.logo} alt="" /></span><div><strong>{service.platformName} delivery</strong><small>Waiting safely in the publishing queue</small></div><Clock3 size={17} /></li>
+        </ol>
       </div>
     </section>
   );
@@ -486,21 +626,22 @@ export default function PremiumServiceDetail({ user, service, category, related 
   const action = actionFor(service, status);
   const baseContent = service.category === "messaging" ? categoryContent.telegram : categoryContent[service.category];
   const profile = service.category === "publishing" ? publishingProfiles[service.slug] : null;
+  const isPublishing = service.category === "publishing";
   const heroTitle = profile ? profile.heroTitle : baseContent.heroTitle;
   const heroDescription = profile ? profile.heroDescription : baseContent.heroDescription;
 
   return (
     <ProductShell user={user} active="apps">
-      <main className={`${styles.serviceMain} ${service.category === "messaging" ? styles.telegramPage : ""}`} style={{ "--accent": service.accent, "--tint": service.tint }}>
+      <main className={`${styles.serviceMain} ${service.category === "messaging" ? styles.telegramPage : ""} ${isPublishing ? styles.publishingPage : ""}`} style={{ "--accent": service.accent, "--tint": service.tint }}>
         <div className={styles.topline}>
           <nav aria-label="Breadcrumb"><Link href="/apps">Store</Link><ChevronRight size={14} /><Link href={`/apps#${category.id}`}>{category.label}</Link><ChevronRight size={14} /><span>{service.platformName}</span></nav>
           <Link href="/apps"><ArrowLeft size={16} />Back to store</Link>
         </div>
 
-        <section className={`${styles.heroSection} ${service.category === "messaging" ? styles.telegramHero : ""}`}>
+        <section className={`${styles.heroSection} ${service.category === "messaging" ? styles.telegramHero : ""} ${isPublishing ? styles.publishingHero : ""}`}>
           <div className={styles.heroCopy}>
             <div className={styles.serviceIdentity}><span><img src={service.logo} alt="" /></span><div><strong>{service.name}</strong><small>{category.eyebrow}</small></div></div>
-            <h1>{heroTitle}</h1>
+            <h1 className={isPublishing ? styles.publishingHeroTitle : ""}>{isPublishing ? <>{service.platformName} <span>Publishing</span></> : heroTitle}</h1>
             <p>{heroDescription}</p>
             <div className={styles.heroActions}>
               {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={17} /></Link>}
@@ -519,7 +660,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
         <CategoryProof service={service} />
 
         <section className={styles.trustStrip}>
-          <span><PiShieldCheckBold /></span>
+          <span><PiFingerprintBold /></span>
           <div><h2>{service.category === "scraping" ? "Use public information responsibly." : "Your connection stays under your control."}</h2><p>{service.note}</p></div>
           <span className={styles.trustTag}>{service.category === "scraping" ? "Public sources" : "Secure setup"}</span>
         </section>
