@@ -1,6 +1,8 @@
 import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import type { PlatformUpload } from "../../shared/schema.js";
 import {
@@ -38,6 +40,21 @@ import { classifyPublishingRisk } from "./risk-classifier.js";
 
 const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
+const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
+  instagram: "https://www.instagram.com/accounts/login/",
+  x: "https://x.com/i/flow/login",
+  linkedin: "https://www.linkedin.com/login/",
+  facebook: "https://www.facebook.com/login/",
+  youtube: "https://www.youtube.com/upload",
+};
+
+type BrowserStorageState = {
+  cookies?: Parameters<BrowserContext["addCookies"]>[0];
+  origins?: Array<{
+    origin: string;
+    localStorage: Array<{ name: string; value: string }>;
+  }>;
+};
 
 type EncryptedSessionState = {
   version: 1;
@@ -114,7 +131,7 @@ export function readEncryptedSessionState(filePath: string, key: Buffer) {
     decipher.update(Buffer.from(envelope.ciphertext, "base64")),
     decipher.final(),
   ]).toString("utf8");
-  return JSON.parse(plaintext) as { cookies?: Parameters<BrowserContext["addCookies"]>[0] };
+  return JSON.parse(plaintext) as BrowserStorageState;
 }
 
 function migrateLegacyAccountSessionState(account: PublishingAccount) {
@@ -199,7 +216,7 @@ function detectedChromeExecutablePath() {
 function chromeExecutablePath() {
   const executablePath = detectedChromeExecutablePath();
   if (!executablePath) {
-    throw new Error("Google Chrome or Microsoft Edge is required when the publisher runs without AgenticThat Publishing Companion.");
+    throw new Error("Google Chrome or Microsoft Edge is required for secure social-account login. Install one, restart Companion, and try again.");
   }
   return executablePath;
 }
@@ -211,8 +228,55 @@ export function publishingBrowserRuntimeHealth() {
     chromeInstalled: Boolean(executablePath),
     chromeExecutablePath: executablePath,
     embeddedBrowser,
-    automationAvailable: embeddedBrowser || Boolean(executablePath),
+    automationAvailable: Boolean(executablePath),
   };
+}
+
+function getFreePort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a secure browser connection port.")));
+    });
+  });
+}
+
+function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
+  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
+
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs);
+    processHandle.once("exit", () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+  });
+}
+
+async function waitForChromeDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  const endpoint = `http://127.0.0.1:${port}`;
+
+  while (Date.now() < deadline) {
+    if (processHandle.exitCode !== null) {
+      throw new Error(`The secure login browser closed before it was ready. Exit code: ${processHandle.exitCode}`);
+    }
+
+    try {
+      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) return endpoint;
+    } catch {
+      // The dedicated browser profile is still starting.
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+
+  throw new Error("The secure Chrome/Edge login window did not become ready. Close any older login window for this account and try again.");
 }
 
 function prepareChromeProfile(profileDir: string) {
@@ -393,10 +457,22 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
   }
 }
 
+async function exportStandardBrowserSession(account: PublishingAccount, context: BrowserContext) {
+  const key = sessionEncryptionKey();
+  if (!key) {
+    if (publishingDesktopHost()) {
+      throw new Error("Companion could not protect the connected account session. Restart Companion and try login again.");
+    }
+    console.log(`The ${account.platform} login remains in its dedicated local browser profile.`);
+    return;
+  }
+
+  fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+  writeEncryptedSessionState(accountSessionStatePath(account), await context.storageState(), key);
+  console.log(`Saved protected ${account.platform} login session for ${account.handle}.`);
+}
+
 async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
-  // Each embedded account browser uses a stable persistent Electron partition,
-  // so Companion restores its protected browser storage without a cookie export.
-  if (publishingDesktopHost()) return;
   migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
@@ -405,14 +481,95 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
     const key = sessionEncryptionKey();
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
+    if (publishingDesktopHost()) await context.clearCookies();
     if (Array.isArray(state.cookies) && state.cookies.length > 0) {
       await context.addCookies(state.cookies);
+    }
+    if (Array.isArray(state.origins) && state.origins.length > 0) {
+      const localStorageByOrigin = Object.fromEntries(
+        state.origins.map(entry => [entry.origin, entry.localStorage]),
+      );
+      await context.addInitScript((storageByOrigin: Record<string, Array<{ name: string; value: string }>>) => {
+        for (const entry of storageByOrigin[window.location.origin] ?? []) {
+          window.localStorage.setItem(entry.name, entry.value);
+        }
+      }, localStorageByOrigin);
+    }
+    if (publishingDesktopHost()) {
+      fs.rmSync(statePath, { force: true });
+      console.log(`Imported protected ${account.platform} login into Companion for ${account.handle}.`);
     }
   } catch (error) {
     console.warn(
       `Could not restore saved session state for ${account.platform} account ${account.handle}:`,
       errorMessage(error),
     );
+  }
+}
+
+async function launchStandardBrowserForLogin(account: PublishingAccount) {
+  const profileDir = accountProfilePath(account);
+  fs.mkdirSync(profileDir, { recursive: true });
+  prepareChromeProfile(profileDir);
+
+  const port = await getFreePort();
+  const executablePath = chromeExecutablePath();
+  const browserName = /msedge/i.test(path.basename(executablePath)) ? "Microsoft Edge" : "Google Chrome";
+  const browserArgs = [
+    `--user-data-dir=${profileDir}`,
+    "--profile-directory=Default",
+    "--remote-debugging-address=127.0.0.1",
+    `--remote-debugging-port=${port}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-mode",
+    "--new-window",
+    platformLoginUrls[account.platform],
+  ];
+
+  console.log(`Opening ${browserName} for secure ${account.platform} login for ${account.handle}.`);
+  const browserProcess = spawn(executablePath, browserArgs, {
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  let spawnError: Error | null = null;
+  browserProcess.once("error", error => { spawnError = error; });
+
+  await new Promise(resolve => setTimeout(resolve, 150));
+  if (spawnError) throw spawnError;
+
+  const debugEndpoint = await waitForChromeDebugEndpoint(port, browserProcess);
+  console.log(`${browserName} secure login window is ready on local port ${port}.`);
+  return { browserProcess, debugEndpoint, browserName };
+}
+
+async function prepareStandardBrowserSession(account: PublishingAccount) {
+  const releaseAccount = reserveAccountBrowser(account, "login");
+  let browserProcess: ChildProcess | null = null;
+  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+
+  try {
+    const launched = await launchStandardBrowserForLogin(account);
+    browserProcess = launched.browserProcess;
+    browser = await chromium.connectOverCDP(launched.debugEndpoint);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error(`${launched.browserName} did not create the secure account profile.`);
+    const page = context.pages().find(candidate => candidate.url().includes(new URL(platformLoginUrls[account.platform]).hostname))
+      ?? context.pages()[0]
+      ?? await context.newPage();
+    await page.bringToFront().catch(() => undefined);
+    console.log(`Complete ${account.platform} login in the visible ${launched.browserName} window. Companion will detect success automatically.`);
+    await loginOnly(page, account, { ignoreLoginErrors: true });
+    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+    await exportStandardBrowserSession(account, context);
+    console.log(`${account.platform} login confirmed for ${account.handle}. Closing the dedicated login window.`);
+  } finally {
+    await browser?.close().catch(() => undefined);
+    if (browserProcess) {
+      const exited = await waitForProcessExit(browserProcess, 5000);
+      if (!exited && browserProcess.exitCode === null && !browserProcess.killed) browserProcess.kill();
+    }
+    releaseAccount();
   }
 }
 
@@ -663,28 +820,9 @@ async function runAccountQueue(
 }
 
 async function prepareManualAccountSession(account: PublishingAccount) {
-  const desktopHost = publishingDesktopHost();
-  if (desktopHost && (account.platform === "x" || account.platform === "youtube")) {
-    // An explicit Login action starts clean, preventing an earlier rejected or
-    // incomplete provider page from poisoning the next embedded login attempt.
-    await Promise.resolve(desktopHost.clearAccountBrowserData(account.id));
-    clearSavedAccountSession(account);
-  }
-
   console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}).`);
-  const browser = await launchAccountBrowser(account, "login");
-  try {
-    await browser.update({
-      state: "waiting",
-      detail: `Complete the ${account.platform} login in this Companion window.`,
-    });
-    await loginOnly(browser.page, account, { ignoreLoginErrors: true });
-    await browser.update({ state: "posted", detail: "Login confirmed and saved." });
-    await saveAccountSessionState(account, browser.context);
-    console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
-  } finally {
-    await browser.close().catch(() => undefined);
-  }
+  await prepareStandardBrowserSession(account);
+  console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
 }
 
 const activeSessionPreparations = new Map<string, Promise<void>>();

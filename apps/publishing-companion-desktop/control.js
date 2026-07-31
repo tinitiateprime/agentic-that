@@ -212,7 +212,7 @@ function renderWorkspace() {
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
     ? "Every simultaneous account stays visible in the live grid. Different accounts publish together; each account still runs only one job at a time."
-    : "Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.";
+    : "Account sign-in opens in a dedicated Chrome or Edge window. Publishing activity appears here automatically and remains visible.";
   const singleSession = active.length === 1 ? active[0] : null;
   byId("live-run-title").textContent = singleSession
     ? `${platformLabel(singleSession.platform)} · ${stateLabel(singleSession)}`
@@ -268,9 +268,9 @@ function renderStatus(status) {
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
-  byId("browser-check").textContent = status.embeddedBrowser
-    ? "Built in"
-    : status.chromeInstalled ? "Chrome or Edge" : "Unavailable";
+  byId("browser-check").textContent = status.embeddedBrowser && status.chromeInstalled
+    ? "Companion + Chrome/Edge"
+    : status.chromeInstalled ? "Chrome or Edge" : "Install Chrome/Edge";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
   const consentGranted = status.publishingInteractionConsent === true;
   byId("permission-state").textContent = consentGranted ? "Unattended publishing allowed" : "Permission not granted";
@@ -284,11 +284,11 @@ function renderStatus(status) {
   byId("sidebar-status-dot").className = ready ? "ready" : "error";
   byId("status-title").textContent = ready ? "Ready for visible publishing" : "Companion needs attention";
   byId("status-detail").textContent = ready
-    ? "AgenticThat stays in Chrome. Login and publishing pages will open here automatically."
+    ? "Account login uses a dedicated Chrome/Edge window; Companion securely runs and displays publishing activity."
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
-  byId("install-chrome").hidden = Boolean(status.embeddedBrowser || status.chromeInstalled);
+  byId("install-chrome").hidden = Boolean(status.chromeInstalled);
 }
 
 async function refreshStatus() {

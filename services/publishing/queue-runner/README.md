@@ -2,7 +2,8 @@
 
 Publish Queue Runner is the local execution service behind AgenticThat's Netlify
 publishing dashboard. It supports Facebook, Instagram, X, LinkedIn, and YouTube
-through isolated Chrome profiles and fully manual social-account login.
+through isolated account sessions and fully manual social-account login in a
+dedicated normal Chrome or Edge window.
 
 Customers use the packaged Windows companion; they do not run this service or
 edit JSON files. The companion stores queue metadata and media locally, checks
@@ -15,7 +16,9 @@ service.
 1. Install the Chrome extension and Windows companion from the dashboard.
 2. Copy the dashboard credentials shown in the companion.
 3. Add social accounts in Config Manager and choose **Login** for each one.
-4. Enter credentials manually on the social network's Chrome page.
+4. Enter credentials manually in the dedicated Chrome or Edge provider page.
+   Companion detects success, protects the session locally, and closes that
+   sign-in window automatically.
 5. Create a post, choose a normal image or video file, select accounts, and
    publish now or schedule a future time.
 

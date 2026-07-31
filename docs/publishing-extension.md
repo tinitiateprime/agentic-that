@@ -22,8 +22,10 @@ Customers do not download this repository or run commands.
    **Start automatically with Windows** enabled.
 4. Copy the dashboard login displayed by the companion app.
 5. Return to the dashboard and choose **Check again**.
-6. Add each social account in Config Manager and choose **Login**. Enter the
-   account credentials and verification codes manually in the Chrome window.
+6. Add each social account in Config Manager and choose **Login**. A dedicated
+   Chrome or Edge profile opens for that account. Enter credentials and
+   verification codes only on the provider page; Companion detects success,
+   protects the session locally, and closes the sign-in window automatically.
 
 The setup card reports whether the extension, companion, and Google Chrome are
 ready before allowing Publish Queue sign-in.

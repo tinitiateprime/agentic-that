@@ -385,7 +385,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
     setDesktopBridgeDetected(extension?.version === 'desktop');
     try {
       const health = await api.health();
-      setConnectionState(!health.embeddedBrowser && !health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
+      setConnectionState(!health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
     } catch {
       setConnectionState(extension ? 'companion-missing' : 'extension-missing');
     }
@@ -456,7 +456,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
               <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
             </div>}
             {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Allow Local network access if Chrome asks. Otherwise extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
-            {connectionState === 'chrome-missing' && <p>Google Chrome is missing. Open the Companion app and choose <strong>Install Google Chrome</strong>.</p>}
+            {connectionState === 'chrome-missing' && <p>Google Chrome or Microsoft Edge is required for supported account sign-in. Install one, restart Companion, and check again.</p>}
             {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{desktopBridgeDetected ? ' inside Companion' : extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
@@ -2264,7 +2264,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay in the Companion browser' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay on the provider sign-in page' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
@@ -2281,7 +2281,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Companion login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || 'Secure Chrome/Edge login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login

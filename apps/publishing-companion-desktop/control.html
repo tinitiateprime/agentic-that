@@ -24,7 +24,7 @@
           -->
           <button class="nav-item active" data-view="activity" type="button">
             <span class="nav-icon">◉</span>
-            <span><strong>Live browser</strong><small>Login and publishing</small></span>
+            <span><strong>Publishing activity</strong><small>Visible and managed</small></span>
             <b id="activity-badge" hidden>0</b>
           </button>
           <button class="nav-item" data-view="settings" type="button">
@@ -55,7 +55,7 @@
         <!-- Full AgenticThat dashboard panel is preserved but paused pending product approval.
         <section class="view-panel" id="dashboard-panel">
           <div class="dashboard-note">
-            <div><strong>Everything stays inside Companion</strong><span>Create posts, manage accounts, sign in and watch publishing without opening another browser.</span></div>
+            <div><strong>One managed publishing workflow</strong><span>Create posts in AgenticThat, sign in through a dedicated provider browser, and monitor publishing in Companion.</span></div>
             <span class="secure-pill">Local secure bridge</span>
           </div>
           <div class="embedded-frame" id="dashboard-host">
@@ -67,9 +67,9 @@
         <section class="view-panel active" id="activity-panel">
           <div class="activity-intro">
             <div>
-              <span class="eyebrow">LIVE, VISIBLE BROWSER</span>
+              <span class="eyebrow">SECURE SIGN-IN, VISIBLE PUBLISHING</span>
               <h2 id="live-heading">Login and publishing activity</h2>
-              <p id="live-description">Click an account login key in AgenticThat or start a publishing run. The required social-media browser opens here automatically so every step stays visible.</p>
+              <p id="live-description">Account sign-in opens in a dedicated Chrome or Edge window. Publishing activity appears here automatically and remains visible.</p>
             </div>
             <div class="safety-note"><strong>Approve once when scheduling</strong><span>The Allow/Deny popup appears immediately, so scheduled publishing can run unattended later.</span></div>
           </div>
@@ -86,8 +86,8 @@
           <div class="live-grid" id="live-grid"></div>
           <div class="activity-empty" id="activity-empty">
             <span class="empty-icon">◎</span>
-            <strong>No login or publishing browser is open</strong>
-            <p>Use AgenticThat in Chrome. When you click an account login key or publishing starts, the live browser will appear here automatically.</p>
+            <strong>No publishing browser is open</strong>
+            <p>Use AgenticThat in Chrome. Account sign-in uses a dedicated secure browser window; scheduled publishing appears here automatically.</p>
             <button class="primary" id="empty-open-dashboard" type="button">Open AgenticThat Publishing</button>
           </div>
 
@@ -101,10 +101,10 @@
           <div class="settings-grid">
             <section class="settings-card service-card">
               <div class="card-heading"><div><span class="eyebrow">LOCAL SERVICE</span><h2 id="status-title">Starting Companion…</h2></div><i id="status-dot"></i></div>
-              <p id="status-detail">Preparing the scheduler and live browser.</p>
+              <p id="status-detail">Preparing the scheduler, secure account login, and live publishing browser.</p>
               <div class="checks">
                 <div><span>Local service</span><strong id="service-check">Checking</strong></div>
-                <div><span>Live browser</span><strong id="browser-check">Checking</strong></div>
+                <div><span>Browser security</span><strong id="browser-check">Checking</strong></div>
                 <div><span>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
               </div>
             </section>
@@ -134,7 +134,7 @@
               <div class="support-actions">
                 <button class="secondary" id="open-logs" type="button">View logs</button>
                 <button class="secondary" id="open-data" type="button">Open local data</button>
-                <button class="secondary" id="install-chrome" type="button">Install Chrome fallback</button>
+                <button class="secondary" id="install-chrome" type="button">Install Google Chrome</button>
               </div>
             </section>
           </div>

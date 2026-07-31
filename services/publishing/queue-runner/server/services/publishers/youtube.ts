@@ -876,13 +876,10 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   const savedSessionOnly = Boolean(accountLogin?.useSavedSessionOnly);
   const manualLoginOnly = !savedSessionOnly;
 
-  console.log(savedSessionOnly ? "Opening YouTube Studio..." : "Opening YouTube in Companion...");
-  await page.goto(savedSessionOnly ? YOUTUBE_UPLOAD_URL : YOUTUBE_HOME_URL, {
-    timeout: 60000,
-    waitUntil: "domcontentloaded",
-  });
+  console.log("Navigating to YouTube upload page...");
+  await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
   await page.waitForLoadState("domcontentloaded");
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
   await dismissChromeSignInPrompt(page);
 
   if (await isYouTubeLoggedIn(page)) {
@@ -890,14 +887,12 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   } else if (savedSessionOnly) {
     throw new Error("YouTube saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
-    console.log("Use YouTube's Sign in button and complete login in this Companion window; Companion will save the session after the account opens.");
+    console.log("Complete the full YouTube login manually in the visible browser; Companion will save the session after the account opens.");
     await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
   }
 
-  if (manualLoginOnly || !/youtube\.com\/upload/i.test(page.url())) {
+  if (!await isYouTubeLoggedIn(page)) {
     await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000 });
-    await page.waitForLoadState("domcontentloaded");
-    await page.waitForTimeout(1500);
     await waitForYouTubeLoginResult(page, true, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
   }
 

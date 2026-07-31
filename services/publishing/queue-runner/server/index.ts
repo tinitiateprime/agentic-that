@@ -1068,7 +1068,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     );
     res.status(202).json({
       message: started
-        ? "Manual login opened inside Companion. Complete login there; the account session will be saved and the live pane will close."
+        ? "Secure login opened in a dedicated Chrome or Edge window. Complete sign-in there; Companion will detect success, protect the account session, and close the login window automatically."
         : "Manual login is already running for this account.",
       started,
     });

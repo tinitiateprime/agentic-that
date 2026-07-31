@@ -66,6 +66,7 @@ try {
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
+  if (-not $health.chromeInstalled) { throw "Google Chrome or Microsoft Edge is required for secure account login." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
@@ -113,6 +114,27 @@ try {
   $manualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($instagramAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $manualLogin.started) { throw "The Instagram manual-login smoke session did not start." }
+  if ($manualLogin.message -notmatch "Chrome or Edge") { throw "The login response did not identify the secure system-browser flow." }
+
+  $facebookAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/facebook/accounts" `
+    -Headers $authorization -ContentType "application/json" -Body (@{
+      displayName = "Facebook smoke account"
+      handle = "@agenticthat-smoke"
+      enabled = $true
+    } | ConvertTo-Json) -TimeoutSec 5
+  $facebookManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($facebookAccount.id)/manual-login" `
+    -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
+  if (-not $facebookManualLogin.started) { throw "The Facebook manual-login smoke session did not start." }
+
+  $linkedinAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/linkedin/accounts" `
+    -Headers $authorization -ContentType "application/json" -Body (@{
+      displayName = "LinkedIn smoke account"
+      handle = "@agenticthat-smoke"
+      enabled = $true
+    } | ConvertTo-Json) -TimeoutSec 5
+  $linkedinManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($linkedinAccount.id)/manual-login" `
+    -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
+  if (-not $linkedinManualLogin.started) { throw "The LinkedIn manual-login smoke session did not start." }
 
   $xAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/x/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
@@ -136,13 +158,20 @@ try {
 
   $companionLog = Join-Path $smokeRoot "publishing-data\logs\publishing-companion.log"
   $loginNavigationReady = $false
-  for ($attempt = 0; $attempt -lt 40; $attempt++) {
+  for ($attempt = 0; $attempt -lt 80; $attempt++) {
     Start-Sleep -Milliseconds 250
     $loginLog = Get-Content -LiteralPath $companionLog -Raw
     if (
+      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure instagram login" -and
+      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure facebook login" -and
+      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure linkedin login" -and
+      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure x login" -and
+      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure youtube login" -and
       $loginLog -match "Navigating to Instagram login page" -and
+      $loginLog -match "Navigating to Facebook home page" -and
+      $loginLog -match "Navigating to LinkedIn login page" -and
       $loginLog -match "Navigating to X" -and
-      $loginLog -match "Opening YouTube in Companion"
+      $loginLog -match "Navigating to YouTube upload page"
     ) {
       $loginNavigationReady = $true
       break
@@ -150,14 +179,11 @@ try {
   }
   if (-not $loginNavigationReady) {
     $logTail = (Get-Content -LiteralPath $companionLog -Tail 24) -join [Environment]::NewLine
-    throw "The embedded login browsers did not all begin navigation.$([Environment]::NewLine)$logTail"
+    throw "The secure Chrome/Edge login windows did not all begin navigation.$([Environment]::NewLine)$logTail"
   }
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
-  if ($loginLog -match "Opening standard Chrome|Opening standard Edge") {
-    throw "X or YouTube escaped to an external browser instead of opening inside Companion."
-  }
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
-    throw "An embedded manual-login browser connection failed."
+    throw "A secure manual-login browser connection failed."
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"
@@ -183,7 +209,7 @@ try {
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
-  Write-Host "Instagram, X, and YouTube login: opened inside Companion"
+  Write-Host "All five platform logins: opened in isolated Chrome/Edge profiles"
   Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"
@@ -194,6 +220,17 @@ try {
   Remove-Item Env:AGENTICTHAT_COMPANION_DISABLE_AUTOSTART -ErrorAction SilentlyContinue
   if ($null -ne $previousElectronRunAsNode) {
     $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode
+  }
+
+  $resolvedSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
+  $externalLoginProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $_.ExecutablePath -and
+    $_.CommandLine -and
+    ([System.IO.Path]::GetFileName($_.ExecutablePath) -in @("chrome.exe", "msedge.exe")) -and
+    $_.CommandLine.IndexOf($resolvedSmokeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+  }
+  foreach ($externalLoginProcess in $externalLoginProcesses) {
+    Stop-Process -Id $externalLoginProcess.ProcessId -Force -ErrorAction SilentlyContinue
   }
 
   $packagedProcesses = Get-CimInstance Win32_Process | Where-Object {
@@ -207,7 +244,6 @@ try {
   }
   Start-Sleep -Seconds 2
 
-  $resolvedSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
   if ($resolvedSmokeRoot.StartsWith($tempRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
     Remove-Item -LiteralPath $resolvedSmokeRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
