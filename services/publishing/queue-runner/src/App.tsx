@@ -1220,12 +1220,6 @@ function UnifiedComposer({
     setSubmitting(true);
     try {
       const safety = await api.assessPublishingSafety(postFormat, destinations);
-      if (!safety.allowed) {
-        throw new PublishingSafetyApiError({
-          message: safety.issues.map(issue => issue.message).join(' '),
-          issues: safety.issues,
-        });
-      }
       await api.authorizePublishing();
       const created = await api.createUnifiedPost({
         postFormat,
@@ -1237,7 +1231,11 @@ function UnifiedComposer({
         confirmWarnings,
       });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
-      const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId);
+      const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId && !upload.safetyDeferredUntil);
+      const safetyWaitCount = safety.issues.length;
+      const safetyWaitNote = safetyWaitCount
+        ? ` ${safetyWaitCount} ${safetyWaitCount === 1 ? 'destination is' : 'destinations are'} waiting automatically for the next safe publishing window.`
+        : '';
       let publishingError = '';
       if (canPublishNow && immediateUploads.length > 0) {
         try {
@@ -1253,10 +1251,10 @@ function UnifiedComposer({
         const scheduledCount = created.length - immediateUploads.length;
         setMessage({
           type: 'success',
-          text: `Publishing started for ${immediateUploads.length} ${immediateUploads.length === 1 ? 'post' : 'posts'} across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}${scheduledCount ? `; ${scheduledCount} scheduled ${scheduledCount === 1 ? 'post remains' : 'posts remain'} queued` : ''}.`,
+          text: `Publishing started for ${immediateUploads.length} ${immediateUploads.length === 1 ? 'post' : 'posts'} across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}${scheduledCount ? `; ${scheduledCount} scheduled ${scheduledCount === 1 ? 'post remains' : 'posts remain'} queued` : ''}.${safetyWaitNote}`,
         });
       } else {
-        setMessage({ type: 'success', text: `${created.length} ${created.length === 1 ? 'post' : 'destination posts'} queued across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}.` });
+        setMessage({ type: 'success', text: `${created.length} ${created.length === 1 ? 'post' : 'destination posts'} queued across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}.${safetyWaitNote}` });
       }
       onCreated();
     } catch (error) {
@@ -1885,13 +1883,7 @@ function ScheduleSubmissionModal({
     const destinations = selectedAccountIds.map(accountId => ({ accountId, ...destinationSchedule(scheduleDraft) }));
     setLoading(true);
     try {
-      const safety = await api.assessPublishingSafety(submission.postFormat, destinations);
-      if (!safety.allowed) {
-        throw new PublishingSafetyApiError({
-          message: safety.issues.map(issue => issue.message).join(' '),
-          issues: safety.issues,
-        });
-      }
+      await api.assessPublishingSafety(submission.postFormat, destinations);
       await api.authorizePublishing();
       await api.scheduleSubmission(
         submission.id,
@@ -2268,11 +2260,11 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
       <div className='modal-head'><span>{platformLabels[platform]} accounts</span><button onClick={onClose}><X size={22} /></button></div>
       <div className='modal-body'>
         {editing ? <div className='account-form'>
-          <div className='account-form-heading'><KeyRound size={34} /><div><strong>{editing === 'new' ? 'Add account' : 'Edit account'}</strong><span>Manual login creates the saved browser session used at schedule time.</span></div></div>
+          <div className='account-form-heading'><KeyRound size={34} /><div><strong>{editing === 'new' ? 'Add account' : 'Edit account'}</strong><span>Secure login creates the saved browser session used at schedule time.</span></div></div>
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Companion' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay in the secure browser' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
@@ -2289,7 +2281,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Companion login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || (account.platform === 'x' || account.platform === 'youtube' ? 'Secure Chrome or Edge login' : 'Manual Companion login')}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
@@ -2609,13 +2601,7 @@ function EditPostModal({
             ? { scheduledAt: scheduledDate!.toISOString() }
             : { scheduleId: Number(scheduleId) }),
         }];
-        const safety = await api.assessPublishingSafety(postFormat, destinations);
-        if (!safety.allowed) {
-          throw new PublishingSafetyApiError({
-            message: safety.issues.map(issue => issue.message).join(' '),
-            issues: safety.issues,
-          });
-        }
+        await api.assessPublishingSafety(postFormat, destinations);
         await api.authorizePublishing();
       }
       await api.updateUploadDetails(upload.id, payload as any);

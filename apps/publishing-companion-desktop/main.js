@@ -318,7 +318,6 @@ function applyWorkspaceLayout() {
       session.view.webContents.setZoomFactor(browserZoomFactors.get(session.id) ?? 1);
     }
     setViewBounds(session.view, bounds);
-    setViewBounds(session.lockView, session.request.purpose === "publish" ? bounds : null);
   }
 }
 
@@ -358,6 +357,13 @@ function showCompanion(section = "activity", focus = true) {
     ? "activity"
     : section;
   if (mainWindow.isMinimized()) mainWindow.restore();
+  if (
+    visibleSection === "activity"
+    && [...managedBrowsers.values()].some(session => session.view)
+    && !mainWindow.isMaximized()
+  ) {
+    mainWindow.maximize();
+  }
   mainWindow.show();
   if (focus) mainWindow.focus();
   mainWindow.webContents.send("companion:navigate", visibleSection);
@@ -411,10 +417,6 @@ function createDashboardView() {
   void dashboardView.webContents.loadURL(DASHBOARD_URL);
 }
 
-function interactionLockPath() {
-  return path.join(app.getAppPath(), "interaction-lock.html");
-}
-
 async function requestPersistentPublishingInteractionConsent() {
   if (settings.publishingInteractionConsent) return;
   if (publishingPermissionPromise) return publishingPermissionPromise;
@@ -422,11 +424,11 @@ async function requestPersistentPublishingInteractionConsent() {
   showCompanion("activity");
   publishingPermissionPromise = dialog.showMessageBox(mainWindow, {
     type: "question",
-    title: "Publishing mouse protection",
+    title: "Scheduled publishing permission",
     message: "Allow scheduled publishing while you are away?",
     detail: [
-      "While posting, Companion will block mouse and keyboard input only inside the live social-media publishing tabs.",
-      "Login tabs and the rest of your computer stay fully usable.",
+      "Companion will open visible social-media tabs and complete the publishing steps at the scheduled time.",
+      "Every live browser remains unobstructed, and Emergency stop is always available in Companion and its tray menu.",
       "This permission is saved for future scheduled posts and can be revoked at any time in Companion Settings.",
     ].join("\n\n"),
     buttons: ["Allow", "Deny"],
@@ -435,7 +437,7 @@ async function requestPersistentPublishingInteractionConsent() {
     noLink: true,
   }).then(result => {
     if (result.response !== 0) {
-      throw new Error("Publishing was cancelled because mouse-protection permission was denied.");
+      throw new Error("Publishing was cancelled because scheduled publishing permission was denied.");
     }
     settings.publishingInteractionConsent = true;
     writeSettings();
@@ -538,27 +540,10 @@ async function openManagedBrowser(request) {
   });
   view.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
 
-  let lockView = null;
-  if (request.purpose === "publish") {
-    lockView = new WebContentsView({
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        preload: path.join(app.getAppPath(), "interaction-lock-preload.cjs"),
-      },
-    });
-    lockView.setBackgroundColor("#00000000");
-    await lockView.webContents.loadFile(interactionLockPath(), {
-      query: { platform: request.platform, account: request.displayName || request.handle },
-    });
-  }
-
   const entry = {
     id,
     request,
     view,
-    lockView,
     activity: {
       state: "opening",
       detail: request.purpose === "login"
@@ -570,9 +555,7 @@ async function openManagedBrowser(request) {
   };
   managedBrowsers.set(id, entry);
   mainWindow.contentView.addChildView(view);
-  if (lockView) mainWindow.contentView.addChildView(lockView);
   view.setVisible(false);
-  lockView?.setVisible(false);
   await view.webContents.loadURL(targetUrl);
 
   showCompanion("activity", request.purpose === "login");
@@ -598,7 +581,7 @@ function updateManagedBrowser(sessionId, activity) {
 }
 
 function removeManagedViews(session) {
-  for (const view of [session.lockView, session.view]) {
+  for (const view of [session.view]) {
     if (!view) continue;
     try {
       mainWindow?.contentView.removeChildView(view);
@@ -614,7 +597,6 @@ function removeManagedViews(session) {
     }
   }
   session.view = null;
-  session.lockView = null;
 }
 
 function pruneActivityHistory() {
@@ -727,6 +709,7 @@ function createTray() {
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open AgenticThat Publishing", click: () => shell.openExternal(DASHBOARD_URL) },
     { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
+    { label: "Emergency stop all publishing", click: () => void emergencyStop() },
     { type: "separator" },
     {
       label: "Start with Windows",

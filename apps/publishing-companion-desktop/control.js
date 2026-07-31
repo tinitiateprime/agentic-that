@@ -68,10 +68,18 @@ function scheduleLayout() {
   layoutFrame = requestAnimationFrame(() => {
     layoutFrame = null;
     const browserElements = [...document.querySelectorAll("[data-browser-session]")];
-    const visibleCount = browserElements.length;
-    const zoomFactor = visibleCount <= 1 ? 1 : visibleCount === 2 ? 0.72 : visibleCount <= 4 ? 0.55 : 0.45;
     const browsers = browserElements
-      .map(element => ({ id: element.dataset.browserSession, bounds: elementBounds(element), zoomFactor }))
+      .map(element => {
+        const bounds = elementBounds(element);
+        if (!bounds) return null;
+        const fitWidth = bounds.width / 1_000;
+        const fitHeight = bounds.height / 680;
+        const zoomFactor = browserElements.length <= 1
+          ? 1
+          : Math.max(0.55, Math.min(0.85, fitWidth, fitHeight));
+        return { id: element.dataset.browserSession, bounds, zoomFactor };
+      })
+      .filter(Boolean)
       .filter(entry => entry.id && entry.bounds);
     void api.setLayout({
       dashboard: null,
@@ -126,7 +134,7 @@ function createLiveCard(session) {
   identity.className = "live-card-identity";
   const purpose = document.createElement("span");
   purpose.className = "live-purpose";
-  purpose.textContent = session.purpose === "login" ? "Interactive login" : "Protected publishing";
+  purpose.textContent = session.purpose === "login" ? "Interactive login" : "Publishing";
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
@@ -210,7 +218,7 @@ function renderWorkspace() {
     ? `${platformLabel(singleSession.platform)} · ${stateLabel(singleSession)}`
     : `${active.length} live accounts`;
   byId("live-run-detail").textContent = singleSession
-    ? singleSession.activity?.detail || (singleSession.purpose === "login" ? "Complete login in the browser above." : "Protected publishing is active.")
+    ? singleSession.activity?.detail || (singleSession.purpose === "login" ? "Complete login in the browser above." : "Visible publishing is active.")
     : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
       : "Publishing all scheduled accounts together in the visible grid.";
@@ -260,7 +268,11 @@ function renderStatus(status) {
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
-  byId("browser-check").textContent = status.embeddedBrowser ? "Built in" : status.chromeInstalled ? "Chrome" : "Unavailable";
+  byId("browser-check").textContent = status.embeddedBrowser && status.chromeInstalled
+    ? "Built in + secure login"
+    : status.embeddedBrowser
+      ? "Built in; X/YouTube need Chrome"
+      : status.chromeInstalled ? "Chrome or Edge" : "Unavailable";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
   const consentGranted = status.publishingInteractionConsent === true;
   byId("permission-state").textContent = consentGranted ? "Unattended publishing allowed" : "Permission not granted";
@@ -278,7 +290,7 @@ function renderStatus(status) {
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
-  byId("install-chrome").hidden = Boolean(status.embeddedBrowser);
+  byId("install-chrome").hidden = Boolean(status.chromeInstalled);
 }
 
 async function refreshStatus() {

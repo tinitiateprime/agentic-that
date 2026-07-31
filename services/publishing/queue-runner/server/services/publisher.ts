@@ -2,7 +2,6 @@ import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import type { PlatformUpload } from "../../shared/schema.js";
 import {
@@ -40,6 +39,7 @@ import { classifyPublishingRisk } from "./risk-classifier.js";
 
 const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
 const X_LOGIN_URL = "https://x.com/i/flow/login";
+const YOUTUBE_LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F";
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 
 type EncryptedSessionState = {
@@ -188,6 +188,9 @@ function detectedChromeExecutablePath() {
     process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe") : undefined,
     process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe") : undefined,
     process.env.LocalAppData ? path.join(process.env.LocalAppData, "Google", "Chrome", "Application", "chrome.exe") : undefined,
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
+    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
     process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined,
     process.platform === "linux" ? "/usr/bin/google-chrome" : undefined,
     process.platform === "linux" ? "/usr/bin/google-chrome-stable" : undefined,
@@ -199,7 +202,7 @@ function detectedChromeExecutablePath() {
 function chromeExecutablePath() {
   const executablePath = detectedChromeExecutablePath();
   if (!executablePath) {
-    throw new Error("Google Chrome is required for publishing. Install Chrome, then restart AgenticThat Publishing Companion.");
+    throw new Error("Google Chrome or Microsoft Edge is required for X and YouTube login. Install a supported browser, then restart AgenticThat Publishing Companion.");
   }
   return executablePath;
 }
@@ -215,51 +218,16 @@ export function publishingBrowserRuntimeHealth() {
   };
 }
 
-function getFreePort() {
-  return new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a Chrome debugging port.")));
-    });
-  });
-}
-
 function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
-  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve();
+  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
 
-  return new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, timeoutMs);
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs);
     processHandle.once("exit", () => {
       clearTimeout(timeout);
-      resolve();
+      resolve(true);
     });
   });
-}
-
-async function waitForChromeDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  const endpoint = `http://127.0.0.1:${port}`;
-
-  while (Date.now() < deadline) {
-    if (processHandle.exitCode !== null) {
-      throw new Error(`Chrome closed before the manual login window was ready. Exit code: ${processHandle.exitCode}`);
-    }
-
-    try {
-      const response = await fetch(`${endpoint}/json/version`);
-      if (response.ok) return endpoint;
-    } catch {
-      // Chrome is still starting.
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-
-  throw new Error("Chrome did not expose its local debugging endpoint in time.");
 }
 
 function prepareChromeProfile(profileDir: string) {
@@ -378,6 +346,7 @@ async function launchAccountBrowser(
   const commonArgs = [
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-background-mode",
     "--disable-notifications",
     "--deny-permission-prompts",
     "--disable-sync",
@@ -439,10 +408,20 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
   }
 }
 
+async function exportAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+  const key = sessionEncryptionKey();
+  if (!key) {
+    throw new Error("Companion could not create the protected session key required to save this login.");
+  }
+  fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+  writeEncryptedSessionState(accountSessionStatePath(account), await context.storageState(), key);
+  console.log(`Imported standard Chrome session for ${account.platform} account ${account.handle}.`);
+}
+
 async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
-  // The desktop WebContentsView uses a stable persist: partition per account,
-  // so its protected browser storage is already restored by Electron.
-  if (publishingDesktopHost()) return;
+  // Companion partitions retain their own browser state. X and YouTube logins
+  // are completed in standard Chrome and exported here because those providers
+  // reject embedded authentication windows.
   migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
@@ -452,6 +431,9 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
     if (Array.isArray(state.cookies) && state.cookies.length > 0) {
+      if (publishingDesktopHost() && (account.platform === "x" || account.platform === "youtube")) {
+        await context.clearCookies();
+      }
       await context.addCookies(state.cookies);
     }
   } catch (error) {
@@ -462,25 +444,30 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
   }
 }
 
-async function launchNormalChromeForManualXLogin(account: PublishingAccount) {
+function standardChromeLoginUrl(account: PublishingAccount) {
+  if (account.platform === "x") return X_LOGIN_URL;
+  if (account.platform === "youtube") return YOUTUBE_LOGIN_URL;
+  throw new Error(`Standard Chrome login is not required for ${account.platform}.`);
+}
+
+async function launchStandardChromeForManualLogin(account: PublishingAccount) {
   const profileDir = accountProfilePath(account);
   fs.mkdirSync(profileDir, { recursive: true });
   prepareChromeProfile(profileDir);
 
-  const port = await getFreePort();
   const chromePath = chromeExecutablePath();
   const chromeArgs = [
     `--user-data-dir=${profileDir}`,
     "--profile-directory=Default",
-    `--remote-debugging-port=${port}`,
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-background-mode",
     "--disable-notifications",
     "--new-window",
-    X_LOGIN_URL,
+    standardChromeLoginUrl(account),
   ];
 
-  console.log(`Opening normal Chrome for manual X login for ${account.handle}.`);
+  console.log(`Opening standard Chrome for manual ${account.platform} login for ${account.handle}.`);
   const chromeProcess = spawn(chromePath, chromeArgs, {
     stdio: "ignore",
     windowsHide: false,
@@ -492,27 +479,42 @@ async function launchNormalChromeForManualXLogin(account: PublishingAccount) {
   await new Promise(resolve => setTimeout(resolve, 100));
   if (spawnError) throw spawnError;
 
-  return { chromeProcess, debugEndpoint: await waitForChromeDebugEndpoint(port, chromeProcess) };
+  return { chromeProcess, profileDir };
 }
 
-async function prepareXSessionInNormalChrome(account: PublishingAccount) {
-  const { chromeProcess, debugEndpoint } = await launchNormalChromeForManualXLogin(account);
-  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+async function prepareStandardChromeSession(account: PublishingAccount) {
+  const releaseAccount = reserveAccountBrowser(account, "login");
+  let chromeProcess: ChildProcess | null = null;
+  let verificationContext: BrowserContext | null = null;
 
   try {
-    browser = await chromium.connectOverCDP(debugEndpoint);
-    const context = browser.contexts()[0];
-    const page = context.pages().find(item => item.url().includes("x.com")) ?? context.pages()[0] ?? await context.newPage();
-    await page.bringToFront().catch(() => undefined);
-    await loginToX(page, undefined, false, accountLogin({
-      ignoreLoginErrors: true,
-    }));
-    await saveAccountSessionState(account, context);
-    console.log(`Normal Chrome manual X session saved for ${account.handle}. Closing Chrome.`);
+    const launched = await launchStandardChromeForManualLogin(account);
+    chromeProcess = launched.chromeProcess;
+    const { profileDir } = launched;
+    const timeoutMs = Number(process.env.PUBLISH_QUEUE_MANUAL_LOGIN_TIMEOUT_MS ?? 10 * 60 * 1000);
+    const closedByUser = await waitForProcessExit(
+      chromeProcess,
+      Number.isFinite(timeoutMs) ? Math.max(60_000, timeoutMs) : 10 * 60 * 1000,
+    );
+    if (!closedByUser) {
+      if (chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
+      throw new Error(`${account.platform === "youtube" ? "YouTube" : "X"} login timed out. Sign in and close the Chrome window within 10 minutes.`);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 750));
+    verificationContext = await chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      executablePath: chromeExecutablePath(),
+      args: ["--no-first-run", "--no-default-browser-check", "--disable-notifications"],
+    });
+    const page = verificationContext.pages()[0] ?? await verificationContext.newPage();
+    await loginOnly(page, account, { useSavedSessionOnly: true });
+    await exportAccountSessionState(account, verificationContext);
+    console.log(`Standard Chrome ${account.platform} session verified and saved for ${account.handle}.`);
   } finally {
-    await browser?.close().catch(() => undefined);
-    await waitForProcessExit(chromeProcess, 15000);
-    if (chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
+    await verificationContext?.close().catch(() => undefined);
+    if (chromeProcess && chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
+    releaseAccount();
   }
 }
 
@@ -763,8 +765,8 @@ async function runAccountQueue(
 }
 
 async function prepareManualAccountSession(account: PublishingAccount) {
-  if (account.platform === "x" && !publishingDesktopHost()) {
-    await prepareXSessionInNormalChrome(account);
+  if (account.platform === "x" || account.platform === "youtube") {
+    await prepareStandardChromeSession(account);
     return;
   }
 

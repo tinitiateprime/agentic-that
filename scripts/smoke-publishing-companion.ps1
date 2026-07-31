@@ -6,6 +6,14 @@ $executable = Join-Path $packageRoot "AgenticThat Publishing Companion.exe"
 if (-not (Test-Path -LiteralPath $executable)) {
   throw "Build the packaged companion before running this smoke test."
 }
+$packagedAppRoot = Join-Path $packageRoot "resources\app"
+$packagedMain = Join-Path $packagedAppRoot "main.js"
+if ((Get-Content -LiteralPath $packagedMain -Raw) -match "interaction-lock") {
+  throw "The packaged Companion still references the obsolete publishing overlay."
+}
+if (Get-ChildItem -LiteralPath $packagedAppRoot -Filter "interaction-lock*" -ErrorAction SilentlyContinue) {
+  throw "The packaged Companion still contains the obsolete publishing overlay."
+}
 if (Get-NetTCPConnection -LocalPort 8792 -State Listen -ErrorAction SilentlyContinue) {
   throw "Port 8792 is already occupied. Stop the development companion before this smoke test."
 }
@@ -58,6 +66,7 @@ try {
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
+  if (-not $health.chromeInstalled) { throw "A supported Chrome or Edge browser is required for X and YouTube login." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
@@ -147,8 +156,10 @@ try {
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
+  Write-Host "X and YouTube secure login browser: available"
   Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Instagram manual-login browser: connected"
+  Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"
   Write-Host "Production dashboard origin: allowed"
   Write-Host "Platforms: $($health.platforms -join ', ')"

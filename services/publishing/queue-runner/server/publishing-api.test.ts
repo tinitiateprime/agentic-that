@@ -269,18 +269,35 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     allowed: boolean;
     issues: Array<{ accountId: string; earliestAt: string }>;
   };
-  assert.equal(safetyAssessment.allowed, false);
+  assert.equal(safetyAssessment.allowed, true);
   assert.equal(safetyAssessment.issues[0]?.accountId, xAccount.id);
   assert.ok(Date.parse(safetyAssessment.issues[0]?.earliestAt) > Date.now());
 
-  const blockedEarlyPostResponse = await api("/api/posts/unified/text", {
+  const mixedSafetyPostResponse = await api("/api/posts/unified/text", {
     method: "POST",
-    body: JSON.stringify({ description: "Second X safety post", destinations: [{ accountId: xAccount.id }] }),
+    body: JSON.stringify({
+      description: "Mixed destination safety post",
+      destinations: [{ accountId: xAccount.id }, { accountId: account.id }],
+    }),
   });
-  assert.equal(blockedEarlyPostResponse.status, 409);
-  const blockedEarlyPost = await blockedEarlyPostResponse.json() as { code?: string; issues?: unknown[] };
-  assert.equal(blockedEarlyPost.code, "PUBLISHING_SAFETY_SCHEDULE");
-  assert.equal((blockedEarlyPost.issues?.length ?? 0) > 0, true);
+  assert.equal(mixedSafetyPostResponse.status, 201);
+  const mixedSafetyPosts = await mixedSafetyPostResponse.json() as Array<{
+    id: string;
+    accountId: string;
+    safetyDeferredUntil?: string;
+    safetyReason?: string;
+  }>;
+  assert.equal(mixedSafetyPosts.length, 2);
+  const deferredXPost = mixedSafetyPosts.find(post => post.accountId === xAccount.id);
+  const readyFacebookPost = mixedSafetyPosts.find(post => post.accountId === account.id);
+  assert.ok(Date.parse(deferredXPost?.safetyDeferredUntil ?? "") > Date.now());
+  assert.match(deferredXPost?.safetyReason ?? "", /Other selected accounts can continue/i);
+  assert.equal(readyFacebookPost?.safetyDeferredUntil, undefined);
+  const { automationInput: loadAutomationInput } = await import("./local-storage.js");
+  const mixedAutomationInput = await loadAutomationInput();
+  const readyAutomationIds = new Set(Object.values(mixedAutomationInput.channels).flat().map(post => post.id));
+  assert.equal(readyAutomationIds.has(readyFacebookPost!.id), true);
+  assert.equal(readyAutomationIds.has(deferredXPost!.id), false);
 
   const media = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const stagedResponse = await api("/api/staged-uploads", {

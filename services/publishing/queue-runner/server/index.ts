@@ -39,6 +39,7 @@ import {
   createUserProfile,
   deactivateUserProfile,
   dashboardSummary,
+  deferUploadForSafety,
   deletePlatformAccount,
   deletePublishingSchedule,
   deleteUpload,
@@ -187,15 +188,6 @@ type PublishingScheduleSafetyIssue = {
   message: string;
 };
 
-class PublishingScheduleSafetyError extends Error {
-  readonly code = "PUBLISHING_SAFETY_SCHEDULE" as const;
-
-  constructor(readonly issues: PublishingScheduleSafetyIssue[]) {
-    super(issues.map(issue => issue.message).join(" "));
-    this.name = "PublishingScheduleSafetyError";
-  }
-}
-
 async function assessDestinationPublishingSafety(
   user: UserProfile,
   postFormat: PostFormat,
@@ -246,23 +238,30 @@ async function assessDestinationPublishingSafety(
         accountName: account.displayName,
         requestedAt: assessment.requestedAt,
         earliestAt: assessment.earliestAt,
-        message: `${account.displayName}: choose ${earliest.toLocaleString()} or later. ${assessment.reason ?? "A publishing safety limit is active."}`,
+        message: `${account.displayName} will wait until ${earliest.toLocaleString()}. ${assessment.reason ?? "A publishing safety limit is active."} Other selected accounts can continue.`,
       });
     }
     return { accountId: account.id, platform: account.platform, ...assessment };
   });
-  return { allowed: issues.length === 0, issues, assessments };
+  return { allowed: true, issues, assessments };
 }
 
-async function assertDestinationPublishingSafety(
-  user: UserProfile,
-  postFormat: PostFormat,
-  destinationsInput: unknown,
-  excludeUploadId?: string,
+async function applyPublishingSafetyDeferrals(
+  uploads: PlatformUpload[],
+  issues: PublishingScheduleSafetyIssue[],
 ) {
-  const result = await assessDestinationPublishingSafety(user, postFormat, destinationsInput, excludeUploadId);
-  if (!result.allowed) throw new PublishingScheduleSafetyError(result.issues);
-  return result;
+  const issueByAccountId = new Map(issues.map(issue => [issue.accountId, issue]));
+  const updated: PlatformUpload[] = [];
+  for (const upload of uploads) {
+    const issue = issueByAccountId.get(upload.accountId);
+    if (!issue) {
+      updated.push(upload);
+      continue;
+    }
+    const deferred = await deferUploadForSafety(upload.id, issue.earliestAt, issue.message);
+    updated.push(deferred ?? upload);
+  }
+  return updated;
 }
 
 function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile, title: string, description: string) {
@@ -601,7 +600,7 @@ async function createUnifiedPosts(
       }
     }
 
-    await assertDestinationPublishingSafety(user, postFormat, destinations);
+    const safety = await assessDestinationPublishingSafety(user, postFormat, destinations);
 
     const preflightIssues = evaluateContentPreflight({
       postFormat,
@@ -643,7 +642,7 @@ async function createUnifiedPosts(
       platforms: [...new Set(createdUploads.map(upload => upload.platform))],
       confirmedPreflightWarnings: preflightIssues.filter(issue => issue.severity === "warning").map(issue => issue.code),
     });
-    return createdUploads;
+    return await applyPublishingSafetyDeferrals(createdUploads, safety.issues);
   } catch (error) {
     await Promise.all(createdUploads.map(upload => deleteUpload(upload.id, user.workspaceId).catch(() => undefined)));
     throw error;
@@ -695,7 +694,7 @@ async function scheduleContentSubmission(
       }
     }
 
-    await assertDestinationPublishingSafety(user, submission.postFormat, destinations);
+    const safety = await assessDestinationPublishingSafety(user, submission.postFormat, destinations);
 
     const preflightIssues = evaluateContentPreflight({
       postFormat: submission.postFormat,
@@ -730,14 +729,15 @@ async function scheduleContentSubmission(
       }, user.id, user.workspaceId));
     }
 
+    const safelyQueuedUploads = await applyPublishingSafetyDeferrals(createdUploads, safety.issues);
     const completed = await completeContentSubmission(
       submission.id,
-      createdUploads.map(upload => upload.id),
+      safelyQueuedUploads.map(upload => upload.id),
       user.id,
       user.workspaceId,
     );
     if (!completed) throw new Error("Content submission not found.");
-    return { submission: completed, uploads: createdUploads };
+    return { submission: completed, uploads: safelyQueuedUploads };
   } catch (error) {
     await Promise.all(createdUploads.map(upload => deleteUpload(upload.id, user.workspaceId).catch(() => undefined)));
     throw error;
@@ -1068,7 +1068,9 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     );
     res.status(202).json({
       message: started
-        ? "Manual login opened in Companion. Complete login there; the session will be saved and the live pane will close."
+        ? account.platform === "x" || account.platform === "youtube"
+          ? `${platformLabels[account.platform]} login opened in a supported secure browser. Complete sign-in, then close that browser window so Companion can verify and save the session.`
+          : "Manual login opened in Companion. Complete login there; the session will be saved and the live pane will close."
         : "Manual login is already running for this account.",
       started,
     });
@@ -1433,6 +1435,7 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), a
       assertScheduleCanReceivePosts(schedule);
     }
 
+    let scheduleSafetyIssues: PublishingScheduleSafetyIssue[] = [];
     if (payload.scheduledAt || payload.scheduleId) {
       const postFormat = existing.postFormat ?? postFormatForFile({
         originalname: existing.originalName,
@@ -1440,18 +1443,23 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), a
         mimetype: existing.mimeType,
         size: existing.size,
       });
-      await assertDestinationPublishingSafety(user, postFormat, [{
+      const safety = await assessDestinationPublishingSafety(user, postFormat, [{
         accountId: payload.accountId ?? existing.accountId,
         scheduledAt: payload.scheduledAt ?? undefined,
         scheduleId: payload.scheduleId ?? undefined,
       }], existing.id);
+      scheduleSafetyIssues = safety.issues;
     }
 
-    const item = await updateUploadDetails(uploadId, payload, user.id, user.workspaceId);
+    let item = await updateUploadDetails(uploadId, payload, user.id, user.workspaceId);
 
     if (!item) {
       res.status(404).json({ message: "Upload not found" });
       return;
+    }
+
+    if (scheduleSafetyIssues.length > 0) {
+      [item] = await applyPublishingSafetyDeferrals([item], scheduleSafetyIssues);
     }
 
     await logActivity(user.id, action, "post", item.id, `${item.title || item.originalName} ${summaryDetail} was updated.`, { platform: item.platform, accountId: item.accountId, scheduledAt: item.scheduledAt, scheduleId: item.scheduleId });
@@ -1561,15 +1569,6 @@ app.use("/api", (req, res) => {
 
 // --- ERROR HANDLER ---
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if (error instanceof PublishingScheduleSafetyError) {
-    res.status(409).json({
-      message: error.message,
-      code: error.code,
-      issues: error.issues,
-    });
-    return;
-  }
-
   if (error instanceof ContentPreflightError) {
     res.status(error.code === "CONTENT_PREFLIGHT_WARNINGS" ? 409 : 422).json({
       message: error.message,
