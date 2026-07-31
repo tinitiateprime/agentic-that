@@ -358,6 +358,10 @@ async function launchAccountBrowser(
         },
       };
     } catch (error) {
+      await Promise.resolve(desktopHost.updateBrowser(managed.id, {
+        state: "failed",
+        detail: "The Companion browser could not start. Restart Companion and try again.",
+      })).catch(() => undefined);
       await Promise.race([
         connection?.close().catch(() => undefined),
         new Promise(resolve => setTimeout(resolve, 3000)),

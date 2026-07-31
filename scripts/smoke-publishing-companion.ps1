@@ -15,6 +15,29 @@ $smokeRoot = Join-Path $tempRoot ("AgenticThatCompanionSmoke-" + [guid]::NewGuid
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
 
 try {
+  $smokeUsername = "operations.manager"
+  $smokePassword = "CompanionSmoke@2026"
+  $smokeSecret = "companion-smoke-auth-secret-that-is-long-enough-for-local-token-signing"
+  $encode = {
+    param([string]$Value)
+    [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value))
+  }
+  $seedSettings = @{
+    version = 1
+    username = $smokeUsername
+    password = @{ protected = $false; value = (& $encode $smokePassword) }
+    authSecret = @{ protected = $false; value = (& $encode $smokeSecret) }
+    instanceId = [guid]::NewGuid().ToString("N")
+    autoStart = $false
+    publishingInteractionConsent = $true
+    createdAt = [DateTime]::UtcNow.ToString("o")
+  } | ConvertTo-Json -Depth 5
+  [IO.File]::WriteAllText(
+    (Join-Path $smokeRoot "companion-settings.json"),
+    $seedSettings,
+    (New-Object Text.UTF8Encoding($false))
+  )
+
   $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
   $env:AGENTICTHAT_COMPANION_DATA_DIR = $smokeRoot
@@ -53,6 +76,54 @@ try {
   $debugStatus = Invoke-RestMethod -Uri "http://127.0.0.1:$debugPort/json/version" -TimeoutSec 5
   if (-not $debugStatus.webSocketDebuggerUrl) { throw "The packaged Companion browser-debug endpoint is unavailable." }
 
+  $secondProcess = Start-Process -FilePath $executable -ArgumentList "--hidden" -WindowStyle Hidden -PassThru
+  if (-not $secondProcess.WaitForExit(10000)) {
+    Stop-Process -Id $secondProcess.Id -Force -ErrorAction SilentlyContinue
+    throw "A second Companion process did not hand control back to the running instance."
+  }
+  $debugPortAfterSecondLaunch = [int](Get-Content -LiteralPath $activePortFile -TotalCount 1)
+  if ($debugPortAfterSecondLaunch -ne $debugPort) {
+    throw "A second Companion launch replaced the running instance's browser-debug endpoint."
+  }
+  $debugStatusAfterSecondLaunch = Invoke-RestMethod -Uri "http://127.0.0.1:$debugPort/json/version" -TimeoutSec 5
+  if (-not $debugStatusAfterSecondLaunch.webSocketDebuggerUrl) {
+    throw "The running Companion browser-debug endpoint was lost after a second launch."
+  }
+
+  $login = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/auth/login" -ContentType "application/json" -Body (@{
+    username = $smokeUsername
+    password = $smokePassword
+  } | ConvertTo-Json) -TimeoutSec 5
+  if (-not $login.token) { throw "The smoke-test operations manager could not sign in." }
+  $authorization = @{ Authorization = "Bearer $($login.token)" }
+  $instagramAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/instagram/accounts" `
+    -Headers $authorization -ContentType "application/json" -Body (@{
+      displayName = "Instagram smoke account"
+      handle = "@agenticthat-smoke"
+      enabled = $true
+    } | ConvertTo-Json) -TimeoutSec 5
+  $manualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($instagramAccount.id)/manual-login" `
+    -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
+  if (-not $manualLogin.started) { throw "The Instagram manual-login smoke session did not start." }
+  $companionLog = Join-Path $smokeRoot "publishing-data\logs\publishing-companion.log"
+  $loginNavigationReady = $false
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    Start-Sleep -Milliseconds 250
+    $loginLog = Get-Content -LiteralPath $companionLog -Raw
+    if ($loginLog -match "Navigating to Instagram login page") {
+      $loginNavigationReady = $true
+      break
+    }
+  }
+  if (-not $loginNavigationReady) {
+    $logTail = (Get-Content -LiteralPath $companionLog -Tail 12) -join [Environment]::NewLine
+    throw "The Instagram manual-login browser did not begin navigation.$([Environment]::NewLine)$logTail"
+  }
+  $loginLog = Get-Content -LiteralPath $companionLog -Raw
+  if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
+    throw "The Instagram manual-login browser connection was refused."
+  }
+
   $productionOrigin = "https://agentic-that.netlify.app"
   $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "http://127.0.0.1:8792/api/health" -Headers @{
     Origin = $productionOrigin
@@ -77,6 +148,7 @@ try {
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
   Write-Host "Isolated browser-debug port: $debugPort"
+  Write-Host "Instagram manual-login browser: connected"
   Write-Host "Extension bridge: enabled"
   Write-Host "Production dashboard origin: allowed"
   Write-Host "Platforms: $($health.platforms -join ', ')"

@@ -39,12 +39,16 @@ if (userDataOverride) {
   app.setPath("userData", resolvedUserData);
 }
 
-if (REQUESTED_DESKTOP_DEBUG_PORT === 0) {
-  fs.rmSync(path.join(app.getPath("userData"), "DevToolsActivePort"), { force: true });
+const ownsSingleInstanceLock = !started && app.requestSingleInstanceLock();
+
+if (ownsSingleInstanceLock) {
+  if (REQUESTED_DESKTOP_DEBUG_PORT === 0) {
+    fs.rmSync(path.join(app.getPath("userData"), "DevToolsActivePort"), { force: true });
+  }
+  app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+  app.commandLine.appendSwitch("remote-debugging-port", String(REQUESTED_DESKTOP_DEBUG_PORT));
+  app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling");
 }
-app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
-app.commandLine.appendSwitch("remote-debugging-port", String(REQUESTED_DESKTOP_DEBUG_PORT));
-app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling");
 
 const APP_VERSION = app.getVersion();
 const managedBrowsers = new Map();
@@ -466,7 +470,23 @@ function browserPartition(accountId) {
 }
 
 async function desktopDebugEndpoint(timeoutMs = 10000) {
-  if (resolvedDesktopDebugPort) return `http://127.0.0.1:${resolvedDesktopDebugPort}`;
+  const endpointIsReady = async endpoint => {
+    try {
+      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1000) });
+      if (!response.ok) return false;
+      const version = await response.json();
+      return typeof version?.webSocketDebuggerUrl === "string";
+    } catch {
+      return false;
+    }
+  };
+
+  if (resolvedDesktopDebugPort) {
+    const endpoint = `http://127.0.0.1:${resolvedDesktopDebugPort}`;
+    if (await endpointIsReady(endpoint)) return endpoint;
+    resolvedDesktopDebugPort = null;
+  }
+
   const activePortPath = path.join(app.getPath("userData"), "DevToolsActivePort");
   const deadline = Date.now() + timeoutMs;
 
@@ -474,8 +494,11 @@ async function desktopDebugEndpoint(timeoutMs = 10000) {
     try {
       const port = Number(fs.readFileSync(activePortPath, "utf8").split(/\r?\n/, 1)[0]);
       if (Number.isInteger(port) && port > 0 && port < 65536) {
-        resolvedDesktopDebugPort = port;
-        return `http://127.0.0.1:${port}`;
+        const endpoint = `http://127.0.0.1:${port}`;
+        if (await endpointIsReady(endpoint)) {
+          resolvedDesktopDebugPort = port;
+          return endpoint;
+        }
       }
     } catch {
       // Chromium creates DevToolsActivePort shortly after Electron becomes ready.
@@ -495,6 +518,7 @@ async function clearAccountBrowserData(accountId) {
 async function openManagedBrowser(request) {
   if (request.purpose === "publish") await ensurePublishingInteractionConsent();
 
+  const debugEndpoint = await desktopDebugEndpoint();
   const id = randomUUID();
   const targetUrl = `about:blank#agenticthat-publishing-${id}`;
   const view = new WebContentsView({
@@ -557,7 +581,7 @@ async function openManagedBrowser(request) {
 
   return {
     id,
-    debugEndpoint: await desktopDebugEndpoint(),
+    debugEndpoint,
     targetUrl,
   };
 }
@@ -835,9 +859,7 @@ function registerIpc() {
   });
 }
 
-if (started) {
-  app.quit();
-} else if (!app.requestSingleInstanceLock()) {
+if (started || !ownsSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => showCompanion("activity"));
@@ -852,6 +874,7 @@ if (started) {
     createTray();
     saveAutoStart(settings.autoStart);
     try {
+      await desktopDebugEndpoint();
       await startPublishingService();
       console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
     } catch (error) {
