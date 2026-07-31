@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { cookies } from "next/headers";
 import { signPublishingWorkspaceIdentity } from "../../../lib/publishing-workspace-auth";
+import { getSql } from "@whatsapp/lib/db";
 
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
@@ -12,7 +13,11 @@ const useNetlifyBlobs = (
   process.env.NETLIFY === "true" ||
   Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+const useDatabaseAuth = Boolean(
+  process.env.DATABASE_URL?.trim() || process.env.SUPABASE_DB_URL?.trim()
+);
 let blobStorePromise = null;
+let platformDatabaseReadyPromise = null;
 
 function resolveDataPath() {
   if (process.env.PLATFORM_AUTH_DATA_PATH?.trim()) {
@@ -119,6 +124,126 @@ function getBlobStore() {
   return blobStorePromise;
 }
 
+function publicDatabaseUser(user) {
+  if (!user?.id) throw new Error("Platform user data is missing a valid ID.");
+  return {
+    id: String(user.id),
+    workspaceId: String(user.workspace_id),
+    name: String(user.name || "Workspace user"),
+    businessName: String(user.business_name || user.name || "Workspace"),
+    email: String(user.email || ""),
+  };
+}
+
+async function importBlobAccounts(sql) {
+  if (!useNetlifyBlobs) return;
+
+  try {
+    const blobStore = await getBlobStore();
+    const source = normalizeStore(
+      await blobStore.get("store", { type: "json", consistency: "strong" })
+    );
+    if (!source.users.length) return;
+
+    await sql.begin(async (tx) => {
+      for (const user of source.users) {
+        const normalized = publicUser(user);
+        await tx`
+          INSERT INTO platform_users
+            (id, workspace_id, publishing_workspace_key, name, business_name,
+             email, password_hash, created_at)
+          VALUES
+            (${normalized.id}, ${normalized.workspaceId},
+             ${String(user.publishingWorkspaceKey)}, ${normalized.name},
+             ${normalized.businessName}, ${normalized.email.toLowerCase()},
+             ${String(user.passwordHash)}, ${user.createdAt || new Date().toISOString()})
+          ON CONFLICT DO NOTHING`;
+      }
+
+      for (const session of source.sessions) {
+        if (
+          !session?.id ||
+          !session?.userId ||
+          !session?.tokenHash ||
+          !session?.expiresAt
+        ) {
+          continue;
+        }
+        await tx`
+          INSERT INTO platform_sessions
+            (id, user_id, token_hash, created_at, expires_at)
+          VALUES
+            (${String(session.id)}, ${String(session.userId)},
+             ${String(session.tokenHash)},
+             ${session.createdAt || new Date().toISOString()},
+             ${session.expiresAt})
+          ON CONFLICT DO NOTHING`;
+      }
+    });
+  } catch (error) {
+    // Blob persistence is not available from every Next.js runtime. Existing
+    // accounts are imported whenever it is readable, but PostgreSQL remains
+    // authoritative so a Blob outage can never block signup or sign-in.
+    console.warn(
+      "Platform Blob import skipped:",
+      error instanceof Error ? error.name : "unknown error"
+    );
+  }
+}
+
+async function migratePlatformDatabase(sql) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS platform_users (
+      id                       TEXT PRIMARY KEY,
+      workspace_id             TEXT NOT NULL UNIQUE,
+      publishing_workspace_key TEXT NOT NULL,
+      name                     TEXT NOT NULL,
+      business_name            TEXT NOT NULL,
+      email                    TEXT NOT NULL,
+      password_hash            TEXT NOT NULL,
+      created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_users_email
+      ON platform_users (LOWER(email))`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS platform_sessions (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES platform_users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
+    )`;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_platform_sessions_expiry
+      ON platform_sessions (expires_at)`;
+  await importBlobAccounts(sql);
+}
+
+async function getPlatformSql() {
+  const sql = await getSql();
+  platformDatabaseReadyPromise ??= migratePlatformDatabase(sql);
+  await platformDatabaseReadyPromise;
+  return sql;
+}
+
+async function createDatabaseSession(sql, userId) {
+  const now = new Date();
+  const token = crypto.randomBytes(32).toString("base64url");
+  await sql`
+    INSERT INTO platform_sessions
+      (id, user_id, token_hash, created_at, expires_at)
+    VALUES
+      (${crypto.randomUUID()}, ${String(userId)}, ${tokenHash(token)},
+       ${now.toISOString()},
+       ${new Date(now.getTime() + SESSION_TTL_MS).toISOString()})`;
+  return token;
+}
+
+async function pruneDatabaseSessions(sql) {
+  await sql`DELETE FROM platform_sessions WHERE expires_at <= now()`;
+}
+
 function pruneSessions(store) {
   const now = Date.now();
   store.sessions = store.sessions.filter((session) => new Date(session.expiresAt).getTime() > now);
@@ -162,6 +287,40 @@ export async function registerPlatformUser({ name, businessName, email, password
     throw new PlatformAuthError("INVALID_PASSWORD", "Password must contain 8 to 128 characters.");
   }
 
+  if (useDatabaseAuth) {
+    const sql = await getPlatformSql();
+    try {
+      return await sql.begin(async (tx) => {
+        const [existing] = await tx`
+          SELECT id FROM platform_users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
+        if (existing) {
+          throw new PlatformAuthError("ACCOUNT_EXISTS", "An account already exists for this email.");
+        }
+
+        const id = crypto.randomUUID();
+        const [user] = await tx`
+          INSERT INTO platform_users
+            (id, workspace_id, publishing_workspace_key, name, business_name,
+             email, password_hash)
+          VALUES
+            (${id}, ${`workspace_${crypto.randomUUID()}`},
+             ${crypto.randomBytes(32).toString("base64url")},
+             ${normalizedName}, ${normalizedBusiness}, ${normalizedEmail},
+             ${passwordHash(normalizedPassword)})
+          RETURNING *`;
+        const token = await createDatabaseSession(tx, user.id);
+        await pruneDatabaseSessions(tx);
+        return { token, user: publicDatabaseUser(user) };
+      });
+    } catch (error) {
+      if (error instanceof PlatformAuthError) throw error;
+      if (error?.code === "23505") {
+        throw new PlatformAuthError("ACCOUNT_EXISTS", "An account already exists for this email.");
+      }
+      throw error;
+    }
+  }
+
   return mutateStore((store) => {
     if (store.users.some((user) => user.email === normalizedEmail)) {
       throw new PlatformAuthError("ACCOUNT_EXISTS", "An account already exists for this email.");
@@ -195,6 +354,18 @@ export async function loginPlatformUser({ email, password }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const normalizedPassword = String(password || "");
 
+  if (useDatabaseAuth) {
+    const sql = await getPlatformSql();
+    const [user] = await sql`
+      SELECT * FROM platform_users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
+    if (!user || !verifyPassword(normalizedPassword, user.password_hash)) {
+      throw new PlatformAuthError("INVALID_CREDENTIALS", "Invalid email or password.");
+    }
+    const token = await createDatabaseSession(sql, user.id);
+    await pruneDatabaseSessions(sql);
+    return { token, user: publicDatabaseUser(user) };
+  }
+
   return mutateStore((store) => {
     const user = store.users.find((candidate) => candidate.email === normalizedEmail);
     if (!user || !verifyPassword(normalizedPassword, user.passwordHash)) {
@@ -220,6 +391,18 @@ export async function getCurrentPlatformUser() {
   if (!token) return null;
 
   try {
+    if (useDatabaseAuth) {
+      const sql = await getPlatformSql();
+      const [user] = await sql`
+        SELECT u.*
+          FROM platform_sessions s
+          JOIN platform_users u ON u.id = s.user_id
+         WHERE s.token_hash = ${tokenHash(token)}
+           AND s.expires_at > now()
+         LIMIT 1`;
+      return user ? publicDatabaseUser(user) : null;
+    }
+
     const store = await readStore();
     const hash = tokenHash(token);
     const session = store.sessions.find(
@@ -238,6 +421,22 @@ export async function getCurrentPlatformUser() {
 }
 
 export async function createPublishingIdentityToken(user) {
+  if (useDatabaseAuth) {
+    const sql = await getPlatformSql();
+    const [storedUser] = await sql`
+      SELECT * FROM platform_users WHERE id = ${String(user.id)} LIMIT 1`;
+    if (!storedUser) throw new Error("Platform user not found.");
+    const publicIdentity = publicDatabaseUser(storedUser);
+    return signPublishingWorkspaceIdentity({
+      sub: publicIdentity.id,
+      workspaceId: publicIdentity.workspaceId,
+      workspaceKey: storedUser.publishing_workspace_key,
+      name: publicIdentity.name,
+      email: publicIdentity.email,
+      businessName: publicIdentity.businessName,
+    });
+  }
+
   const store = await readStore();
   const storedUser = store.users.find((candidate) => candidate.id === user.id);
   if (!storedUser) throw new Error("Platform user not found.");
@@ -255,6 +454,13 @@ export async function createPublishingIdentityToken(user) {
 export async function destroyPlatformSession(token) {
   if (!token) return;
   const hash = tokenHash(token);
+
+  if (useDatabaseAuth) {
+    const sql = await getPlatformSql();
+    await sql`DELETE FROM platform_sessions WHERE token_hash = ${hash}`;
+    return;
+  }
+
   await mutateStore((store) => {
     store.sessions = store.sessions.filter((session) => session.tokenHash !== hash);
   });
