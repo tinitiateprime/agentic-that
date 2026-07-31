@@ -66,7 +66,6 @@ try {
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
-  if (-not $health.chromeInstalled) { throw "A supported Chrome or Edge browser is required for X and YouTube login." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
@@ -114,23 +113,51 @@ try {
   $manualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($instagramAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $manualLogin.started) { throw "The Instagram manual-login smoke session did not start." }
+
+  $xAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/x/accounts" `
+    -Headers $authorization -ContentType "application/json" -Body (@{
+      displayName = "X smoke account"
+      handle = "@agenticthat-smoke"
+      enabled = $true
+    } | ConvertTo-Json) -TimeoutSec 5
+  $xManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($xAccount.id)/manual-login" `
+    -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
+  if (-not $xManualLogin.started) { throw "The X manual-login smoke session did not start." }
+
+  $youtubeAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/youtube/accounts" `
+    -Headers $authorization -ContentType "application/json" -Body (@{
+      displayName = "YouTube smoke account"
+      handle = "@agenticthat-smoke"
+      enabled = $true
+    } | ConvertTo-Json) -TimeoutSec 5
+  $youtubeManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($youtubeAccount.id)/manual-login" `
+    -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
+  if (-not $youtubeManualLogin.started) { throw "The YouTube manual-login smoke session did not start." }
+
   $companionLog = Join-Path $smokeRoot "publishing-data\logs\publishing-companion.log"
   $loginNavigationReady = $false
-  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+  for ($attempt = 0; $attempt -lt 40; $attempt++) {
     Start-Sleep -Milliseconds 250
     $loginLog = Get-Content -LiteralPath $companionLog -Raw
-    if ($loginLog -match "Navigating to Instagram login page") {
+    if (
+      $loginLog -match "Navigating to Instagram login page" -and
+      $loginLog -match "Navigating to X" -and
+      $loginLog -match "Opening YouTube in Companion"
+    ) {
       $loginNavigationReady = $true
       break
     }
   }
   if (-not $loginNavigationReady) {
-    $logTail = (Get-Content -LiteralPath $companionLog -Tail 12) -join [Environment]::NewLine
-    throw "The Instagram manual-login browser did not begin navigation.$([Environment]::NewLine)$logTail"
+    $logTail = (Get-Content -LiteralPath $companionLog -Tail 24) -join [Environment]::NewLine
+    throw "The embedded login browsers did not all begin navigation.$([Environment]::NewLine)$logTail"
   }
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
+  if ($loginLog -match "Opening standard Chrome|Opening standard Edge") {
+    throw "X or YouTube escaped to an external browser instead of opening inside Companion."
+  }
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
-    throw "The Instagram manual-login browser connection was refused."
+    throw "An embedded manual-login browser connection failed."
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"
@@ -156,9 +183,8 @@ try {
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
-  Write-Host "X and YouTube secure login browser: available"
+  Write-Host "Instagram, X, and YouTube login: opened inside Companion"
   Write-Host "Isolated browser-debug port: $debugPort"
-  Write-Host "Instagram manual-login browser: connected"
   Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"
   Write-Host "Production dashboard origin: allowed"

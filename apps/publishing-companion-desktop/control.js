@@ -268,11 +268,9 @@ function renderStatus(status) {
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
-  byId("browser-check").textContent = status.embeddedBrowser && status.chromeInstalled
-    ? "Built in + secure login"
-    : status.embeddedBrowser
-      ? "Built in; X/YouTube need Chrome"
-      : status.chromeInstalled ? "Chrome or Edge" : "Unavailable";
+  byId("browser-check").textContent = status.embeddedBrowser
+    ? "Built in"
+    : status.chromeInstalled ? "Chrome or Edge" : "Unavailable";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
   const consentGranted = status.publishingInteractionConsent === true;
   byId("permission-state").textContent = consentGranted ? "Unattended publishing allowed" : "Permission not granted";
@@ -290,7 +288,7 @@ function renderStatus(status) {
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
-  byId("install-chrome").hidden = Boolean(status.chromeInstalled);
+  byId("install-chrome").hidden = Boolean(status.embeddedBrowser || status.chromeInstalled);
 }
 
 async function refreshStatus() {

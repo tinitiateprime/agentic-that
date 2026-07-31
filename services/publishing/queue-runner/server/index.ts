@@ -1068,9 +1068,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     );
     res.status(202).json({
       message: started
-        ? account.platform === "x" || account.platform === "youtube"
-          ? `${platformLabels[account.platform]} login opened in a supported secure browser. Complete sign-in, then close that browser window so Companion can verify and save the session.`
-          : "Manual login opened in Companion. Complete login there; the session will be saved and the live pane will close."
+        ? "Manual login opened inside Companion. Complete login there; the account session will be saved and the live pane will close."
         : "Manual login is already running for this account.",
       started,
     });

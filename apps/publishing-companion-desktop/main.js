@@ -389,7 +389,9 @@ function createDashboardView() {
     },
   });
   dashboardView.setBackgroundColor("#f4f8f6");
-  dashboardView.webContents.setUserAgent(chromiumUserAgent(dashboardView.webContents));
+  const dashboardUserAgent = chromiumUserAgent(dashboardView.webContents);
+  dashboardView.webContents.setUserAgent(dashboardUserAgent);
+  dashboardView.webContents.session.setUserAgent(dashboardUserAgent, "en-US,en;q=0.9");
   dashboardView.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
@@ -533,7 +535,9 @@ async function openManagedBrowser(request) {
     },
   });
   view.setBackgroundColor("#ffffff");
-  view.webContents.setUserAgent(chromiumUserAgent(view.webContents));
+  const embeddedUserAgent = chromiumUserAgent(view.webContents);
+  view.webContents.setUserAgent(embeddedUserAgent);
+  view.webContents.session.setUserAgent(embeddedUserAgent, "en-US,en;q=0.9");
   view.webContents.setWindowOpenHandler(({ url }) => {
     void view.webContents.loadURL(url);
     return { action: "deny" };

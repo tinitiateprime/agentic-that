@@ -2264,7 +2264,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay in the secure browser' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay in the Companion browser' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
@@ -2281,7 +2281,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || (account.platform === 'x' || account.platform === 'youtube' ? 'Secure Chrome or Edge login' : 'Manual Companion login')}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Companion login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login

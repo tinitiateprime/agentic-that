@@ -1,5 +1,4 @@
 import { chromium, type BrowserContext, type Page } from "playwright-core";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,8 +37,6 @@ import { assessPublishingSafety, type PublishingSafetyAssessment } from "./safet
 import { classifyPublishingRisk } from "./risk-classifier.js";
 
 const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
-const X_LOGIN_URL = "https://x.com/i/flow/login";
-const YOUTUBE_LOGIN_URL = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F";
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 
 type EncryptedSessionState = {
@@ -202,7 +199,7 @@ function detectedChromeExecutablePath() {
 function chromeExecutablePath() {
   const executablePath = detectedChromeExecutablePath();
   if (!executablePath) {
-    throw new Error("Google Chrome or Microsoft Edge is required for X and YouTube login. Install a supported browser, then restart AgenticThat Publishing Companion.");
+    throw new Error("Google Chrome or Microsoft Edge is required when the publisher runs without AgenticThat Publishing Companion.");
   }
   return executablePath;
 }
@@ -216,18 +213,6 @@ export function publishingBrowserRuntimeHealth() {
     embeddedBrowser,
     automationAvailable: embeddedBrowser || Boolean(executablePath),
   };
-}
-
-function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
-  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
-
-  return new Promise<boolean>((resolve) => {
-    const timeout = setTimeout(() => resolve(false), timeoutMs);
-    processHandle.once("exit", () => {
-      clearTimeout(timeout);
-      resolve(true);
-    });
-  });
 }
 
 function prepareChromeProfile(profileDir: string) {
@@ -408,20 +393,10 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
   }
 }
 
-async function exportAccountSessionState(account: PublishingAccount, context: BrowserContext) {
-  const key = sessionEncryptionKey();
-  if (!key) {
-    throw new Error("Companion could not create the protected session key required to save this login.");
-  }
-  fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
-  writeEncryptedSessionState(accountSessionStatePath(account), await context.storageState(), key);
-  console.log(`Imported standard Chrome session for ${account.platform} account ${account.handle}.`);
-}
-
 async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
-  // Companion partitions retain their own browser state. X and YouTube logins
-  // are completed in standard Chrome and exported here because those providers
-  // reject embedded authentication windows.
+  // Each embedded account browser uses a stable persistent Electron partition,
+  // so Companion restores its protected browser storage without a cookie export.
+  if (publishingDesktopHost()) return;
   migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
@@ -431,9 +406,6 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
     if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-      if (publishingDesktopHost() && (account.platform === "x" || account.platform === "youtube")) {
-        await context.clearCookies();
-      }
       await context.addCookies(state.cookies);
     }
   } catch (error) {
@@ -441,80 +413,6 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
       `Could not restore saved session state for ${account.platform} account ${account.handle}:`,
       errorMessage(error),
     );
-  }
-}
-
-function standardChromeLoginUrl(account: PublishingAccount) {
-  if (account.platform === "x") return X_LOGIN_URL;
-  if (account.platform === "youtube") return YOUTUBE_LOGIN_URL;
-  throw new Error(`Standard Chrome login is not required for ${account.platform}.`);
-}
-
-async function launchStandardChromeForManualLogin(account: PublishingAccount) {
-  const profileDir = accountProfilePath(account);
-  fs.mkdirSync(profileDir, { recursive: true });
-  prepareChromeProfile(profileDir);
-
-  const chromePath = chromeExecutablePath();
-  const chromeArgs = [
-    `--user-data-dir=${profileDir}`,
-    "--profile-directory=Default",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-mode",
-    "--disable-notifications",
-    "--new-window",
-    standardChromeLoginUrl(account),
-  ];
-
-  console.log(`Opening standard Chrome for manual ${account.platform} login for ${account.handle}.`);
-  const chromeProcess = spawn(chromePath, chromeArgs, {
-    stdio: "ignore",
-    windowsHide: false,
-  });
-
-  let spawnError: Error | null = null;
-  chromeProcess.once("error", error => { spawnError = error; });
-
-  await new Promise(resolve => setTimeout(resolve, 100));
-  if (spawnError) throw spawnError;
-
-  return { chromeProcess, profileDir };
-}
-
-async function prepareStandardChromeSession(account: PublishingAccount) {
-  const releaseAccount = reserveAccountBrowser(account, "login");
-  let chromeProcess: ChildProcess | null = null;
-  let verificationContext: BrowserContext | null = null;
-
-  try {
-    const launched = await launchStandardChromeForManualLogin(account);
-    chromeProcess = launched.chromeProcess;
-    const { profileDir } = launched;
-    const timeoutMs = Number(process.env.PUBLISH_QUEUE_MANUAL_LOGIN_TIMEOUT_MS ?? 10 * 60 * 1000);
-    const closedByUser = await waitForProcessExit(
-      chromeProcess,
-      Number.isFinite(timeoutMs) ? Math.max(60_000, timeoutMs) : 10 * 60 * 1000,
-    );
-    if (!closedByUser) {
-      if (chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
-      throw new Error(`${account.platform === "youtube" ? "YouTube" : "X"} login timed out. Sign in and close the Chrome window within 10 minutes.`);
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 750));
-    verificationContext = await chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      executablePath: chromeExecutablePath(),
-      args: ["--no-first-run", "--no-default-browser-check", "--disable-notifications"],
-    });
-    const page = verificationContext.pages()[0] ?? await verificationContext.newPage();
-    await loginOnly(page, account, { useSavedSessionOnly: true });
-    await exportAccountSessionState(account, verificationContext);
-    console.log(`Standard Chrome ${account.platform} session verified and saved for ${account.handle}.`);
-  } finally {
-    await verificationContext?.close().catch(() => undefined);
-    if (chromeProcess && chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
-    releaseAccount();
   }
 }
 
@@ -765,9 +663,12 @@ async function runAccountQueue(
 }
 
 async function prepareManualAccountSession(account: PublishingAccount) {
-  if (account.platform === "x" || account.platform === "youtube") {
-    await prepareStandardChromeSession(account);
-    return;
+  const desktopHost = publishingDesktopHost();
+  if (desktopHost && (account.platform === "x" || account.platform === "youtube")) {
+    // An explicit Login action starts clean, preventing an earlier rejected or
+    // incomplete provider page from poisoning the next embedded login attempt.
+    await Promise.resolve(desktopHost.clearAccountBrowserData(account.id));
+    clearSavedAccountSession(account);
   }
 
   console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}).`);
