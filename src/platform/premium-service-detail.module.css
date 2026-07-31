@@ -2253,6 +2253,9 @@
 }
 
 .platformPostPreview {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid #dfe5e3;
   border-radius: 11px;
@@ -2286,6 +2289,9 @@
 
 .platformPostPreview header small,
 .youtubePreviewMeta small {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   margin-top: 3px;
   color: #7e8996;
   font-size: 9px;
@@ -2304,9 +2310,9 @@
 }
 
 .platformPostPreview > p {
-  min-height: 74px;
+  min-height: 66px;
   margin: 0;
-  padding: 5px 12px 11px;
+  padding: 4px 12px 9px;
   color: #4f5d6f;
   font-size: 10px;
   line-height: 1.5;
@@ -2314,13 +2320,22 @@
 
 .platformPostPreview > p strong {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
   color: #1f2b3a;
   font-size: 12px;
+  line-height: 1.35;
+}
+
+.platformPostPreview > p > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .platformArtworkCompact {
-  min-height: 168px;
+  min-height: 136px;
+  flex: 1;
   border: 0;
   border-radius: 0;
 }
@@ -2329,17 +2344,15 @@
   display: none;
 }
 
-.platformArtworkCompact .platformArtworkCopy {
-  bottom: 10px;
-}
-
-.platformArtworkCompact .platformArtworkCopy > strong {
-  font-size: 11px;
+.platformPostPreview .platformArtworkCompact .platformArtworkCopy,
+.platformPostPreview .platformArtworkCompact .platformArtworkShade {
+  display: none;
 }
 
 .platformPostPreview > footer {
   display: flex;
-  min-height: 34px;
+  min-height: 32px;
+  flex: 0 0 32px;
   align-items: center;
   justify-content: space-around;
   border-top: 1px solid #ebefed;
@@ -2354,31 +2367,60 @@
   gap: 5px;
 }
 
+.platformEngagementSummary {
+  display: flex;
+  min-height: 25px;
+  flex: 0 0 25px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  color: #718091;
+  font-size: 8px;
+}
+
 .youtubePostPreview {
   display: flex;
   flex-direction: column;
 }
 
 .youtubePostPreview .platformArtworkCompact {
-  min-height: 245px;
+  min-height: 0;
   flex: 1;
 }
 
 .youtubePreviewMeta {
   display: grid;
-  min-height: 64px;
+  min-height: 67px;
+  flex: 0 0 67px;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 8px 11px;
 }
 
-.platformPostPreview_x > p {
-  min-height: 88px;
+.platformPostPreview_facebook .platformArtworkCompact > img {
+  object-position: center 48%;
 }
 
 .platformPostPreview_x .platformArtworkCompact {
-  min-height: 153px;
+  min-height: 128px;
+}
+
+.platformPostPreview_x > p {
+  min-height: 73px;
+}
+
+.platformPostPreview_x > footer {
+  justify-content: space-between;
+  padding: 0 11px;
+}
+
+.platformPostPreview_x .platformArtworkCompact > img {
+  object-position: center 44%;
+}
+
+.platformPostPreview_linkedin .platformArtworkCompact > img {
+  object-position: center 42%;
 }
 
 .platformPreviewScene > .platformPostPreview {
@@ -3378,6 +3420,8 @@
   .platformPostPreview { height: 100%; }
   .platformArtworkCompact { min-height: 250px; }
   .youtubePostPreview .platformArtworkCompact { min-height: 360px; }
+  .platformPostPreview .platformArtworkCompact,
+  .youtubePostPreview .platformArtworkCompact { min-height: 0; }
   .instagramPhonePreview > img { height: 300px; }
   .instagramPostDetails { display: none; }
   .instagramScheduleScene { grid-template-columns: 1fr; grid-template-rows: 222px minmax(0, 1fr); gap: 8px; padding: 9px; }
@@ -3459,6 +3503,8 @@
   .instagramPhonePreview > img { height: 292px; }
   .platformArtworkCompact { min-height: 235px; }
   .youtubePostPreview .platformArtworkCompact { min-height: 345px; }
+  .platformPostPreview .platformArtworkCompact,
+  .youtubePostPreview .platformArtworkCompact { min-height: 0; }
   .publishComposer { grid-template-columns: 1fr; }
   .publishComposer > .mediaArtwork { display: none; }
   .publishComposer label { min-height: 54px; }

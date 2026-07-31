@@ -25,11 +25,14 @@ import {
   MoreHorizontal,
   Paperclip,
   Play,
+  Repeat2,
   Search,
   Send,
+  Share2,
   ShieldCheck,
   Smile,
   Sparkles,
+  ThumbsUp,
   UploadCloud,
   Users,
 } from "lucide-react";
@@ -87,9 +90,9 @@ const publishingProfiles = {
     account: "AgenticThat",
     heroTitle: "YouTube Publishing",
     heroDescription: "Prepare the video, title, description, channel, and release time in one clear publishing workflow.",
-    headline: "Inside AgenticThat: a simpler way to run content operations",
-    body: "See how one connected workspace takes a campaign from first draft to a confident, scheduled release.",
-    mediaLabel: "Product walkthrough",
+    headline: "How AgenticThat turns one campaign into a clear publishing plan",
+    body: "A practical walkthrough of composing, reviewing, scheduling, and tracking every channel from one workspace.",
+    mediaLabel: "Publishing workflow, explained",
     postType: "Public video · 16:9",
     scheduleTime: "6:30 PM",
     mediaClass: styles.youtubeMedia,
@@ -103,9 +106,9 @@ const publishingProfiles = {
     account: "AgenticThat",
     heroTitle: "Facebook Publishing",
     heroDescription: "Create page-ready updates, confirm the right account, preview the post, and schedule it with confidence.",
-    headline: "One workspace for every customer-facing update",
-    body: "Plan the message, review the final creative, and keep every scheduled Facebook update visible to your team.",
-    mediaLabel: "Product announcement",
+    headline: "A faster way to keep customers informed",
+    body: "Your next update is ready: clear copy, approved media, and the right publish time—all organised in one shared workspace.",
+    mediaLabel: "Customer update",
     postType: "Facebook Page post",
     scheduleTime: "11:30 AM",
     mediaClass: styles.facebookMedia,
@@ -119,10 +122,10 @@ const publishingProfiles = {
     account: "@AgenticThat",
     heroTitle: "X Publishing",
     heroDescription: "Write concise updates, verify the publishing account, preview every detail, and send at the right moment.",
-    headline: "Your content operation, finally in one place.",
-    body: "Compose, review, and schedule updates across your connected channels from one focused AgenticThat workspace.",
-    mediaLabel: "Launch update",
-    postType: "X post · 223 characters",
+    headline: "A faster publishing workflow just shipped.",
+    body: "Compose, preview, schedule, and track every channel from one AgenticThat workspace. Less switching. More clarity.",
+    mediaLabel: "Product release",
+    postType: "X post · Within 280 characters",
     scheduleTime: "2:15 PM",
     mediaClass: styles.xMedia,
     audience: [
@@ -135,9 +138,9 @@ const publishingProfiles = {
     account: "AgenticThat",
     heroTitle: "LinkedIn Publishing",
     heroDescription: "Prepare professional updates, preserve review context, and schedule every company post from one workspace.",
-    headline: "Building a clearer operating system for content teams",
-    body: "Today we are sharing how AgenticThat helps teams prepare, approve, and publish high-quality updates without losing context.",
-    mediaLabel: "Company insight",
+    headline: "Why content operations need one source of truth",
+    body: "Strong publishing depends on clear ownership, review context, and delivery visibility. Here is the operating model our team uses.",
+    mediaLabel: "Content operations playbook",
     postType: "Company Page update",
     scheduleTime: "9:30 AM",
     mediaClass: styles.linkedinMedia,
@@ -360,7 +363,13 @@ function CampaignImage({ className = "" }) {
 }
 
 function publishingImageFor(service) {
-  return service.slug === "instagram" ? "/instagram-summer-campaign.webp" : "/publish-queue-runner/operations-desk.png";
+  return {
+    instagram: "/instagram-summer-campaign.webp",
+    youtube: "/publishing-youtube-preview.webp",
+    facebook: "/publishing-facebook-preview.webp",
+    x: "/publishing-x-preview.webp",
+    linkedin: "/publishing-linkedin-preview.webp",
+  }[service.slug] || "/publish-queue-runner/operations-desk.png";
 }
 
 function platformFieldLabel(service) {
@@ -450,16 +459,75 @@ function PlatformPostPreview({ service, profile }) {
     return (
       <article className={`${styles.platformPostPreview} ${styles.youtubePostPreview}`}>
         <PlatformArtwork service={service} profile={profile} compact />
-        <div className={styles.youtubePreviewMeta}><span className={styles.publisherBrandAvatar}>AT</span><span><strong>{profile.headline}</strong><small>AgenticThat · Premieres 24 Sep 2026</small></span><MoreHorizontal size={17} /></div>
+        <div className={styles.youtubePreviewMeta}>
+          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span>
+            <strong>{profile.headline}</strong>
+            <small>AgenticThat · 2.1K views · Premieres 24 Sep</small>
+          </span>
+          <MoreHorizontal size={17} />
+        </div>
       </article>
     );
   }
+
+  if (service.slug === "facebook") {
+    return (
+      <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_facebook}`}>
+        <header>
+          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span><strong>AgenticThat</strong><small>2 h · <Globe2 size={9} /></small></span>
+          <MoreHorizontal size={17} />
+        </header>
+        <p><strong>{profile.headline}</strong><span>{profile.body}</span></p>
+        <PlatformArtwork service={service} profile={profile} compact />
+        <div className={styles.platformEngagementSummary}><span>👍 💚 284</span><span>42 comments · 18 shares</span></div>
+        <footer>
+          <span><ThumbsUp size={14} />Like</span>
+          <span><MessageCircle size={14} />Comment</span>
+          <span><Share2 size={14} />Share</span>
+        </footer>
+      </article>
+    );
+  }
+
+  if (service.slug === "x") {
+    return (
+      <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_x}`}>
+        <header>
+          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span><strong>AgenticThat ✓</strong><small>@AgenticThat · 2h</small></span>
+          <MoreHorizontal size={17} />
+        </header>
+        <p><strong>{profile.headline}</strong><span>{profile.body}</span></p>
+        <PlatformArtwork service={service} profile={profile} compact />
+        <footer>
+          <span><MessageCircle size={14} />48</span>
+          <span><Repeat2 size={14} />126</span>
+          <span><Heart size={14} />1.8K</span>
+          <span><BarChart3 size={14} />24K</span>
+          <span><Bookmark size={14} /></span>
+        </footer>
+      </article>
+    );
+  }
+
   return (
-    <article className={`${styles.platformPostPreview} ${styles[`platformPostPreview_${service.slug}`] || ""}`}>
-      <header><span className={styles.publisherBrandAvatar}>AT</span><span><strong>AgenticThat</strong><small>{service.slug === "x" ? "@AgenticThat" : service.slug === "linkedin" ? "12,480 followers" : "Sponsored preview"}</small></span><MoreHorizontal size={17} /></header>
-      <p><strong>{profile.headline}</strong>{profile.body}</p>
+    <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_linkedin}`}>
+      <header>
+        <span className={styles.publisherBrandAvatar}>AT</span>
+        <span><strong>AgenticThat</strong><small>12,480 followers · 1h · <Globe2 size={9} /></small></span>
+        <MoreHorizontal size={17} />
+      </header>
+      <p><strong>{profile.headline}</strong><span>{profile.body}</span></p>
       <PlatformArtwork service={service} profile={profile} compact />
-      <footer>{service.slug === "x" ? <><span><MessageCircle size={14} />48</span><span><Send size={14} />126</span><span><Heart size={14} />1.8K</span><span><Bookmark size={14} /></span></> : <><span><Heart size={14} />Like</span><span><MessageCircle size={14} />Comment</span><span><Send size={14} />Share</span></>}</footer>
+      <div className={styles.platformEngagementSummary}><span>👍 💡 ❤️ 376</span><span>54 comments · 21 reposts</span></div>
+      <footer>
+        <span><ThumbsUp size={14} />Like</span>
+        <span><MessageCircle size={14} />Comment</span>
+        <span><Repeat2 size={14} />Repost</span>
+        <span><Send size={14} />Send</span>
+      </footer>
     </article>
   );
 }
