@@ -47,6 +47,17 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     return fetch(`${origin}${route}`, { ...init, headers });
   }
 
+  const missingApiRoute = await api("/api/compatibility-route-that-does-not-exist", {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(missingApiRoute.status, 404);
+  assert.match(missingApiRoute.headers.get("content-type") ?? "", /application\/json/);
+  assert.match(
+    ((await missingApiRoute.json()) as { message: string }).message,
+    /Publishing API route not found/,
+  );
+
   const accountResponse = await api("/api/platforms/facebook/accounts", {
     method: "POST",
     body: JSON.stringify({

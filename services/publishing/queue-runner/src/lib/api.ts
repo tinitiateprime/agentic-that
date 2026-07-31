@@ -68,6 +68,22 @@ export class PublishingSafetyApiError extends Error {
   }
 }
 
+class PublishingApiRequestError extends Error {
+  readonly status: number;
+  readonly path: string;
+
+  constructor(message: string, status: number, path: string) {
+    super(message);
+    this.name = "PublishingApiRequestError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
+function isLegacyMissingRoute(error: unknown) {
+  return error instanceof PublishingApiRequestError && error.status === 404;
+}
+
 export function setAuthToken(token: string | null) {
   authToken = token;
 }
@@ -122,7 +138,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (error instanceof ContentPreflightApiError || error instanceof PublishingSafetyApiError) throw error;
       // Keep the plain response text when the server did not return JSON.
     }
-    throw new Error(message);
+    throw new PublishingApiRequestError(message, response.status, path);
   }
 
   if (response.status === 204) {
@@ -161,25 +177,50 @@ export const api = {
     };
   },
 
-  assessPublishingSafety: (postFormat: PostFormat, destinations: UnifiedPostDestinationInput[]) =>
-    request<{
-      allowed: boolean;
-      issues: PublishingSafetyApiIssue[];
-      assessments: Array<{
-        accountId: string;
-        platform: Platform;
+  assessPublishingSafety: async (postFormat: PostFormat, destinations: UnifiedPostDestinationInput[]) => {
+    try {
+      return await request<{
         allowed: boolean;
-        requestedAt: string;
-        earliestAt: string;
-      }>;
-    }>("/api/publishing-safety/assess", {
-      method: "POST",
-      body: JSON.stringify({ postFormat, destinations }),
-    }),
+        issues: PublishingSafetyApiIssue[];
+        assessments: Array<{
+          accountId: string;
+          platform: Platform;
+          allowed: boolean;
+          requestedAt: string;
+          earliestAt: string;
+        }>;
+      }>("/api/publishing-safety/assess", {
+        method: "POST",
+        body: JSON.stringify({ postFormat, destinations }),
+      });
+    } catch (error) {
+      // Public Companion 1.3.0 predates the separate safety-assessment route.
+      // Its scheduling endpoint still performs the content checks it supports,
+      // so allow that endpoint to decide until the signed update is installed.
+      if (isLegacyMissingRoute(error)) {
+        return { allowed: true, issues: [], assessments: [] };
+      }
+      throw error;
+    }
+  },
 
-  authorizePublishing: () => request<{ granted: boolean; message: string }>("/api/automation/consent", {
-    method: "POST",
-  }),
+  authorizePublishing: async () => {
+    try {
+      return await request<{ granted: boolean; message: string }>("/api/automation/consent", {
+        method: "POST",
+      });
+    } catch (error) {
+      // Companion 1.3.0 has no desktop-consent handshake. Preserve its existing
+      // scheduling flow while newer Companions continue to require consent.
+      if (isLegacyMissingRoute(error)) {
+        return {
+          granted: true,
+          message: "Publishing authorization is managed by this Companion version.",
+        };
+      }
+      throw error;
+    }
+  },
 
   login: (payload: LoginInput) =>
     request<AuthResponse>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),

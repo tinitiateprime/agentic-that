@@ -1553,6 +1553,12 @@ app.post("/api/automation/stop", requireRoles("operations_manager"), async (req:
   }
 });
 
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    message: `Publishing API route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
+
 // --- ERROR HANDLER ---
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (error instanceof PublishingScheduleSafetyError) {
