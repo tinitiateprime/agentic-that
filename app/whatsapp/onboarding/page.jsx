@@ -25,7 +25,13 @@ export default async function OnboardingPage() {
           business,
           connected: Boolean(account),
           account: account
-            ? { waba_id: account.waba_id, api_version: account.api_version, app_id: account.app_id }
+            ? {
+                waba_id: account.waba_id,
+                api_version: account.api_version,
+                app_id: account.app_id,
+                provider: account.provider,
+                service_url: account.service_url,
+              }
             : null,
           numbers,
           encryptionReady: hasEncryptionKey(),

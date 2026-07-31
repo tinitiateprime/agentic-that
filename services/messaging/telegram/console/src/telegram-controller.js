@@ -151,6 +151,42 @@ function busy(form, isBusy) { const button = form.querySelector("button[type='su
 function onError(error, node) { if (error instanceof ApiError && error.status === 401) return signedOut("Your session has ended. Please sign in again."); status(node, error instanceof Error ? error.message : "Something went wrong.", "error"); }
 function showAuthError(error) { status(el.signInStatus, error instanceof Error ? error.message : "Sign in failed.", "error"); }
 
+function configManagerContinuation() {
+  const raw = new URLSearchParams(window.location.search).get("returnTo");
+  if (!raw) return "";
+  try {
+    const target = new URL(raw, window.location.origin);
+    if (!["http:", "https:"].includes(target.protocol) || target.pathname !== "/config-manager") {
+      return "";
+    }
+
+    let referrerOrigin = "";
+    try {
+      referrerOrigin = document.referrer ? new URL(document.referrer).origin : "";
+    } catch {}
+    const currentIsLocal = ["127.0.0.1", "localhost"].includes(window.location.hostname);
+    const targetIsLocal = ["127.0.0.1", "localhost"].includes(target.hostname);
+    const trustedOrigin =
+      target.origin === window.location.origin ||
+      (referrerOrigin && target.origin === referrerOrigin) ||
+      (currentIsLocal && targetIsLocal);
+    return trustedOrigin ? target.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+const returnToConfigManager = configManagerContinuation();
+
+async function finishWorkspaceSignIn(user) {
+  signedIn(user);
+  if (returnToConfigManager) {
+    window.location.replace(returnToConfigManager);
+    return;
+  }
+  await loadAccounts();
+}
+
 function moveAccountSetupToConfigManager() {
   const panel = document.querySelector(".connect-panel");
   if (!panel) return;
@@ -919,7 +955,7 @@ el.passwordSignInForm.addEventListener("submit", async (event) => {
   const username = el.username.value.trim(), password = el.loginPassword.value;
   if (!username || !password) return status(el.signInStatus, "Enter username and password.", "error");
   busy(el.passwordSignInForm, true); status(el.signInStatus, "Opening workspace...");
-  try { const data = await api("/v1/auth/password", { method: "POST", body: { username, password } }); signedIn(data.user); await loadAccounts(); }
+  try { const data = await api("/v1/auth/password", { method: "POST", body: { username, password } }); await finishWorkspaceSignIn(data.user); }
   catch (error) { showAuthError(error); }
   finally { busy(el.passwordSignInForm, false); }
 });
@@ -927,7 +963,7 @@ el.createAccount.addEventListener("click", async () => {
   const username = el.username.value.trim(), password = el.loginPassword.value, displayName = el.displayName.value.trim();
   if (!username || !password) return status(el.signInStatus, "Choose a username and password.", "error");
   el.createAccount.disabled = true; busy(el.passwordSignInForm, true); status(el.signInStatus, "Creating your workspace...");
-  try { const data = await api("/v1/auth/register", { method: "POST", body: { username, password, displayName } }); el.loginPassword.value = ""; el.displayName.value = ""; signedIn(data.user); await loadAccounts(); }
+  try { const data = await api("/v1/auth/register", { method: "POST", body: { username, password, displayName } }); el.loginPassword.value = ""; el.displayName.value = ""; await finishWorkspaceSignIn(data.user); }
   catch (error) { showAuthError(error); }
   finally { el.createAccount.disabled = false; busy(el.passwordSignInForm, false); }
 });
@@ -936,7 +972,7 @@ el.tokenSignInForm.addEventListener("submit", async (event) => {
   const accessToken = el.accessToken.value.trim();
   if (!accessToken) return status(el.signInStatus, "Enter your access token.", "error");
   busy(el.tokenSignInForm, true); status(el.signInStatus, "Opening workspace...");
-  try { const data = await api("/v1/auth/session", { method: "POST", body: { accessToken } }); el.accessToken.value = ""; signedIn(data.user); await loadAccounts(); }
+  try { const data = await api("/v1/auth/session", { method: "POST", body: { accessToken } }); el.accessToken.value = ""; await finishWorkspaceSignIn(data.user); }
   catch (error) { showAuthError(error); }
   finally { busy(el.tokenSignInForm, false); }
 });
@@ -1093,7 +1129,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 (async function restoreSession() {
-  try { const data = await api("/v1/me"); signedIn(data.user); await loadAccounts(); }
+  try { const data = await api("/v1/me"); await finishWorkspaceSignIn(data.user); }
   catch (error) { signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again."); }
   setView("dashboard");
   runScheduler();

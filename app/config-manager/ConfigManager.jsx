@@ -173,6 +173,7 @@ export default function ConfigManager({
   initialService,
   initialMessagingPlatform,
   initialPublishingPlatform,
+  initialTelegramConnect,
   publishingIdentityToken,
   user,
   telegramDashboardUrl,
@@ -380,6 +381,7 @@ export default function ConfigManager({
               user={telegramUser}
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
+              continueTelegramConnect={initialTelegramConnect}
               onReload={loadTelegram}
               setNotice={setNotice}
             />
@@ -423,6 +425,7 @@ function MessagingManager({
   user,
   accounts,
   dashboardUrl,
+  continueTelegramConnect,
   onReload,
   setNotice
 }) {
@@ -451,6 +454,7 @@ function MessagingManager({
           user={user}
           accounts={accounts}
           dashboardUrl={dashboardUrl}
+          continueTelegramConnect={continueTelegramConnect}
           onReload={onReload}
           setNotice={setNotice}
         />
@@ -492,7 +496,15 @@ function PlaceholderService({ icon: Icon, title, copy }) {
   );
 }
 
-function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNotice }) {
+function TelegramManager({
+  status,
+  user,
+  accounts,
+  dashboardUrl,
+  continueTelegramConnect,
+  onReload,
+  setNotice
+}) {
   const [connecting, setConnecting] = useState(false);
   const [stage, setStage] = useState("credentials");
   const [challengeId, setChallengeId] = useState("");
@@ -504,6 +516,25 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
   const [busy, setBusy] = useState(false);
   const [showHash, setShowHash] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    if (!continueTelegramConnect || status !== "ready") return;
+    setConnecting(true);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("continue");
+    window.history.replaceState({}, "", url);
+  }, [continueTelegramConnect, status]);
+
+  const openTelegramSignIn = () => {
+    const returnUrl = new URL("/config-manager", window.location.origin);
+    returnUrl.searchParams.set("service", "messaging");
+    returnUrl.searchParams.set("platform", "telegram");
+    returnUrl.searchParams.set("continue", "telegram-connect");
+
+    const signInUrl = new URL(dashboardUrl, window.location.origin);
+    signInUrl.searchParams.set("returnTo", returnUrl.toString());
+    window.location.assign(signInUrl.toString());
+  };
 
   const resetConnection = () => {
     setConnecting(false);
@@ -615,10 +646,10 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
       <EmptyState
         icon={LockKeyhole}
         title="Sign in to the Telegram workspace once"
-        copy="Config Manager uses the Telegram workspace session to connect accounts securely. Sign in there, return to this tab, and recheck."
+        copy="Config Manager uses the Telegram workspace session securely. After sign-in, we bring you back here and open the account connection form automatically."
         action={
           <div className="config-empty-actions">
-            <a className="config-primary" href={dashboardUrl} target="_blank" rel="noreferrer">Open Telegram sign in<ExternalLink size={15} /></a>
+            <button className="config-primary" type="button" onClick={openTelegramSignIn}>Continue to Telegram sign in<ArrowRight size={15} /></button>
             <button className="config-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I signed in</button>
           </div>
         }

@@ -76,9 +76,16 @@ SECRETS_SCAN_OMIT_KEYS=
 
 Do not add `SECRETS_SCAN_OMIT_KEYS` in the Netlify UI. The repository excludes only public URLs, provider names, API versions, phone/WABA/app identifiers, and the Embedded Signup configuration id. Real tokens, app secrets, passwords, encryption keys, session cookies, and connection strings remain protected by secret scanning.
 
-## Optional alternatives
+## Optional WATI fallback
 
-Only add these when switching WhatsApp from Meta to WATI:
+New workspaces can choose Meta or WATI during WhatsApp onboarding. For WATI,
+the workspace owner enters the tenant API URL and access token in the setup
+wizard; AgenticThat validates them, generates a workspace-specific webhook
+secret, and stores the connection encrypted. Those self-serve connections do
+not require global WATI variables in Netlify.
+
+Only add these variables when seeding a legacy/default WATI connection for the
+first admin workspace:
 
 ```env
 WA_PROVIDER=wati

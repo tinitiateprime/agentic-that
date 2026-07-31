@@ -1,7 +1,7 @@
 import { getSql } from "@whatsapp/lib/db";
 import { getCurrentUser } from "@whatsapp/lib/auth";
 import { getAccountForBusiness, listTenantNumbers, upsertAccount, syncNumbers } from "@whatsapp/lib/tenant";
-import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
+import { metaListPhoneNumbers, watiGetContacts } from "@whatsapp/lib/wa/provider";
 import { hasEncryptionKey } from "@whatsapp/lib/crypto";
 
 // Self-serve onboarding for a new workspace.
@@ -34,6 +34,8 @@ export async function GET() {
           api_version: account.api_version,
           app_id: account.app_id,
           status: account.status,
+          provider: account.provider,
+          service_url: account.service_url,
           onboarding_source: account.onboarding_source,
           has_token: Boolean(account.access_token),
         }
@@ -127,8 +129,87 @@ export async function POST(req) {
       const conflict = /already connected/i.test(String(err?.message));
       return Response.json({ error: err.message || "Could not save this WhatsApp account" }, { status: conflict ? 409 : 400 });
     }
-    await sql`UPDATE businesses SET provider = 'meta' WHERE id = ${user.business_id}`;
-    return Response.json({ ok: true, numbers: saved });
+    await sql`
+      UPDATE businesses
+         SET provider = 'meta', active_wa_provider = 'meta'
+       WHERE id = ${user.business_id}`;
+    return Response.json({ ok: true, provider: "meta", numbers: saved });
+  }
+
+  if (body.step === "wati") {
+    if (!hasEncryptionKey()) {
+      return Response.json(
+        { error: "Server is missing CREDENTIAL_ENCRYPTION_KEY — credentials can't be stored securely." },
+        { status: 500 }
+      );
+    }
+
+    const serviceUrl = String(body.apiUrl || "").trim().replace(/\/+$/, "");
+    const accessToken = String(body.accessToken || "").trim();
+    const webhookSecret = String(body.webhookSecret || "").trim();
+
+    let parsed;
+    try {
+      parsed = new URL(serviceUrl);
+    } catch {
+      return Response.json({ error: "Enter a valid WATI API endpoint URL" }, { status: 400 });
+    }
+    if (parsed.protocol !== "https:") {
+      return Response.json({ error: "The WATI API endpoint must use HTTPS" }, { status: 400 });
+    }
+    if (!accessToken) {
+      return Response.json({ error: "WATI access token is required" }, { status: 400 });
+    }
+    if (webhookSecret.length < 24) {
+      return Response.json(
+        { error: "Use a webhook secret with at least 24 characters" },
+        { status: 400 }
+      );
+    }
+
+    let contacts;
+    try {
+      contacts = await watiGetContacts(
+        { pageSize: 1 },
+        { provider: "wati", serviceUrl, accessToken }
+      );
+    } catch (err) {
+      return Response.json(
+        { error: `WATI rejected these connection details: ${err.message}` },
+        { status: 400 }
+      );
+    }
+
+    try {
+      await upsertAccount({
+        businessId: user.business_id,
+        wabaId: `wati:${user.business_id}`,
+        accessToken,
+        webhookVerifyToken: webhookSecret,
+        provider: "wati",
+        onboardingSource: "self-serve",
+        status: "active",
+        serviceUrl,
+      });
+    } catch (err) {
+      return Response.json(
+        { error: err.message || "Could not save this WATI account" },
+        { status: 400 }
+      );
+    }
+
+    await sql`
+      UPDATE businesses
+         SET provider = 'wati', active_wa_provider = 'wati'
+       WHERE id = ${user.business_id}`;
+
+    return Response.json({
+      ok: true,
+      provider: "wati",
+      apiUrl: serviceUrl,
+      contactCheck: contacts.length,
+      numbers: [],
+    });
   }
 
   if (body.step === "default-number") {

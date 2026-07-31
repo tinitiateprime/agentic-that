@@ -31,6 +31,7 @@ export default async function ConfigManagerPage({ searchParams }) {
       initialService={requestedService}
       initialMessagingPlatform={requestedMessagingPlatform}
       initialPublishingPlatform={requestedPublishingPlatform}
+      initialTelegramConnect={params?.continue === "telegram-connect"}
       publishingIdentityToken={await createPublishingIdentityToken(user)}
       user={{ name: user.name, email: user.email, businessName: user.businessName }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}

@@ -96,7 +96,7 @@ export async function POST(req) {
     UPDATE businesses
        SET provider = 'meta',
            active_wa_provider = CASE
-             WHEN active_wa_provider IS NULL OR active_wa_provider = 'mock' THEN 'meta'
+             WHEN onboarded_at IS NULL OR active_wa_provider IS NULL OR active_wa_provider = 'mock' THEN 'meta'
              ELSE active_wa_provider
            END
      WHERE id = ${user.business_id}`;
