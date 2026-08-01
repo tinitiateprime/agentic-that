@@ -151,13 +151,13 @@
 }
 
 .config-hero {
-  max-width: 1450px;
+  width: min(1600px, calc(100% - 32px));
   display: flex;
   align-items: end;
   justify-content: space-between;
   gap: 32px;
   margin: 0 auto;
-  padding: 50px clamp(22px, 4vw, 64px) 34px;
+  padding: 42px 8px 28px;
 }
 
 .config-hero > div:first-child {
@@ -219,11 +219,11 @@
 }
 
 .config-layout {
-  width: min(1450px, calc(100% - clamp(44px, 8vw, 128px)));
+  width: min(1600px, calc(100% - 32px));
   min-height: 680px;
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
-  margin: 0 auto 70px;
+  margin: 0 auto 40px;
   overflow: hidden;
   border: 1px solid #d5e0db;
   border-radius: 19px;
@@ -379,7 +379,7 @@
 
 .config-content {
   min-width: 0;
-  padding: clamp(24px, 3vw, 42px);
+  padding: clamp(22px, 2vw, 32px);
 }
 
 .config-content-head {
@@ -779,7 +779,7 @@
 .config-account-row {
   min-height: 68px;
   display: grid;
-  grid-template-columns: 42px minmax(150px, 1fr) auto minmax(150px, 0.9fr) auto;
+  grid-template-columns: 42px minmax(130px, 1fr) auto minmax(120px, 0.7fr) max-content;
   align-items: center;
   gap: 12px;
   padding: 11px 13px;
@@ -888,6 +888,7 @@
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
+  flex: 0 0 auto;
 }
 
 .config-account-actions button.open {
@@ -918,9 +919,37 @@
 
 .config-account-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 6px;
+  white-space: nowrap;
+}
+
+.config-auth-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #dce6e2;
+  border-radius: 10px;
+  background: #f3f7f5;
+}
+
+.config-auth-mode button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cm-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.config-auth-mode button.active {
+  background: #fff;
+  color: var(--cm-ink);
+  box-shadow: 0 3px 10px rgba(24, 62, 52, 0.08);
 }
 
 .config-empty {
@@ -1376,5 +1405,7 @@
   .config-account-actions {
     grid-column: 2 / -1;
     justify-self: end;
+    max-width: 100%;
+    overflow-x: auto;
   }
 }

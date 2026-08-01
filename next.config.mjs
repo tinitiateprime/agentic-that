@@ -29,6 +29,13 @@ const nextConfig = {
         : "/v1/:path*",
     });
 
+    if (telegramTarget && process.env.NODE_ENV === "development") {
+      rewrites.push({
+        source: "/v1/:path*",
+        destination: `${telegramTarget.replace(/\/$/, "")}/v1/:path*`,
+      });
+    }
+
     const publishQueueTarget = process.env.PUBLISH_QUEUE_API_URL
       || (process.env.NODE_ENV === "development"
         ? `http://127.0.0.1:${Number(process.env.PUBLISH_QUEUE_SERVICE_PORT || 8792)}`

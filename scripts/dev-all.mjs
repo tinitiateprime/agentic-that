@@ -66,7 +66,7 @@ const publishQueuePort = await findPort(
 );
 
 const siteUrl = `http://${host}:${sitePort}`;
-const telegramUrl = `http://${host}:${telegramPort}/console`;
+const telegramUrl = `${siteUrl}/console`;
 const instagramUrl = `${siteUrl}/scraper/instagram`;
 const publishQueueUrl = `${siteUrl}/publishing`;
 const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
@@ -95,7 +95,7 @@ const services = [
       PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
       PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
-      NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: telegramUrl,
+      NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: "/console",
     },
   },
   {

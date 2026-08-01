@@ -190,7 +190,7 @@ Default local URLs:
 
 ```text
 Website + WhatsApp: http://127.0.0.1:5173
-Telegram:           http://127.0.0.1:8787/console
+Telegram:           http://127.0.0.1:5173/console
 Instagram:          http://127.0.0.1:5173/scraper/instagram
 ```
 

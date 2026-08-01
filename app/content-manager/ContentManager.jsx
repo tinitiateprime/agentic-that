@@ -238,7 +238,6 @@ export default function ContentManager({
   const [publishingSchedules, setPublishingSchedules] = useState([]);
 
   const loadTelegram = useCallback(async () => {
-    setTelegramStatus("checking");
     try {
       const me = await telegramRequest("/me");
       const accountData = await telegramRequest("/telegram/accounts");
@@ -263,7 +262,6 @@ export default function ContentManager({
       return;
     }
 
-    setPublishingStatus("checking");
     try {
       const me = await publishingRequest("/api/auth/me", session.token);
       const [accountsResult, uploadsResult, schedulesResult] = await Promise.allSettled([
@@ -293,7 +291,6 @@ export default function ContentManager({
   }, []);
 
   const connectPublishing = useCallback(async () => {
-    setPublishingStatus("checking");
     if (!publishingIdentityToken) return loadPublishing();
     try {
       const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
@@ -549,12 +546,12 @@ function TelegramAccounts({ status, user, accounts, dashboardUrl, onReload }) {
     return (
       <EmptyState
         icon={LockKeyhole}
-        title="Sign in to the Telegram workspace"
-        copy="Content Manager uses the same Telegram workspace session as Config Manager before it can display connected Telegram accounts."
+        title="Connect Telegram through Connections"
+        copy="Sign in and add Telegram accounts in Connections. Content will update here automatically afterward."
         action={
           <div className="content-empty-actions">
-            <a className="content-primary" href={dashboardUrl} target="_blank" rel="noreferrer">Open Telegram sign in<ExternalLink size={15} /></a>
-            <button className="content-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I signed in</button>
+            <a className="content-primary" href="/config-manager?service=messaging&platform=telegram"><Settings2 size={15} />Open Connections</a>
+            <button className="content-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I connected an account</button>
           </div>
         }
       />

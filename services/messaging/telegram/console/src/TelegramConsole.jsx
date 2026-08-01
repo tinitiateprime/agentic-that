@@ -59,7 +59,7 @@ export function TelegramConsole() {
                 "Welcome back"
               ),
               h("p", {"className":"lede"},
-                "Sign in to continue to your Telegram workspace."
+                "Use the same Telegram dashboard login configured in Connections."
               )
             ),
             h("form", {"id":"password-sign-in-form","className":"stack","noValidate":true},
@@ -80,7 +80,7 @@ export function TelegramConsole() {
                   "Sign in"
                 ),
                 h("button", {"id":"create-account","className":"button ghost","type":"button"},
-                  "Create workspace"
+                  "Create dashboard login"
                 )
               )
             ),

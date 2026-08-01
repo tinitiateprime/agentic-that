@@ -192,7 +192,6 @@ export default function ConfigManager({
   const [publishingAccounts, setPublishingAccounts] = useState([]);
 
   const loadTelegram = useCallback(async () => {
-    setTelegramStatus("checking");
     try {
       const me = await telegramRequest("/me");
       const accountData = await telegramRequest("/telegram/accounts");
@@ -215,7 +214,6 @@ export default function ConfigManager({
       setPublishingStatus("needs-login");
       return;
     }
-    setPublishingStatus("checking");
     try {
       const me = await publishingRequest("/api/auth/me", session.token);
       const accounts = await publishingRequest("/api/accounts", session.token);
@@ -239,7 +237,6 @@ export default function ConfigManager({
   }, []);
 
   const connectPublishing = useCallback(async () => {
-    setPublishingStatus("checking");
     if (!publishingIdentityToken) return loadPublishing();
     try {
       const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
@@ -365,6 +362,7 @@ export default function ConfigManager({
               onPlatformChange={selectMessagingPlatform}
               status={telegramStatus}
               user={telegramUser}
+              platformUser={user}
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
               continueTelegramConnect={initialTelegramConnect}
@@ -410,6 +408,7 @@ function MessagingManager({
   onPlatformChange,
   status,
   user,
+  platformUser,
   accounts,
   dashboardUrl,
   continueTelegramConnect,
@@ -439,6 +438,7 @@ function MessagingManager({
         <TelegramManager
           status={status}
           user={user}
+          platformUser={platformUser}
           accounts={accounts}
           dashboardUrl={dashboardUrl}
           continueTelegramConnect={continueTelegramConnect}
@@ -486,6 +486,7 @@ function PlaceholderService({ icon: Icon, title, copy }) {
 function TelegramManager({
   status,
   user,
+  platformUser,
   accounts,
   dashboardUrl,
   continueTelegramConnect,
@@ -500,6 +501,10 @@ function TelegramManager({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [workspaceAuthMode, setWorkspaceAuthMode] = useState("signin");
+  const [workspaceUsername, setWorkspaceUsername] = useState(platformUser?.email || "");
+  const [workspacePassword, setWorkspacePassword] = useState("");
+  const [workspaceDisplayName, setWorkspaceDisplayName] = useState(platformUser?.name || platformUser?.businessName || "");
 
   useEffect(() => {
     if (!continueTelegramConnect || status !== "ready") return;
@@ -509,15 +514,31 @@ function TelegramManager({
     window.history.replaceState({}, "", url);
   }, [continueTelegramConnect, status]);
 
-  const openTelegramSignIn = () => {
-    const returnUrl = new URL("/config-manager", window.location.origin);
-    returnUrl.searchParams.set("service", "messaging");
-    returnUrl.searchParams.set("platform", "telegram");
-    returnUrl.searchParams.set("continue", "telegram-connect");
-
-    const signInUrl = new URL(dashboardUrl, window.location.origin);
-    signInUrl.searchParams.set("returnTo", returnUrl.toString());
-    window.location.assign(signInUrl.toString());
+  const authenticateWorkspace = async (event) => {
+    event.preventDefault();
+    const creating = workspaceAuthMode === "register";
+    setBusy(true);
+    try {
+      const data = await telegramRequest(creating ? "/auth/register" : "/auth/password", {
+        method: "POST",
+        body: JSON.stringify({
+          username: workspaceUsername.trim(),
+          password: workspacePassword,
+          ...(creating ? { displayName: workspaceDisplayName.trim() } : {})
+        })
+      });
+      setWorkspacePassword("");
+      setConnecting(true);
+      setNotice({
+        tone: "success",
+        message: "Telegram dashboard access is ready for " + (data.user?.displayName || workspaceUsername.trim()) + ". Add the Telegram account below."
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const resetConnection = () => {
@@ -625,17 +646,29 @@ function TelegramManager({
 
   if (status === "needs-login") {
     return (
-      <EmptyState
-        icon={LockKeyhole}
-        title="Sign in to the Telegram workspace once"
-        copy="Config Manager uses the Telegram workspace session securely. After sign-in, we bring you back here and open the account connection form automatically."
-        action={
-          <div className="config-empty-actions">
-            <button className="config-primary" type="button" onClick={openTelegramSignIn}>Continue to Telegram sign in<ArrowRight size={15} /></button>
-            <button className="config-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I signed in</button>
+      <div className="config-auth-card telegram-auth-card">
+        <div className="config-auth-copy">
+          <span><LockKeyhole size={25} /></span>
+          <p>One login for Connections and Telegram</p>
+          <h3>{workspaceAuthMode === "register" ? "Create your Telegram dashboard login" : "Use your Telegram dashboard login"}</h3>
+          <div>{workspaceAuthMode === "register"
+            ? "This creates the same login used before the Telegram dashboard. Create it once here, then connect your Telegram number below."
+            : "Enter the same username and password used before opening the Telegram dashboard. The account form opens here immediately."}</div>
+          <small><ShieldCheck size={14} />The same secure session opens Connections and the Telegram dashboard.</small>
+        </div>
+        <form onSubmit={authenticateWorkspace}>
+          <div className="config-auth-mode" role="tablist" aria-label="Telegram workspace access">
+            <button type="button" role="tab" aria-selected={workspaceAuthMode === "signin"} className={workspaceAuthMode === "signin" ? "active" : ""} onClick={() => setWorkspaceAuthMode("signin")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={workspaceAuthMode === "register"} className={workspaceAuthMode === "register" ? "active" : ""} onClick={() => setWorkspaceAuthMode("register")}>Create dashboard login</button>
           </div>
-        }
-      />
+          {workspaceAuthMode === "register" && (
+            <label><span>Workspace name</span><input value={workspaceDisplayName} onChange={event => setWorkspaceDisplayName(event.target.value)} autoComplete="name" placeholder="Your name or business" required /></label>
+          )}
+          <label><span>Username</span><input value={workspaceUsername} onChange={event => setWorkspaceUsername(event.target.value)} autoComplete="username" placeholder="you@example.com" required /></label>
+          <label><span>Password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={workspacePassword} onChange={event => setWorkspacePassword(event.target.value)} autoComplete={workspaceAuthMode === "register" ? "new-password" : "current-password"} minLength={8} required /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{workspaceAuthMode === "register" ? "Create login and add account" : "Sign in and add account"}</button>
+        </form>
+      </div>
     );
   }
 
