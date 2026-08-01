@@ -558,6 +558,15 @@ async function openManagedBrowser(request) {
     closedAt: null,
   };
   managedBrowsers.set(id, entry);
+  const reapplyLayoutAfterNavigation = () => {
+    setImmediate(() => {
+      const activeEntry = managedBrowsers.get(id);
+      if (activeEntry?.view === view && !view.webContents.isDestroyed()) applyWorkspaceLayout();
+    });
+  };
+  view.webContents.on("did-navigate", reapplyLayoutAfterNavigation);
+  view.webContents.on("did-navigate-in-page", reapplyLayoutAfterNavigation);
+  view.webContents.on("did-finish-load", reapplyLayoutAfterNavigation);
   mainWindow.contentView.addChildView(view);
   view.setVisible(false);
   await view.webContents.loadURL(targetUrl);

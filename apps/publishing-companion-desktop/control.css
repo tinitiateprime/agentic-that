@@ -382,15 +382,15 @@ h3 { margin: 4px 0 0; font-size: 15px; }
   margin-top: 13px;
 }
 .live-grid[data-layout="focus"] { grid-template-columns: minmax(0, 1fr); }
-.live-grid[data-layout="split"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.live-grid[data-layout="split"][data-count="2"] .live-card { grid-column: span 3; }
-.live-grid[data-layout="split"][data-count="3"] .live-card { grid-column: span 3; }
-.live-grid[data-layout="split"][data-count="3"] .live-card:last-child { grid-column: 1 / -1; }
-.live-grid[data-layout="split"][data-count="4"] .live-card { grid-column: span 3; }
-.live-grid[data-layout="split"][data-count="5"] .live-card:nth-child(-n + 3) { grid-column: span 2; }
-.live-grid[data-layout="split"][data-count="5"] .live-card:nth-child(n + 4) { grid-column: span 3; }
-.live-grid[data-layout="split"][data-count="6"] .live-card { grid-column: span 2; }
-.live-grid[data-layout="split"] { grid-auto-rows: minmax(0, 1fr); }
+.live-grid[data-layout="split"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.live-grid[data-layout="split"] .live-card:last-child:nth-child(odd) {
+  width: calc(50% - 6px);
+  grid-column: 1 / -1;
+  justify-self: center;
+}
 #activity-panel.has-live .live-grid { height: 100%; margin-top: 0; }
 
 .live-card {
@@ -617,16 +617,16 @@ body.immersive-grid .live-grid {
   background: #dfe8e5;
 }
 body.immersive-grid .live-card {
-  grid-template-rows: 38px 2px minmax(0, 1fr);
+  grid-template-rows: 46px 2px minmax(0, 1fr);
   border-radius: 6px;
   box-shadow: none;
 }
-body.immersive-grid .live-card-header { min-height: 38px; padding: 4px 7px; gap: 6px; }
-body.immersive-grid .live-card-header .platform-mark { width: 25px; height: 25px; border-radius: 6px; font-size: 8px; }
-body.immersive-grid .live-purpose { margin-bottom: 1px; font-size: 6px; }
-body.immersive-grid .live-card-header strong { font-size: 9px; }
-body.immersive-grid .live-card-header small { margin-top: 1px; font-size: 7px; }
-body.immersive-grid .state-pill { padding: 3px 5px; font-size: 7px; }
+body.immersive-grid .live-card-header { min-height: 46px; padding: 5px 8px; gap: 7px; }
+body.immersive-grid .live-card-header .platform-mark { width: 30px; height: 30px; border-radius: 7px; font-size: 9px; }
+body.immersive-grid .live-purpose { margin-bottom: 1px; font-size: 7px; }
+body.immersive-grid .live-card-header strong { font-size: 11px; }
+body.immersive-grid .live-card-header small { margin-top: 1px; font-size: 8px; }
+body.immersive-grid .state-pill { padding: 4px 6px; font-size: 8px; }
 body.immersive-grid .live-browser-slot { height: auto; min-height: 0; }
 body.immersive-grid .live-command-bar {
   grid-area: safety;

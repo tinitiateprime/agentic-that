@@ -11,6 +11,10 @@ function getLoginHoldMs() {
   return Number(process.env.LINKEDIN_LOGIN_HOLD_MS ?? 15000);
 }
 
+function getPostHoldMs() {
+  return Number(process.env.LINKEDIN_POST_HOLD_MS ?? 1000);
+}
+
 async function clickIfVisible(locator: Locator, timeout = 1500) {
   try {
     await locator.first().click({ timeout });
@@ -377,7 +381,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForPostComplete(page);
 
-  const holdTime = getLoginHoldMs();
+  const holdTime = getPostHoldMs();
   if (holdTime > 0) {
     console.log(`LinkedIn post complete. Holding for ${holdTime / 1000} seconds...`);
     await page.waitForTimeout(holdTime);

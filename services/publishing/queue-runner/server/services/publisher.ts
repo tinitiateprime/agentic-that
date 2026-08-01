@@ -364,11 +364,14 @@ async function launchAccountBrowser(
         update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
         close: async () => {
           try {
+            // Remove the completed pane first so the remaining live browsers
+            // expand immediately. Closing the CDP transport is best-effort and
+            // must not keep a finished account visible for several seconds.
+            await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
             await Promise.race([
               connection?.close().catch(() => undefined),
-              new Promise(resolve => setTimeout(resolve, 3000)),
+              new Promise(resolve => setTimeout(resolve, 1000)),
             ]);
-            await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
           } finally {
             releaseAccount();
           }
@@ -379,11 +382,11 @@ async function launchAccountBrowser(
         state: "failed",
         detail: "The Companion browser could not start. Restart Companion and try again.",
       })).catch(() => undefined);
+      await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
       await Promise.race([
         connection?.close().catch(() => undefined),
-        new Promise(resolve => setTimeout(resolve, 3000)),
+        new Promise(resolve => setTimeout(resolve, 1000)),
       ]);
-      await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
       releaseAccount();
       throw error;
     }

@@ -12,7 +12,7 @@ function getLoginHoldMs() {
 }
 
 function getPostHoldMs() {
-  return Number(process.env.X_POST_HOLD_MS ?? 15000);
+  return Number(process.env.X_POST_HOLD_MS ?? 1000);
 }
 
 async function firstVisible(locators: Locator[]) {
