@@ -217,8 +217,7 @@ function actionFor(service, status) {
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (service.connectionKind === "none") return { label: "Open Instagram scraper", href: service.dashboardHref };
   if (status.state === "connected") return { label: `Open ${service.platformName} workspace`, href: service.dashboardHref };
-  if (status.state === "continue") return { label: "Continue setup", href: service.configHref };
-  return { label: `Connect ${service.platformName}`, href: service.configHref };
+  return { label: `Open ${service.platformName} workspace`, disabled: true };
 }
 
 const telegramChats = [
@@ -682,7 +681,7 @@ function RelatedServices({ service, category, related }) {
   if (!related.length) return null;
   return (
     <section className={styles.relatedSection}>
-      <header><div><span>MORE IN {category.label.toUpperCase()}</span><h2>Continue with another app</h2></div><Link href={`/apps#${category.id}`}>View all<ArrowRight size={16} /></Link></header>
+      <header><div><span>MORE IN {category.label.toUpperCase()}</span><h2>Continue with another app</h2></div><Link href={`/apps#category-${category.id}`}>View all<ArrowRight size={16} /></Link></header>
       <div>{related.map((item) => <Link href={serviceDetailHref(item)} key={item.slug}><img src={item.logo} alt="" /><span><strong>{item.name}</strong><small>{item.shortDescription}</small></span><ChevronRight size={18} /></Link>)}</div>
     </section>
   );
@@ -695,6 +694,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
   const baseContent = service.category === "messaging" ? categoryContent.telegram : categoryContent[service.category];
   const profile = service.category === "publishing" ? publishingProfiles[service.slug] : null;
   const isPublishing = service.category === "publishing";
+  const needsConnection = service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
   const heroTitle = profile ? profile.heroTitle : baseContent.heroTitle;
   const heroDescription = profile ? profile.heroDescription : baseContent.heroDescription;
 
@@ -702,7 +702,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
     <ProductShell user={user} active="apps">
       <main className={`${styles.serviceMain} ${service.category === "messaging" ? styles.telegramPage : ""} ${isPublishing ? styles.publishingPage : ""}`} style={{ "--accent": service.accent, "--tint": service.tint }}>
         <div className={styles.topline}>
-          <nav aria-label="Breadcrumb"><Link href="/apps">Store</Link><ChevronRight size={14} /><Link href={`/apps#${category.id}`}>{category.label}</Link><ChevronRight size={14} /><span>{service.platformName}</span></nav>
+          <nav aria-label="Breadcrumb"><Link href="/apps">Store</Link><ChevronRight size={14} /><Link href={`/apps#category-${category.id}`}>{category.label}</Link><ChevronRight size={14} /><span aria-current="page">{service.platformName}</span></nav>
           <Link href="/apps"><ArrowLeft size={16} />Back to store</Link>
         </div>
 
@@ -713,7 +713,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
             <p>{heroDescription}</p>
             <div className={styles.heroActions}>
               {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={17} /></Link>}
-              <a href="#how-it-works">See how it works<ChevronRight size={17} /></a>
+              {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ChevronRight size={17} /></Link> : <a href="#how-it-works">See how it works<ChevronRight size={17} /></a>}
             </div>
             <div className={styles.heroAssurances}>
               {service.category === "scraping" ? <><span><Globe2 />Public data only</span><span><ShieldCheck />No Instagram login</span><span><Download />CSV and JSON</span></> : service.category === "publishing" ? <><span><Eye />Preview first</span><span><CalendarDays />Schedule clearly</span><span><BarChart3 />Track delivery</span></> : <><span><LockKeyhole />Encrypted sessions</span><span><Users />Multiple accounts</span><span><MessageCircle />Direct messaging</span></>}
@@ -735,7 +735,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
 
         <section className={styles.launchSection}>
           <div><span>READY WHEN YOU ARE</span><h2>{service.category === "scraping" ? "Start with one public Instagram target." : status.state === "connected" ? `Continue in your ${service.platformName} workspace.` : `Connect ${service.platformName} and start with a guided first step.`}</h2><p>{service.category === "scraping" ? "No account connection is required." : "You will always see what to do next."}</p></div>
-          {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
+          {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ArrowRight size={18} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
         </section>
 
         <RelatedServices service={service} category={category} related={related} />

@@ -7,7 +7,7 @@ export function TelegramConsole() {
       h("main", null,
         h("section", {"id":"sign-in-view","className":"auth-shell","aria-labelledby":"sign-in-title"},
           h("div", {"className":"auth-showcase","aria-hidden":"true"},
-            h("div", {"className":"auth-brand"},
+            h("a", {"className":"auth-brand","href":"/apps","title":"Back to AgenticThat Store"},
               h("span", {"className":"auth-brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -43,6 +43,9 @@ export function TelegramConsole() {
             )
           ),
           h("div", {"className":"auth-card"},
+            h("a", {"className":"auth-back","href":"/apps"},
+              "← Back to Store"
+            ),
             h("div", {"className":"auth-card-heading"},
               h("span", {"className":"mobile-auth-mark","aria-hidden":"true"},
                 h("svg", {"viewBox":"0 0 24 24"},
@@ -145,7 +148,7 @@ export function TelegramConsole() {
                 h("path", {"d":"M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4m4-6 4-4 4 4m-4-4v11"})
               )
             ),
-            h("div", {"className":"brand"},
+            h("a", {"className":"brand","href":"/apps","title":"Back to AgenticThat Store"},
               h("span", {"className":"brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -158,6 +161,14 @@ export function TelegramConsole() {
                 h("span", null,
                   "Workflow automation"
                 )
+              )
+            ),
+            h("nav", {"className":"product-links","aria-label":"AgenticThat navigation"},
+              h("a", {"href":"/apps"},
+                "← Store"
+              ),
+              h("a", {"href":"/config-manager?service=messaging&platform=telegram"},
+                "Connections"
               )
             ),
             h("nav", {"className":"nav-menu"},
@@ -236,7 +247,7 @@ export function TelegramConsole() {
                     h("use", {"href":"#nav-connect"})
                   ),
                   h("span", null,
-                    "Config Manager"
+                    "Connect account"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"manage-numbers"},
@@ -445,19 +456,9 @@ export function TelegramConsole() {
                   )
                 ),
                 h("p", {"id":"connect-copy","className":"muted"},
-                  "Use the full phone number with country code. Telegram will deliver a verification code."
+                  "Enter your phone number. Telegram will deliver a verification code."
                 ),
                 h("form", {"id":"phone-form","className":"stack"},
-                  h("div", {"className":"form-grid"},
-                    h("label", {"htmlFor":"telegram-api-id"},
-                      "Telegram API ID ",
-                      h("input", {"id":"telegram-api-id","name":"telegramApiId","type":"text","inputMode":"numeric","autoComplete":"off","required":true})
-                    ),
-                    h("label", {"htmlFor":"telegram-api-hash"},
-                      "Telegram API hash ",
-                      h("input", {"id":"telegram-api-hash","name":"telegramApiHash","type":"password","autoComplete":"off","required":true})
-                    )
-                  ),
                   h("label", {"htmlFor":"phone"},
                     "Phone number"
                   ),
@@ -2685,7 +2686,7 @@ export function TelegramConsole() {
                 "Help guide"
               ),
               h("h2", {"id":"telegram-user-guide-title"},
-                "Telegram API setup"
+                "Connect your Telegram account"
               )
             ),
             h("button", {"className":"icon-button guide-close-button","type":"button","data-guide-close":"","aria-label":"Close help guide"},
@@ -2693,7 +2694,7 @@ export function TelegramConsole() {
             )
           ),
           h("p", {"className":"guide-intro"},
-            "Use these quick steps to create Telegram API credentials and connect your number."
+            "Three quick steps connect an account. AgenticThat keeps the app credentials on the server."
           ),
           h("ol", {"className":"guide-steps"},
             h("li", null,
@@ -2701,11 +2702,7 @@ export function TelegramConsole() {
                 "1"
               ),
               h("p", null,
-                "Open ",
-                h("a", {"href":"https://my.telegram.org/auth?to=apps","target":"_blank","rel":"noopener noreferrer"},
-                  "my.telegram.org"
-                ),
-                "."
+                "Enter your Telegram phone number with its country code, then request a verification code."
               )
             ),
             h("li", null,
@@ -2714,14 +2711,10 @@ export function TelegramConsole() {
               ),
               h("div", null,
                 h("p", null,
-                  "Enter your Telegram phone number. For India, use ",
-                  h("strong", null,
-                    "+91"
-                  ),
-                  " before the number."
+                  "Enter the newest verification code sent to your Telegram app or by SMS."
                 ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-phone-entry.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-phone-entry.png","width":"1592","height":"563","alt":"Telegram website phone number entry screen","loading":"lazy","decoding":"async"})
+                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-confirmation-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
+                  h("img", {"src":"/console/assets/guide/telegram-confirmation-redacted.png","width":"1523","height":"667","alt":"Telegram confirmation-code screen with a safe example phone number","loading":"lazy","decoding":"async"})
                 )
               )
             ),
@@ -2731,60 +2724,8 @@ export function TelegramConsole() {
               ),
               h("div", null,
                 h("p", null,
-                  "Enter the confirmation code received in Telegram and click ",
-                  h("strong", null,
-                    "Sign in"
-                  ),
-                  "."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-confirmation-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-confirmation-redacted.png","width":"1523","height":"667","alt":"Telegram website confirmation-code screen with a safe example phone number","loading":"lazy","decoding":"async"})
+                  "If this account uses Telegram two-step verification, enter its password to finish connecting."
                 )
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "4"
-              ),
-              h("p", null,
-                "Click ",
-                h("a", {"href":"https://my.telegram.org/apps","target":"_blank","rel":"noopener noreferrer"},
-                  "API development tools"
-                ),
-                "."
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "5"
-              ),
-              h("div", null,
-                h("p", null,
-                  "Copy ",
-                  h("strong", null,
-                    "API ID"
-                  ),
-                  " and ",
-                  h("strong", null,
-                    "API hash"
-                  ),
-                  ", then paste them into this form."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-api-credentials-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-api-credentials-redacted.png","width":"1601","height":"320","alt":"Telegram API configuration screen with the API ID and API hash blurred","loading":"lazy","decoding":"async"})
-                )
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "6"
-              ),
-              h("p", null,
-                "Enter your phone number here, click ",
-                h("strong", null,
-                  "Send verification code"
-                ),
-                ", then enter the Telegram code."
               )
             )
           )

@@ -66,7 +66,9 @@ const recentHistorySyncTargetLimit = 50;
 const secretEnvironmentNames = [
   "SESSION_ENCRYPTION_KEY",
   "USER_PROVISIONING_KEY",
-  "TELEGRAM_BOT_TOKEN"
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_API_ID",
+  "TELEGRAM_API_HASH"
 ];
 
 function shouldRunBackgroundListeners() {
@@ -470,19 +472,8 @@ function normalizePhoneFromBody(body: JsonBody) {
   }
 }
 
-function telegramApiCredentialsFromBody(body: JsonBody): TelegramApiCredentials {
-  const rawApiId = requiredString(body, "telegramApiId", 20);
-  const apiId = Number(rawApiId);
-  if (!Number.isInteger(apiId) || apiId <= 0) {
-    throw new HttpError(400, "Telegram API ID must be a positive number from my.telegram.org.");
-  }
-
-  const apiHash = requiredString(body, "telegramApiHash", 128);
-  if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
-    throw new HttpError(400, "Telegram API hash must be the 32-character hash from my.telegram.org.");
-  }
-
-  return { apiId, apiHash };
+function sharedTelegramApiCredentials(): TelegramApiCredentials {
+  return { apiId: config.telegramApiId, apiHash: config.telegramApiHash };
 }
 
 function telegramApiCredentialsFromAccount(account: TelegramAccountWithSession): TelegramApiCredentials {
@@ -696,7 +687,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (request.method === "POST" && url.pathname === "/v1/telegram/login/start") {
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
-    const credentials = telegramApiCredentialsFromBody(body);
+    const credentials = sharedTelegramApiCredentials();
     const phone = normalizePhoneFromBody(body);
     let start;
     try {

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
+import ProductShell from "@platform/ProductShell";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
@@ -374,37 +375,22 @@ export default function ContentManager({
   };
 
   return (
-    <main className="content-shell">
-      <header className="content-topbar">
-        <a className="content-brand" href="/apps">
-          <span>AT</span>
-          <strong>AgenticThat</strong>
-          <small>Content Manager</small>
-        </a>
-        <div className="content-workspace">
-          <span>{String(user.businessName || user.name || "W").charAt(0).toUpperCase()}</span>
-          <div><strong>{user.businessName || user.name}</strong><small>{user.email}</small></div>
-        </div>
-        <div className="content-top-actions">
-          <a className="content-secondary" href="/config-manager"><Settings2 size={15} />Config Manager</a>
-          <a className="content-back" href="/apps"><ArrowLeft size={16} />Back to apps</a>
-        </div>
-      </header>
+    <ProductShell user={user} active="content">
+      <main className="content-shell">
+        <section className="content-overview">
+          <div>
+            <p><Database size={15} />Content and activity</p>
+            <h1>See what is connected and ready to use.</h1>
+            <span>Review connected accounts, queued content, and recent activity. To add or sign in an account, use Connections.</span>
+          </div>
+          <div className="content-overview-metrics">
+            <Metric icon={UsersRound} label="connected accounts" value={connectedAccounts} />
+            <Metric icon={ShieldCheck} label="active publishing" value={activePublishingAccounts} />
+            <Metric icon={FileText} label="queued posts" value={queuedUploads} />
+          </div>
+        </section>
 
-      <section className="content-overview">
-        <div>
-          <p><Database size={15} />Service account inventory</p>
-          <h1>Content routing, accounts, and app visibility in one place.</h1>
-          <span>Accounts are still added in Config Manager. This page shows where each connected account is available and what content is already attached to it.</span>
-        </div>
-        <div className="content-overview-metrics">
-          <Metric icon={UsersRound} label="connected accounts" value={connectedAccounts} />
-          <Metric icon={ShieldCheck} label="active publishing" value={activePublishingAccounts} />
-          <Metric icon={FileText} label="queued posts" value={queuedUploads} />
-        </div>
-      </section>
-
-      <div className="content-layout">
+        <div className="content-layout">
         <aside className="content-service-nav">
           <div className="content-nav-heading"><span>Services</span><small>Grouped by app</small></div>
           {services.map((service) => {
@@ -490,8 +476,9 @@ export default function ContentManager({
             />
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </ProductShell>
   );
 }
 

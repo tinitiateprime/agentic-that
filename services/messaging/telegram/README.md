@@ -16,7 +16,7 @@ Developer runs npm run server
 -> Future sends use the selected saved Telegram account/session
 ```
 
-Each user enters their own Telegram API ID and API Hash when connecting a number. Those credentials and the Telegram session are encrypted in `data/store.json`, so one phone number is never reused as another sender.
+The deployment uses one server-side Telegram API ID and API hash. Users never see or submit those credentials; they enter only their phone number, verification code, and optional Telegram two-factor password. Connected Telegram sessions remain isolated per workspace and encrypted in the datastore.
 
 No PostgreSQL, pgAdmin, or separate database server is required. Backend data is stored in the local encrypted JSON datastore at `data/store.json`. The application UI opens in the browser, while VS Code is only used for editing/running the project.
 
@@ -69,10 +69,10 @@ contact-telegram/
 - Node.js 20 or newer.
 - npm.
 
-- Each user needs their own Telegram API ID and API Hash from `https://my.telegram.org` when connecting a number.
+- The AgenticThat deployment owner needs one Telegram API ID and API hash from `https://my.telegram.org`; users do not need their own app credentials.
 - A real Telegram phone number for each account you want to connect.
 - For production use: HTTPS, a real auth system, secret manager, backups, monitoring, and network restrictions.
-- Go to `https://my.telegram.org`, enter your mobile number, paste the Telegram code, open API development, create an app, and copy the API ID and API hash. Enter those values on the dashboard Add Number screen.
+- Add the deployment API ID and API hash to the server environment as `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Never expose them through a `NEXT_PUBLIC_*` variable.
 - For SESSION_ENCRYPTION_KEY and USER_PROVISIONING_KEY, run this `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` 2 times a random key will be generated paste them in their respective places
 
 ## First-Time Local Setup
@@ -118,11 +118,13 @@ Fill `.env` like this:
 DATA_DIR=data
 SESSION_ENCRYPTION_KEY=generated_key_1
 USER_PROVISIONING_KEY=generated_key_2
+TELEGRAM_API_ID=your_server_api_id
+TELEGRAM_API_HASH=your_server_api_hash
 SERVICE_HOST=127.0.0.1
 SERVICE_PORT=8787
 ```
 
-Never commit or share `.env`, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys. Users should keep their own Telegram API hash private.
+Never commit or share `.env`, the shared Telegram API hash, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys.
 
 ### 4. Start the API and Browser UI
 
@@ -154,7 +156,7 @@ Account connections are centrally managed from the AgenticThat **Config Manager*
 
 1. Sign in to the Telegram workspace once.
 2. Open `http://127.0.0.1:5173/config-manager?service=messaging&platform=telegram`.
-3. Enter the Telegram API ID, API hash, and phone number with country code.
+3. Enter the Telegram phone number with country code.
 4. Submit the verification code sent by Telegram.
 5. If prompted, enter that Telegram account's 2FA password.
 6. Return to Telegram and select the connected profile from the top `Profile` selector.

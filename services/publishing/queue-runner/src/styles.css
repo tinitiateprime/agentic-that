@@ -3343,6 +3343,23 @@
   gap: 8px;
 }
 
+.publish-queue-runner .workboard-global-link {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #D4DEE4;
+  border-radius: 7px;
+  color: #51616B;
+  background: #FFFFFF;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.publish-queue-runner .workboard-global-link:hover { border-color: #9FB0BA; color: #0B6859; background: #F7FAFB; }
+
 .publish-queue-runner .workboard-app .workboard-status {
   color: #0B7A66;
   font-size: 11px;
@@ -4676,6 +4693,7 @@
   }
 
   .publish-queue-runner .workboard-app .workboard-status,
+.publish-queue-runner .workboard-global-link,
 .publish-queue-runner .workboard-user {
     display: none;
   }

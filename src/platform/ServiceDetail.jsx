@@ -23,8 +23,7 @@ function actionFor(service, status) {
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (service.connectionKind === "none") return { label: "Start scraping", href: service.dashboardHref };
   if (status.state === "connected") return { label: `Open ${service.platformName} workspace`, href: service.dashboardHref };
-  if (status.state === "continue") return { label: "Continue setup", href: service.configHref };
-  return { label: `Connect ${service.platformName}`, href: service.configHref };
+  return { label: `Open ${service.platformName} workspace`, disabled: true };
 }
 
 function secondaryActionFor(service) {
@@ -47,17 +46,18 @@ function StandardServiceDetail({ user, service, category, related }) {
   const status = statusFor(service);
   const action = actionFor(service, status);
   const secondaryAction = secondaryActionFor(service);
+  const needsConnection = service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
 
   return (
     <ProductShell user={user} active="apps">
       <main className={styles.detailMain} style={{ "--service-accent": service.accent, "--service-tint": service.tint }}>
         <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
-          <Link href="/apps">Apps</Link><ChevronRight size={15} /><Link href={`/apps#${category.id}`}>{category.label}</Link><ChevronRight size={15} /><span>{service.name}</span>
+          <Link href="/apps">Store</Link><ChevronRight size={15} /><Link href={`/apps#category-${category.id}`}>{category.label}</Link><ChevronRight size={15} /><span aria-current="page">{service.name}</span>
         </nav>
 
         <section className={styles.detailHero}>
           <div className={styles.detailHeroMain}>
-            <Link className={styles.detailBack} href="/apps"><ArrowLeft size={17} />Back to catalogue</Link>
+            <Link className={styles.detailBack} href="/apps"><ArrowLeft size={17} />Back to store</Link>
             <div className={styles.detailIdentity}>
               <span className={styles.detailLogo}><img src={service.logo} alt="" /></span>
               <div><span>{category.label}</span><small>{service.provider}</small></div>
@@ -71,7 +71,7 @@ function StandardServiceDetail({ user, service, category, related }) {
               ) : (
                 <Link className={styles.primaryAction} href={action.href}>{action.label}<ArrowRight size={18} /></Link>
               )}
-              <Link className={styles.secondaryAction} href={secondaryAction.href}>{secondaryAction.label}<ChevronRight size={17} /></Link>
+              <Link className={styles.secondaryAction} href={needsConnection ? service.configHref : secondaryAction.href}>{needsConnection ? (status.state === "continue" ? "Continue setup" : "Connect account") : secondaryAction.label}<ChevronRight size={17} /></Link>
             </div>
           </div>
 
@@ -146,7 +146,7 @@ function StandardServiceDetail({ user, service, category, related }) {
             <span>{status.state === "connected" ? "Connection ready" : service.availability === "live" ? "Ready to begin" : "Planned service"}</span>
             <h2>{status.state === "connected" ? `Continue in your ${service.platformName} workspace.` : service.availability === "live" ? `Put ${service.name} to work.` : `${service.name} is being prepared for a future release.`}</h2>
           </div>
-          {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
+          {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ArrowRight size={18} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={18} /></Link>}
         </section>
 
         {related.length > 0 && (

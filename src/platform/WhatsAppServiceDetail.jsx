@@ -84,8 +84,7 @@ const connectionModes = [
 function actionFor(status, service) {
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (status.state === "connected") return { label: "Open WhatsApp workspace", href: service.dashboardHref };
-  if (status.state === "continue") return { label: "Continue setup", href: service.configHref };
-  return { label: "Connect WhatsApp", href: service.configHref };
+  return { label: "Open WhatsApp workspace", disabled: true };
 }
 
 function DemoAvatar({ tone = "green", src, alt = "" }) {
@@ -389,6 +388,7 @@ export default function WhatsAppServiceDetail({ user, service }) {
   const status = statusFor(service);
   const action = actionFor(status, service);
   const connected = status.state === "connected";
+  const needsConnection = !connected && status.state !== "checking";
 
   return (
     <ProductShell user={user} active="apps">
@@ -404,7 +404,7 @@ export default function WhatsAppServiceDetail({ user, service }) {
             <p>Answer customers, send updates, organize contacts, and follow up from one simple workspace. No technical knowledge is needed.</p>
             <div className={styles.heroActions}>
               {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
-              <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>
+              {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ChevronRight size={18} /></Link> : <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>}
             </div>
             <div className={styles.heroAssurances}><span><BadgeCheck size={18} strokeWidth={1.9} />Simple setup</span><span><ShieldCheck size={18} strokeWidth={1.9} />Works with Meta or WATI</span><span><UsersRound size={18} strokeWidth={1.9} />Easy for your team</span></div>
           </div>
@@ -421,7 +421,7 @@ export default function WhatsAppServiceDetail({ user, service }) {
 
         <section className={styles.launchSection}>
           <div><h2>{connected ? "Continue where your WhatsApp work happens." : "Bring WhatsApp into a workspace your whole team can understand."}</h2></div>
-          {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+          {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ArrowRight size={19} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
         </section>
       </main>
     </ProductShell>

@@ -1551,7 +1551,7 @@ function Workboard({
     <main className='workboard-app'>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/apps' title='Back to AgenticThat Apps'><span>AT</span><div><strong>AgenticThat</strong><small>Publish Queue</small></div></a>
+        <a className='workboard-brand' href='/apps' title='Back to AgenticThat Store'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
@@ -1559,6 +1559,7 @@ function Workboard({
           <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
         </nav>
         <div className='workboard-actions'>
+          <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
           <span className='workboard-status' title={connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && (isRunning

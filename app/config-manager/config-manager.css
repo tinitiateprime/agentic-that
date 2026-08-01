@@ -32,6 +32,9 @@
 
 .config-shell {
   min-height: 100vh;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(25, 151, 123, 0.09), transparent 27rem),
+    linear-gradient(180deg, #f7faf8 0, #eef4f1 100%);
 }
 
 .config-topbar {
@@ -776,7 +779,7 @@
 .config-account-row {
   min-height: 68px;
   display: grid;
-  grid-template-columns: 42px minmax(150px, 1.2fr) auto minmax(140px, 1fr) auto;
+  grid-template-columns: 42px minmax(150px, 1fr) auto minmax(150px, 0.9fr) auto;
   align-items: center;
   gap: 12px;
   padding: 11px 13px;
@@ -821,13 +824,13 @@
 }
 
 .config-account-main strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .config-account-main small,
 .config-account-meta {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .config-account-state {
@@ -838,7 +841,7 @@
   color: #08634f;
   border-radius: 999px;
   background: #e5f5ef;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -869,15 +872,43 @@
 
 .config-icon-danger,
 .config-account-actions button {
-  width: 34px;
+  width: auto;
+  min-width: 64px;
   height: 34px;
-  display: grid;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
   place-items: center;
+  padding: 0 10px;
   color: #4b5c57;
   border: 1px solid #dbe4e1;
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.config-account-actions button.open {
+  border-color: #98cbbd;
+  background: #eaf7f2;
+  color: #076653;
+  font-weight: 760;
+}
+
+.config-account-actions button.open:not(:disabled):hover {
+  border-color: var(--cm-accent);
+  background: var(--cm-accent);
+  color: #fff;
+}
+
+.config-account-actions button:disabled {
+  border-color: #e4e9e7;
+  background: #f3f5f4;
+  color: #9aa39f;
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .config-icon-danger,
@@ -887,7 +918,9 @@
 
 .config-account-actions {
   display: flex;
-  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .config-empty {
@@ -1171,6 +1204,31 @@
 
 @keyframes config-spin {
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) and (min-width: 761px) {
+  .config-layout {
+    width: calc(100% - 32px);
+    display: block;
+  }
+
+  .config-service-nav {
+    display: flex;
+    gap: 7px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--cm-border);
+  }
+
+  .config-nav-heading,
+  .config-security-note {
+    display: none;
+  }
+
+  .config-service-nav > button {
+    min-width: 210px;
+    margin: 0;
+  }
 }
 
 @media (max-width: 1050px) {

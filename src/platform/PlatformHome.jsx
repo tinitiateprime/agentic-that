@@ -17,7 +17,12 @@ const WhatsAppLogo = "/whatsapp-logo.svg";
 const XLogo = "/x-logo.svg";
 const YouTubeLogo = "/youtube-logo.svg";
 
-const navItems = ["Marketplace", "Services", "Solutions", "Docs", "Company"];
+const navItems = [
+  { label: "Store", href: "/apps" },
+  { label: "Messaging", href: "#messaging" },
+  { label: "Publishing", href: "#publishing" },
+  { label: "Scraping", href: "#scraping" },
+];
 
 const services = [
   {
@@ -169,9 +174,9 @@ function PlatformTile({ platform, onOpen }) {
   );
 }
 
-function IntegrationServiceSection({ kicker, title, description, platforms, onOpen }) {
+function IntegrationServiceSection({ id, kicker, title, description, platforms, onOpen }) {
   return (
-    <article className="integration-service-section">
+    <article className="integration-service-section" id={id}>
       <div className="integration-service-copy">
         <span className="integration-kicker">{kicker}</span>
         <h3>{title}</h3>
@@ -325,28 +330,15 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
     <main className="site-shell">
       <nav className="nav-bar" aria-label="Main navigation">
         
-        <div className="brand">AgenticThat</div>
+        <a className="brand" href="/" aria-label="AgenticThat home">AgenticThat</a>
 
         <div className="nav-links">
           {navItems.map((item) => (
-            <span key={item}>{item}</span>
+            <a href={item.href} key={item.label}>{item.label}</a>
           ))}
         </div>
 
         <div className="nav-actions">
-          {user && (
-            <>
-              <button className="site-content-manager" type="button" onClick={openContentManager}>
-                Content Manager
-              </button>
-              <button className="site-config-manager" type="button" onClick={openConfigManager}>
-                Config Manager
-              </button>
-            </>
-          )}
-          <button className="ghost-button" type="button">
-            Contact
-          </button>
           {user ? (
             <div className="site-account">
               <span className="site-account-avatar">{String(user.name || user.email || "A").charAt(0).toUpperCase()}</span>
@@ -404,7 +396,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 </div>
         </div>
 
-        <div className="services-section">
+        <div className="services-section" id="services">
           <div className="section-head">
             <h2>All Services</h2>
           </div>
@@ -425,6 +417,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 
           <div className="integration-service-stack">
             <IntegrationServiceSection
+              id="messaging"
               kicker="Messaging Automation"
               title="Chat Workflow Automation"
               description="Automate account workflows, contacts, campaigns, templates, inbox replies, and outbound messages across Telegram and WhatsApp."
@@ -433,6 +426,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             />
 
             <IntegrationServiceSection
+              id="scraping"
               kicker="Scraping Service"
               title="Social and Search Scrapers"
               description="Run Instagram scraping now, with placeholders ready for public pages, search results, maps listings, and professional profiles."
@@ -441,6 +435,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             />
 
             <IntegrationServiceSection
+              id="publishing"
               kicker="Publishing Service"
               title="Publish Queue Runner"
               description="Create, queue, schedule, and track browser-based publishing workflows across all connected social channels."
@@ -449,6 +444,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             />
 
             <IntegrationServiceSection
+              id="engagement"
               kicker="Engagement Service"
               title="Post Engagement Agent"
               description="Prepare monitored engagement workflows for posts, replies, interactions, and verification-driven actions across social channels."

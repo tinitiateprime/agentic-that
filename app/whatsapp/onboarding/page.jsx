@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getSql } from "@whatsapp/lib/db";
 import { requireUser } from "@whatsapp/lib/auth";
 import { getAccountForBusiness, listTenantNumbers } from "@whatsapp/lib/tenant";
@@ -20,6 +21,10 @@ export default async function OnboardingPage() {
 
   return (
     <main className="min-h-screen bg-slate-50 p-4 py-10">
+      <nav className="mx-auto mb-5 flex w-full max-w-xl items-center justify-between" aria-label="Setup navigation">
+        <Link href="/apps" className="text-sm font-semibold text-slate-600 hover:text-slate-950">← Store</Link>
+        <Link href="/config-manager?service=messaging&platform=whatsapp" className="text-sm font-semibold text-[var(--brand-dark)] hover:underline">All connections</Link>
+      </nav>
       <OnboardingWizard
         initial={{
           business,

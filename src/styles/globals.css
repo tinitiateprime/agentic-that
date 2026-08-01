@@ -1,7 +1,7 @@
 :root {
   font-family: "Inter", sans-serif;
-  color: #f6f5ef;
-  background: #030303;
+  color: #191c20;
+  background: #f7faf8;
   font-synthesis: none;
   text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
@@ -14,14 +14,14 @@
 
 html {
   min-width: 320px;
-  background: #030303;
+  background: #f7faf8;
 }
 
 body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: #030303;
+  background: #f7faf8;
   font-family: "Inter", sans-serif;
 }
 

@@ -99,7 +99,7 @@ function ServiceCard({ service, status }) {
               );
             })}
           </span>
-          <strong>{service.availability === "live" ? "Open app" : "Preview"}<ArrowRight size={15} /></strong>
+          <strong>{service.availability === "live" ? "View details" : "Preview"}<ArrowRight size={15} /></strong>
         </div>
       </div>
     </Link>

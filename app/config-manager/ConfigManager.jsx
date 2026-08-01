@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
+import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
@@ -302,37 +303,22 @@ export default function ConfigManager({
   const canRefresh = activeService === "publishing" || (activeService === "messaging" && messagingPlatform === "telegram");
 
   return (
-    <main className="config-shell">
-      <header className="config-topbar">
-        <a className="config-brand" href="/apps">
-          <span>AT</span>
-          <strong>AgenticThat</strong>
-          <small>Config Manager</small>
-        </a>
-        <div className="config-workspace">
-          <span>{String(user.businessName || user.name || "W").charAt(0).toUpperCase()}</span>
-          <div><strong>{user.businessName || user.name}</strong><small>{user.email}</small></div>
-        </div>
-        <div className="config-top-actions">
-          <a className="config-secondary" href="/content-manager"><Database size={15} />Content Manager</a>
-          <a className="config-back" href="/apps"><ArrowLeft size={16} />Back to apps</a>
-        </div>
-      </header>
+    <ProductShell user={user} active="connections">
+      <main className="config-shell">
+        <section className="config-hero">
+          <div>
+            <p className="config-kicker"><Settings2 size={15} />Account connections</p>
+            <h1>Connect and manage your accounts.</h1>
+            <p>Add an account, complete its login, then return to the Store to open the service workspace.</p>
+          </div>
+          <div className="config-summary">
+            <span><strong>{connectedCount}</strong><small>connected accounts</small></span>
+            <span><strong>2</strong><small>active integrations</small></span>
+            <span><strong>2</strong><small>planned integrations</small></span>
+          </div>
+        </section>
 
-      <section className="config-hero">
-        <div>
-          <p className="config-kicker"><Settings2 size={15} />Central service configuration</p>
-          <h1>Connect once. Use the account everywhere it belongs.</h1>
-          <p>Accounts are configured here and automatically appear inside their respective services for selection and automation.</p>
-        </div>
-        <div className="config-summary">
-          <span><strong>{connectedCount}</strong><small>connected accounts</small></span>
-          <span><strong>2</strong><small>active integrations</small></span>
-          <span><strong>2</strong><small>planned integrations</small></span>
-        </div>
-      </section>
-
-      <div className="config-layout">
+        <div className="config-layout">
         <aside className="config-service-nav">
           <div className="config-nav-heading"><span>Services</span><small>Choose a destination</small></div>
           {services.map(service => (
@@ -413,8 +399,9 @@ export default function ConfigManager({
             />
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </ProductShell>
   );
 }
 
@@ -506,15 +493,12 @@ function TelegramManager({
   setNotice
 }) {
   const [connecting, setConnecting] = useState(false);
-  const [stage, setStage] = useState("credentials");
+  const [stage, setStage] = useState("phone");
   const [challengeId, setChallengeId] = useState("");
-  const [apiId, setApiId] = useState("");
-  const [apiHash, setApiHash] = useState("");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showHash, setShowHash] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
@@ -538,10 +522,8 @@ function TelegramManager({
 
   const resetConnection = () => {
     setConnecting(false);
-    setStage("credentials");
+    setStage("phone");
     setChallengeId("");
-    setApiId("");
-    setApiHash("");
     setPhone("");
     setCode("");
     setPassword("");
@@ -553,7 +535,7 @@ function TelegramManager({
     try {
       const data = await telegramRequest("/telegram/login/start", {
         method: "POST",
-        body: JSON.stringify({ telegramApiId: apiId.trim(), telegramApiHash: apiHash.trim(), phone: phone.trim() })
+        body: JSON.stringify({ phone: phone.trim() })
       });
       setChallengeId(data.challengeId);
       setStage("code");
@@ -668,18 +650,16 @@ function TelegramManager({
         <section className="config-form-card">
           <header>
             <span><KeyRound size={21} /></span>
-            <div><p>New Telegram connection</p><h3>{stage === "credentials" ? "API credentials and phone" : stage === "code" ? "Verification code" : "Two-factor password"}</h3></div>
+            <div><p>New Telegram connection</p><h3>{stage === "phone" ? "Enter your phone number" : stage === "code" ? "Verification code" : "Two-factor password"}</h3></div>
             <button type="button" onClick={resetConnection} aria-label="Close form"><X size={18} /></button>
           </header>
 
-          {stage === "credentials" && (
+          {stage === "phone" && (
             <form onSubmit={startConnection}>
               <div className="config-form-grid">
-                <label><span>Telegram API ID</span><input value={apiId} onChange={event => setApiId(event.target.value)} inputMode="numeric" placeholder="12345678" required /></label>
-                <label><span>Telegram API hash</span><div className="config-secret-input"><input type={showHash ? "text" : "password"} value={apiHash} onChange={event => setApiHash(event.target.value)} placeholder="32-character API hash" required /><button type="button" onClick={() => setShowHash(value => !value)}>{showHash ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
                 <label className="wide"><span>Phone number with country code</span><input value={phone} onChange={event => setPhone(event.target.value)} type="tel" autoComplete="tel" placeholder="+91 98765 43210" required /></label>
               </div>
-              <p className="config-form-help">Create API credentials at my.telegram.org. Telegram will send a one-time verification code to this account.</p>
+              <p className="config-form-help">AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account.</p>
               <div className="config-form-actions"><button className="config-secondary" type="button" onClick={resetConnection}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Send verification code</button></div>
             </form>
           )}
@@ -688,7 +668,7 @@ function TelegramManager({
             <form onSubmit={submitCode}>
               <label className="config-code-field"><span>Verification code</span><input value={code} onChange={event => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="12345" autoFocus required /></label>
               <p className="config-form-help">Enter the newest code sent by Telegram. It is used once and is not saved.</p>
-              <div className="config-form-actions"><button className="config-secondary" type="button" onClick={() => setStage("credentials")}>Start over</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify account</button></div>
+              <div className="config-form-actions"><button className="config-secondary" type="button" onClick={() => setStage("phone")}>Start over</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify account</button></div>
             </form>
           )}
 
@@ -720,8 +700,11 @@ function TelegramManager({
               <span className="config-account-logo"><img src="/telegram-logo.svg" alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName || "Telegram account"}</strong><small>{account.username ? "@" + account.username : "Telegram user " + account.telegramUserId}</small></span>
               <span className="config-account-state"><i />Connected</span>
-              <span className="config-account-meta">Available in Telegram</span>
-              <button className="config-icon-danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} aria-label={"Disconnect " + account.displayName}><Trash2 size={16} /></button>
+              <span className="config-account-meta">Ready to open in Telegram</span>
+              <div className="config-account-actions">
+                <button className="open" type="button" onClick={() => window.location.assign(dashboardUrl)} disabled={!dashboardUrl}><ArrowRight size={15} />Open</button>
+                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} aria-label={"Delete " + account.displayName}><Trash2 size={15} />Delete</button>
+              </div>
             </article>
           ))}
         </div>
@@ -848,6 +831,14 @@ function PublishingManager({
     }
   };
 
+  const openPublishingAccount = (account) => {
+    if (!account.enabled || !account.credentialConfigured) return;
+    const destination = new URL(publishQueueUrl, window.location.origin);
+    destination.searchParams.set("platform", account.platform);
+    destination.searchParams.set("account", account.id);
+    window.location.assign(destination.toString());
+  };
+
   if (status === "checking") {
     return <div className="config-loading"><Loader2 className="spin" size={23} />Checking Publish Queue access…</div>;
   }
@@ -972,12 +963,13 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Login ready" : "Login required"}</span>
-              <span className="config-account-meta">{account.loginIdentifier || "Manual Chrome login"}</span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Connected" : "Login required"}</span>
+              <span className="config-account-meta">{account.credentialConfigured ? "Ready to open and publish" : "Complete Login to enable Open"}</span>
               <div className="config-account-actions">
-                <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account"><Pencil size={15} /></button>
-                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Refresh saved account login" : "Connect account login"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}</button>
-                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} /></button>
+                <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
+                <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
+                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the saved session" : "Sign in to this account"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}Login</button>
+                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} />Delete</button>
               </div>
             </article>
           ))}
