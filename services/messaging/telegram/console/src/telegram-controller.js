@@ -948,7 +948,7 @@ function setLoginStage(stage) {
   el.connectCopy.textContent = isPhone ? "Enter your phone number. Telegram will deliver a verification code." : isCode ? "Enter the code Telegram sent. It is used once and is not saved by this page." : "This Telegram account uses two-factor authentication. Enter its password to finish connecting.";
   if (isCode) el.code.focus(); if (isPassword) el.telegramPassword.focus();
 }
-async function completeConnection(data) { resetLogin(); el.phone.value = ""; if (el.phoneCountryCode) el.phoneCountryCode.value = "+91"; await loadAccounts(); selectAccount(data.account.id); status(el.connectStatus, `${data.account.displayName} is connected and ready to use.`, "success"); }
+async function completeConnection(data) { resetLogin(); el.phone.value = ""; if (el.phoneCountryCode) el.phoneCountryCode.value = "+91"; await loadAccounts(); selectAccount(data.account.id); status(el.connectStatus, data.transferred ? `${data.account.displayName} was securely moved to this workspace and is ready to use.` : `${data.account.displayName} is connected and ready to use.`, "success"); }
 
 el.passwordSignInForm.addEventListener("submit", async (event) => {
   event.preventDefault();

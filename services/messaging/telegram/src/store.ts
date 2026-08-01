@@ -21,6 +21,11 @@ export type TelegramAccountWithSession = TelegramAccount & {
   sessionString: string;
 };
 
+export type SavedTelegramAccount = {
+  account: TelegramAccount;
+  transferred: boolean;
+};
+
 export type LoginChallenge = {
   id: string;
   telegramApiId: number;
@@ -404,12 +409,17 @@ export class MultiUserStore {
 
   async saveTelegramAccount(
     userId: string,
-    input: { telegramApiId: number; telegramApiHash: string; telegramUserId: string; displayName: string; username: string; sessionString: string }
-  ): Promise<TelegramAccount> {
+    input: { telegramApiId: number; telegramApiHash: string; telegramUserId: string; displayName: string; username: string; sessionString: string },
+    options: { allowVerifiedTransfer?: boolean } = {}
+  ): Promise<SavedTelegramAccount> {
     return this.updateDatabase((database) => {
       const existing = database.telegramAccounts.find((account) => account.telegramUserId === input.telegramUserId);
+      const transferred = Boolean(existing && existing.userId !== userId);
       if (existing && existing.userId !== userId) {
-        throw new AccountAlreadyLinkedError("This Telegram account is already linked to another app user.");
+        if (!options.allowVerifiedTransfer) {
+          throw new AccountAlreadyLinkedError("This Telegram account is already linked to another app user.");
+        }
+        existing.userId = userId;
       }
 
       if (existing) {
@@ -419,7 +429,7 @@ export class MultiUserStore {
         existing.telegramApiHashCiphertext = this.cipher.encrypt(input.telegramApiHash);
         existing.sessionCiphertext = this.cipher.encrypt(input.sessionString);
         existing.updatedAt = nowIso();
-        return this.toAccount(existing);
+        return { account: this.toAccount(existing), transferred };
       }
 
       const createdAt = nowIso();
@@ -436,7 +446,7 @@ export class MultiUserStore {
         updatedAt: createdAt
       };
       database.telegramAccounts.push(row);
-      return this.toAccount(row);
+      return { account: this.toAccount(row), transferred: false };
     });
   }
 

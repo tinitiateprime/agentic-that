@@ -53,12 +53,12 @@ async function main() {
           (await rl.question("Telegram 2FA password: ")).trim()
         )
       : codeResult;
-    const account = await store.saveTelegramAccount(user.id, {
+    const { account } = await store.saveTelegramAccount(user.id, {
       telegramApiId: credentials.apiId,
       telegramApiHash: credentials.apiHash,
       ...result.profile,
       sessionString: result.sessionString
-    });
+    }, { allowVerifiedTransfer: true });
     await store.deleteLoginChallenge(user.id, challenge.id);
     console.log(JSON.stringify({ ok: true, status: "connected", account }, null, 2));
   } finally {
@@ -71,4 +71,3 @@ main().catch((error) => {
   console.error("Command failed without logging sensitive input.");
   process.exitCode = 1;
 });
-

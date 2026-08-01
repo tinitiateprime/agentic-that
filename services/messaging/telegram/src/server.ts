@@ -735,13 +735,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       sendJson(request, response, 202, { ok: true, status: "password_required", challengeId: challenge.id });
       return;
     }
-    const account = await store.saveTelegramAccount(user.id, {
+    const saved = await store.saveTelegramAccount(user.id, {
       telegramApiId: credentials.apiId,
       telegramApiHash: credentials.apiHash,
       ...result.profile,
       sessionString: result.sessionString
-    });
+    }, { allowVerifiedTransfer: true });
+    const { account, transferred } = saved;
     if (shouldRunBackgroundListeners()) {
+      if (transferred) await stopTelegramListener(account.id);
       void startTelegramListener({
         ...account,
         telegramApiId: credentials.apiId,
@@ -750,7 +752,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     await store.deleteLoginChallenge(user.id, challenge.id);
-    sendJson(request, response, 201, { ok: true, status: "connected", account });
+    sendJson(request, response, 201, { ok: true, status: "connected", account, transferred });
     return;
   }
 
@@ -770,13 +772,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } catch (error) {
       throw telegramLoginError(error);
     }
-    const account = await store.saveTelegramAccount(user.id, {
+    const saved = await store.saveTelegramAccount(user.id, {
       telegramApiId: credentials.apiId,
       telegramApiHash: credentials.apiHash,
       ...result.profile,
       sessionString: result.sessionString
-    });
+    }, { allowVerifiedTransfer: true });
+    const { account, transferred } = saved;
     if (shouldRunBackgroundListeners()) {
+      if (transferred) await stopTelegramListener(account.id);
       void startTelegramListener({
         ...account,
         telegramApiId: credentials.apiId,
@@ -785,7 +789,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     await store.deleteLoginChallenge(user.id, challenge.id);
-    sendJson(request, response, 201, { ok: true, status: "connected", account });
+    sendJson(request, response, 201, { ok: true, status: "connected", account, transferred });
     return;
   }
 
