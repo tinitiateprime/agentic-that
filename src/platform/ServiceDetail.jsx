@@ -46,7 +46,7 @@ function StandardServiceDetail({ user, service, category, related }) {
   const status = statusFor(service);
   const action = actionFor(service, status);
   const secondaryAction = secondaryActionFor(service);
-  const needsConnection = service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
+  const needsConnection = service.availability === "live" && service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
 
   return (
     <ProductShell user={user} active="apps">

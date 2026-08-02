@@ -3,10 +3,12 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  BarChart3,
   Captions,
   Cloud,
   Eye,
   FileText,
+  Hash,
   Heart,
   Image,
   KeyRound,
@@ -17,6 +19,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
   SquarePen,
   Type,
   UserRound,
@@ -32,6 +35,7 @@ const categoryPresentation = {
   messaging: { icon: MessageCircleMore, accent: "#087360", tint: "#e6f4f0" },
   publishing: { icon: SquarePen, accent: "#7857e8", tint: "#f1edff" },
   scraping: { icon: Search, accent: "#2378d4", tint: "#eaf3ff" },
+  seo: { icon: BarChart3, accent: "#a05f17", tint: "#fff5e8" },
   engagement: { icon: Heart, accent: "#e43f73", tint: "#fff0f5" },
 };
 
@@ -48,6 +52,19 @@ const capabilityIcons = {
   text: Type,
   profile: UserRound,
   keyword: Search,
+  keywords: Search,
+  "search seo": Search,
+  "site audit": ShieldCheck,
+  priorities: BarChart3,
+  "ai seo": Sparkles,
+  visibility: Eye,
+  mentions: MessageCircleMore,
+  content: FileText,
+  citations: LinkIcon,
+  "social seo": Hash,
+  profiles: UserRound,
+  discovery: Search,
+  hashtags: Hash,
   url: LinkIcon,
   "product preview": Eye,
 };

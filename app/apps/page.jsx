@@ -4,7 +4,7 @@ import { getCurrentPlatformUser } from "@platform/server/auth-store";
 
 export const metadata = {
   title: "Apps — AgenticThat",
-  description: "Choose, connect, and open AgenticThat messaging, publishing, scraping, and engagement services.",
+  description: "Choose, connect, and open AgenticThat messaging, publishing, scraping, SEO, and engagement services.",
 };
 
 export default async function AppsPage() {
