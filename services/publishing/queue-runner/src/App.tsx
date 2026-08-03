@@ -11,8 +11,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
-import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
+import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingEngine, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, assetUrl, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
@@ -40,6 +40,10 @@ function StatusStateIcon({ state, size = 18 }: { state: string; size?: number })
 function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 'paused' | 'restricted' {
   if (!account.enabled) return account.safetyStatus === 'restricted' ? 'restricted' : 'paused';
   return account.safetyStatus ?? 'healthy';
+}
+
+function accountPublishingEngine(account: PlatformAccount): PublishingEngine {
+  return account.executionEngine ?? 'companion';
 }
 
 const accountHealthLabels = {
@@ -1338,7 +1342,7 @@ function UnifiedComposer({
                   <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformAccounts.length : '—'}</i>
                 </button>
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
-                  {platformAccounts.map(account => <label key={account.id} className={account.credentialConfigured ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {account.credentialConfigured ? 'Login ready' : 'Login required before publishing'}</small></span></label>)}
+                  {platformAccounts.map(account => <label key={account.id} className={account.credentialConfigured ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.credentialConfigured ? 'Login ready' : 'Login required'}</small></span></label>)}
                 </div>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
                 <div className='composer-platform-tools'><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
@@ -1363,7 +1367,7 @@ function UnifiedComposer({
             {selectedAccounts.map(account => {
               const override = scheduleOverrides[account.id];
               return <article key={account.id}>
-                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{account.displayName}</strong><small>{account.handle} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
+                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{account.displayName}</strong><small>{publishingEngineLabels[accountPublishingEngine(account)]} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
                 <label className='composer-override-toggle'><input type='checkbox' checked={Boolean(override)} onChange={() => toggleOverride(account.id)} /><SlidersHorizontal size={14} />Override</label>
                 {override && <div className='composer-override-fields'><select value={override.mode} onChange={event => updateOverride(account.id, { mode: event.target.value as ComposerScheduleMode })}><option value='now'>Queue now</option><option value='exact'>Exact time</option><option value='template'>Template</option></select>{override.mode === 'exact' && <input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={override.exactAt} onChange={event => updateOverride(account.id, { exactAt: event.target.value })} />}{override.mode === 'template' && <select value={override.scheduleId} onChange={event => updateOverride(account.id, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.time}</option>)}</select>}</div>}
               </article>;
@@ -1688,7 +1692,7 @@ function Workboard({
             const health = accountHealthStatus(account);
             return <article key={account.id} className={`account-health-row ${health}`}>
               <CustomIcon platform={account.platform} size={18} />
-              <span><strong>{account.displayName}</strong><small>{account.handle} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
               <em>{accountHealthLabels[health]}</em>
               {account.safetyReason && <small title={account.safetyReason}>{account.safetyReason}</small>}
             </article>;
@@ -1925,7 +1929,7 @@ function ScheduleSubmissionModal({
                 <label key={account.id} className={selectedAccountIds.includes(account.id) ? 'selected' : ''}>
                   <input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} />
                   <CustomIcon platform={account.platform} size={22} />
-                  <span><strong>{account.displayName}</strong><small>{account.handle} · {platformLabels[account.platform]}</small></span>
+                  <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {publishingEngineLabels[accountPublishingEngine(account)]}</small></span>
                 </label>
               ))}
             </div>
@@ -2179,6 +2183,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [handle, setHandle] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [executionEngine, setExecutionEngine] = useState<PublishingEngine>('companion');
   const [safetyMode, setSafetyMode] = useState<'standard' | 'protected'>('protected');
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -2190,6 +2195,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle(account?.handle ?? '');
     setLoginIdentifier(account?.loginIdentifier ?? '');
     setEnabled(account?.enabled ?? true);
+    setExecutionEngine(account ? accountPublishingEngine(account) : 'companion');
     setSafetyMode(account?.safetyMode ?? (account ? 'standard' : 'protected'));
     setTwoFactorEnabled(account?.twoFactorEnabled ?? false);
   };
@@ -2200,11 +2206,12 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle('');
     setLoginIdentifier('');
     setEnabled(true);
+    setExecutionEngine('companion');
     setSafetyMode('protected');
     setTwoFactorEnabled(false);
   };
 
-  const openManualLogin = async (account: PlatformAccount, surface: 'embedded' | 'external' = 'embedded') => {
+  const openManualLogin = async (account: PlatformAccount, surface: 'engine' | 'embedded' | 'external' = 'engine') => {
     setLoginAccountId(account.id);
     try {
       const result = await api.startManualLogin(account.id, surface);
@@ -2220,6 +2227,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const saveAccount = async (loginAfterSave = false) => {
     if (!displayName.trim()) return alert('Account name is required.');
     if (!handle.trim()) return alert('Account handle is required.');
+    if (editing !== 'new' && editing && executionEngine !== accountPublishingEngine(editing) && editing.credentialConfigured && !confirm('Changing the publishing engine signs this account out. Continue and log in again?')) return;
     setLoading(true);
     try {
       const payload = {
@@ -2227,6 +2235,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
         handle: handle.trim(),
         loginIdentifier: loginIdentifier.trim(),
         enabled,
+        executionEngine,
         safetyMode,
         twoFactorEnabled,
       };
@@ -2267,6 +2276,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
             <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay on the provider sign-in page' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
+            <div className='account-engine-field account-form-wide'><label>Publishing engine</label><div className='account-engine-picker' role='group' aria-label='Choose publishing engine'><button type='button' className={executionEngine === 'companion' ? 'active' : ''} aria-pressed={executionEngine === 'companion'} onClick={() => setExecutionEngine('companion')}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Visible tabs inside Companion</small></span></button><button type='button' className={executionEngine === 'external_browser' ? 'active' : ''} aria-pressed={executionEngine === 'external_browser'} onClick={() => setExecutionEngine('external_browser')}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button></div></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
           </div>
@@ -2280,16 +2290,16 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='storage-access-list'>
             {accounts.length === 0 ? <div className='account-list-empty'><UsersRound size={27} /><strong>No publishing accounts yet</strong><span>Add an account, then open its login page and sign in manually.</span><button className='btn-primary' onClick={() => openForm()}>Add first account</button></div> : accounts.map(account => <article className='storage-access-row account-session-row' key={account.id}>
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
-              <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Companion login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || publishingEngineLabels[accountPublishingEngine(account)]}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
-                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
+                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : accountPublishingEngine(account) === 'external_browser' ? <ExternalLink size={14} /> : <KeyRound size={14} />}Login
               </button>
-              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Open login in Chrome or Edge' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
+              {accountPublishingEngine(account) === 'companion' && <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Open login in Chrome or Edge' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
                 <ExternalLink size={14} />Chrome
-              </button>
+              </button>}
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}
           </div>
@@ -2630,7 +2640,7 @@ function EditPostModal({
                 <CustomIcon platform={upload.platform} size={28} />
                 <div><strong>{upload.originalName}</strong><span>{platformLabels[upload.platform]}</span></div>
               </div>
-              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}){account.enabled ? '' : ' — paused'}</option>)}</select></div>
+              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}

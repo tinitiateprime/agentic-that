@@ -16,6 +16,7 @@ import {
   Loader2,
   LockKeyhole,
   MessageCircle,
+  MonitorCheck,
   Pencil,
   Plug,
   Plus,
@@ -53,6 +54,10 @@ const platformLogos = {
   x: "/x-logo.svg",
   youtube: "/youtube-logo.svg",
   linkedin: "/linkedin-logo.png"
+};
+const publishingEngineLabels = {
+  companion: "Companion",
+  external_browser: "External browser"
 };
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
@@ -823,13 +828,14 @@ function PublishingManager({
         displayName: form.displayName.trim(),
         handle: form.handle.trim(),
         loginIdentifier: form.loginIdentifier.trim(),
-        enabled: form.enabled
+        enabled: form.enabled,
+        executionEngine: form.executionEngine
       });
       const account = form.id
         ? await publishingRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, { method: "PATCH", body })
         : await publishingRequest("/api/platforms/" + selectedPlatform + "/accounts", session.token, { method: "POST", body });
       setEditing(null);
-      setNotice({ tone: "success", message: account.displayName + " is now available throughout Publish Queue Runner." });
+      setNotice({ tone: "success", message: account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "." });
       await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -852,10 +858,13 @@ function PublishingManager({
     }
   };
 
-  const startLogin = async (account) => {
+  const startLogin = async (account, surface = "engine") => {
     setLoginAccountId(account.id);
     try {
-      const result = await publishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, { method: "POST" });
+      const result = await publishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, {
+        method: "POST",
+        body: JSON.stringify({ surface })
+      });
       setNotice({ tone: "success", message: result.message });
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -997,11 +1006,12 @@ function PublishingManager({
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
               <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Connected" : "Login required"}</span>
-              <span className="config-account-meta">{account.credentialConfigured ? "Ready to open and publish" : "Complete Login to enable Open"}</span>
+              <span className="config-account-meta config-account-engine">{(account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
                 <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
-                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the saved session" : "Sign in to this account"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}Login</button>
+                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the selected engine session" : "Sign in with the selected engine"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={15} /> : <KeyRound size={15} />}Login</button>
+                {(account.executionEngine || "companion") === "companion" && <button className="icon-only" type="button" onClick={() => void startLogin(account, "external")} disabled={!account.enabled || Boolean(loginAccountId)} title="Open Chrome or Edge login fallback" aria-label={"Open " + account.displayName + " login in Chrome or Edge"}><ExternalLink size={15} /></button>}
                 <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} />Delete</button>
               </div>
             </article>
@@ -1017,15 +1027,19 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
   const [handle, setHandle] = useState(account?.handle || "");
   const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
+  const [executionEngine, setExecutionEngine] = useState(account?.executionEngine || "companion");
+  const engineChanged = Boolean(account && executionEngine !== (account.executionEngine || "companion"));
 
   const submit = (event) => {
     event.preventDefault();
+    if (engineChanged && account.credentialConfigured && !window.confirm("Changing the publishing engine signs this account out. Continue and log in again?")) return;
     void onSave({
       id: account?.id,
       displayName,
       handle,
       loginIdentifier,
-      enabled
+      enabled,
+      executionEngine
     });
   };
 
@@ -1040,7 +1054,15 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
         <div className="config-form-grid">
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
           <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
-          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; enter login in Chrome" /></label>
+          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; credentials stay on the provider sign-in page" /></label>
+          <fieldset className="config-engine-field wide">
+            <legend>Publishing engine</legend>
+            <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
+              <button type="button" className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Visible tabs inside Companion</small></span></button>
+              <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button>
+            </div>
+            {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
+          </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>
         <div className="config-form-actions"><button className="config-secondary" type="button" onClick={onCancel}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}{account ? "Save changes" : "Add account"}</button></div>

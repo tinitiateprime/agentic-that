@@ -1,10 +1,8 @@
-import { chromium, type BrowserContext, type Page } from "playwright-core";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { BrowserContext, Page } from "playwright-core";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
-import type { PlatformUpload } from "../../shared/schema.js";
+import type { PlatformUpload, PublishingEngine } from "../../shared/schema.js";
 import {
   automationInput,
   createAutomationRun,
@@ -31,14 +29,21 @@ import { loginToYouTube, postToYouTube } from "./publishers/youtube.js";
 import { loginToX, postToX } from "./publishers/x.js";
 import {
   publishingDesktopHost,
-  type DesktopBrowserActivity,
   type DesktopBrowserPurpose,
 } from "./desktop-host.js";
-import { publishingBrowserDataDirectory } from "../runtime-paths.js";
 import { assessPublishingSafety, type PublishingSafetyAssessment } from "./safety-governor.js";
 import { classifyPublishingRisk } from "./risk-classifier.js";
+import { launchCompanionEngineBrowser } from "../engines/companion/index.js";
+import {
+  detectedExternalBrowserExecutablePath,
+  externalBrowserExecutablePath,
+  externalBrowserProfilePath,
+  externalBrowserProfilesRoot,
+  launchExternalBrowserEngine,
+  stopExternalPublishingBrowsers,
+} from "../engines/external-browser/index.js";
+import type { PublishingBrowserSession } from "../engines/types.js";
 
-const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
   instagram: "https://www.instagram.com/accounts/login/",
@@ -64,29 +69,16 @@ type EncryptedSessionState = {
   ciphertext: string;
 };
 
-function readJsonFile(filePath: string) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, any>;
-  } catch {
-    return {};
-  }
-}
-
-function writeJsonFile(filePath: string, data: Record<string, any>) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data));
-}
-
-function accountProfilePath(account: PublishingAccount) {
-  return path.join(accountProfilesDir, account.platform, account.id.replace(/[^a-z0-9-_]/gi, "-"));
+function accountEngine(account: PublishingAccount): PublishingEngine {
+  return account.executionEngine ?? "companion";
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
-  return path.join(accountProfilePath(account), "automation-session-state.enc.json");
+  return path.join(externalBrowserProfilePath(account), "automation-session-state.enc.json");
 }
 
 function legacyAccountSessionStatePath(account: PublishingAccount) {
-  return path.join(accountProfilePath(account), "automation-session-state.json");
+  return path.join(externalBrowserProfilePath(account), "automation-session-state.json");
 }
 
 function sessionEncryptionKey() {
@@ -158,8 +150,8 @@ function migrateLegacyAccountSessionState(account: PublishingAccount) {
 
 export async function removeSavedAccountProfile(account: PublishingAccount) {
   await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
-  const profilesRoot = path.resolve(accountProfilesDir);
-  const profilePath = path.resolve(accountProfilePath(account));
+  const profilesRoot = path.resolve(externalBrowserProfilesRoot());
+  const profilePath = path.resolve(externalBrowserProfilePath(account));
   if (!profilePath.startsWith(`${profilesRoot}${path.sep}`)) {
     throw new Error("The saved account profile path is invalid.");
   }
@@ -189,114 +181,24 @@ export async function reconcileSavedAccountSessions() {
   const accounts = await listPlatformAccounts();
   accounts.forEach(migrateLegacyAccountSessionState);
   await Promise.all(accounts
-    .filter(account => !account.credentialConfigured && hasSavedAccountSession(account))
+    .filter(account => accountEngine(account) === "companion" && !account.credentialConfigured && hasSavedAccountSession(account))
     .map(account => updatePlatformAccountCredentialState(account.id, true)));
 }
 
-function detectedChromeExecutablePath() {
-  const configured = process.env.PUBLISH_QUEUE_CHROME_PATH?.trim()
-    || process.env.CHROME_PATH?.trim()
-    || process.env.GOOGLE_CHROME_PATH?.trim();
-  const candidates = [
-    configured,
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome-stable" : undefined,
-  ].filter(Boolean) as string[];
-
-  return candidates.find(candidate => path.isAbsolute(candidate) && fs.existsSync(candidate)) ?? null;
-}
-
-function chromeExecutablePath() {
-  const executablePath = detectedChromeExecutablePath();
-  if (!executablePath) {
-    throw new Error("Google Chrome or Microsoft Edge is required for secure social-account login. Install one, restart Companion, and try again.");
-  }
-  return executablePath;
-}
-
 export function publishingBrowserRuntimeHealth() {
-  const executablePath = detectedChromeExecutablePath();
+  const executablePath = detectedExternalBrowserExecutablePath();
   const embeddedBrowser = Boolean(publishingDesktopHost());
   return {
     chromeInstalled: Boolean(executablePath),
     chromeExecutablePath: executablePath,
     embeddedBrowser,
     automationAvailable: embeddedBrowser || Boolean(executablePath),
+    engines: {
+      companion: { available: embeddedBrowser },
+      external_browser: { available: Boolean(executablePath) },
+    },
   };
 }
-
-function getFreePort() {
-  return new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a secure browser connection port.")));
-    });
-  });
-}
-
-function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
-  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
-
-  return new Promise<boolean>((resolve) => {
-    const timeout = setTimeout(() => resolve(false), timeoutMs);
-    processHandle.once("exit", () => {
-      clearTimeout(timeout);
-      resolve(true);
-    });
-  });
-}
-
-async function waitForChromeDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  const endpoint = `http://127.0.0.1:${port}`;
-
-  while (Date.now() < deadline) {
-    if (processHandle.exitCode !== null) {
-      throw new Error(`The secure login browser closed before it was ready. Exit code: ${processHandle.exitCode}`);
-    }
-
-    try {
-      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1000) });
-      if (response.ok) return endpoint;
-    } catch {
-      // The dedicated browser profile is still starting.
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-
-  throw new Error("The secure Chrome/Edge login window did not become ready. Close any older login window for this account and try again.");
-}
-
-function prepareChromeProfile(profileDir: string) {
-  const preferencesPath = path.join(profileDir, "Default", "Preferences");
-  const preferences = readJsonFile(preferencesPath);
-  preferences.browser = { ...(preferences.browser ?? {}), has_seen_welcome_page: true };
-  preferences.credentials_enable_service = false;
-  preferences.profile = { ...(preferences.profile ?? {}), exit_type: "Normal", password_manager_enabled: false };
-  preferences.signin = { ...(preferences.signin ?? {}), allowed: false, allowed_on_next_startup: false };
-  preferences.sync = { ...(preferences.sync ?? {}), suppress_start: true };
-  writeJsonFile(preferencesPath, preferences);
-}
-
-type AccountBrowserSession = {
-  context: BrowserContext;
-  page: Page;
-  desktopSessionId?: string;
-  update(activity: DesktopBrowserActivity): Promise<void>;
-  close(): Promise<void>;
-};
 
 const activeAccountBrowserOperations = new Map<string, { purpose: DesktopBrowserPurpose; token: symbol }>();
 
@@ -316,142 +218,60 @@ function reserveAccountBrowser(account: PublishingAccount, purpose: DesktopBrows
   };
 }
 
-async function waitForDesktopPage(
-  browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>,
-  targetUrl: string,
-) {
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    const pages = browser.contexts().flatMap(context => context.pages());
-    const page = pages.find(candidate => candidate.url() === targetUrl);
-    if (page) return page;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error("The Companion live browser view did not become available.");
-}
-
 async function launchAccountBrowser(
   account: PublishingAccount,
   purpose: DesktopBrowserPurpose,
-): Promise<AccountBrowserSession> {
+  selectedEngine: PublishingEngine = accountEngine(account),
+): Promise<PublishingBrowserSession> {
   const releaseAccount = reserveAccountBrowser(account, purpose);
   const desktopHost = publishingDesktopHost();
-  if (desktopHost) {
-    let managed: Awaited<ReturnType<typeof desktopHost.openBrowser>>;
-    try {
-      managed = await desktopHost.openBrowser({
-        accountId: account.id,
-        platform: account.platform,
-        displayName: account.displayName,
-        handle: account.handle,
-        purpose,
-      });
-    } catch (error) {
+  if (selectedEngine === "companion") {
+    if (!desktopHost) {
       releaseAccount();
-      throw error;
+      throw new Error("The Companion engine requires the Publishing Companion desktop app. Open Companion or choose the External browser engine for this account.");
     }
-    let connection: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
-
-    try {
-      connection = await chromium.connectOverCDP(managed.debugEndpoint);
-      const page = await waitForDesktopPage(connection, managed.targetUrl);
-      const context = page.context();
-      await restoreAccountSessionState(account, context);
-      return {
-        context,
-        page,
-        desktopSessionId: managed.id,
-        update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
-        close: async () => {
-          try {
-            // Remove the completed pane first so the remaining live browsers
-            // expand immediately. Closing the CDP transport is best-effort and
-            // must not keep a finished account visible for several seconds.
-            await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
-            await Promise.race([
-              connection?.close().catch(() => undefined),
-              new Promise(resolve => setTimeout(resolve, 1000)),
-            ]);
-          } finally {
-            releaseAccount();
-          }
-        },
-      };
-    } catch (error) {
-      await Promise.resolve(desktopHost.updateBrowser(managed.id, {
-        state: "failed",
-        detail: "The Companion browser could not start. Restart Companion and try again.",
-      })).catch(() => undefined);
-      await Promise.resolve(desktopHost.closeBrowser(managed.id)).catch(() => undefined);
-      await Promise.race([
-        connection?.close().catch(() => undefined),
-        new Promise(resolve => setTimeout(resolve, 1000)),
-      ]);
-      releaseAccount();
-      throw error;
-    }
+    return launchCompanionEngineBrowser({
+      account,
+      purpose,
+      desktopHost,
+      restoreSessionState: context => restoreAccountSessionState(account, context, "companion"),
+      releaseAccount,
+    });
   }
 
-  const profileDir = accountProfilePath(account);
-  prepareChromeProfile(profileDir);
-  const slowMoMs = Number(process.env.AUTOMATION_SLOW_MO_MS ?? 120);
-  const commonArgs = [
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-mode",
-    "--disable-notifications",
-    "--deny-permission-prompts",
-    "--disable-sync",
-    "--disable-signin-promo",
-  ];
-  let context: BrowserContext | null = null;
   try {
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless: false,
-      executablePath: chromeExecutablePath(),
-      slowMo: slowMoMs,
-      viewport: null,
-      args: commonArgs,
+    return await launchExternalBrowserEngine({
+      account,
+      purpose,
+      targetUrl: purpose === "login" ? platformLoginUrls[account.platform] : "about:blank",
+      desktopHost,
+      restoreSessionState: context => restoreAccountSessionState(account, context, "external_browser"),
+      releaseAccount,
     });
-    await restoreAccountSessionState(account, context);
-    const launchedContext = context;
-    const page = launchedContext.pages()[0] ?? await launchedContext.newPage();
-    return {
-      context: launchedContext,
-      page,
-      update: async () => undefined,
-      close: async () => {
-        try {
-          await launchedContext.close();
-        } finally {
-          releaseAccount();
-        }
-      },
-    };
   } catch (error) {
-    await context?.close().catch(() => undefined);
+    // Launchers release the account after they take ownership. Errors thrown
+    // before that point still need to free the per-account operation lock.
     releaseAccount();
     throw error;
   }
 }
 
-async function saveAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+async function saveAccountSessionState(
+  account: PublishingAccount,
+  context: BrowserContext,
+  engine: PublishingEngine,
+) {
   try {
     // Electron's per-account persistent partition already saves cookies with
     // Chromium/OS encryption. Asking CDP for cookies after a large media post
     // can block the embedded service, so no duplicate export is needed here.
-    if (publishingDesktopHost()) {
+    if (engine === "companion") {
       fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
       console.log(`Retained protected Companion session for ${account.platform} account ${account.handle}.`);
       return;
     }
-    const key = sessionEncryptionKey();
     fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
-    if (!key) return;
-    const statePath = accountSessionStatePath(account);
-    const state = await context.storageState();
-    writeEncryptedSessionState(statePath, state, key);
-    console.log(`Saved encrypted browser session state for ${account.platform} account ${account.handle}.`);
+    console.log(`Retained dedicated external browser profile for ${account.platform} account ${account.handle}.`);
   } catch (error) {
     console.warn(
       `Could not save browser session state for ${account.platform} account ${account.handle}:`,
@@ -475,7 +295,11 @@ async function exportStandardBrowserSession(account: PublishingAccount, context:
   console.log(`Saved protected ${account.platform} login session for ${account.handle}.`);
 }
 
-async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+async function restoreAccountSessionState(
+  account: PublishingAccount,
+  context: BrowserContext,
+  engine: PublishingEngine,
+) {
   migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
@@ -484,7 +308,7 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
     const key = sessionEncryptionKey();
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
-    if (publishingDesktopHost()) await context.clearCookies();
+    if (engine === "companion") await context.clearCookies();
     if (Array.isArray(state.cookies) && state.cookies.length > 0) {
       await context.addCookies(state.cookies);
     }
@@ -498,10 +322,8 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
         }
       }, localStorageByOrigin);
     }
-    if (publishingDesktopHost()) {
-      fs.rmSync(statePath, { force: true });
-      console.log(`Imported protected ${account.platform} login into Companion for ${account.handle}.`);
-    }
+    fs.rmSync(statePath, { force: true });
+    console.log(`Imported protected ${account.platform} login into ${engine === "companion" ? "Companion" : "the external browser"} for ${account.handle}.`);
   } catch (error) {
     console.warn(
       `Could not restore saved session state for ${account.platform} account ${account.handle}:`,
@@ -510,76 +332,40 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
   }
 }
 
-async function launchStandardBrowserForLogin(account: PublishingAccount) {
-  const profileDir = accountProfilePath(account);
-  fs.mkdirSync(profileDir, { recursive: true });
-  prepareChromeProfile(profileDir);
-
-  const port = await getFreePort();
-  const executablePath = chromeExecutablePath();
-  const browserName = /msedge/i.test(path.basename(executablePath)) ? "Microsoft Edge" : "Google Chrome";
-  const browserArgs = [
-    `--user-data-dir=${profileDir}`,
-    "--profile-directory=Default",
-    "--remote-debugging-address=127.0.0.1",
-    `--remote-debugging-port=${port}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-mode",
-    "--new-window",
-    platformLoginUrls[account.platform],
-  ];
-
-  console.log(`Opening ${browserName} for secure ${account.platform} login for ${account.handle}.`);
-  const browserProcess = spawn(executablePath, browserArgs, {
-    stdio: "ignore",
-    windowsHide: false,
-  });
-  let spawnError: Error | null = null;
-  browserProcess.once("error", error => { spawnError = error; });
-
-  await new Promise(resolve => setTimeout(resolve, 150));
-  if (spawnError) throw spawnError;
-
-  const debugEndpoint = await waitForChromeDebugEndpoint(port, browserProcess);
-  console.log(`${browserName} secure login window is ready on local port ${port}.`);
-  return { browserProcess, debugEndpoint, browserName };
-}
-
-async function prepareStandardBrowserSession(account: PublishingAccount) {
-  const releaseAccount = reserveAccountBrowser(account, "login");
-  let browserProcess: ChildProcess | null = null;
-  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
-
+async function prepareStandardBrowserSession(account: PublishingAccount, transferToCompanion: boolean) {
+  const browser = await launchAccountBrowser(account, "login", "external_browser");
   try {
-    const launched = await launchStandardBrowserForLogin(account);
-    browserProcess = launched.browserProcess;
-    browser = await chromium.connectOverCDP(launched.debugEndpoint);
-    const context = browser.contexts()[0];
-    if (!context) throw new Error(`${launched.browserName} did not create the secure account profile.`);
-    const page = context.pages().find(candidate => candidate.url().includes(new URL(platformLoginUrls[account.platform]).hostname))
-      ?? context.pages()[0]
-      ?? await context.newPage();
-    await page.bringToFront().catch(() => undefined);
-    console.log(`Complete ${account.platform} login in the visible ${launched.browserName} window. Companion will detect success automatically.`);
-    await loginOnly(page, account, { ignoreLoginErrors: true });
-    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
-    await exportStandardBrowserSession(account, context);
-    console.log(`${account.platform} login confirmed for ${account.handle}. Closing the dedicated login window.`);
-  } finally {
-    await browser?.close().catch(() => undefined);
-    if (browserProcess) {
-      const exited = await waitForProcessExit(browserProcess, 5000);
-      if (!exited && browserProcess.exitCode === null && !browserProcess.killed) browserProcess.kill();
+    await browser.update({
+      state: "waiting",
+      detail: `Complete ${account.platform} login in the dedicated Chrome or Edge window. Companion will detect success automatically.`,
+    });
+    await loginOnly(browser.page, account, { ignoreLoginErrors: true });
+    if (transferToCompanion) {
+      await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+      await exportStandardBrowserSession(account, browser.context);
+    } else {
+      await saveAccountSessionState(account, browser.context, "external_browser");
     }
-    releaseAccount();
+    await browser.update({
+      state: "posted",
+      detail: transferToCompanion
+        ? "Login confirmed and transferred securely into Companion."
+        : "Login confirmed in the dedicated external browser profile.",
+    });
+    console.log(`${account.platform} login confirmed for ${account.handle}. Closing the dedicated login window.`);
+  } catch (error) {
+    await browser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
+    throw error;
+  } finally {
+    await browser.close().catch(() => undefined);
   }
 }
 
 export type ManualLoginSurface = "embedded" | "external";
+export type ManualLoginRequest = ManualLoginSurface | "engine";
 
 async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
-  const browser = await launchAccountBrowser(account, "login");
+  const browser = await launchAccountBrowser(account, "login", "companion");
 
   try {
     await browser.update({
@@ -587,7 +373,7 @@ async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
       detail: `Sign in to ${account.platform} inside Companion. Passwords and verification codes stay on the provider page.`,
     });
     await loginOnly(browser.page, account, { ignoreLoginErrors: true, embeddedLogin: true });
-    await saveAccountSessionState(account, browser.context);
+    await saveAccountSessionState(account, browser.context, "companion");
     await browser.update({
       state: "posted",
       detail: "Login confirmed and the protected local session is ready.",
@@ -688,7 +474,7 @@ async function runAccountQueue(
     runPostIds.set(upload.id, await createAutomationRunPost(automationRunId, upload));
   }
 
-  let browser: AccountBrowserSession | null = null;
+  let browser: PublishingBrowserSession | null = null;
   let hadFailure = false;
   let sessionInvalidated = false;
 
@@ -849,7 +635,7 @@ async function runAccountQueue(
     throw error;
   } finally {
     if (browser) {
-      if (!sessionInvalidated) await saveAccountSessionState(account, browser.context);
+      if (!sessionInvalidated) await saveAccountSessionState(account, browser.context, browser.engine);
       await browser.close().catch(() => undefined);
     }
   }
@@ -860,7 +646,7 @@ async function prepareManualAccountSession(account: PublishingAccount, surface: 
   if (surface === "embedded") {
     await prepareEmbeddedCompanionSession(account);
   } else {
-    await prepareStandardBrowserSession(account);
+    await prepareStandardBrowserSession(account, accountEngine(account) === "companion");
   }
   console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
 }
@@ -870,9 +656,15 @@ const activeSessionPreparations = new Map<string, {
   surface: ManualLoginSurface;
 }>();
 
+export function assertAccountEngineChangeAllowed(accountId: string) {
+  if (activeAccountBrowserOperations.has(accountId) || activeSessionPreparations.has(accountId)) {
+    throw new Error("This account is busy with login or publishing. Wait for it to finish before changing its engine.");
+  }
+}
+
 export async function startManualAccountSession(
   accountId: string,
-  requestedSurface: ManualLoginSurface = "embedded",
+  requestedSurface: ManualLoginRequest = "engine",
 ) {
   const existing = activeSessionPreparations.get(accountId);
   const account = await getPublishingAccount(accountId);
@@ -881,10 +673,12 @@ export async function startManualAccountSession(
 
   if (existing) return { account, started: false, surface: existing.surface };
 
-  const surface: ManualLoginSurface = requestedSurface === "embedded" && publishingDesktopHost()
-    ? "embedded"
-    : "external";
-  if (surface === "external") chromeExecutablePath();
+  const useExternal = accountEngine(account) === "external_browser"
+    || requestedSurface === "external"
+    || !publishingDesktopHost();
+  const surface: ManualLoginSurface = useExternal ? "external" : "embedded";
+  if (!account.credentialConfigured) await removeSavedAccountProfile(account);
+  if (surface === "external") externalBrowserExecutablePath();
 
   const operation = prepareManualAccountSession(account, surface)
     .then(async () => {
@@ -932,14 +726,17 @@ export async function cancelAutomation(reason = "Publishing was stopped by the u
   activeAutomationController?.abort(cancellationError);
   const pending = pendingAutomationRuns.splice(0);
   for (const run of pending) run.reject(cancellationError);
-  await Promise.resolve(publishingDesktopHost()?.stopPublishingBrowsers(reason)).catch(() => undefined);
+  await Promise.all([
+    Promise.resolve(publishingDesktopHost()?.stopPublishingBrowsers(reason)).catch(() => undefined),
+    stopExternalPublishingBrowsers(reason).catch(() => undefined),
+  ]);
   return wasRunning;
 }
 
 function maxConcurrentAccounts() {
-  // Different accounts can start together at the scheduled minute. Companion
-  // keeps every browser visible in a scaled grid, while the per-account lock
-  // still guarantees that one account never receives overlapping jobs.
+  // Different accounts can start together at the scheduled minute. Their
+  // selected engines remain visible, while the per-account lock guarantees
+  // that one account never receives overlapping jobs.
   const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 5);
   return Number.isInteger(configured) ? Math.min(5, Math.max(1, configured)) : 5;
 }

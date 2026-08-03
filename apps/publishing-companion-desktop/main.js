@@ -7,6 +7,7 @@ import {
   Menu,
   nativeImage,
   safeStorage,
+  screen,
   session,
   shell,
   Tray,
@@ -329,8 +330,9 @@ function publicBrowserSession(session) {
     displayName: session.request.displayName,
     handle: session.request.handle,
     purpose: session.request.purpose,
+    engine: session.request.engine || "companion",
     activity: session.activity,
-    active: Boolean(session.view),
+    active: !session.closedAt,
     openedAt: session.openedAt,
     closedAt: session.closedAt ?? null,
   };
@@ -429,8 +431,8 @@ async function requestPersistentPublishingInteractionConsent() {
     title: "Scheduled publishing permission",
     message: "Allow scheduled publishing while you are away?",
     detail: [
-      "Companion will open visible social-media tabs and complete the publishing steps at the scheduled time.",
-      "Every live browser remains unobstructed, and Emergency stop is always available in Companion and its tray menu.",
+      "Companion will use each account's selected engine and complete the publishing steps in visible social-media tabs or external browser windows.",
+      "Every publishing browser remains visible, and Emergency stop is always available in Companion and its tray menu.",
       "This permission is saved for future scheduled posts and can be revoked at any time in Companion Settings.",
     ].join("\n\n"),
     buttons: ["Allow", "Deny"],
@@ -582,6 +584,39 @@ async function openManagedBrowser(request) {
   };
 }
 
+function externalBrowserWorkspaceBounds() {
+  const cursorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const workArea = cursorDisplay?.workArea || screen.getPrimaryDisplay().workArea;
+  return {
+    x: Math.round(workArea.x),
+    y: Math.round(workArea.y),
+    width: Math.max(1, Math.round(workArea.width)),
+    height: Math.max(1, Math.round(workArea.height)),
+  };
+}
+
+async function openExternalActivity(request) {
+  if (request.purpose === "publish") await ensurePublishingInteractionConsent();
+  const id = randomUUID();
+  const workspaceBounds = externalBrowserWorkspaceBounds();
+  managedBrowsers.set(id, {
+    id,
+    request: { ...request, engine: "external_browser" },
+    view: null,
+    activity: {
+      state: "opening",
+      detail: request.purpose === "login"
+        ? "Opening the dedicated external login window in the browser grid."
+        : "Opening the dedicated external publishing window in the browser grid.",
+    },
+    openedAt: new Date().toISOString(),
+    closedAt: null,
+  });
+  showCompanion("activity", false);
+  notifyWorkspaceState({ revealActivity: true });
+  return { id, workspaceBounds };
+}
+
 function updateManagedBrowser(sessionId, activity) {
   const session = managedBrowsers.get(sessionId);
   if (!session) return;
@@ -614,14 +649,14 @@ function removeManagedViews(session) {
 
 function pruneActivityHistory() {
   const completed = [...managedBrowsers.values()]
-    .filter(session => !session.view)
+    .filter(session => session.closedAt)
     .sort((left, right) => String(right.closedAt).localeCompare(String(left.closedAt)));
   for (const session of completed.slice(MAX_ACTIVITY_HISTORY)) managedBrowsers.delete(session.id);
 }
 
 async function closeManagedBrowser(sessionId, forcedState) {
   const session = managedBrowsers.get(sessionId);
-  if (!session || !session.view) return;
+  if (!session || session.closedAt) return;
   if (forcedState) {
     session.activity = {
       ...session.activity,
@@ -640,7 +675,7 @@ async function closeManagedBrowser(sessionId, forcedState) {
 
 async function stopPublishingBrowsers(reason) {
   const activePublishingSessions = [...managedBrowsers.values()]
-    .filter(session => session.view && session.request.purpose === "publish");
+    .filter(session => !session.closedAt && session.request.purpose === "publish");
   await Promise.all(activePublishingSessions.map(session => closeManagedBrowser(session.id, {
     state: "stopped",
     detail: reason,
@@ -653,6 +688,7 @@ function installPublishingDesktopHost() {
     requestPublishingPermission: ensurePublishingInteractionConsent,
     finishPublishingRun: finishPublishingInteractionConsent,
     openBrowser: openManagedBrowser,
+    openExternalActivity,
     updateBrowser: updateManagedBrowser,
     closeBrowser: closeManagedBrowser,
     stopPublishingBrowsers,
@@ -661,10 +697,10 @@ function installPublishingDesktopHost() {
 }
 
 async function emergencyStop() {
-  const activeSessions = [...managedBrowsers.values()].filter(session => session.view);
-  const stopped = await publishingRuntime?.cancelAutomation?.(
-    "Publishing was stopped with the Companion emergency stop.",
-  );
+  const activeSessions = [...managedBrowsers.values()].filter(session => !session.closedAt);
+  const reason = "Publishing was stopped with the Companion emergency stop.";
+  const stopped = await publishingRuntime?.cancelAutomation?.(reason);
+  await publishingRuntime?.stopAllExternalBrowserWindows?.(reason);
   await Promise.all(activeSessions.map(session => closeManagedBrowser(session.id, {
     state: "stopped",
     detail: session.request.purpose === "login"
@@ -846,6 +882,12 @@ function registerIpc() {
     return settings.autoStart;
   });
   ipcMain.handle("companion:revoke-publishing-consent", () => revokePublishingInteractionConsent());
+  ipcMain.handle("companion:arrange-external-windows", () => (
+    publishingRuntime?.arrangeExternalBrowserWindows?.(externalBrowserWorkspaceBounds())
+  ));
+  ipcMain.handle("companion:focus-external-window", (_event, sessionId) => (
+    publishingRuntime?.focusExternalBrowserWindow?.(String(sessionId || ""))
+  ));
   ipcMain.handle("companion:emergency-stop", () => emergencyStop());
   ipcMain.handle("companion:dashboard-proxy", (event, message) => {
     if (!EMBED_FULL_PUBLISHING_WORKSPACE || !dashboardView || event.sender.id !== dashboardView.webContents.id) {

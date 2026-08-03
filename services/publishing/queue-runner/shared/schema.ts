@@ -9,6 +9,7 @@ export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
 export const accountSafetyStatuses = ["healthy", "warning", "paused", "restricted"] as const;
 export const accountSafetyModes = ["standard", "protected"] as const;
+export const publishingEngines = ["companion", "external_browser"] as const;
 export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
 
 export const platformSchema = z.enum(platforms);
@@ -20,6 +21,7 @@ export const scheduleStatusSchema = z.enum(scheduleStatuses);
 export const userRoleSchema = z.enum(userRoles);
 export const accountSafetyStatusSchema = z.enum(accountSafetyStatuses);
 export const accountSafetyModeSchema = z.enum(accountSafetyModes);
+export const publishingEngineSchema = z.enum(publishingEngines);
 export const publishActionStateSchema = z.enum(publishActionStates);
 export const scheduleIdSchema = z.coerce.number().int().positive();
 
@@ -32,7 +34,13 @@ export type ScheduleStatus = (typeof scheduleStatuses)[number];
 export type UserRole = (typeof userRoles)[number];
 export type AccountSafetyStatus = (typeof accountSafetyStatuses)[number];
 export type AccountSafetyMode = (typeof accountSafetyModes)[number];
+export type PublishingEngine = (typeof publishingEngines)[number];
 export type PublishActionState = (typeof publishActionStates)[number];
+
+export const publishingEngineLabels: Record<PublishingEngine, string> = {
+  companion: "Companion",
+  external_browser: "External browser"
+};
 
 export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
   daily: "Daily",
@@ -98,6 +106,7 @@ export const platformAccountSchema = z.object({
   loginIdentifier: z.string(),
   credentialConfigured: z.boolean(),
   enabled: z.boolean(),
+  executionEngine: publishingEngineSchema.optional(),
   safetyStatus: accountSafetyStatusSchema.optional(),
   safetyMode: accountSafetyModeSchema.optional(),
   twoFactorEnabled: z.boolean().optional(),
@@ -112,6 +121,7 @@ export const upsertPlatformAccountSchema = z.object({
   handle: z.string().trim().min(1, "Account handle is required"),
   loginIdentifier: z.string().trim().max(254).optional().default(""),
   enabled: z.boolean().optional(),
+  executionEngine: publishingEngineSchema.optional(),
   safetyMode: accountSafetyModeSchema.optional(),
   twoFactorEnabled: z.boolean().optional()
 });

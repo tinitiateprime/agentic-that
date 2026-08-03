@@ -323,6 +323,22 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 .live-layout-controls button.active { color: #0c6d58; background: #fff; box-shadow: 0 1px 4px rgba(31, 69, 58, .12); }
 .live-layout-controls button:disabled { opacity: .42; cursor: not-allowed; }
 
+.external-arrange {
+  min-height: 31px;
+  padding: 6px 11px;
+  border: 1px solid #8eb4aa;
+  border-radius: 8px;
+  color: #145e4d;
+  background: #f5faf8;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.external-arrange:hover:not(:disabled) { border-color: #4f927f; background: #eaf6f2; }
+.external-arrange:disabled { opacity: .58; cursor: wait; }
+.external-arrange[hidden] { display: none; }
+
 .live-stop {
   min-height: 31px;
   padding: 6px 12px;
@@ -451,6 +467,40 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 .live-browser-slot { height: clamp(310px, 47vh, 540px); border: 0; border-radius: 0; box-shadow: none; }
 #activity-panel.has-live .live-browser-slot,
 #activity-panel.has-live .live-card:only-child .live-browser-slot { height: auto; min-height: 0; }
+.external-browser-slot { display: grid; place-items: center; padding: 22px; background: #eef4f2; }
+.external-browser-status { width: min(100%, 360px); display: grid; justify-items: center; gap: 7px; color: #29463d; text-align: center; }
+.external-browser-status strong { font-size: 17px; }
+.external-browser-status small { color: #667b74; font-size: 11px; line-height: 1.5; }
+.external-tile-map {
+  width: min(100%, 230px);
+  display: grid;
+  grid-template-columns: repeat(var(--external-tile-columns), minmax(0, 1fr));
+  grid-auto-rows: 44px;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.external-tile-map i {
+  border: 1px solid #b9cec8;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .8);
+}
+.external-tile-map i.centered { width: calc(50% - 3.5px); grid-column: 1 / -1; justify-self: center; }
+.external-tile-map i.current { border-color: #16866b; background: #cceee4; box-shadow: inset 0 0 0 2px #fff; }
+.external-focus-window {
+  min-height: 30px;
+  margin-top: 5px;
+  padding: 6px 12px;
+  border: 1px solid #7fa99e;
+  border-radius: 7px;
+  color: #155c4c;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.external-focus-window:hover { border-color: #257f69; background: #f6fbf9; }
 .live-progress { height: 3px; background: #e1ebe7; }
 .live-progress i { display: block; height: 100%; background: linear-gradient(90deg, #22b58e, #50ddbb); transition: width .25s ease; }
 

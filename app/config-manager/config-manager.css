@@ -666,6 +666,60 @@
   grid-column: 1 / -1;
 }
 
+.config-engine-field {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.config-engine-field legend {
+  margin-bottom: 7px;
+  color: #3c514a;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.config-engine-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid #d8e3df;
+  border-radius: 8px;
+  background: #f2f6f4;
+}
+
+.config-engine-picker button {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  color: #4d625b;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.config-engine-picker button.active {
+  color: #075f4d;
+  border-color: #91c7b7;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(26, 70, 58, 0.07);
+}
+
+.config-engine-picker button > span { min-width: 0; display: grid; gap: 3px; }
+.config-engine-picker strong { font-size: 11px; }
+.config-engine-picker small { overflow: hidden; color: #74857f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.config-engine-warning { display: flex; align-items: center; gap: 6px; margin: 0; color: #985016; font-size: 9px; font-weight: 700; }
+
 .config-form-grid input,
 .config-code-field input,
 .config-auth-card input {
@@ -823,6 +877,8 @@
   white-space: nowrap;
 }
 
+.config-account-engine { display: inline-flex; align-items: center; gap: 6px; }
+
 .config-account-main strong {
   font-size: 13px;
 }
@@ -916,6 +972,8 @@
 .config-account-actions button.danger {
   color: #bd4646;
 }
+
+.config-account-actions button.icon-only { min-width: 34px; padding: 0; }
 
 .config-account-actions {
   display: flex;
@@ -1370,6 +1428,8 @@
     grid-template-columns: 1fr;
   }
 
+  .config-engine-picker { grid-template-columns: 1fr; }
+
   .config-auth-copy,
   .config-auth-card form {
     padding: 24px;
@@ -1404,7 +1464,9 @@
 
   .config-account-actions {
     grid-column: 2 / -1;
-    justify-self: end;
+    justify-self: stretch;
+    justify-content: flex-start;
+    width: 100%;
     max-width: 100%;
     overflow-x: auto;
   }

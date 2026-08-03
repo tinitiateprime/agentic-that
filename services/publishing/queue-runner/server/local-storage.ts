@@ -272,6 +272,7 @@ function normalizeStore(value: unknown): Store {
     ? input.accounts.map(account => ({
       ...account,
       workspaceId: account.workspaceId || legacyWorkspaceId,
+      executionEngine: account.executionEngine ?? "companion",
       safetyStatus: account.safetyStatus || (account.enabled ? "healthy" : "paused"),
       safetyMode: account.safetyMode ?? "standard",
       twoFactorEnabled: account.twoFactorEnabled ?? false,
@@ -1030,6 +1031,7 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
+      executionEngine: input.executionEngine ?? "companion",
       safetyStatus: input.enabled === false ? "paused" : "healthy",
       safetyMode: input.safetyMode ?? "protected",
       twoFactorEnabled: input.twoFactorEnabled ?? false,
@@ -1053,13 +1055,16 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       && account.handle.toLowerCase() === input.handle.toLowerCase()
     );
     if (duplicate) throw new Error(platformLabels[existing.platform] + " account " + input.handle + " already exists.");
+    const previousEngine = existing.executionEngine ?? "companion";
+    const executionEngine = input.executionEngine ?? previousEngine;
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName,
       handle: input.handle,
       loginIdentifier: input.loginIdentifier ?? "",
-      credentialConfigured: existing.credentialConfigured,
+      credentialConfigured: executionEngine === previousEngine ? existing.credentialConfigured : false,
       enabled: input.enabled ?? existing.enabled,
+      executionEngine,
       safetyMode: input.safetyMode ?? existing.safetyMode ?? "standard",
       twoFactorEnabled: input.twoFactorEnabled ?? existing.twoFactorEnabled ?? false,
       safetyStatus: input.enabled === true

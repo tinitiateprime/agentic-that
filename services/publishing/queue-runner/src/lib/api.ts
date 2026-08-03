@@ -160,6 +160,10 @@ export const api = {
       automationRunning: boolean;
       chromeInstalled?: boolean;
       embeddedBrowser?: boolean;
+      engines?: {
+        companion: { available: boolean };
+        external_browser: { available: boolean };
+      };
       extensionBridge?: boolean;
       platforms?: Platform[];
     }>("/api/health");
@@ -437,8 +441,8 @@ export const api = {
   deleteAccount: (accountId: string) =>
     request<void>(`/api/accounts/${accountId}`, { method: "DELETE" }),
 
-  startManualLogin: (accountId: string, surface: "embedded" | "external" = "embedded") =>
-    request<{ message: string; started: boolean; surface: "embedded" | "external" }>(`/api/accounts/${accountId}/manual-login`, {
+  startManualLogin: (accountId: string, surface: "engine" | "embedded" | "external" = "engine") =>
+    request<{ message: string; started: boolean; surface: "embedded" | "external"; executionEngine: "companion" | "external_browser" }>(`/api/accounts/${accountId}/manual-login`, {
       method: "POST",
       body: JSON.stringify({ surface }),
     }),

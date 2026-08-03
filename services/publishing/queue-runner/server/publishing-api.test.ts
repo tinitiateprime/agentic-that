@@ -67,11 +67,13 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     }),
   });
   assert.equal(accountResponse.status, 201);
-  const account = await accountResponse.json() as { id: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  const account = await accountResponse.json() as { id: string; executionEngine?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  assert.equal(account.executionEngine, "companion");
   assert.equal(account.safetyMode, "protected");
   assert.equal(account.twoFactorEnabled, false);
 
-  const { pausePlatformAccountForSafety } = await import("./local-storage.js");
+  const { pausePlatformAccountForSafety, updatePlatformAccountCredentialState } = await import("./local-storage.js");
+  await updatePlatformAccountCredentialState(account.id, true);
   await pausePlatformAccountForSafety(account.id, "warning", "Uncertain publish result requires review.");
   const pausedAccounts = await (await api("/api/accounts?platform=facebook")).json() as Array<{
     id: string;
@@ -88,13 +90,16 @@ test("publishing API supports login, media and text posts, queue scheduling, and
       displayName: "Facebook test account",
       handle: "@agenticthat-test",
       enabled: true,
+      executionEngine: "external_browser",
       safetyMode: "standard",
       twoFactorEnabled: true,
     }),
   });
   assert.equal(resumeResponse.status, 200);
-  const resumedAccount = await resumeResponse.json() as { enabled: boolean; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  const resumedAccount = await resumeResponse.json() as { enabled: boolean; credentialConfigured: boolean; executionEngine?: string; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
   assert.equal(resumedAccount.enabled, true);
+  assert.equal(resumedAccount.executionEngine, "external_browser");
+  assert.equal(resumedAccount.credentialConfigured, false);
   assert.equal(resumedAccount.safetyStatus, "healthy");
   assert.equal(resumedAccount.safetyReason, undefined);
   assert.equal(resumedAccount.safetyMode, "standard");

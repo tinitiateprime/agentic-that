@@ -1,4 +1,4 @@
-import type { Platform } from "../../shared/schema.js";
+import type { Platform, PublishingEngine } from "../../shared/schema.js";
 
 export type DesktopBrowserPurpose = "login" | "publish";
 
@@ -8,6 +8,7 @@ export type DesktopBrowserRequest = {
   displayName: string;
   handle: string;
   purpose: DesktopBrowserPurpose;
+  engine: PublishingEngine;
 };
 
 export type DesktopBrowserSession = {
@@ -16,12 +17,36 @@ export type DesktopBrowserSession = {
   targetUrl: string;
 };
 
+export type DesktopWindowBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type DesktopExternalActivitySession = {
+  id: string;
+  workspaceBounds: DesktopWindowBounds;
+};
+
+export type DesktopExternalBrowserLayout = {
+  index: number;
+  total: number;
+  row: number;
+  column: number;
+  rows: number;
+  columns: number;
+  centered: boolean;
+  bounds: DesktopWindowBounds;
+};
+
 export type DesktopBrowserActivity = {
-  state: "opening" | "waiting" | "publishing" | "posted" | "failed" | "stopped";
+  state?: "opening" | "waiting" | "publishing" | "posted" | "failed" | "stopped";
   detail?: string;
   currentItem?: string;
   currentIndex?: number;
   totalItems?: number;
+  externalLayout?: DesktopExternalBrowserLayout;
 };
 
 export type PublishingDesktopHost = {
@@ -29,6 +54,7 @@ export type PublishingDesktopHost = {
   requestPublishingPermission(): Promise<void>;
   finishPublishingRun(): Promise<void> | void;
   openBrowser(request: DesktopBrowserRequest): Promise<DesktopBrowserSession>;
+  openExternalActivity(request: DesktopBrowserRequest): Promise<DesktopExternalActivitySession>;
   updateBrowser(sessionId: string, activity: DesktopBrowserActivity): Promise<void> | void;
   closeBrowser(sessionId: string): Promise<void> | void;
   stopPublishingBrowsers(reason: string): Promise<void> | void;

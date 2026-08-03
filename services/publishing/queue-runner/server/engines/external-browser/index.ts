@@ -1,0 +1,371 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { chromium } from "playwright-core";
+import type { PublishingAccount } from "../../local-storage.js";
+import { publishingBrowserDataDirectory } from "../../runtime-paths.js";
+import type {
+  DesktopBrowserPurpose,
+  DesktopExternalBrowserLayout,
+  PublishingDesktopHost,
+} from "../../services/desktop-host.js";
+import type { PublishingBrowserSession, RestorePublishingSession } from "../types.js";
+import {
+  externalBrowserTileLayout,
+  type ExternalBrowserWorkspaceBounds,
+} from "./layout.js";
+
+const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
+const fallbackWorkspaceBounds: ExternalBrowserWorkspaceBounds = { x: 0, y: 0, width: 1440, height: 900 };
+const layoutSettleDelayMs = 120;
+
+type ManagedExternalWindow = {
+  activityId?: string;
+  purpose: DesktopBrowserPurpose;
+  workspaceBounds: ExternalBrowserWorkspaceBounds;
+  applyBounds?: (bounds: ExternalBrowserWorkspaceBounds) => Promise<void>;
+  bringToFront?: () => Promise<void>;
+  close?: (reason?: string) => Promise<void>;
+  updateLayout?: (layout: DesktopExternalBrowserLayout) => Promise<void>;
+};
+
+const managedExternalWindows = new Map<symbol, ManagedExternalWindow>();
+let externalLayoutQueue: Promise<{ count: number; columns: number; rows: number }> = Promise.resolve({
+  count: 0,
+  columns: 0,
+  rows: 0,
+});
+
+type ExternalBrowserEngineOptions = {
+  account: PublishingAccount;
+  purpose: DesktopBrowserPurpose;
+  targetUrl: string;
+  desktopHost: PublishingDesktopHost | null;
+  restoreSessionState: RestorePublishingSession;
+  releaseAccount: () => void;
+};
+
+function readJsonFile(filePath: string) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, any>;
+  } catch {
+    return {};
+  }
+}
+
+function writeJsonFile(filePath: string, data: Record<string, any>) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data));
+}
+
+function prepareExternalBrowserProfile(profileDir: string) {
+  const preferencesPath = path.join(profileDir, "Default", "Preferences");
+  const preferences = readJsonFile(preferencesPath);
+  preferences.browser = { ...(preferences.browser ?? {}), has_seen_welcome_page: true };
+  preferences.credentials_enable_service = false;
+  preferences.profile = { ...(preferences.profile ?? {}), exit_type: "Normal", password_manager_enabled: false };
+  preferences.signin = { ...(preferences.signin ?? {}), allowed: false, allowed_on_next_startup: false };
+  preferences.sync = { ...(preferences.sync ?? {}), suppress_start: true };
+  writeJsonFile(preferencesPath, preferences);
+}
+
+function getFreePort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a local browser connection port.")));
+    });
+  });
+}
+
+function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
+  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs);
+    processHandle.once("exit", () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+  });
+}
+
+async function waitForDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  const endpoint = `http://127.0.0.1:${port}`;
+  while (Date.now() < deadline) {
+    if (processHandle.exitCode !== null) {
+      throw new Error(`The external browser closed before it was ready. Exit code: ${processHandle.exitCode}`);
+    }
+    try {
+      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) return endpoint;
+    } catch {
+      // The dedicated browser profile is still starting.
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error("The external Chrome or Edge window did not become ready. Close any older window for this account and try again.");
+}
+
+function normalizedExternalWorkspace(candidate: ExternalBrowserWorkspaceBounds) {
+  return {
+    x: Math.round(candidate.x),
+    y: Math.round(candidate.y),
+    width: Math.max(1, Math.round(candidate.width)),
+    height: Math.max(1, Math.round(candidate.height)),
+  };
+}
+
+function sharedExternalWorkspace(preferred?: ExternalBrowserWorkspaceBounds) {
+  const activeWorkspace = managedExternalWindows.values().next().value?.workspaceBounds;
+  return normalizedExternalWorkspace(activeWorkspace ?? preferred ?? fallbackWorkspaceBounds);
+}
+
+function currentExternalLayout() {
+  const entries = [...managedExternalWindows.values()];
+  const workspace = sharedExternalWorkspace(entries[0]?.workspaceBounds);
+  return {
+    entries,
+    tiles: externalBrowserTileLayout(workspace, entries.length),
+  };
+}
+
+export function arrangeExternalBrowserWindows(workspaceBounds?: ExternalBrowserWorkspaceBounds) {
+  if (workspaceBounds) {
+    const normalized = normalizedExternalWorkspace(workspaceBounds);
+    for (const entry of managedExternalWindows.values()) entry.workspaceBounds = normalized;
+  }
+  externalLayoutQueue = externalLayoutQueue
+    .catch(() => ({ count: 0, columns: 0, rows: 0 }))
+    .then(async () => {
+      const { entries, tiles } = currentExternalLayout();
+      await Promise.all(entries.map(async (entry, index) => {
+        const tile = tiles[index];
+        if (!tile) return;
+        await entry.applyBounds?.(tile.bounds).catch(() => undefined);
+        await entry.updateLayout?.(tile).catch(() => undefined);
+      }));
+      return {
+        count: entries.length,
+        columns: tiles[0]?.columns ?? 0,
+        rows: tiles[0]?.rows ?? 0,
+      };
+    });
+  return externalLayoutQueue;
+}
+
+export async function focusExternalBrowserWindow(activityId: string) {
+  const entry = [...managedExternalWindows.values()].find(candidate => candidate.activityId === activityId);
+  if (!entry?.bringToFront) return false;
+  await arrangeExternalBrowserWindows();
+  await entry.bringToFront().catch(() => undefined);
+  return true;
+}
+
+export function externalBrowserProfilePath(account: PublishingAccount) {
+  return path.join(accountProfilesDir, account.platform, account.id.replace(/[^a-z0-9-_]/gi, "-"));
+}
+
+export function externalBrowserProfilesRoot() {
+  return accountProfilesDir;
+}
+
+export function detectedExternalBrowserExecutablePath() {
+  const configured = process.env.PUBLISH_QUEUE_CHROME_PATH?.trim()
+    || process.env.CHROME_PATH?.trim()
+    || process.env.GOOGLE_CHROME_PATH?.trim();
+  const candidates = [
+    configured,
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe") : undefined,
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe") : undefined,
+    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Google", "Chrome", "Application", "chrome.exe") : undefined,
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
+    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
+    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
+    process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined,
+    process.platform === "linux" ? "/usr/bin/google-chrome" : undefined,
+    process.platform === "linux" ? "/usr/bin/google-chrome-stable" : undefined,
+  ].filter(Boolean) as string[];
+  return candidates.find(candidate => path.isAbsolute(candidate) && fs.existsSync(candidate)) ?? null;
+}
+
+export function externalBrowserExecutablePath() {
+  const executablePath = detectedExternalBrowserExecutablePath();
+  if (!executablePath) {
+    throw new Error("Google Chrome or Microsoft Edge is required for the External browser engine. Install one, restart Companion, and try again.");
+  }
+  return executablePath;
+}
+
+export async function launchExternalBrowserEngine({
+  account,
+  purpose,
+  targetUrl,
+  desktopHost,
+  restoreSessionState,
+  releaseAccount,
+}: ExternalBrowserEngineOptions): Promise<PublishingBrowserSession> {
+  const profileDir = externalBrowserProfilePath(account);
+  fs.mkdirSync(profileDir, { recursive: true });
+  prepareExternalBrowserProfile(profileDir);
+
+  const executablePath = externalBrowserExecutablePath();
+  const browserName = /msedge/i.test(path.basename(executablePath)) ? "Microsoft Edge" : "Google Chrome";
+  const port = await getFreePort();
+  const activity = desktopHost
+    ? await desktopHost.openExternalActivity({
+      accountId: account.id,
+      platform: account.platform,
+      displayName: account.displayName,
+      handle: account.handle,
+      purpose,
+      engine: "external_browser",
+    })
+    : null;
+  const layoutToken = Symbol(account.id);
+  const layoutEntry: ManagedExternalWindow = {
+    activityId: activity?.id,
+    purpose,
+    workspaceBounds: sharedExternalWorkspace(activity?.workspaceBounds),
+    updateLayout: layout => activity
+      ? Promise.resolve(desktopHost?.updateBrowser(activity.id, { externalLayout: layout }))
+      : Promise.resolve(),
+  };
+  managedExternalWindows.set(layoutToken, layoutEntry);
+  // Let simultaneous account launches reserve their slots before any window
+  // appears, so the browsers open directly into the final grid.
+  await new Promise(resolve => setTimeout(resolve, layoutSettleDelayMs));
+  await arrangeExternalBrowserWindows();
+  const initialLayout = currentExternalLayout();
+  const initialIndex = [...managedExternalWindows.keys()].indexOf(layoutToken);
+  const initialBounds = initialLayout.tiles[initialIndex]?.bounds ?? layoutEntry.workspaceBounds;
+  let browserProcess: ChildProcess;
+  try {
+    browserProcess = spawn(executablePath, [
+      `--user-data-dir=${profileDir}`,
+      "--profile-directory=Default",
+      "--remote-debugging-address=127.0.0.1",
+      `--remote-debugging-port=${port}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-mode",
+      `--window-position=${initialBounds.x},${initialBounds.y}`,
+      `--window-size=${initialBounds.width},${initialBounds.height}`,
+      "--new-window",
+      targetUrl,
+    ], {
+      stdio: "ignore",
+      windowsHide: false,
+    });
+  } catch (error) {
+    managedExternalWindows.delete(layoutToken);
+    await arrangeExternalBrowserWindows().catch(() => undefined);
+    if (activity) await Promise.resolve(desktopHost?.closeBrowser(activity.id)).catch(() => undefined);
+    releaseAccount();
+    throw error;
+  }
+  let spawnError: Error | null = null;
+  browserProcess.once("error", error => { spawnError = error; });
+  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+  let closed = false;
+
+  const close = async (reason?: string) => {
+    if (closed) return;
+    closed = true;
+    if (reason && activity) {
+      await Promise.resolve(desktopHost?.updateBrowser(activity.id, { state: "stopped", detail: reason })).catch(() => undefined);
+    }
+    try {
+      await Promise.race([
+        browser?.close().catch(() => undefined),
+        new Promise(resolve => setTimeout(resolve, 1500)),
+      ]);
+      const exited = await waitForProcessExit(browserProcess, 3000);
+      if (!exited && browserProcess.exitCode === null && !browserProcess.killed) browserProcess.kill();
+      if (activity) await Promise.resolve(desktopHost?.closeBrowser(activity.id)).catch(() => undefined);
+    } finally {
+      managedExternalWindows.delete(layoutToken);
+      await arrangeExternalBrowserWindows().catch(() => undefined);
+      releaseAccount();
+    }
+  };
+  layoutEntry.close = close;
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 150));
+    if (spawnError) throw spawnError;
+    const debugEndpoint = await waitForDebugEndpoint(port, browserProcess);
+    browser = await chromium.connectOverCDP(debugEndpoint);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error(`${browserName} did not create the dedicated account profile.`);
+    await restoreSessionState(context);
+    const targetHost = targetUrl.startsWith("http") ? new URL(targetUrl).hostname : "";
+    const page = context.pages().find(candidate => targetHost && candidate.url().includes(targetHost))
+      ?? context.pages()[0]
+      ?? await context.newPage();
+    const cdpSession = await context.newCDPSession(page);
+    const browserWindow = await cdpSession.send("Browser.getWindowForTarget") as { windowId?: number };
+    if (typeof browserWindow.windowId === "number") {
+      const windowId = browserWindow.windowId;
+      layoutEntry.applyBounds = async bounds => {
+        await cdpSession.send("Browser.setWindowBounds", {
+          windowId,
+          bounds: { windowState: "normal" },
+        });
+        await cdpSession.send("Browser.setWindowBounds", {
+          windowId,
+          bounds: {
+            left: bounds.x,
+            top: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+          },
+        });
+      };
+    }
+    layoutEntry.bringToFront = () => page.bringToFront();
+    browser.on("disconnected", () => {
+      if (!closed) void close();
+    });
+    await arrangeExternalBrowserWindows();
+    await page.bringToFront().catch(() => undefined);
+    return {
+      engine: "external_browser",
+      context,
+      page,
+      desktopSessionId: activity?.id,
+      update: next => activity
+        ? Promise.resolve(desktopHost?.updateBrowser(activity.id, next))
+        : Promise.resolve(),
+      close: () => close(),
+    };
+  } catch (error) {
+    if (activity) {
+      await Promise.resolve(desktopHost?.updateBrowser(activity.id, {
+        state: "failed",
+        detail: `The ${browserName} window could not start. Close older windows for this account and try again.`,
+      })).catch(() => undefined);
+    }
+    await close();
+    throw error;
+  }
+}
+
+export async function stopExternalPublishingBrowsers(reason: string) {
+  const sessions = [...managedExternalWindows.values()]
+    .filter(entry => entry.purpose === "publish" && entry.close)
+    .map(entry => entry.close!(reason));
+  await Promise.all(sessions);
+}
+
+export async function stopAllExternalBrowserWindows(reason: string) {
+  const sessions = [...managedExternalWindows.values()]
+    .filter(entry => entry.close)
+    .map(entry => entry.close!(reason));
+  await Promise.all(sessions);
+}

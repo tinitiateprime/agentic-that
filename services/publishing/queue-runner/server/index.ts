@@ -69,6 +69,7 @@ import {
   updateUserProfile,
 } from "./local-storage.js";
 import {
+  assertAccountEngineChangeAllowed,
   cancelAutomation,
   isAutomationRunning,
   publishingBrowserRuntimeHealth,
@@ -86,6 +87,12 @@ import {
   evaluateContentPreflight,
 } from "./services/content-preflight.js";
 import { publishingUploadDirectory } from "./runtime-paths.js";
+
+export {
+  arrangeExternalBrowserWindows,
+  focusExternalBrowserWindow,
+  stopAllExternalBrowserWindows,
+} from "./engines/external-browser/index.js";
 
 export const publishingApp = express();
 const app = publishingApp;
@@ -296,7 +303,7 @@ const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
 });
 const manualLoginRequestSchema = z.object({
-  surface: z.enum(["embedded", "external"]).default("embedded"),
+  surface: z.enum(["engine", "embedded", "external"]).default("engine"),
 });
 
 const publishingSafetyRequestSchema = z.object({
@@ -787,6 +794,7 @@ app.get("/api/health", async (_req, res) => {
       automationRunning: isAutomationRunning(),
       chromeInstalled: browser.chromeInstalled,
       embeddedBrowser: browser.embeddedBrowser,
+      engines: browser.engines,
       companionInstanceId: process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID?.trim() || null,
       extensionBridge: true,
       platforms,
@@ -1014,12 +1022,41 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
   try {
     const payload = upsertPlatformAccountSchema.parse(req.body);
     const user = currentUser(req);
-    const account = await updatePlatformAccount(pathParam(req.params.id, "id"), payload, user.workspaceId);
+    const accountId = pathParam(req.params.id, "id");
+    const existing = await getPlatformAccount(accountId, user.workspaceId);
+    if (!existing) {
+      res.status(404).json({ message: "Publishing account not found" });
+      return;
+    }
+    const previousEngine = existing.executionEngine ?? "companion";
+    const nextEngine = payload.executionEngine ?? previousEngine;
+    const engineChanged = nextEngine !== previousEngine;
+    if (engineChanged) assertAccountEngineChangeAllowed(accountId);
+    const account = await updatePlatformAccount(accountId, payload, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
-    await logActivity(user.id, "account.updated", "publishing_account", account.id, `${account.displayName} account was updated.`, { platform: account.platform, handle: account.handle });
+    if (engineChanged) {
+      await removeSavedAccountProfile(account).catch(error => {
+        console.warn(`Could not immediately clear the previous browser data for ${account.handle}:`, error instanceof Error ? error.message : error);
+      });
+    }
+    await logActivity(
+      user.id,
+      engineChanged ? "account.engine_changed" : "account.updated",
+      "publishing_account",
+      account.id,
+      engineChanged
+        ? `${account.displayName} changed publishing engine and now requires login.`
+        : `${account.displayName} account was updated.`,
+      {
+        platform: account.platform,
+        handle: account.handle,
+        executionEngine: account.executionEngine ?? "companion",
+        ...(engineChanged ? { previousEngine, sessionReset: true } : {}),
+      },
+    );
     res.json(account);
   } catch (error) {
     next(error);
@@ -1069,7 +1106,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       started
         ? `${account.displayName} manual login session was opened in ${surfaceLabel}.`
         : `${account.displayName} manual login session is already open in ${surfaceLabel}.`,
-      { platform: account.platform, handle: account.handle, surface: activeSurface },
+      { platform: account.platform, handle: account.handle, surface: activeSurface, executionEngine: account.executionEngine ?? "companion" },
     );
     res.status(202).json({
       message: started
@@ -1079,6 +1116,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
         : "Manual login is already running for this account.",
       started,
       surface: activeSurface,
+      executionEngine: account.executionEngine ?? "companion",
     });
   } catch (error) {
     next(error);

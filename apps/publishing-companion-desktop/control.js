@@ -12,6 +12,7 @@ let logEntries = [];
 let layoutFrame = null;
 let liveLayoutMode = "focus";
 let focusedSessionId = null;
+let previousActiveCount = 0;
 
 function platformLabel(value) {
   const labels = {
@@ -112,7 +113,7 @@ function createSessionTab(session) {
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
-  detail.textContent = `${session.purpose === "login" ? "Login" : "Publishing"} · ${stateLabel(session)}`;
+  detail.textContent = `${session.purpose === "login" ? "Login" : "Publishing"} - ${session.engine === "external_browser" ? "External browser" : "Companion"} - ${stateLabel(session)}`;
   identity.append(name, detail);
 
   const state = document.createElement("i");
@@ -122,6 +123,7 @@ function createSessionTab(session) {
     focusedSessionId = session.id;
     liveLayoutMode = "focus";
     renderWorkspace();
+    if (session.engine === "external_browser") void api.focusExternalWindow(session.id);
   });
   return button;
 }
@@ -137,12 +139,16 @@ function createLiveCard(session) {
   identity.className = "live-card-identity";
   const purpose = document.createElement("span");
   purpose.className = "live-purpose";
-  purpose.textContent = session.purpose === "login" ? "Interactive login" : "Publishing";
+  purpose.textContent = session.engine === "external_browser"
+    ? session.purpose === "login" ? "External browser login" : "External browser publishing"
+    : session.purpose === "login" ? "Companion login" : "Companion publishing";
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
   detail.textContent = session.activity?.detail
-    || (session.purpose === "login" ? "Complete login in this pane." : "Preparing the publishing page.");
+    || (session.engine === "external_browser"
+      ? "The dedicated Chrome or Edge window is active."
+      : session.purpose === "login" ? "Complete login in this pane." : "Preparing the publishing page.");
   identity.append(purpose, name, detail);
 
   const state = document.createElement("span");
@@ -168,7 +174,40 @@ function createLiveCard(session) {
 
   const slot = document.createElement("div");
   slot.className = "live-browser-slot";
-  slot.dataset.browserSession = session.id;
+  if (session.engine === "external_browser") {
+    slot.classList.add("external-browser-slot");
+    const externalStatus = document.createElement("div");
+    externalStatus.className = "external-browser-status";
+    const layout = session.activity?.externalLayout;
+    const tileMap = document.createElement("div");
+    tileMap.className = "external-tile-map";
+    tileMap.setAttribute("aria-hidden", "true");
+    tileMap.style.setProperty("--external-tile-columns", String(layout?.columns || 1));
+    const tileCount = Math.max(1, Number(layout?.total || 1));
+    for (let tileIndex = 1; tileIndex <= tileCount; tileIndex += 1) {
+      const tile = document.createElement("i");
+      tile.classList.toggle("current", tileIndex === Number(layout?.index || 1));
+      tile.classList.toggle("centered", Boolean(layout?.columns === 2 && tileCount % 2 === 1 && tileIndex === tileCount));
+      tileMap.append(tile);
+    }
+    const externalLabel = document.createElement("strong");
+    externalLabel.textContent = layout
+      ? `Window ${layout.index} of ${layout.total}`
+      : "Arranging browser window";
+    const externalDetail = document.createElement("small");
+    externalDetail.textContent = layout
+      ? `Row ${layout.row}, ${layout.centered ? "centered" : `column ${layout.column}`} - dedicated Chrome or Edge profile`
+      : "Preparing a dedicated Chrome or Edge profile.";
+    const focusWindow = document.createElement("button");
+    focusWindow.type = "button";
+    focusWindow.className = "external-focus-window";
+    focusWindow.textContent = "Bring to front";
+    focusWindow.addEventListener("click", () => void api.focusExternalWindow(session.id));
+    externalStatus.append(tileMap, externalLabel, externalDetail, focusWindow);
+    slot.append(externalStatus);
+  } else {
+    slot.dataset.browserSession = session.id;
+  }
   card.append(header, progress, slot);
   return card;
 }
@@ -201,7 +240,10 @@ function renderWorkspace() {
   const active = activeSessions();
   if (!active.some(session => session.id === focusedSessionId)) focusedSessionId = active[0]?.id ?? null;
   const canSplit = active.length > 1;
-  liveLayoutMode = canSplit ? "split" : "focus";
+  if (!canSplit) liveLayoutMode = "focus";
+  else if (previousActiveCount <= 1) liveLayoutMode = "split";
+  previousActiveCount = active.length;
+  const externalSessions = active.filter(session => session.engine === "external_browser");
 
   const activityPanel = byId("activity-panel");
   activityPanel.classList.toggle("has-live", active.length > 0);
@@ -214,15 +256,21 @@ function renderWorkspace() {
     ? `${active.length} live ${active.length === 1 ? "browser" : "browsers"}`
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
-    ? "Every simultaneous account stays visible in the live grid. Different accounts publish together; each account still runs only one job at a time."
-    : "Account sign-in and publishing open inside Companion. A Chrome or Edge fallback remains available for providers that block embedded sign-in.";
+    ? externalSessions.length
+      ? "External Chrome or Edge windows are fitted into a two-column workspace while Companion keeps every account and status together."
+      : "Every active Companion browser remains visible in the live workspace."
+    : "Each account uses its selected Companion or External browser engine for login and publishing.";
   const singleSession = active.length === 1 ? active[0] : null;
   byId("live-run-title").textContent = singleSession
     ? `${platformLabel(singleSession.platform)} · ${stateLabel(singleSession)}`
     : `${active.length} live accounts`;
   byId("live-run-detail").textContent = singleSession
-    ? singleSession.activity?.detail || (singleSession.purpose === "login" ? "Complete login in the browser above." : "Visible publishing is active.")
-    : liveLayoutMode === "focus"
+    ? singleSession.activity?.detail || (singleSession.engine === "external_browser"
+      ? "The dedicated external browser window is active."
+      : singleSession.purpose === "login" ? "Complete login in the browser above." : "Visible publishing is active.")
+    : externalSessions.length === active.length
+      ? `${externalSessions.length} external windows arranged two per row.`
+      : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
       : "Publishing all scheduled accounts together in the visible grid.";
   byId("live-stop").textContent = singleSession?.purpose === "login" ? "Close login" : "Stop publishing";
@@ -233,6 +281,7 @@ function renderWorkspace() {
   splitButton.classList.toggle("active", liveLayoutMode === "split");
   focusButton.disabled = canSplit;
   splitButton.disabled = !canSplit;
+  byId("arrange-external").hidden = externalSessions.length === 0;
 
   const switcher = byId("session-switcher");
   switcher.replaceChildren(...active.map(createSessionTab));
@@ -287,7 +336,7 @@ function renderStatus(status) {
   byId("sidebar-status-dot").className = ready ? "ready" : "error";
   byId("status-title").textContent = ready ? "Ready for visible publishing" : "Companion needs attention";
   byId("status-detail").textContent = ready
-    ? "Account login and publishing run visibly inside Companion; Chrome or Edge is available only as a sign-in fallback."
+    ? "Account login and publishing use each account's selected Companion or External browser engine."
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
@@ -348,6 +397,14 @@ byId("layout-split").addEventListener("click", () => {
   if (activeSessions().length < 2) return;
   liveLayoutMode = "split";
   renderWorkspace();
+});
+byId("arrange-external").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Arranging...";
+  await api.arrangeExternalWindows();
+  button.textContent = "Arrange windows";
+  button.disabled = false;
 });
 async function stopPublishing(event) {
   const button = event.currentTarget;

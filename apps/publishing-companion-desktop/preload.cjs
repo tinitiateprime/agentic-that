@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   copyCredentials: () => ipcRenderer.invoke("companion:copy-credentials"),
   setAutoStart: enabled => ipcRenderer.invoke("companion:set-auto-start", enabled),
   revokePublishingConsent: () => ipcRenderer.invoke("companion:revoke-publishing-consent"),
+  arrangeExternalWindows: () => ipcRenderer.invoke("companion:arrange-external-windows"),
+  focusExternalWindow: sessionId => ipcRenderer.invoke("companion:focus-external-window", sessionId),
   emergencyStop: () => ipcRenderer.invoke("companion:emergency-stop"),
   onStatusChanged: callback => ipcRenderer.on("companion:status-changed", callback),
   onWorkspaceState: callback => ipcRenderer.on("companion:workspace-state", (_event, state) => callback(state)),
