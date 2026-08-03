@@ -2974,7 +2974,7 @@ button, input, textarea, select { font-family: inherit; }
 .schedule-row .btn-outline, .schedule-row .btn-danger { min-height: 34px; border-radius: 7px; padding: 7px 10px; }
 .storage-access-list { display: grid; gap: 9px; }
 .storage-access-row { min-height: 68px; display: grid; grid-template-columns: 38px minmax(150px, 1fr) auto minmax(180px, 0.8fr) 42px 42px; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid #DCE5E1; border-radius: 9px; background: #FFFFFF; }
-.account-session-row { grid-template-columns: 38px minmax(150px, 1fr) auto minmax(150px, 0.72fr) auto auto 42px; }
+.account-session-row { grid-template-columns: 38px minmax(150px, 1fr) auto minmax(130px, 0.65fr) auto auto auto 42px; }
 .storage-access-row > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
 .storage-access-row strong, .storage-access-row small, .storage-access-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .storage-access-row strong { color: #203A31; font-size: 12px; }
@@ -3008,7 +3008,7 @@ button, input, textarea, select { font-family: inherit; }
   .schedule-row { grid-template-columns: 42px minmax(0, 1fr) auto; }
   .schedule-row .btn-outline, .schedule-row .btn-danger, .schedule-account-count { display: none; }
   .storage-access-row { grid-template-columns: 34px minmax(0, 1fr) auto; }
-  .account-session-row { grid-template-columns: 34px minmax(0, 1fr) auto auto auto; }
+  .account-session-row { grid-template-columns: 34px minmax(0, 1fr) auto auto auto auto; }
   .storage-access-path, .storage-access-row .btn-outline { display: none; }
   .account-session-row .btn-outline { display: inline-flex; }
   .account-session-row .storage-access-path, .account-session-row .btn-outline:first-of-type { display: none; }

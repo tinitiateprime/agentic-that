@@ -291,7 +291,7 @@ async function waitForXPostComplete(page: Page, composer: Locator) {
   throw new Error("X did not confirm the post within 90 seconds.");
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart: boolean, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart: boolean, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "X",
@@ -304,6 +304,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart: boolean
     beforeCheck: () => dismissCookiePrompt(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -326,12 +327,12 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
     await dismissCookiePrompt(page);
 
     console.log("Complete the full X login manually in the visible browser; Companion will save the session after the account opens.");
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (!/x\.com\/home/i.test(page.url())) {
     await page.goto(X_HOME_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
-    await waitForLoginResult(page, manualLoginOnly, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, manualLoginOnly, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (holdAfterLogin) {

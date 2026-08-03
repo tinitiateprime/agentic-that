@@ -437,8 +437,11 @@ export const api = {
   deleteAccount: (accountId: string) =>
     request<void>(`/api/accounts/${accountId}`, { method: "DELETE" }),
 
-  startManualLogin: (accountId: string) =>
-    request<{ message: string; started: boolean }>(`/api/accounts/${accountId}/manual-login`, { method: "POST" }),
+  startManualLogin: (accountId: string, surface: "embedded" | "external" = "embedded") =>
+    request<{ message: string; started: boolean; surface: "embedded" | "external" }>(`/api/accounts/${accountId}/manual-login`, {
+      method: "POST",
+      body: JSON.stringify({ surface }),
+    }),
 
   users: () => request<UserProfile[]>("/api/users"),
 

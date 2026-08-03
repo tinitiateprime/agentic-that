@@ -215,7 +215,7 @@ function renderWorkspace() {
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
     ? "Every simultaneous account stays visible in the live grid. Different accounts publish together; each account still runs only one job at a time."
-    : "Account sign-in opens in a dedicated Chrome or Edge window. Publishing activity appears here automatically and remains visible.";
+    : "Account sign-in and publishing open inside Companion. A Chrome or Edge fallback remains available for providers that block embedded sign-in.";
   const singleSession = active.length === 1 ? active[0] : null;
   byId("live-run-title").textContent = singleSession
     ? `${platformLabel(singleSession.platform)} · ${stateLabel(singleSession)}`
@@ -271,8 +271,8 @@ function renderStatus(status) {
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
-  byId("browser-check").textContent = status.embeddedBrowser && status.chromeInstalled
-    ? "Companion + Chrome/Edge"
+  byId("browser-check").textContent = status.embeddedBrowser
+    ? status.chromeInstalled ? "Companion + Chrome fallback" : "Companion browser"
     : status.chromeInstalled ? "Chrome or Edge" : "Install Chrome/Edge";
   byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
   const consentGranted = status.publishingInteractionConsent === true;
@@ -287,7 +287,7 @@ function renderStatus(status) {
   byId("sidebar-status-dot").className = ready ? "ready" : "error";
   byId("status-title").textContent = ready ? "Ready for visible publishing" : "Companion needs attention";
   byId("status-detail").textContent = ready
-    ? "Account login uses a dedicated Chrome/Edge window; Companion securely runs and displays publishing activity."
+    ? "Account login and publishing run visibly inside Companion; Chrome or Edge is available only as a sign-in fallback."
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";

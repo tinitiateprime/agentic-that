@@ -323,7 +323,7 @@ async function isManualVerificationVisible(page: Page, url: string) {
   return Boolean(signal);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "LinkedIn",
@@ -336,6 +336,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     beforeCheck: () => dismissCookiePrompt(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -355,11 +356,11 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
     throw new Error("LinkedIn saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
     console.log("Complete the full LinkedIn login manually in the visible browser; Companion will save the session after the account opens.");
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
-  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
 
   console.log("LinkedIn ready.");
   return { success: true };

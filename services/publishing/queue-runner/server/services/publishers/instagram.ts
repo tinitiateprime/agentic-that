@@ -562,7 +562,7 @@ async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promis
   await clickDoneAfterInstagramShared(page);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "Instagram",
@@ -575,6 +575,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     beforeCheck: () => dismissPostLoginPrompts(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -595,11 +596,11 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
   } else {
     console.log("Complete the full Instagram login manually in the visible browser; Companion will save the session after the account opens.");
     await clickLoginInterstitialLink(page);
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await page.goto(INSTAGRAM_HOME_URL, { timeout: 60000 });
-  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
 
   if (holdAfterLogin) {
     const holdTime = getLoginHoldMs();

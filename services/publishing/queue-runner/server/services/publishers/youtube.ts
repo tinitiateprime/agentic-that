@@ -856,7 +856,7 @@ async function getGoogleLoginError(page: Page) {
   return null;
 }
 
-async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "YouTube",
@@ -869,6 +869,7 @@ async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart =
     beforeCheck: () => dismissChromeSignInPrompt(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -888,12 +889,12 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
     throw new Error("YouTube saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
   } else {
     console.log("Complete the full YouTube login manually in the visible browser; Companion will save the session after the account opens.");
-    await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (!await isYouTubeLoggedIn(page)) {
     await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000 });
-    await waitForYouTubeLoginResult(page, true, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForYouTubeLoginResult(page, true, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await dismissChromeSignInPrompt(page);

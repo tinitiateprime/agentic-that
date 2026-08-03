@@ -228,7 +228,7 @@ export function publishingBrowserRuntimeHealth() {
     chromeInstalled: Boolean(executablePath),
     chromeExecutablePath: executablePath,
     embeddedBrowser,
-    automationAvailable: Boolean(executablePath),
+    automationAvailable: embeddedBrowser || Boolean(executablePath),
   };
 }
 
@@ -576,9 +576,41 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   }
 }
 
+export type ManualLoginSurface = "embedded" | "external";
+
+async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
+  const browser = await launchAccountBrowser(account, "login");
+
+  try {
+    await browser.update({
+      state: "waiting",
+      detail: `Sign in to ${account.platform} inside Companion. Passwords and verification codes stay on the provider page.`,
+    });
+    await loginOnly(browser.page, account, { ignoreLoginErrors: true, embeddedLogin: true });
+    await saveAccountSessionState(account, browser.context);
+    await browser.update({
+      state: "posted",
+      detail: "Login confirmed and the protected local session is ready.",
+    });
+  } catch (error) {
+    const message = errorMessage(error);
+    const fallbackHint = /Chrome fallback/i.test(message)
+      ? ""
+      : " Use the Chrome fallback if this provider blocks embedded sign-in.";
+    await browser.update({
+      state: "failed",
+      detail: `${message}${fallbackHint}`,
+    }).catch(() => undefined);
+    throw error;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 type AccountLoginOptions = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
   onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
@@ -586,6 +618,7 @@ function accountLogin(options: AccountLoginOptions = {}): AccountLogin {
   return {
     useSavedSessionOnly: options.useSavedSessionOnly,
     ignoreLoginErrors: options.ignoreLoginErrors,
+    embeddedLogin: options.embeddedLogin,
     onFinalActionSubmitted: options.onFinalActionSubmitted,
   };
 }
@@ -822,23 +855,38 @@ async function runAccountQueue(
   }
 }
 
-async function prepareManualAccountSession(account: PublishingAccount) {
-  console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}).`);
-  await prepareStandardBrowserSession(account);
+async function prepareManualAccountSession(account: PublishingAccount, surface: ManualLoginSurface) {
+  console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}) using the ${surface} login surface.`);
+  if (surface === "embedded") {
+    await prepareEmbeddedCompanionSession(account);
+  } else {
+    await prepareStandardBrowserSession(account);
+  }
   console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
 }
 
-const activeSessionPreparations = new Map<string, Promise<void>>();
+const activeSessionPreparations = new Map<string, {
+  operation: Promise<void>;
+  surface: ManualLoginSurface;
+}>();
 
-export async function startManualAccountSession(accountId: string) {
+export async function startManualAccountSession(
+  accountId: string,
+  requestedSurface: ManualLoginSurface = "embedded",
+) {
   const existing = activeSessionPreparations.get(accountId);
   const account = await getPublishingAccount(accountId);
   if (!account) throw new Error("Publishing account not found.");
   if (!account.enabled) throw new Error("Publishing account is disabled.");
 
-  if (existing) return { account, started: false };
+  if (existing) return { account, started: false, surface: existing.surface };
 
-  const operation = prepareManualAccountSession(account)
+  const surface: ManualLoginSurface = requestedSurface === "embedded" && publishingDesktopHost()
+    ? "embedded"
+    : "external";
+  if (surface === "external") chromeExecutablePath();
+
+  const operation = prepareManualAccountSession(account, surface)
     .then(async () => {
       await updatePlatformAccountCredentialState(account.id, true);
     })
@@ -854,8 +902,8 @@ export async function startManualAccountSession(accountId: string) {
       activeSessionPreparations.delete(account.id);
     });
 
-  activeSessionPreparations.set(account.id, operation);
-  return { account, started: true };
+  activeSessionPreparations.set(account.id, { operation, surface });
+  return { account, started: true, surface };
 }
 
 type RunAutomationOptions = {

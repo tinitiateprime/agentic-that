@@ -6,7 +6,7 @@ import {
   ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
-  Bookmark, Check, Clock3, Download, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
+  Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -385,7 +385,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
     setDesktopBridgeDetected(extension?.version === 'desktop');
     try {
       const health = await api.health();
-      setConnectionState(!health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
+      setConnectionState(health.automationReady ? 'ready' : !health.chromeInstalled ? 'chrome-missing' : 'companion-missing');
     } catch {
       setConnectionState(extension ? 'companion-missing' : 'extension-missing');
     }
@@ -456,7 +456,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
               <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
             </div>}
             {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Allow Local network access if Chrome asks. Otherwise extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
-            {connectionState === 'chrome-missing' && <p>Google Chrome or Microsoft Edge is required for supported account sign-in. Install one, restart Companion, and check again.</p>}
+            {connectionState === 'chrome-missing' && <p>Install Google Chrome or Microsoft Edge to use the system-browser login fallback.</p>}
             {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{desktopBridgeDetected ? ' inside Companion' : extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
@@ -2204,10 +2204,10 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setTwoFactorEnabled(false);
   };
 
-  const openManualLogin = async (account: PlatformAccount) => {
+  const openManualLogin = async (account: PlatformAccount, surface: 'embedded' | 'external' = 'embedded') => {
     setLoginAccountId(account.id);
     try {
-      const result = await api.startManualLogin(account.id);
+      const result = await api.startManualLogin(account.id, surface);
       alert(result.message);
       onSuccess();
     } catch (error) {
@@ -2282,10 +2282,13 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
               <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Secure Chrome/Edge login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || 'Companion login'}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
+              </button>
+              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Open login in Chrome or Edge' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
+                <ExternalLink size={14} />Chrome
               </button>
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}

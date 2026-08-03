@@ -3,6 +3,7 @@ import type { Page } from "playwright-core";
 export type AccountLogin = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
   onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
@@ -19,7 +20,17 @@ type ManualLoginFallbackOptions = {
   shouldAbort?: (url: string) => Promise<string | null> | string | null;
   allowManualLoginFromStart?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
 };
+
+async function embeddedLoginBlockReason(page: Page) {
+  const blockedMessage = page.getByText(
+    /embedded browser (?:is |has been )?(?:disabled|blocked|not supported)|logging in .* from an embedded browser is disabled|browser or app may not be secure|browser is not supported|use a supported browser|open (?:this page|the link) in (?:your|a) browser/i,
+  ).first();
+  if (!await blockedMessage.isVisible().catch(() => false)) return null;
+  return (await blockedMessage.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim()
+    || "The provider does not support this embedded sign-in page.";
+}
 
 export function getManualActionTimeoutMs() {
   return Number(process.env.MANUAL_ACTION_TIMEOUT_MS ?? 600000);
@@ -38,6 +49,7 @@ export async function waitForLoginWithManualFallback({
   shouldAbort,
   allowManualLoginFromStart = false,
   ignoreLoginErrors = false,
+  embeddedLogin = false,
 }: ManualLoginFallbackOptions) {
   const normalDeadline = Date.now() + normalTimeoutMs;
   let manualDeadline: number | null = null;
@@ -49,6 +61,10 @@ export async function waitForLoginWithManualFallback({
 
   while (Date.now() < (manualDeadline ?? normalDeadline)) {
     const url = page.url();
+    const embeddedBlock = embeddedLogin ? await embeddedLoginBlockReason(page) : null;
+    if (embeddedBlock) {
+      throw new Error(`${platform} blocked sign-in inside Companion: ${embeddedBlock} Use the Chrome fallback.`);
+    }
     const abortReason = await shouldAbort?.(url);
 
     if (abortReason) {

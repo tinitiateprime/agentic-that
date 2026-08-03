@@ -295,6 +295,9 @@ const scheduleOnlyUpdateSchema = z.object({
 const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
 });
+const manualLoginRequestSchema = z.object({
+  surface: z.enum(["embedded", "external"]).default("embedded"),
+});
 
 const publishingSafetyRequestSchema = z.object({
   postFormat: postFormatSchema,
@@ -1055,22 +1058,27 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
-    const { account, started } = await startManualAccountSession(accountId);
+    const { surface } = manualLoginRequestSchema.parse(req.body ?? {});
+    const { account, started, surface: activeSurface } = await startManualAccountSession(accountId, surface);
+    const surfaceLabel = activeSurface === "embedded" ? "Companion" : "Chrome or Edge";
     await logActivity(
       user.id,
       started ? "account.manual_login_started" : "account.manual_login_already_running",
       "publishing_account",
       account.id,
       started
-        ? `${account.displayName} manual login session was opened.`
-        : `${account.displayName} manual login session is already open.`,
-      { platform: account.platform, handle: account.handle },
+        ? `${account.displayName} manual login session was opened in ${surfaceLabel}.`
+        : `${account.displayName} manual login session is already open in ${surfaceLabel}.`,
+      { platform: account.platform, handle: account.handle, surface: activeSurface },
     );
     res.status(202).json({
       message: started
-        ? "Secure login opened in a dedicated Chrome or Edge window. Complete sign-in there; Companion will detect success, protect the account session, and close the login window automatically."
+        ? activeSurface === "embedded"
+          ? "Secure login opened inside Companion. Complete sign-in there; Companion will detect success, protect the local account session, and close the login pane automatically."
+          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will detect success, protect the account session, and close the login window automatically."
         : "Manual login is already running for this account.",
       started,
+      surface: activeSurface,
     });
   } catch (error) {
     next(error);

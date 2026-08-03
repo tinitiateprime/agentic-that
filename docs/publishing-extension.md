@@ -22,13 +22,14 @@ Customers do not download this repository or run commands.
    **Start automatically with Windows** enabled.
 4. Copy the dashboard login displayed by the companion app.
 5. Return to the dashboard and choose **Check again**.
-6. Add each social account in Config Manager and choose **Login**. A dedicated
-   Chrome or Edge profile opens for that account. Enter credentials and
-   verification codes only on the provider page; Companion detects success,
-   protects the session locally, and closes the sign-in window automatically.
+6. Add each social account in Config Manager and choose **Login**. An isolated
+   sign-in pane opens inside Companion. Enter credentials and verification
+   codes only on the provider page; Companion detects success, protects the
+   session locally, and closes the pane automatically. If a provider blocks
+   embedded sign-in, choose the account's **Chrome** fallback action.
 
-The setup card reports whether the extension, companion, and Google Chrome are
-ready before allowing Publish Queue sign-in.
+The setup card reports whether the extension and Companion are ready before
+allowing Publish Queue sign-in. Chrome or Edge is optional fallback software.
 
 ## Posting and scheduling
 
@@ -65,10 +66,11 @@ Actions publishing release workflow performs the same build for version tags.
 ## Security boundary
 
 Social passwords and verification codes are never accepted by the AgenticThat
-dashboard, extension, or companion. They are typed directly into the social
-network page. Publishing data and browser sessions remain in the companion's
-Windows user-data directory. The extension is limited to the production
-dashboard origin and the loopback companion address.
+dashboard or extension. They are typed directly into the social network page
+shown by Companion or the optional Chrome/Edge fallback. Publishing data and
+browser sessions remain in the companion's Windows user-data directory. The
+extension is limited to the production dashboard origin and the loopback
+companion address.
 
 Browser publishing still depends on third-party interfaces. Platform UI
 changes, CAPTCHA, account restrictions, and internet outages can require manual

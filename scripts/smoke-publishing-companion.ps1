@@ -66,7 +66,6 @@ try {
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
-  if (-not $health.chromeInstalled) { throw "Google Chrome or Microsoft Edge is required for secure account login." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
@@ -114,7 +113,8 @@ try {
   $manualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($instagramAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $manualLogin.started) { throw "The Instagram manual-login smoke session did not start." }
-  if ($manualLogin.message -notmatch "Chrome or Edge") { throw "The login response did not identify the secure system-browser flow." }
+  if ($manualLogin.surface -ne "embedded") { throw "The login response did not identify the embedded Companion flow." }
+  if ($manualLogin.message -notmatch "inside Companion") { throw "The login response did not describe the embedded Companion flow." }
 
   $facebookAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/facebook/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
@@ -162,11 +162,11 @@ try {
     Start-Sleep -Milliseconds 250
     $loginLog = Get-Content -LiteralPath $companionLog -Raw
     if (
-      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure instagram login" -and
-      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure facebook login" -and
-      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure linkedin login" -and
-      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure x login" -and
-      $loginLog -match "Opening (Google Chrome|Microsoft Edge) for secure youtube login" -and
+      $loginLog -match "Opening instagram login page .* using the embedded login surface" -and
+      $loginLog -match "Opening facebook login page .* using the embedded login surface" -and
+      $loginLog -match "Opening linkedin login page .* using the embedded login surface" -and
+      $loginLog -match "Opening x login page .* using the embedded login surface" -and
+      $loginLog -match "Opening youtube login page .* using the embedded login surface" -and
       $loginLog -match "Navigating to Instagram login page" -and
       $loginLog -match "Navigating to Facebook home page" -and
       $loginLog -match "Navigating to LinkedIn login page" -and
@@ -179,11 +179,11 @@ try {
   }
   if (-not $loginNavigationReady) {
     $logTail = (Get-Content -LiteralPath $companionLog -Tail 24) -join [Environment]::NewLine
-    throw "The secure Chrome/Edge login windows did not all begin navigation.$([Environment]::NewLine)$logTail"
+    throw "The embedded Companion login panes did not all begin navigation.$([Environment]::NewLine)$logTail"
   }
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
-    throw "A secure manual-login browser connection failed."
+    throw "An embedded manual-login browser connection failed."
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"

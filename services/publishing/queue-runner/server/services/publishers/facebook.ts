@@ -521,7 +521,7 @@ async function loginFormIsVisible(page: Page) {
   return Boolean(emailField && passwordField);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "Facebook",
@@ -533,6 +533,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     getLoginError: () => getLoginError(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -556,12 +557,12 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(1000);
     await dismissCookiePrompt(page);
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (!/facebook\.com\/?$|facebook\.com\/home/i.test(page.url())) {
     await page.goto(FACEBOOK_HOME_URL, { timeout: 60000 });
-    await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await blockNotificationPrompt(page);

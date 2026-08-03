@@ -13,8 +13,9 @@ Suggested description:
 > AgenticThat Publishing Companion connects the AgenticThat publishing
 > dashboard to the local scheduler installed on your Windows computer. It
 > transfers selected post media and queue actions to the local companion and
-> displays local media previews. Social-network login remains manual in Chrome;
-> the extension never receives or stores social passwords.
+> displays local media previews. Social-network login remains manual on the
+> provider page inside Companion or its optional Chrome fallback; the extension
+> never receives or stores social passwords.
 
 ## Permission explanations
 
