@@ -10,7 +10,6 @@ export default async function handler(request: Request, context: Context) {
 
 export const config: Config = {
   background: true,
-  memory: 2048,
   method: "POST",
   path: "/api/scraping/instagram/jobs/:id/run"
 };
