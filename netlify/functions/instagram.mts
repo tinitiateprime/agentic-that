@@ -7,5 +7,6 @@ export default async function handler(request: Request) {
 }
 
 export const config: Config = {
-  path: "/api/scraping/instagram/*"
+  path: "/api/scraping/instagram/*",
+  excludedPath: "/api/scraping/instagram/jobs/:id/run"
 };

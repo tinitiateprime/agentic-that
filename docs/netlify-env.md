@@ -36,13 +36,8 @@ BUSINESS_NAME=AgenticThat
 WA_FROM=<e164-whatsapp-number>
 CURRENCY=INR
 
-# Instagram authenticated scraper session
-INSTAGRAM_STORAGE_STATE_BASE64=<authenticated-session-payload>
-INSTAGRAM_SESSION_EXPIRY_BUFFER_DAYS=7
-INSTAGRAM_MAX_SESSION_ATTEMPTS=3
+# Instagram scraping uses public Playwright pages; no Instagram session variables are required.
 ```
-
-Use the single Instagram value when it fits the Netlify variable limit. For a larger regenerated payload, replace it with consecutive `INSTAGRAM_STORAGE_STATE_BASE64_CHUNK_1`, `_2`, and so on, without gaps. Netlify accepts up to 5,000 characters per value, while function-runtime limits still apply.
 
 ## Scopes
 

@@ -92,6 +92,7 @@ const services = [
       DEV_PORT_ATTEMPTS: "1",
       TELEGRAM_SERVICE_PORT: String(telegramPort),
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
+      NEXT_PUBLIC_INSTAGRAM_API_URL: `http://${host}:${instagramPort}/api/scraping/instagram`,
       PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
       PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,

@@ -85,6 +85,7 @@
 }
 
 .instagram-scraper-app .launch-panel {
+  min-width: 0;
   border: 1px solid #d8dee6;
   border-radius: 8px;
   background: #ffffff;
@@ -128,7 +129,7 @@
 
 .instagram-scraper-app .mode-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -264,10 +265,99 @@
 
 .instagram-scraper-app .launch-row {
   display: grid;
-  grid-template-columns: 120px 140px 1fr;
+  grid-template-columns: 120px minmax(180px, 1fr);
   gap: 12px;
   align-items: end;
   margin-top: 16px;
+}
+
+.instagram-scraper-app .launch-row.is-single-post {
+  grid-template-columns: 1fr;
+}
+
+.instagram-scraper-app .workflow-picker {
+  min-width: 0;
+  margin: 18px 0 0;
+  padding: 18px 0 0;
+  border: 0;
+  border-top: 1px solid #e5e9ee;
+}
+
+.instagram-scraper-app .workflow-picker legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.instagram-scraper-app .workflow-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.instagram-scraper-app .workflow-options button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+}
+
+.instagram-scraper-app .workflow-options button.is-selected {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #166534;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.instagram-scraper-app .range-builder {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1.2fr);
+  gap: 16px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.instagram-scraper-app .range-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.instagram-scraper-app .range-heading > span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.instagram-scraper-app .range-type-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid #cfd7df;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.instagram-scraper-app .range-type-picker button {
+  min-height: 44px;
+  border: 0;
+  border-right: 1px solid #cfd7df;
+  border-radius: 0;
+}
+
+.instagram-scraper-app .range-type-picker button:last-child {
+  border-right: 0;
+}
+
+.instagram-scraper-app .range-type-picker button.is-selected {
+  background: #17202a;
+  color: #ffffff;
+}
+
+.instagram-scraper-app .range-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .instagram-scraper-app .primary-button {
@@ -279,17 +369,23 @@
 
 .instagram-scraper-app .quick-row {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
 }
 
 .instagram-scraper-app .quick-row button {
+  min-width: 0;
+  max-width: 100%;
   min-height: 34px;
   padding: 0 12px;
   background: #ecfdf5;
   border-color: #bbf7d0;
   color: #166534;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .instagram-scraper-app .error-box,
@@ -366,6 +462,310 @@
   padding: 0 14px;
 }
 
+.instagram-scraper-app .toolbar button.is-active {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #166534;
+}
+
+.instagram-scraper-app .analysis-dashboard {
+  margin-top: 24px;
+}
+
+.instagram-scraper-app .analysis-overview {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  padding: 22px 0;
+  border-top: 1px solid #d8dee6;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.instagram-scraper-app .profile-identity > span {
+  display: block;
+  margin-bottom: 6px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.instagram-scraper-app .profile-identity h2 {
+  margin: 0 0 4px;
+  color: #101828;
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.instagram-scraper-app .profile-identity a,
+.instagram-scraper-app .analysis-ranking-table a {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.instagram-scraper-app .analysis-meta {
+  display: grid;
+  gap: 5px;
+  color: #667085;
+  font-size: 13px;
+  text-align: right;
+}
+
+.instagram-scraper-app .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.instagram-scraper-app .metric-card {
+  min-width: 0;
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.instagram-scraper-app .metric-card > span {
+  display: block;
+  min-height: 19px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.instagram-scraper-app .metric-card > strong {
+  display: block;
+  margin-top: 10px;
+  color: #101828;
+  font-size: 25px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.instagram-scraper-app .metric-card > small {
+  display: block;
+  margin-top: 8px;
+  color: #7c8796;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.instagram-scraper-app .analysis-tabs {
+  display: flex;
+  gap: 0;
+  margin-top: 24px;
+  border-bottom: 1px solid #cfd7df;
+  overflow-x: auto;
+}
+
+.instagram-scraper-app .analysis-tabs button {
+  flex: 0 0 auto;
+  min-height: 46px;
+  padding: 0 17px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #667085;
+}
+
+.instagram-scraper-app .analysis-tabs button.is-active {
+  border-bottom-color: #0f766e;
+  color: #0b625b;
+}
+
+.instagram-scraper-app .analysis-view {
+  min-height: 290px;
+  padding-top: 16px;
+}
+
+.instagram-scraper-app .analysis-table-wrap {
+  width: 100%;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: auto;
+}
+
+.instagram-scraper-app .analysis-ranking-table {
+  min-width: 980px;
+}
+
+.instagram-scraper-app .analysis-ranking-table th,
+.instagram-scraper-app .analysis-ranking-table td {
+  padding: 12px 14px;
+}
+
+.instagram-scraper-app .analysis-ranking-table .is-primary-metric {
+  background: #f0fdfa;
+  color: #0b625b;
+  font-weight: 850;
+}
+
+.instagram-scraper-app .rank-number {
+  width: 48px;
+  color: #667085;
+  font-weight: 850;
+}
+
+.instagram-scraper-app .rank-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.instagram-scraper-app .rank-content > div:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.instagram-scraper-app .rank-content strong {
+  color: #101828;
+  font-size: 14px;
+}
+
+.instagram-scraper-app .rank-content span {
+  color: #7c8796;
+  font-size: 12px;
+}
+
+.instagram-scraper-app .patterns-view {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 34px;
+}
+
+.instagram-scraper-app .format-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 190px));
+  gap: 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.instagram-scraper-app .format-summary > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.instagram-scraper-app .format-summary strong {
+  color: #101828;
+  font-size: 28px;
+}
+
+.instagram-scraper-app .format-summary span {
+  color: #667085;
+  font-weight: 800;
+}
+
+.instagram-scraper-app .pattern-section {
+  min-width: 0;
+  padding: 20px 0;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.instagram-scraper-app .pattern-section h3 {
+  margin: 0 0 12px;
+  color: #344054;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.instagram-scraper-app .pattern-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.instagram-scraper-app .pattern-items > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid #cfd7df;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.instagram-scraper-app .pattern-items strong {
+  min-width: 0;
+  color: #344054;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.instagram-scraper-app .pattern-items small {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e7f7f3;
+  color: #0b625b;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.instagram-scraper-app .pattern-empty,
+.instagram-scraper-app .analysis-empty {
+  margin: 0;
+  color: #7c8796;
+}
+
+.instagram-scraper-app .analysis-empty {
+  min-height: 190px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #cfd7df;
+  border-radius: 8px;
+  background: #fbfcfd;
+  text-align: center;
+  padding: 24px;
+}
+
+.instagram-scraper-app .accuracy-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin-top: 18px;
+  padding: 14px 0;
+  border-top: 1px solid #d8dee6;
+  color: #667085;
+  font-size: 12px;
+}
+
+.instagram-scraper-app .accuracy-strip strong {
+  color: #344054;
+  font-size: 13px;
+}
+
+.instagram-scraper-app .accuracy-strip span {
+  position: relative;
+}
+
+.instagram-scraper-app .accuracy-strip span::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
 .instagram-scraper-app .data-panel {
   margin-top: 22px;
   border: 1px solid #d8dee6;
@@ -384,6 +784,10 @@
   width: 100%;
   min-width: 1320px;
   border-collapse: collapse;
+}
+
+.instagram-scraper-app table.is-engagement {
+  min-width: 1420px;
 }
 
 .instagram-scraper-app th,
@@ -454,6 +858,17 @@
   text-decoration: none;
 }
 
+.instagram-scraper-app .author-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.instagram-scraper-app .author-cell a {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .instagram-scraper-app .comment-list {
   display: grid;
   gap: 6px;
@@ -492,8 +907,21 @@
     align-items: start;
   }
 
+  .instagram-scraper-app .intro-panel {
+    min-width: 0;
+  }
+
   .instagram-scraper-app .workspace-header {
     display: grid;
+  }
+
+  .instagram-scraper-app .analysis-overview {
+    display: grid;
+    align-items: start;
+  }
+
+  .instagram-scraper-app .analysis-meta {
+    text-align: left;
   }
 
   .instagram-scraper-app .toolbar {
@@ -523,7 +951,7 @@
   }
 
   .instagram-scraper-app .input-builder.is-active .mode-options {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .instagram-scraper-app .mode-button {
@@ -539,5 +967,27 @@
 
   .instagram-scraper-app .launch-row {
     grid-template-columns: 1fr;
+  }
+
+  .instagram-scraper-app .range-builder,
+  .instagram-scraper-app .range-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .instagram-scraper-app .patterns-view {
+    grid-template-columns: 1fr;
+  }
+
+  .instagram-scraper-app .format-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .instagram-scraper-app .accuracy-strip {
+    display: grid;
+    gap: 7px;
+  }
+
+  .instagram-scraper-app .accuracy-strip span::before {
+    display: none;
   }
 }

@@ -1,15 +1,27 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 
-const API_URL = "/api/scraping/instagram";
+const API_URL = process.env.NEXT_PUBLIC_INSTAGRAM_API_URL || "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
-const DEFAULT_RECENT_DAYS = 7;
+const RANGE_TYPES = ["date", "month", "year"];
+const COLLECTION_MODES = [
+  { id: "latest", label: "Latest" },
+  { id: "range", label: "Range" },
+  { id: "engagement", label: "Analyze Profile" }
+];
+const ANALYSIS_TABS = [
+  { id: "watched", label: "Most Watched" },
+  { id: "liked", label: "Most Liked" },
+  { id: "discussed", label: "Most Discussed" },
+  { id: "patterns", label: "Content Patterns" }
+];
 
 const inputModes = [
   {
     id: "profile",
     label: "Profile",
+    symbol: "@",
     prefix: "@",
     fieldLabel: "Username",
     placeholder: "Enter username"
@@ -17,18 +29,31 @@ const inputModes = [
   {
     id: "keyword",
     label: "Keyword",
+    symbol: "#",
     prefix: "#",
     fieldLabel: "Keyword",
     placeholder: "Enter keyword"
   },
   {
-    id: "url",
-    label: "URL",
+    id: "profile_url",
+    label: "Profile URL",
+    symbol: "P",
     prefix: "",
-    fieldLabel: "Instagram URL",
-    placeholder: "Enter URL"
+    fieldLabel: "Instagram profile URL",
+    placeholder: "https://www.instagram.com/username/"
+  },
+  {
+    id: "post_url",
+    label: "Post URL",
+    symbol: "POST",
+    prefix: "",
+    fieldLabel: "Instagram post or reel URL",
+    placeholder: "https://www.instagram.com/reel/.../"
   }
 ];
+
+const isProfileInput = (mode) => mode === "profile" || mode === "profile_url";
+const isPostInput = (mode) => mode === "post_url";
 
 const cleanModeValue = (mode, value) => {
   const text = value.trim();
@@ -45,18 +70,55 @@ const composeScrapeQuery = (mode, value) => {
   return cleanValue;
 };
 
+const instagramUrlType = (value) => {
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(value) ? value : "https://" + value);
+    if (!/(^|\.)instagram\.com$/i.test(url.hostname)) return null;
+    const path = url.pathname.replace(/\/+$/, "");
+    if (/^\/(?:p|reel)\/[^/]+$/i.test(path)) return "post";
+    if (/^\/[A-Za-z0-9._]+$/.test(path)) return "profile";
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 const detectInputMode = (value) => {
   const text = value.trim();
   if (text.startsWith("#")) return { mode: "keyword", value: cleanModeValue("keyword", text) };
   if (text.startsWith("@")) return { mode: "profile", value: cleanModeValue("profile", text) };
-  if (/^(https?:\/\/|www\.|instagram\.com\/)/i.test(text)) return { mode: "url", value: text };
+  if (/^(https?:\/\/|www\.|instagram\.com\/)/i.test(text)) {
+    const mode = instagramUrlType(text) === "post" ? "post_url" : "profile_url";
+    return { mode, value: text };
+  }
   return { mode: "profile", value: text };
 };
 
-const dateFromRecentDays = (days) => {
-  const date = new Date();
-  date.setDate(date.getDate() - Math.max(1, Number(days) || 1));
-  return date.toISOString().slice(0, 10);
+const localDateValue = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const defaultRange = (type) => {
+  const now = new Date();
+  if (type === "month") {
+    const end = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return { from: localDateValue(now).slice(0, 7), to: localDateValue(end).slice(0, 7) };
+  }
+  if (type === "year") {
+    const year = String(now.getFullYear());
+    return { from: year, to: String(now.getFullYear() - 1) };
+  }
+  const end = new Date(now);
+  end.setDate(end.getDate() - 6);
+  return { from: localDateValue(now), to: localDateValue(end) };
+};
+
+const rangeLabel = (type, from, to) => {
+  const labels = { date: "Dates", month: "Months", year: "Years" };
+  return `${labels[type]}: ${from} to ${to}`;
 };
 
 const publicInstagramUrl = (value) => {
@@ -75,23 +137,41 @@ const publicInstagramUrl = (value) => {
   }
 };
 
-const exportColumns = [
+const baseExportColumns = [
   "rank",
   "thumbnail_url",
   "username",
   "display_name",
   "post_url",
   "comments_count",
+  "comments_hidden",
   "likes",
+  "likes_hidden",
   "follower_count",
+  "follower_count_display",
   "top_comments",
   "timestamp"
+];
+
+const engagementExportColumns = [
+  ...baseExportColumns,
+  "views",
+  "views_display"
 ];
 
 async function apiGet(path) {
   const response = await fetch(`${API_URL}${path}`);
   if (!response.ok) return {};
   return response.json();
+}
+
+async function apiGetRequired(path) {
+  const response = await fetch(`${API_URL}${path}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || `Request failed (${response.status})`);
+  }
+  return data;
 }
 
 async function apiPost(path, body) {
@@ -111,13 +191,22 @@ function InstagramScraperConsole() {
   const [inputMode, setInputMode] = useState(null);
   const [inputValue, setInputValue] = useState("");
   const [maxResults, setMaxResults] = useState(DEFAULT_MAX_RESULTS);
-  const [recentDays, setRecentDays] = useState(DEFAULT_RECENT_DAYS);
+  const [collectionMode, setCollectionMode] = useState("latest");
+  const [rangeType, setRangeType] = useState("date");
+  const initialRange = defaultRange("date");
+  const [rangeFrom, setRangeFrom] = useState(initialRange.from);
+  const [rangeTo, setRangeTo] = useState(initialRange.to);
   const [results, setResults] = useState([]);
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisTab, setAnalysisTab] = useState("watched");
   const [keywords, setKeywords] = useState([]);
   const [page, setPage] = useState("start");
   const [error, setError] = useState(null);
   const [lastQuery, setLastQuery] = useState("");
-  const onlyPostsNewerThan = useMemo(() => dateFromRecentDays(recentDays), [recentDays]);
+  const [lastWorkflowLabel, setLastWorkflowLabel] = useState("Latest posts and reels");
+  const [lastCollectionMode, setLastCollectionMode] = useState("latest");
+  const [lastInputMode, setLastInputMode] = useState(null);
+  const [workingStatus, setWorkingStatus] = useState("Preparing scrape");
   const activeInputMode = inputModes.find((item) => item.id === inputMode);
 
   useEffect(() => {
@@ -145,6 +234,9 @@ function InstagramScraperConsole() {
   const selectInputMode = (mode) => {
     setInputMode(mode);
     setInputValue((value) => cleanModeValue(mode, value));
+    if (isPostInput(mode) || (!isProfileInput(mode) && collectionMode === "engagement")) {
+      setCollectionMode("latest");
+    }
     setError(null);
   };
 
@@ -152,36 +244,109 @@ function InstagramScraperConsole() {
     const detected = detectInputMode(value);
     setInputMode(detected.mode);
     setInputValue(detected.value);
+    if (isPostInput(detected.mode) || (!isProfileInput(detected.mode) && collectionMode === "engagement")) {
+      setCollectionMode("latest");
+    }
+    setError(null);
+  };
+
+  const selectCollectionMode = (mode) => {
+    if (isPostInput(inputMode) || (mode === "engagement" && !isProfileInput(inputMode))) return;
+    setCollectionMode(mode);
+    setError(null);
+  };
+
+  const selectRangeType = (type) => {
+    const nextRange = defaultRange(type);
+    setRangeType(type);
+    setRangeFrom(nextRange.from);
+    setRangeTo(nextRange.to);
     setError(null);
   };
 
   const startScrape = async () => {
     if (!inputMode) {
-      setError("Select Profile, Keyword, or URL first.");
+      setError("Select Profile, Keyword, Profile URL, or Post URL first.");
       return;
     }
 
     const cleanQuery = composeScrapeQuery(inputMode, inputValue);
     if (!cleanQuery) {
-      setError(inputMode === "url" ? "Paste an Instagram URL." : "Enter text for the selected input type.");
+      setError(inputMode === "profile_url" || inputMode === "post_url"
+        ? "Paste the selected Instagram URL type."
+        : "Enter text for the selected input type.");
+      return;
+    }
+    const selectedUrlType = instagramUrlType(cleanQuery);
+    if (inputMode === "profile_url" && selectedUrlType !== "profile") {
+      setError("Enter an Instagram profile URL, not a post or reel URL.");
+      return;
+    }
+    if (inputMode === "post_url" && selectedUrlType !== "post") {
+      setError("Enter an Instagram post or reel URL.");
+      return;
+    }
+    const effectiveCollectionMode = isPostInput(inputMode) ? "latest" : collectionMode;
+    if (effectiveCollectionMode === "range" && (!rangeFrom || !rangeTo)) {
+      setError("Choose both the range start and end.");
       return;
     }
 
     setError(null);
     setResults([]);
+    setAnalysis(null);
+    setAnalysisTab("watched");
     setLastQuery(cleanQuery);
+    setLastWorkflowLabel(
+      isPostInput(inputMode)
+        ? "Single post"
+        : effectiveCollectionMode === "range"
+        ? rangeLabel(rangeType, rangeFrom, rangeTo)
+        : effectiveCollectionMode === "engagement"
+          ? "Profile analysis"
+          : "Latest posts and reels"
+    );
+    setLastCollectionMode(effectiveCollectionMode);
+    setLastInputMode(inputMode);
+    setWorkingStatus("Preparing scrape");
     setPage("working");
 
     try {
-      const data = await apiPost("/scrape", {
+      const payload = {
+        mode: inputMode,
         keyword: cleanQuery,
-        max_results: maxResults,
-        recent_days: recentDays,
-        only_posts_newer_than: onlyPostsNewerThan,
-        auto_expand_days: true,
-        max_auto_expand_days: 365
-      });
+        max_results: isPostInput(inputMode) ? 1 : maxResults,
+        collection_mode: effectiveCollectionMode,
+        ...(effectiveCollectionMode === "range" ? {
+          range_type: rangeType,
+          range_from: rangeFrom,
+          range_to: rangeTo
+        } : {}),
+        timezone_offset_minutes: new Date().getTimezoneOffset(),
+        auto_expand_days: false,
+        max_auto_expand_days: 1
+      };
+      const created = await apiPost("/jobs", payload);
+      const jobId = created?.job?.id;
+      if (!jobId) throw new Error("The background scrape could not be created.");
+
+      setWorkingStatus("Scraping public pages");
+      let data = await apiPost(`/jobs/${jobId}/run`, {});
+      const deadline = Date.now() + 16 * 60_000;
+      while (data?.job?.status !== "complete") {
+        if (data?.job?.status === "failed") {
+          throw new Error(data.job.error || "Scrape failed");
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("The scrape took too long. Try a smaller count or range.");
+        }
+        setWorkingStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        data = await apiGetRequired(`/jobs/${jobId}`);
+      }
       setResults(data?.results || []);
+      setAnalysis(data?.analysis || data?.run?.analysis || null);
+      setLastQuery(data?.run?.query || cleanQuery);
       setPage("results");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scrape failed");
@@ -210,6 +375,15 @@ function InstagramScraperConsole() {
     return `${age} days ago`;
   };
 
+  const formatPercentage = (value) => (
+    value === undefined || value === null ? "N/A" : `${Number(value).toFixed(2)}%`
+  );
+
+  const formatPostMetric = (post, metric) => {
+    const hidden = metric === "likes" ? post.likes_hidden : post.comments_hidden;
+    return hidden ? "Hidden" : formatNumber(post[metric]);
+  };
+
   const download = (content, filename, type) => {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
@@ -221,10 +395,20 @@ function InstagramScraperConsole() {
   };
 
   const exportJson = () => {
-    download(JSON.stringify(results, null, 2), "instagram-results.json", "application/json");
+    const data = analysis ? { analysis, results } : results;
+    download(JSON.stringify(data, null, 2), "instagram-results.json", "application/json");
   };
 
   const exportCsv = () => {
+    const exportColumns = lastCollectionMode === "engagement" ? engagementExportColumns : baseExportColumns;
+    const analysisRows = analysisTab === "liked"
+      ? analysis?.top_liked
+      : analysisTab === "discussed"
+        ? analysis?.top_discussed
+        : analysis?.top_watched;
+    const exportResults = lastCollectionMode === "engagement" && analysisRows?.length
+      ? analysisRows
+      : results;
     const escapeCell = (value) => {
       if (value === undefined || value === null) return "";
       const text = Array.isArray(value) || typeof value === "object"
@@ -234,21 +418,117 @@ function InstagramScraperConsole() {
     };
     const rows = [
       exportColumns.join(","),
-      ...results.map((item, index) => exportColumns.map((key) => (
+      ...exportResults.map((item, index) => exportColumns.map((key) => (
         key === "rank" ? index + 1 : escapeCell(item[key])
       )).join(","))
     ];
     download(rows.join("\n"), "instagram-results.csv", "text/csv");
   };
 
+  const renderRankingTable = (posts, primaryMetric) => {
+    const primaryLabels = {
+      views: "Views",
+      likes: "Likes",
+      comments_count: "Comments"
+    };
+    return posts.length === 0 ? (
+      <div className="analysis-empty">No public {primaryLabels[primaryMetric].toLowerCase()} data was visible.</div>
+    ) : (
+      <div className="analysis-table-wrap">
+        <table className="analysis-ranking-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Content</th>
+              <th>Profile</th>
+              <th className="is-primary-metric">{primaryLabels[primaryMetric]}</th>
+              {primaryMetric !== "views" && <th>Views</th>}
+              {primaryMetric !== "likes" && <th>Likes</th>}
+              {primaryMetric !== "comments_count" && <th>Comments</th>}
+              <th>Posted</th>
+              <th>Post</th>
+            </tr>
+          </thead>
+          <tbody>
+            {posts.map((post, index) => (
+              <tr key={`${primaryMetric}-${post.post_url}-${index}`}>
+                <td className="rank-number">{index + 1}</td>
+                <td>
+                  <div className="rank-content">
+                    <div className="mini-thumb">
+                      {post.thumbnail_url ? <img src={post.thumbnail_url} alt="" /> : <span />}
+                    </div>
+                    <div>
+                      <strong>{/\/reel\//i.test(post.post_url) ? "Reel" : "Post"}</strong>
+                      <span>{relativeDate(post.timestamp)}</span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {post.username ? (
+                    <a
+                      href={publicInstagramUrl(post.profile_url || `/${post.username}/`)}
+                      target="_blank"
+                      rel="external noopener noreferrer"
+                      referrerPolicy="no-referrer"
+                    >
+                      @{post.username}
+                    </a>
+                  ) : "N/A"}
+                </td>
+                <td className="is-primary-metric">
+                  {primaryMetric === "views"
+                    ? post.views_display || formatNumber(post.views)
+                    : formatPostMetric(post, primaryMetric)}
+                </td>
+                {primaryMetric !== "views" && <td>{post.views_display || formatNumber(post.views)}</td>}
+                {primaryMetric !== "likes" && <td>{formatPostMetric(post, "likes")}</td>}
+                {primaryMetric !== "comments_count" && <td>{formatPostMetric(post, "comments_count")}</td>}
+                <td>{formatDate(post.timestamp)}</td>
+                <td>
+                  <a
+                    href={publicInstagramUrl(post.post_url)}
+                    target="_blank"
+                    rel="external noopener noreferrer"
+                    referrerPolicy="no-referrer"
+                  >
+                    Open
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderPatternItems = (items) => (
+    items?.length ? (
+      <div className="pattern-items">
+        {items.map((item) => (
+          <span key={item.label}><strong>{item.label}</strong><small>{item.count}</small></span>
+        ))}
+      </div>
+    ) : <p className="pattern-empty">N/A</p>
+  );
+
   if (page === "working") {
     return (
       <main className="instagram-scraper-app work-page">
         <div className="loader-ring" />
-        <p className="eyebrow">Agent is working</p>
-        <h1>Fetching latest posts and reels</h1>
+        <p className="eyebrow">{workingStatus}</p>
+        <h1>
+          {isPostInput(lastInputMode)
+            ? "Fetching the post"
+            : lastCollectionMode === "engagement"
+            ? "Analyzing the profile"
+            : lastCollectionMode === "range"
+              ? "Collecting the selected range"
+              : "Fetching latest posts and reels"}
+        </h1>
         <p className="work-copy">
-          Starting with posts newer than {onlyPostsNewerThan}; expanding older if needed for {lastQuery}.
+          Opening public Instagram pages, closing popups, and collecting visible data for {lastQuery}.
         </p>
       </main>
     );
@@ -261,18 +541,141 @@ function InstagramScraperConsole() {
           <div>
             <p className="eyebrow">Dataset ready</p>
             <h1>{lastQuery}</h1>
-            <p className="subtle">Latest public posts and reels, newest first.</p>
+            <p className="subtle">
+              {lastWorkflowLabel}. {lastCollectionMode === "engagement"
+                ? "Public performance and content patterns."
+                : isPostInput(lastInputMode)
+                  ? "Public data for this post."
+                : lastCollectionMode === "range"
+                  ? "Following the selected direction."
+                  : "Newest first."}
+            </p>
           </div>
           <div className="toolbar">
             <button onClick={() => setPage("start")}>New Search</button>
-            <button onClick={exportJson} disabled={!results.length}>JSON</button>
-            <button onClick={exportCsv} disabled={!results.length}>CSV</button>
+            <button onClick={exportJson} disabled={!results.length && !analysis}>JSON</button>
+            <button onClick={exportCsv} disabled={!results.length && !analysis}>CSV</button>
           </div>
         </header>
 
-        {results.length === 0 ? (
+        {lastCollectionMode === "engagement" && analysis ? (
+          <section className="analysis-dashboard">
+            <div className="analysis-overview">
+              <div className="profile-identity">
+                <span>Profile report</span>
+                <h2>{analysis.display_name || analysis.username || "Instagram profile"}</h2>
+                {analysis.username && (
+                  <a
+                    href={publicInstagramUrl(analysis.profile_url || `/${analysis.username}/`)}
+                    target="_blank"
+                    rel="external noopener noreferrer"
+                    referrerPolicy="no-referrer"
+                  >
+                    @{analysis.username}
+                  </a>
+                )}
+              </div>
+              <div className="analysis-meta">
+                <span>Updated {formatDate(analysis.captured_at)}</span>
+                <span>{formatNumber(analysis.analyzed_posts)} public posts and reels analyzed</span>
+              </div>
+            </div>
+
+            <div className="metric-grid">
+              <article className="metric-card">
+                <span>Followers</span>
+                <strong>{analysis.follower_count_display || formatNumber(analysis.follower_count)}</strong>
+                <small>Exactly as Instagram displays it</small>
+              </article>
+              <article className="metric-card">
+                <span>Posts analyzed</span>
+                <strong>{formatNumber(analysis.analyzed_posts)}</strong>
+                <small>{formatNumber(analysis.posting_frequency?.posts_last_30_days)} in the last 30 days</small>
+              </article>
+              <article className="metric-card">
+                <span>Average views</span>
+                <strong>{formatNumber(analysis.averages?.views)}</strong>
+                <small>Reels with public views</small>
+              </article>
+              <article className="metric-card">
+                <span>Average likes</span>
+                <strong>{formatNumber(analysis.averages?.likes)}</strong>
+                <small>Visible likes only</small>
+              </article>
+              <article className="metric-card">
+                <span>Average comments</span>
+                <strong>{formatNumber(analysis.averages?.comments)}</strong>
+                <small>Visible comments only</small>
+              </article>
+              <article className="metric-card">
+                <span>Estimated engagement rate</span>
+                <strong>{formatPercentage(analysis.engagement_rate)}</strong>
+                <small>Using the public follower value</small>
+              </article>
+              <article className="metric-card">
+                <span>Observed frequency</span>
+                <strong>{formatNumber(analysis.posting_frequency?.posts_per_week)}</strong>
+                <small>Analyzed posts per week</small>
+              </article>
+            </div>
+
+            <nav className="analysis-tabs" aria-label="Profile analysis views">
+              {ANALYSIS_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={analysisTab === tab.id ? "is-active" : ""}
+                  onClick={() => setAnalysisTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+
+            <div className="analysis-view">
+              {analysisTab === "watched" && renderRankingTable(analysis.top_watched || [], "views")}
+              {analysisTab === "liked" && renderRankingTable(analysis.top_liked || [], "likes")}
+              {analysisTab === "discussed" && renderRankingTable(analysis.top_discussed || [], "comments_count")}
+
+              {analysisTab === "patterns" && (
+                <div className="patterns-view">
+                  <section className="format-summary">
+                    <div><strong>{formatNumber(analysis.patterns?.formats?.reels)}</strong><span>Reels</span></div>
+                    <div><strong>{formatNumber(analysis.patterns?.formats?.posts)}</strong><span>Posts</span></div>
+                  </section>
+                  <section className="pattern-section">
+                    <h3>Top hashtags</h3>
+                    {renderPatternItems(analysis.patterns?.hashtags)}
+                  </section>
+                  <section className="pattern-section">
+                    <h3>Common caption words</h3>
+                    {renderPatternItems(analysis.patterns?.keywords)}
+                  </section>
+                  <section className="pattern-section">
+                    <h3>Posting days</h3>
+                    {renderPatternItems(analysis.patterns?.posting_days)}
+                  </section>
+                  <section className="pattern-section">
+                    <h3>Posting times</h3>
+                    {renderPatternItems(analysis.patterns?.posting_hours)}
+                  </section>
+                </div>
+              )}
+
+            </div>
+
+            <footer className="accuracy-strip">
+              <strong>Data quality</strong>
+              <span>{analysis.accuracy?.source || "Public Instagram pages"}</span>
+              <span>{analysis.accuracy?.followers || "Instagram's visible follower value"}</span>
+              <span>{analysis.accuracy?.views || "Public Reels grid values"}</span>
+              <span>{analysis.accuracy?.missing_metrics || "Missing metrics shown as N/A"}</span>
+              <span>Captured {formatDate(analysis.captured_at)}</span>
+            </footer>
+          </section>
+        ) : results.length === 0 ? (
           <div className="empty-panel">
-            Public Instagram did not return usable posts for this input. Try a public username, #hashtag, or direct reel URL.
+            Public Instagram did not return usable data for this input. Check that the selected profile, post, or reel is public.
           </div>
         ) : (
           <section className="data-panel">
@@ -304,7 +707,19 @@ function InstagramScraperConsole() {
                         </div>
                       </td>
                       <td>
-                        <strong>{post.display_name || post.username || "Unknown"}</strong>
+                        <div className="author-cell">
+                          <strong>{post.display_name || post.username || "Unknown"}</strong>
+                          {post.username && (
+                            <a
+                              href={publicInstagramUrl(post.profile_url || `/${post.username}/`)}
+                              target="_blank"
+                              rel="external noopener noreferrer"
+                              referrerPolicy="no-referrer"
+                            >
+                              @{post.username}
+                            </a>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <a
@@ -316,9 +731,9 @@ function InstagramScraperConsole() {
                           Open post
                         </a>
                       </td>
-                      <td>{formatNumber(post.comments_count)}</td>
-                      <td>{formatNumber(post.likes)}</td>
-                      <td>{formatNumber(post.follower_count)}</td>
+                      <td>{formatPostMetric(post, "comments_count")}</td>
+                      <td>{formatPostMetric(post, "likes")}</td>
+                      <td>{post.follower_count_display || formatNumber(post.follower_count)}</td>
                       <td>
                         <div className="comment-list">
                           {(post.top_comments || []).slice(0, 5).map((comment, commentIndex) => (
@@ -345,10 +760,8 @@ function InstagramScraperConsole() {
     <main className="instagram-scraper-app start-page">
       <section className="intro-panel">
         <p className="eyebrow">Instagram intelligence</p>
-        <h1>Build a clean latest-post dataset</h1>
-        <p>
-          Choose Profile, Keyword, or URL, then enter the value. Recent days is tried first, then older posts are added if needed.
-        </p>
+        <h1>Instagram scraper</h1>
+        <p>Public post and reel data.</p>
       </section>
 
       <section className="launch-panel">
@@ -363,7 +776,7 @@ function InstagramScraperConsole() {
                   className={`mode-button ${inputMode === item.id ? "is-selected" : ""}`}
                   onClick={() => selectInputMode(item.id)}
                 >
-                  <span className="mode-symbol">{item.prefix || "URL"}</span>
+                  <span className="mode-symbol">{item.symbol}</span>
                   <span>{item.label}</span>
                 </button>
               ))}
@@ -380,7 +793,7 @@ function InstagramScraperConsole() {
                   )}
                   <input
                     id="query"
-                    type={inputMode === "url" ? "url" : "text"}
+                    type={inputMode === "profile_url" || inputMode === "post_url" ? "url" : "text"}
                     placeholder={activeInputMode.placeholder}
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
@@ -395,30 +808,96 @@ function InstagramScraperConsole() {
           </div>
         </div>
 
-        <div className="launch-row">
-          <div>
-            <label htmlFor="count">Count</label>
-            <input
-              id="count"
-              type="number"
-              min="1"
-              max="50"
-              value={maxResults}
-              onChange={(e) => setMaxResults(Math.max(1, Number(e.target.value) || 1))}
-            />
+        {!isPostInput(inputMode) && (
+          <fieldset className="workflow-picker">
+            <legend>Choose collection</legend>
+            <div className="workflow-options">
+              {COLLECTION_MODES
+                .filter((item) => item.id !== "engagement" || isProfileInput(inputMode))
+                .map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={collectionMode === item.id ? "is-selected" : ""}
+                    onClick={() => selectCollectionMode(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+            </div>
+          </fieldset>
+        )}
+
+        {!isPostInput(inputMode) && collectionMode === "range" && (
+          <div className="range-builder">
+            <div className="range-heading">
+              <span>Range unit</span>
+              <div className="range-type-picker" aria-label="Post range type">
+                {RANGE_TYPES.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    className={rangeType === type ? "is-selected" : ""}
+                    onClick={() => selectRangeType(type)}
+                  >
+                    {type === "date" ? "Date" : type === "month" ? "Month" : "Year"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="range-fields">
+              <div>
+                <label htmlFor="range-from">Start</label>
+                <input
+                  id="range-from"
+                  type={rangeType === "year" ? "number" : rangeType}
+                  min={rangeType === "year" ? "2010" : undefined}
+                  max={rangeType === "year"
+                    ? String(new Date().getFullYear())
+                    : rangeType === "month"
+                      ? localDateValue(new Date()).slice(0, 7)
+                      : localDateValue(new Date())}
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="range-to">End</label>
+                <input
+                  id="range-to"
+                  type={rangeType === "year" ? "number" : rangeType}
+                  min={rangeType === "year" ? "2010" : undefined}
+                  max={rangeType === "year"
+                    ? String(new Date().getFullYear())
+                    : rangeType === "month"
+                      ? localDateValue(new Date()).slice(0, 7)
+                      : localDateValue(new Date())}
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                />
+              </div>
+            </div>
           </div>
-          <div>
-            <label htmlFor="recent-days">Recent days</label>
-            <input
-              id="recent-days"
-              type="number"
-              min="1"
-              max="30"
-              value={recentDays}
-              onChange={(e) => setRecentDays(Math.max(1, Number(e.target.value) || 1))}
-            />
-          </div>
-          <button className="primary-button" onClick={startScrape}>Save & Start</button>
+        )}
+
+        <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`}>
+          {!isPostInput(inputMode) && (
+            <div className="count-field">
+              <label htmlFor="count">Count</label>
+              <input
+                id="count"
+                type="number"
+                min="1"
+                max="50"
+                value={maxResults}
+                onChange={(e) => setMaxResults(Math.max(1, Number(e.target.value) || 1))}
+              />
+            </div>
+          )}
+          <button className="primary-button" onClick={() => startScrape()}>
+            {isPostInput(inputMode) ? "Scrape Post" : "Start Scraping"}
+          </button>
         </div>
 
         {keywords.length > 0 && (
