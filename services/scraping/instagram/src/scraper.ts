@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Response } from "playwright-core";
 
 export type InstagramScrapeInput = {
   query: string;
@@ -88,8 +88,11 @@ type NormalizedQuery = {
 
 type Candidate = Partial<InstagramPost> & {
   _handle?: string | null;
+  _owner_id?: string | null;
+  _reels_id?: string | null;
   _source?: string | null;
   _source_rank?: number | null;
+  _views_verified?: boolean;
 };
 
 type ScrapeResult = {
@@ -109,6 +112,7 @@ type RawPageCandidate = {
   likes?: string | number | null;
   commentsCount?: string | number | null;
   views?: string | number | null;
+  viewsVerified?: boolean;
   thumbnail?: string | null;
   caption?: string | null;
   rank?: number | null;
@@ -118,6 +122,7 @@ type PublicProfileBootstrap = {
   ok: boolean;
   status?: number;
   userId?: string | null;
+  reelsId?: string | null;
   username?: string | null;
   displayName?: string | null;
   followerCount?: number | null;
@@ -693,6 +698,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
       .filter((post) => !post.likes_hidden && !post.comments_hidden && post.likes !== null && post.comments_count !== null)
       .map((post) => ((post.likes! + post.comments_count!) / followerCount) * 100)
     : [];
+  const verifiedViewPosts = results.filter((post) => post.views !== null && post.views !== undefined).length;
 
   return {
     username: firstProfile?.username ?? null,
@@ -725,10 +731,10 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
       posting_hours: topCountEntries(postingHours, 8)
     },
     accuracy: {
-      source: "Public Instagram pages",
-      followers: "Instagram's visible public value",
-      views: "Public Reels grid values",
-      missing_metrics: "Shown as N/A"
+      source: "Fresh public Instagram pages",
+      followers: "Exact public profile count captured for this run",
+      views: `Exact public views verified for ${verifiedViewPosts} of ${results.length} analyzed posts`,
+      missing_metrics: "Unverified values are shown as N/A"
     }
   };
 }
@@ -823,8 +829,11 @@ function candidateToData(candidate: Candidate): Candidate {
     timestamp: candidate.timestamp ?? null,
     caption: candidate.caption ?? null,
     _handle: candidate._handle || candidate.username || null,
+    _owner_id: candidate._owner_id ?? null,
+    _reels_id: candidate._reels_id ?? null,
     _source: candidate._source ?? null,
-    _source_rank: candidate._source_rank ?? null
+    _source_rank: candidate._source_rank ?? null,
+    _views_verified: candidate._views_verified ?? false
   };
 }
 
@@ -836,6 +845,13 @@ function countFromRaw(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
   if (typeof value === "string") return parseCount(value);
   return null;
+}
+
+function largestCountFromRaw(...values: unknown[]) {
+  const counts = values
+    .map(countFromRaw)
+    .filter((value): value is number => value !== null && value >= 0);
+  return counts.length ? Math.max(...counts) : null;
 }
 
 function timestampFromRaw(value: unknown) {
@@ -889,7 +905,8 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     top_comments: [],
     _handle: handle,
     _source: sourceLabel,
-    _source_rank: typeof raw.rank === "number" && Number.isFinite(raw.rank) ? raw.rank : null
+    _source_rank: typeof raw.rank === "number" && Number.isFinite(raw.rank) ? raw.rank : null,
+    _views_verified: raw.viewsVerified === true
   };
 }
 
@@ -905,8 +922,11 @@ async function collectPublicProfileFeedCandidates(
   const bootstrap: PublicProfileBootstrap = await page.evaluate<PublicProfileBootstrap>(`
     (async () => {
       const handle = ${JSON.stringify(handle)};
-      const response = await fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(handle), {
+      const response = await fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(handle) + "&_=" + Date.now(), {
+        cache: "no-store",
         headers: {
+          "cache-control": "no-cache",
+          "pragma": "no-cache",
           "x-ig-app-id": "936619743392459",
           "x-requested-with": "XMLHttpRequest"
         }
@@ -922,6 +942,7 @@ async function collectPublicProfileFeedCandidates(
         ok: true,
         status: response.status,
         userId: String(user.id),
+        reelsId: user.fbid ? String(user.fbid) : null,
         username: user.username || handle,
         displayName: user.full_name || user.username || handle,
         followerCount: user.edge_followed_by && Number(user.edge_followed_by.count),
@@ -934,7 +955,10 @@ async function collectPublicProfileFeedCandidates(
           timestamp: node.taken_at_timestamp,
           likes: node.edge_liked_by && node.edge_liked_by.count,
           commentsCount: node.edge_media_to_comment && node.edge_media_to_comment.count,
-          views: node.video_view_count,
+          views: [node.play_count, node.view_count, node.video_view_count, node.ig_play_count]
+            .map(Number)
+            .filter((value) => Number.isFinite(value) && value >= 0)
+            .reduce((largest, value) => Math.max(largest, value), 0) || null,
           thumbnail: node.display_url || node.thumbnail_src,
           caption: node.edge_media_to_caption && node.edge_media_to_caption.edges &&
             node.edge_media_to_caption.edges[0] && node.edge_media_to_caption.edges[0].node &&
@@ -967,6 +991,8 @@ async function collectPublicProfileFeedCandidates(
     seen.add(identity);
     candidate.username = handle;
     candidate._handle = handle;
+    candidate._owner_id = cleanText(bootstrap.userId) || null;
+    candidate._reels_id = cleanText(bootstrap.reelsId) || null;
     candidate.display_name = displayName;
     candidate.profile_url = `${instagramHost}/${handle}/`;
     candidate.follower_count = exactFollowerCount;
@@ -985,10 +1011,13 @@ async function collectPublicProfileFeedCandidates(
       (async () => {
         const userId = ${JSON.stringify(userId)};
         const maxId = ${JSON.stringify(maxId)};
-        const params = new URLSearchParams({ count: "12" });
+        const params = new URLSearchParams({ count: "12", _: String(Date.now()) });
         if (maxId) params.set("max_id", maxId);
         const response = await fetch("/api/v1/feed/user/" + encodeURIComponent(userId) + "/?" + params, {
+          cache: "no-store",
           headers: {
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
             "x-ig-app-id": "936619743392459",
             "x-requested-with": "XMLHttpRequest"
           }
@@ -1016,7 +1045,17 @@ async function collectPublicProfileFeedCandidates(
             timestamp: media.taken_at,
             likes: media.like_count,
             commentsCount: media.comment_count,
-            views: media.play_count || media.view_count || media.video_view_count || media.ig_play_count,
+            views: [
+              media.play_count,
+              media.view_count,
+              media.video_view_count,
+              media.ig_play_count,
+              media.clips_metadata && media.clips_metadata.play_count,
+              media.clips_metadata && media.clips_metadata.view_count
+            ]
+              .map(Number)
+              .filter((value) => Number.isFinite(value) && value >= 0)
+              .reduce((largest, value) => Math.max(largest, value), 0) || null,
             thumbnail: thumbnail(media),
             caption: media.caption && media.caption.text
           }))
@@ -1056,12 +1095,274 @@ function mergeCandidateData(target: Candidate, source: Candidate) {
     "caption",
     "timestamp",
     "_handle",
+    "_owner_id",
+    "_reels_id",
     "_source"
   ] as (keyof Candidate)[]) {
     if (target[key] == null || target[key] === "") target[key] = source[key] as never;
   }
   if (target._source_rank == null || (source._source_rank != null && source._source_rank < target._source_rank)) {
     target._source_rank = source._source_rank;
+  }
+  if (source._views_verified && source.views !== null && source.views !== undefined) {
+    target.views = source.views;
+    target.views_display = source.views_display;
+    target._views_verified = true;
+  }
+}
+
+export function currentReelViewsFromPayload(payload: unknown) {
+  const metrics = new Map<string, number>();
+  const visited = new Set<object>();
+
+  const visit = (value: unknown, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 60 || visited.has(value)) return;
+    visited.add(value);
+    const node = value as Record<string, unknown>;
+    const code = cleanText(node.code || node.shortcode);
+    if (code && /^[A-Za-z0-9_-]{6,}$/.test(code)) {
+      const views = largestCountFromRaw(
+        node.play_count,
+        node.view_count,
+        node.video_view_count,
+        node.ig_play_count,
+        (node.clips_metadata as Record<string, unknown> | undefined)?.play_count,
+        (node.clips_metadata as Record<string, unknown> | undefined)?.view_count
+      );
+      if (views !== null) metrics.set(code, Math.max(metrics.get(code) ?? 0, views));
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
+      else if (child && typeof child === "object") visit(child, depth + 1);
+    }
+  };
+
+  visit(payload);
+  return metrics;
+}
+
+async function verifyPublicProfileReelViews(page: Page, username: string, candidates: Candidate[]) {
+  const targets = new Map<string, Candidate>();
+  for (const candidate of candidates) {
+    if (!candidate.post_url || !/\/reel\//i.test(candidate.post_url)) continue;
+    targets.set(postIdentity(candidate.post_url), candidate);
+  }
+  if (!targets.size) return;
+
+  const pending = new Set<Promise<void>>();
+  let graphqlTemplate = "";
+  let initialQueryDocId = process.env.INSTAGRAM_REELS_INITIAL_DOC_ID || "7950326061742207";
+  let pageQueryDocId = process.env.INSTAGRAM_REELS_PAGE_DOC_ID || "27402742122690167";
+  let reelsCursor = "";
+  let discoveredReelsId = "";
+  const applyPayload = (payload: unknown) => {
+    for (const [code, views] of currentReelViewsFromPayload(payload)) {
+      const candidate = targets.get(code);
+      if (!candidate) continue;
+      candidate.views = views;
+      candidate.views_display = views.toLocaleString("en-US");
+      candidate._views_verified = true;
+    }
+  };
+  const captureConnectionState = (payload: unknown) => {
+    const visited = new Set<object>();
+    const visit = (value: unknown, depth = 0) => {
+      if (!value || typeof value !== "object" || depth > 60 || visited.has(value)) return;
+      visited.add(value);
+      const node = value as Record<string, unknown>;
+      const pageInfo = node.page_info as Record<string, unknown> | undefined;
+      const cursor = cleanText(pageInfo?.end_cursor);
+      if (cursor && /^AQ/i.test(cursor)) reelsCursor = cursor;
+      const fbid = cleanText(node.fbid || node.fbid_v2);
+      if (fbid && /^\d{12,}$/.test(fbid)) discoveredReelsId = fbid;
+      for (const child of Object.values(node)) {
+        if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
+        else if (child && typeof child === "object") visit(child, depth + 1);
+      }
+    };
+    visit(payload);
+  };
+  const responseHandler = (response: Response) => {
+    if (!/instagram\.com\/(?:api\/)?graphql/i.test(response.url())) return;
+    const request = response.request();
+    const postData = request.postData();
+    if (postData) {
+      const params = new URLSearchParams(postData);
+      const friendlyName = params.get("fb_api_req_friendly_name") || "";
+      if (!graphqlTemplate || friendlyName.includes("ProfileReelsTabContentQuery")) graphqlTemplate = postData;
+      if (friendlyName.includes("ProfileReelsTabContentQuery") && params.get("doc_id")) {
+        pageQueryDocId = params.get("doc_id")!;
+      }
+    } else {
+      const docId = new URL(response.url()).searchParams.get("doc_id");
+      if (docId && /edge_owner_to_timeline_media/i.test(response.url()) === false) initialQueryDocId = docId;
+    }
+    const resourceType = request.resourceType();
+    if (resourceType !== "xhr" && resourceType !== "fetch") return;
+    let task: Promise<void>;
+    task = response.json()
+      .then((payload) => {
+        applyPayload(payload);
+        captureConnectionState(payload);
+      })
+      .catch(() => {})
+      .finally(() => pending.delete(task));
+    pending.add(task);
+  };
+  const settleResponses = async () => {
+    while (pending.size) await Promise.allSettled([...pending]);
+  };
+
+  page.on("response", responseHandler);
+  try {
+    const url = `${instagramHost}/${username}/reels/?hl=en&fresh=${Date.now()}`;
+    await gotoPublicPage(page, url, 30_000);
+    const routeState = await page.evaluate<{ cursor: string; reelsId: string }>(`
+      (() => {
+        const cursors = [];
+        const ids = [];
+        const visited = new Set();
+        const visit = (value, depth = 0) => {
+          if (!value || typeof value !== "object" || depth > 60 || visited.has(value)) return;
+          visited.add(value);
+          if (value.page_info && typeof value.page_info === "object") {
+            const cursor = String(value.page_info.end_cursor || "").trim();
+            if (/^AQ/i.test(cursor)) cursors.push(cursor);
+          }
+          const fbid = String(value.fbid || value.fbid_v2 || "").trim();
+          if (/^\\d{12,}$/.test(fbid)) ids.push(fbid);
+          for (const child of Object.values(value)) {
+            if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
+            else if (child && typeof child === "object") visit(child, depth + 1);
+          }
+        };
+        for (const script of Array.from(document.scripts)) {
+          const text = script.textContent || "";
+          try {
+            visit(JSON.parse(text));
+          } catch {
+            for (const match of text.matchAll(/\\?"end_cursor\\?":\\?"(AQ[^"\\\\]{20,})/g)) {
+              cursors.push(match[1].replace(/\\\\u003d/g, "="));
+            }
+            for (const match of text.matchAll(/\\?"(?:fbid|fbid_v2)\\?":\\?"(\\d{12,})/g)) ids.push(match[1]);
+          }
+        }
+        return { cursor: cursors[0] || "", reelsId: ids[0] || "" };
+      })()
+    `).catch(() => ({ cursor: "", reelsId: "" }));
+    if (routeState.cursor) reelsCursor = routeState.cursor;
+    if (routeState.reelsId) discoveredReelsId = routeState.reelsId;
+    let previousCount = 0;
+    let staleScrolls = 0;
+    const scrollLimit = Math.max(4, Math.min(20, Math.ceil(targets.size / 4) + 3));
+
+    for (let index = 0; index < scrollLimit; index += 1) {
+      await sleep(700);
+      await settleResponses();
+      const count = await page.locator('a[href*="/reel/"]').count().catch(() => 0);
+      staleScrolls = count > previousCount ? 0 : staleScrolls + 1;
+      previousCount = Math.max(previousCount, count);
+      if ([...targets.values()].every((candidate) => candidate._views_verified) || staleScrolls >= 2) break;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    }
+    await settleResponses();
+
+    const ownerId = cleanText([...targets.values()].find((candidate) => candidate._owner_id)?._owner_id);
+    const reelsId = cleanText([...targets.values()].find((candidate) => candidate._reels_id)?._reels_id) || discoveredReelsId;
+    if (ownerId) {
+      const payloads = await page.evaluate<unknown[], {
+        ownerId: string;
+        reelsId: string;
+        template: string;
+        initialDocId: string;
+        pageDocId: string;
+        pageLimit: number;
+        startCursor: string;
+      }>(async ({ ownerId, reelsId, template, initialDocId, pageDocId, pageLimit, startCursor }) => {
+        const payloads: unknown[] = [];
+        const parseJson = (text: string) => {
+          try {
+            return JSON.parse(text.replace(/^for\s*\(;;\);/, ""));
+          } catch {
+            return null;
+          }
+        };
+        const initialVariables = { id: ownerId, include_clips_attribution_info: false, first: 12 };
+        const initialUrl = "/graphql/query/?hl=en&doc_id=" + encodeURIComponent(initialDocId) +
+          "&variables=" + encodeURIComponent(JSON.stringify(initialVariables)) + "&_=" + Date.now();
+        const initialResponse = await fetch(initialUrl, {
+          cache: "no-store",
+          headers: { "cache-control": "no-cache", "pragma": "no-cache", "x-requested-with": "XMLHttpRequest" }
+        });
+        const initialPayload = parseJson(await initialResponse.text());
+        if (initialPayload) payloads.push(initialPayload);
+
+        const initialConnection = initialPayload?.data?.user?.edge_owner_to_timeline_media;
+        let after = startCursor || initialConnection?.page_info?.end_cursor || "";
+        const firstNode = initialConnection?.edges?.[0]?.node;
+        const firstOwner = firstNode?.owner;
+        const connectionId = reelsId || initialPayload?.data?.user?.fbid ||
+          firstOwner?.id || firstOwner?.__id || "";
+        if (!after || !connectionId) return payloads;
+
+        for (let index = 0; index < pageLimit && after; index += 1) {
+          const variables = { after, first: 4, id: connectionId };
+          const pageUrl = "/graphql/query/?hl=en&doc_id=" + encodeURIComponent(pageDocId) +
+            "&variables=" + encodeURIComponent(JSON.stringify(variables)) + "&_=" + Date.now();
+          let response = await fetch(pageUrl, {
+            cache: "no-store",
+            headers: {
+              "cache-control": "no-cache",
+              "pragma": "no-cache",
+              "x-requested-with": "XMLHttpRequest"
+            }
+          });
+          let payload = parseJson(await response.text());
+          let connection = payload?.data?.node?.polaris_clips_connection;
+
+          if (!connection && template) {
+            const body = new URLSearchParams(template);
+            body.set("fb_api_caller_class", "RelayModern");
+            body.set("fb_api_req_friendly_name", "PolarisLoggedOutDesktopWWWProfileReelsTabContentQuery_connection");
+            body.set("variables", JSON.stringify(variables));
+            body.set("doc_id", pageDocId);
+            const lsd = body.get("lsd") || "";
+            response = await fetch("/api/graphql", {
+              method: "POST",
+              cache: "no-store",
+              headers: {
+                "cache-control": "no-cache",
+                "content-type": "application/x-www-form-urlencoded",
+                "pragma": "no-cache",
+                "x-fb-lsd": lsd,
+                "x-requested-with": "XMLHttpRequest"
+              },
+              body
+            });
+            payload = parseJson(await response.text());
+            connection = payload?.data?.node?.polaris_clips_connection;
+          }
+          if (!payload) break;
+          payloads.push(payload);
+          if (!connection?.page_info?.has_next_page) break;
+          after = connection.page_info.end_cursor || "";
+        }
+        return payloads;
+      }, {
+        ownerId,
+        reelsId,
+        template: graphqlTemplate,
+        initialDocId: initialQueryDocId,
+        pageDocId: pageQueryDocId,
+        pageLimit: scrollLimit,
+        startCursor: reelsCursor
+      }).catch(() => []);
+      payloads.forEach(applyPayload);
+    }
+  } catch {
+    // Keep view values unverified when Instagram does not expose the live Reels response.
+  } finally {
+    page.off("response", responseHandler);
   }
 }
 
@@ -1089,6 +1390,19 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           if (value !== null && value !== undefined && value !== "") return value;
         }
         return null;
+      };
+      const largestMetric = (...values) => {
+        const parsed = values
+          .map((value) => {
+            if (typeof value === "number") return value;
+            const match = String(value || "").replace(/,/g, "").trim().match(/^(\d+(?:\.\d+)?)([KMB])?$/i);
+            if (!match) return Number.NaN;
+            const suffix = (match[2] || "").toUpperCase();
+            const multiplier = suffix === "K" ? 1e3 : suffix === "M" ? 1e6 : suffix === "B" ? 1e9 : 1;
+            return Number(match[1]) * multiplier;
+          })
+          .filter((value) => Number.isFinite(value) && value >= 0);
+        return parsed.length ? Math.max(...parsed) : null;
       };
       const firstImage = (node) => {
         if (!node || typeof node !== "object") return null;
@@ -1118,7 +1432,14 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           timestamp: firstValue(node.taken_at, node.taken_at_timestamp, node.caption && node.caption.created_at),
           likes: firstValue(node.like_count, node.edge_liked_by && node.edge_liked_by.count),
           commentsCount: firstValue(node.comment_count, node.edge_media_to_comment && node.edge_media_to_comment.count),
-          views: firstValue(node.play_count, node.view_count, node.video_view_count, node.ig_play_count),
+          views: largestMetric(
+            node.play_count,
+            node.view_count,
+            node.video_view_count,
+            node.ig_play_count,
+            node.clips_metadata && node.clips_metadata.play_count,
+            node.clips_metadata && node.clips_metadata.view_count
+          ),
           thumbnail: firstImage(node),
           caption: firstText(
             node.caption && node.caption.text,
@@ -1151,7 +1472,8 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           href,
           code: parsed.code,
           mediaType: parsed.type === "reel" ? "reel" : "post",
-          views: parsed.type === "reel" ? visibleMetric : null
+          views: parsed.type === "reel" ? visibleMetric : null,
+          viewsVerified: parsed.type === "reel" && visibleMetric !== null
         });
       }
 
@@ -1246,9 +1568,14 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     likes: countFromRaw(media.like_count),
     likes_hidden: Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts) &&
       countFromRaw(media.like_count) === null,
-    views: [media.play_count, media.view_count, media.video_view_count, media.ig_play_count]
-      .map(Number)
-      .find(Number.isFinite) ?? null,
+    views: largestCountFromRaw(
+      media.play_count,
+      media.view_count,
+      media.video_view_count,
+      media.ig_play_count,
+      (media.clips_metadata as Record<string, unknown> | undefined)?.play_count,
+      (media.clips_metadata as Record<string, unknown> | undefined)?.view_count
+    ),
     follower_count: countFromRaw(user.follower_count),
     follower_count_display: countFromRaw(user.follower_count) !== null
       ? countFromRaw(user.follower_count)!.toLocaleString("en-US")
@@ -1749,6 +2076,16 @@ function firstCountFromPatterns(text: string | null | undefined, patterns: RegEx
   return null;
 }
 
+function firstMetricDisplay(text: string | null | undefined, patterns: RegExp[]) {
+  if (!text) return null;
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    return `${match[1]}${(match[2] || "").toUpperCase()}`;
+  }
+  return null;
+}
+
 function cleanCommentText(value: string, limit = 70) {
   let text = value.split(/\s+/).join(" ").trim();
   for (let index = 0; index < 4; index += 1) {
@@ -1822,7 +2159,8 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
     description: string | null;
     thumbnail: string | null;
     bodyText: string;
-    embeddedViews: number[];
+    embeddedLikes: number[];
+    embeddedComments: number[];
     topComments: { username: string; text: string; timestamp?: string }[];
   }>(`
     (() => {
@@ -1935,23 +2273,19 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         if (topComments.length >= 5) break;
       }
 
-      const embeddedViews = [];
+      const embeddedLikes = [];
+      const embeddedComments = [];
       const shortcode = window.location.pathname.match(/\\/(?:p|reel)\\/([^/]+)/i)?.[1] || "";
-      const addView = (value) => {
+      const addMetric = (target, value) => {
         const number = Number(value);
-        if (Number.isFinite(number) && number >= 0) embeddedViews.push(number);
+        if (Number.isFinite(number) && number >= 0) target.push(number);
       };
       const visitMedia = (node, depth = 0) => {
         if (!node || typeof node !== "object" || depth > 60) return;
         const code = String(node.code || node.shortcode || "");
         if (shortcode && code === shortcode) {
-          addView(node.play_count);
-          addView(node.view_count);
-          addView(node.video_view_count);
-          addView(node.ig_play_count);
-          if (node.clips_metadata && typeof node.clips_metadata === "object") {
-            addView(node.clips_metadata.play_count);
-          }
+          addMetric(embeddedLikes, node.like_count);
+          addMetric(embeddedComments, node.comment_count);
         }
         for (const value of Object.values(node)) {
           if (Array.isArray(value)) value.forEach((item) => visitMedia(item, depth + 1));
@@ -1966,8 +2300,9 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         } catch {
           const shortcodeIndex = text.indexOf(shortcode);
           const nearby = text.slice(Math.max(0, shortcodeIndex - 6000), shortcodeIndex + 12000);
-          for (const match of nearby.matchAll(/"(?:play_count|view_count|video_view_count|ig_play_count)"\\s*:\\s*(\\d+)/g)) {
-            addView(match[1]);
+          for (const match of nearby.matchAll(/"(like_count|comment_count)"\\s*:\\s*(\\d+)/g)) {
+            if (match[1] === "like_count") addMetric(embeddedLikes, match[2]);
+            else addMetric(embeddedComments, match[2]);
           }
         }
       }
@@ -1977,31 +2312,31 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         description: pickMeta('meta[property="og:description"]'),
         thumbnail: pickMeta('meta[property="og:image"]'),
         bodyText: document.body ? document.body.innerText || "" : "",
-        embeddedViews,
+        embeddedLikes,
+        embeddedComments,
         topComments
       };
     })()
   `);
 
-  let likes = parseCount(raw.actionMetrics?.likes);
-  let commentsCount = parseCount(raw.actionMetrics?.comments);
+  let likes = raw.embeddedLikes?.length ? Math.max(...raw.embeddedLikes) : null;
+  let commentsCount = raw.embeddedComments?.length ? Math.max(...raw.embeddedComments) : null;
+  if (likes === null) likes = parseCount(raw.actionMetrics?.likes);
+  if (commentsCount === null) commentsCount = parseCount(raw.actionMetrics?.comments);
   if (likes === null) likes = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+likes?/i]);
   if (commentsCount === null) commentsCount = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+comments?/i]);
   const likesHidden = likes === null && Boolean(raw.actionMetrics?.likesHidden);
   const commentsHidden = commentsCount === null && Boolean(raw.actionMetrics?.commentsHidden);
-  let views = raw.embeddedViews?.length ? Math.max(...raw.embeddedViews) : null;
-  if (views === null) {
-    views = firstCountFromPatterns(raw.description, [
-      /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+views?/i,
-      /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+plays?/i
-    ]);
-  }
-  if (views === null) {
-    views = firstCountFromPatterns(raw.bodyText, [
-      /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+views?/i,
-      /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+plays?/i
-    ]);
-  }
+  const views = firstCountFromPatterns(raw.bodyText, [
+    /(?:^|\n)\s*([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+views?\s*(?:\n|$)/im,
+    /(?:^|\n)\s*([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+plays?\s*(?:\n|$)/im
+  ]);
+  const viewPatterns = [
+    /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+views?/i,
+    /([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+plays?/i
+  ];
+  const viewsDisplay = firstMetricDisplay(raw.bodyText, viewPatterns) ||
+    (views === null ? null : views.toLocaleString("en-US"));
 
   let topComments = cleanTopComments(raw.topComments || [], ownerHandle);
   if (!topComments.length) topComments = extractTopCommentsFromText(raw.bodyText, ownerHandle);
@@ -2012,6 +2347,7 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
     comments_count: commentsCount,
     comments_hidden: commentsHidden,
     views,
+    views_display: viewsDisplay,
     thumbnail_url: raw.thumbnail,
     top_comments: topComments
   };
@@ -2145,46 +2481,56 @@ async function getProfileInfo(handle: string, context: BrowserContext) {
 
     let followerCount: number | null = null;
     let followerCountDisplay: string | null = null;
-    const captureFollowerCount = (match: RegExpMatchArray | null | undefined) => {
+    const captureFollowerDisplay = (match: RegExpMatchArray | null | undefined) => {
       if (!match) return false;
       const display = `${match[1]}${(match[2] || "").toUpperCase()}`.replace(/\s+/g, "");
       const parsed = parseCount(display);
       if (parsed === null || parsed <= 0) return false;
-      followerCount = parsed;
+      if (followerCount === null) followerCount = parsed;
       followerCountDisplay = display;
       return true;
     };
-    const meta = await page.$('meta[property="og:description"], meta[name="description"]');
-    const content = meta ? await meta.getAttribute("content") : null;
-    const metaMatch = content?.match(/([\d,.]+)\s*([KMB]?)\s*followers?/i);
-    captureFollowerCount(metaMatch);
 
-    if (followerCount === null) {
-      const selectors = [
-        'a[href*="/followers/"]',
-        "section ul li a",
-        'li:has-text("followers")',
-        'span:has-text("followers")',
-        'div:has-text("followers")'
-      ];
-      for (const selector of selectors) {
-        try {
-          await page.waitForSelector(selector, { timeout: 2500 });
-          const element = await page.$(selector);
-          const text = element ? (await element.innerText()).trim() : "";
-          if (!/followers?/i.test(text)) continue;
-          const match = text.match(/([\d,.]+)\s*([KMB]?)\s*followers?/i);
-          if (captureFollowerCount(match)) break;
-        } catch {
-          continue;
-        }
-      }
+    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    captureFollowerDisplay(bodyText.match(/([\d,.]+)\s*([KMB]?)\s*followers?/i));
+
+    const liveProfile = await page.evaluate<{
+      followerCount: number | null;
+      displayName: string | null;
+    }>(`
+      (async () => {
+        const response = await fetch(
+          "/api/v1/users/web_profile_info/?username=" + encodeURIComponent(${JSON.stringify(handle)}) + "&_=" + Date.now(),
+          {
+            cache: "no-store",
+            headers: {
+              "cache-control": "no-cache",
+              "pragma": "no-cache",
+              "x-ig-app-id": "936619743392459",
+              "x-requested-with": "XMLHttpRequest"
+            }
+          }
+        );
+        if (!response.ok) return { followerCount: null, displayName: null };
+        const payload = await response.json();
+        const user = payload && payload.data && payload.data.user;
+        const count = Number(user && user.edge_followed_by && user.edge_followed_by.count);
+        return {
+          followerCount: Number.isFinite(count) && count >= 0 ? Math.trunc(count) : null,
+          displayName: user && user.full_name || null
+        };
+      })()
+    `).catch(() => ({ followerCount: null, displayName: null }));
+    if (liveProfile.followerCount !== null) followerCount = liveProfile.followerCount;
+    if (liveProfile.displayName) displayName = liveProfile.displayName;
+
+    if (!followerCountDisplay) {
+      const meta = await page.$('meta[property="og:description"], meta[name="description"]');
+      const content = meta ? await meta.getAttribute("content") : null;
+      captureFollowerDisplay(content?.match(/([\d,.]+)\s*([KMB]?)\s*followers?/i));
     }
-
-    if (followerCount === null) {
-      const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
-      const bodyMatch = bodyText.match(/([\d,.]+)\s*([KMB]?)\s*followers?/i);
-      captureFollowerCount(bodyMatch);
+    if (!followerCountDisplay && followerCount !== null) {
+      followerCountDisplay = followerCount.toLocaleString("en-US");
     }
 
     return { followerCount, followerCountDisplay, displayName };
@@ -2278,19 +2624,25 @@ async function scrapePublicBrowser(
         visualSample: visualCandidates.slice(0, 5).map((item) => ({
           post_url: item.post_url,
           username: item.username,
-          source: item._source
+          source: item._source,
+          views: item.views,
+          views_verified: item._views_verified
         }))
       }, null, 2));
     }
 
     const candidates: Candidate[] = [];
-    const seenCandidates = new Set<string>();
+    const candidateByIdentity = new Map<string, Candidate>();
     const addCandidate = (candidate: Candidate | undefined) => {
       if (!candidate?.post_url) return;
       if (!candidate.timestamp) candidate.timestamp = timestampFromPostUrl(candidate.post_url);
       const identity = postIdentity(candidate.post_url);
-      if (seenCandidates.has(identity)) return;
-      seenCandidates.add(identity);
+      const existing = candidateByIdentity.get(identity);
+      if (existing) {
+        mergeCandidateData(existing, candidate);
+        return;
+      }
+      candidateByIdentity.set(identity, candidate);
       candidates.push(candidate);
     };
 
@@ -2308,11 +2660,16 @@ async function scrapePublicBrowser(
       for (const candidate of visualCandidates.slice(0, candidateCount)) addCandidate(candidate);
     }
 
+    if (sortBy === "engagement" && normalized.mode === "profile" && normalized.username) {
+      await verifyPublicProfileReelViews(page, normalized.username, candidates);
+    }
+
     const candidatesInRange = candidates
       .filter((candidate) => timestampInRange(candidate.timestamp, range))
       .sort((a, b) => {
         if (sortBy === "engagement") {
-          const byViews = (b.views ?? -1) - (a.views ?? -1);
+          const byViews = (b._views_verified ? b.views ?? -1 : -1) -
+            (a._views_verified ? a.views ?? -1 : -1);
           if (byViews) return byViews;
         }
         const byTime = timestampValue(a.timestamp) - timestampValue(b.timestamp);
@@ -2357,22 +2714,19 @@ async function scrapePublicBrowser(
         if (!timestampInRange(data.timestamp, range)) return null;
 
         const stats = await extractPostStats(postPage, data._handle || data.username);
-        if (stats.top_comments.length) data.top_comments = stats.top_comments;
-        if (stats.likes !== null) {
-          data.likes = stats.likes;
-          data.likes_hidden = false;
-        } else if (stats.likes_hidden) {
-          data.likes = null;
-          data.likes_hidden = true;
+        data.top_comments = stats.top_comments;
+        data.likes = stats.likes;
+        data.likes_hidden = stats.likes === null && stats.likes_hidden;
+        data.comments_count = stats.comments_count;
+        data.comments_hidden = stats.comments_count === null && stats.comments_hidden;
+        if (stats.views !== null) {
+          data.views = stats.views;
+          data.views_display = stats.views_display;
+          data._views_verified = true;
+        } else if (!data._views_verified) {
+          data.views = null;
+          data.views_display = null;
         }
-        if (stats.comments_count !== null) {
-          data.comments_count = stats.comments_count;
-          data.comments_hidden = false;
-        } else if (stats.comments_hidden) {
-          data.comments_count = null;
-          data.comments_hidden = true;
-        }
-        if (stats.views !== null && data.views == null) data.views = stats.views;
         if (stats.thumbnail_url) data.thumbnail_url = stats.thumbnail_url;
 
         if (normalized.mode === "hashtag" && normalized.tag && !postMatchesTag(data, normalized.tag)) return null;

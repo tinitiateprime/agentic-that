@@ -440,7 +440,11 @@ function InstagramScraperConsole() {
       comments_count: "Comments"
     };
     return posts.length === 0 ? (
-      <div className="analysis-empty">No public {primaryLabels[primaryMetric].toLowerCase()} data was visible.</div>
+      <div className="analysis-empty">
+        {primaryMetric === "views"
+          ? "Instagram did not expose current public view counts for this run."
+          : `Instagram did not expose public ${primaryLabels[primaryMetric].toLowerCase()} for the analyzed posts.`}
+      </div>
     ) : (
       <div className="analysis-table-wrap">
         <table className="analysis-ranking-table">
@@ -486,10 +490,10 @@ function InstagramScraperConsole() {
                 </td>
                 <td className="is-primary-metric">
                   {primaryMetric === "views"
-                    ? post.views_display || formatNumber(post.views)
+                    ? formatNumber(post.views)
                     : formatPostMetric(post, primaryMetric)}
                 </td>
-                {primaryMetric !== "views" && <td>{post.views_display || formatNumber(post.views)}</td>}
+                {primaryMetric !== "views" && <td>{formatNumber(post.views)}</td>}
                 {primaryMetric !== "likes" && <td>{formatPostMetric(post, "likes")}</td>}
                 {primaryMetric !== "comments_count" && <td>{formatPostMetric(post, "comments_count")}</td>}
                 <td>{formatDate(post.timestamp)}</td>
@@ -592,8 +596,12 @@ function InstagramScraperConsole() {
             <div className="metric-grid">
               <article className="metric-card">
                 <span>Followers</span>
-                <strong>{analysis.follower_count_display || formatNumber(analysis.follower_count)}</strong>
-                <small>Exactly as Instagram displays it</small>
+                <strong>{formatNumber(analysis.follower_count)}</strong>
+                <small>
+                  {analysis.follower_count_display
+                    ? `Instagram displays ${analysis.follower_count_display}`
+                    : "Current public profile count"}
+                </small>
               </article>
               <article className="metric-card">
                 <span>Posts analyzed</span>
@@ -741,7 +749,7 @@ function InstagramScraperConsole() {
                       </td>
                       <td>{formatPostMetric(post, "comments_count")}</td>
                       <td>{formatPostMetric(post, "likes")}</td>
-                      <td>{post.follower_count_display || formatNumber(post.follower_count)}</td>
+                      <td>{formatNumber(post.follower_count)}</td>
                       <td>
                         <div className="comment-list">
                           {(post.top_comments || []).slice(0, 5).map((comment, commentIndex) => (
