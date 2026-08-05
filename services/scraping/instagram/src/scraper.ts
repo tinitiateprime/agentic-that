@@ -83,6 +83,7 @@ type NormalizedQuery = {
   startUrl: string;
   postUrl?: string;
   tag?: string;
+  username?: string;
 };
 
 type Candidate = Partial<InstagramPost> & {
@@ -111,6 +112,24 @@ type RawPageCandidate = {
   thumbnail?: string | null;
   caption?: string | null;
   rank?: number | null;
+};
+
+type PublicProfileBootstrap = {
+  ok: boolean;
+  status?: number;
+  userId?: string | null;
+  username?: string | null;
+  displayName?: string | null;
+  followerCount?: number | null;
+  items?: RawPageCandidate[];
+};
+
+type PublicProfileFeedPage = {
+  ok: boolean;
+  status?: number;
+  moreAvailable?: boolean;
+  nextMaxId?: string | null;
+  items?: RawPageCandidate[];
 };
 
 type PageSnapshot = {
@@ -176,7 +195,7 @@ function normalizeQuery(query: string): NormalizedQuery {
     const profileMatch = cleanPath.match(/^\/([A-Za-z0-9._]+)$/);
     if (profileMatch) {
       const username = profileMatch[1];
-      return { mode: "profile", label: `@${username}`, startUrl: `${instagramHost}/${username}/` };
+      return { mode: "profile", label: `@${username}`, startUrl: `${instagramHost}/${username}/`, username };
     }
     const tagMatch = cleanPath.match(/^\/explore\/tags\/([^/]+)/i);
     if (tagMatch) {
@@ -194,7 +213,7 @@ function normalizeQuery(query: string): NormalizedQuery {
 
   const username = raw.replace(/^@+/, "").trim();
   if (/^[A-Za-z0-9._]+$/.test(username)) {
-    return { mode: "profile", label: `@${username}`, startUrl: `${instagramHost}/${username}/` };
+    return { mode: "profile", label: `@${username}`, startUrl: `${instagramHost}/${username}/`, username };
   }
 
   const encodedKeyword = new URLSearchParams({ q: raw }).toString().replace(/^q=/, "");
@@ -874,6 +893,156 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
   };
 }
 
+async function collectPublicProfileFeedCandidates(
+  page: Page,
+  requestedHandle: string,
+  limit: number,
+  range: ScrapeRange
+) {
+  const handle = requestedHandle.replace(/^@+/, "").trim().toLowerCase();
+  if (!isInstagramHandle(handle)) return [];
+
+  const bootstrap: PublicProfileBootstrap = await page.evaluate<PublicProfileBootstrap>(`
+    (async () => {
+      const handle = ${JSON.stringify(handle)};
+      const response = await fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(handle), {
+        headers: {
+          "x-ig-app-id": "936619743392459",
+          "x-requested-with": "XMLHttpRequest"
+        }
+      });
+      if (!response.ok) return { ok: false, status: response.status };
+      const payload = await response.json();
+      const user = payload && payload.data && payload.data.user;
+      if (!user || !user.id) return { ok: false, status: response.status };
+      const nodes = ((user.edge_owner_to_timeline_media && user.edge_owner_to_timeline_media.edges) || [])
+        .map((edge) => edge && edge.node)
+        .filter(Boolean);
+      return {
+        ok: true,
+        status: response.status,
+        userId: String(user.id),
+        username: user.username || handle,
+        displayName: user.full_name || user.username || handle,
+        followerCount: user.edge_followed_by && Number(user.edge_followed_by.count),
+        items: nodes.map((node) => ({
+          code: node.shortcode,
+          username: (node.owner && node.owner.username) || user.username || handle,
+          displayName: user.full_name || user.username || handle,
+          mediaType: node.is_video ? 2 : 1,
+          productType: node.product_type || (node.is_video ? "clips" : "feed"),
+          timestamp: node.taken_at_timestamp,
+          likes: node.edge_liked_by && node.edge_liked_by.count,
+          commentsCount: node.edge_media_to_comment && node.edge_media_to_comment.count,
+          views: node.video_view_count,
+          thumbnail: node.display_url || node.thumbnail_src,
+          caption: node.edge_media_to_caption && node.edge_media_to_caption.edges &&
+            node.edge_media_to_caption.edges[0] && node.edge_media_to_caption.edges[0].node &&
+            node.edge_media_to_caption.edges[0].node.text
+        }))
+      };
+    })()
+  `).catch((): PublicProfileBootstrap => ({ ok: false }));
+
+  if (!bootstrap.ok) {
+    console.warn(`Instagram public profile feed bootstrap failed for ${handle} (${bootstrap.status || "unknown"}).`);
+    return [];
+  }
+
+  const profileHandle = cleanText(bootstrap.username).toLowerCase() || handle;
+  if (profileHandle !== handle) return [];
+  const followerCount = Number(bootstrap.followerCount);
+  const exactFollowerCount = Number.isFinite(followerCount) && followerCount >= 0 ? Math.trunc(followerCount) : null;
+  const followerCountDisplay = exactFollowerCount === null ? null : exactFollowerCount.toLocaleString("en-US");
+  const displayName = cleanText(bootstrap.displayName) || profileHandle;
+  const candidates: Candidate[] = [];
+  const seen = new Set<string>();
+  const addRawCandidate = (raw: RawPageCandidate, source: string) => {
+    const candidate = rawPageCandidateToCandidate(raw, source);
+    if (!candidate?.post_url) return;
+    const candidateHandle = cleanText(candidate._handle || candidate.username).toLowerCase();
+    if (candidateHandle && candidateHandle !== handle) return;
+    const identity = postIdentity(candidate.post_url);
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    candidate.username = handle;
+    candidate._handle = handle;
+    candidate.display_name = displayName;
+    candidate.profile_url = `${instagramHost}/${handle}/`;
+    candidate.follower_count = exactFollowerCount;
+    candidate.follower_count_display = followerCountDisplay;
+    candidates.push(candidate);
+  };
+
+  for (const item of bootstrap.items || []) addRawCandidate(item, "public profile bootstrap");
+
+  const userId = cleanText(bootstrap.userId);
+  if (!userId) return candidates.slice(0, limit);
+  let maxId = "";
+  const pageLimit = Math.max(2, Math.min(16, Math.ceil(limit / 12) + 2));
+  for (let pageIndex = 0; pageIndex < pageLimit && candidates.length < limit; pageIndex += 1) {
+    const feed: PublicProfileFeedPage = await page.evaluate<PublicProfileFeedPage>(`
+      (async () => {
+        const userId = ${JSON.stringify(userId)};
+        const maxId = ${JSON.stringify(maxId)};
+        const params = new URLSearchParams({ count: "12" });
+        if (maxId) params.set("max_id", maxId);
+        const response = await fetch("/api/v1/feed/user/" + encodeURIComponent(userId) + "/?" + params, {
+          headers: {
+            "x-ig-app-id": "936619743392459",
+            "x-requested-with": "XMLHttpRequest"
+          }
+        });
+        if (!response.ok) return { ok: false, status: response.status };
+        const payload = await response.json();
+        const thumbnail = (media) => {
+          const own = media && media.image_versions2 && media.image_versions2.candidates;
+          if (own && own[0] && own[0].url) return own[0].url;
+          const first = media && media.carousel_media && media.carousel_media[0];
+          const carousel = first && first.image_versions2 && first.image_versions2.candidates;
+          return carousel && carousel[0] && carousel[0].url || null;
+        };
+        return {
+          ok: true,
+          status: response.status,
+          moreAvailable: Boolean(payload.more_available),
+          nextMaxId: payload.next_max_id || null,
+          items: (payload.items || []).map((media) => ({
+            code: media.code,
+            username: media.user && media.user.username,
+            displayName: media.user && media.user.full_name,
+            mediaType: media.media_type,
+            productType: media.product_type,
+            timestamp: media.taken_at,
+            likes: media.like_count,
+            commentsCount: media.comment_count,
+            views: media.play_count || media.view_count || media.video_view_count || media.ig_play_count,
+            thumbnail: thumbnail(media),
+            caption: media.caption && media.caption.text
+          }))
+        };
+      })()
+    `).catch((): PublicProfileFeedPage => ({ ok: false }));
+
+    if (!feed.ok || !feed.items?.length) {
+      console.warn(`Instagram public profile feed page failed for ${handle} (${feed.status || "unknown"}).`);
+      break;
+    }
+    for (const item of feed.items) addRawCandidate(item, "public profile feed");
+
+    const feedTimes = feed.items
+      .map((item) => timestampValue(timestampFromRaw(item.timestamp)))
+      .filter((value) => value > 0);
+    if (range.collectionMode === "range" && feedTimes.length && feedTimes.every((value) => value < range.start.getTime())) {
+      break;
+    }
+    maxId = cleanText(feed.nextMaxId);
+    if (!feed.moreAvailable || !maxId) break;
+  }
+
+  return candidates.slice(0, limit);
+}
+
 function mergeCandidateData(target: Candidate, source: Candidate) {
   for (const key of [
     "username",
@@ -1391,6 +1560,25 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
     } catch {
       const embeddedOnly = await collectCurrentPageCandidates(page, source.label);
       for (const candidate of embeddedOnly) addCandidate(candidate);
+      if (!embeddedOnly.length) {
+        const diagnostic = await page.evaluate<{ title: string; description: string; body: string }>(`
+          (() => ({
+            title: document.title || "",
+            description: document.querySelector('meta[name="description"]')?.content || "",
+            body: (document.body?.innerText || "").replace(/\\s+/g, " ").slice(0, 180)
+          }))()
+        `).catch((): { title: string; description: string; body: string } => ({
+          title: "",
+          description: "",
+          body: ""
+        }));
+        console.warn("Instagram discovery returned no candidates", JSON.stringify({
+          source: source.label,
+          requestedUrl: source.url,
+          finalUrl: page.url(),
+          ...diagnostic
+        }));
+      }
       continue;
     }
     if (source.label.includes("topic")) {
@@ -2047,6 +2235,18 @@ async function scrapePublicBrowser(
       visualCandidates.push(...await collectLatestCandidates(page, discoveryQuery, candidateCount, maxResults));
     }
 
+    if (normalized.mode === "profile" && normalized.username) {
+      const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
+      if (process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
+        visualCandidates.push(...await collectPublicProfileFeedCandidates(
+          page,
+          normalized.username,
+          candidateCount,
+          range
+        ));
+      }
+    }
+
     if (normalized.mode === "hashtag" && normalized.tag) {
       const recentPage = await context.newPage();
       try {
@@ -2176,6 +2376,10 @@ async function scrapePublicBrowser(
         if (stats.thumbnail_url) data.thumbnail_url = stats.thumbnail_url;
 
         if (normalized.mode === "hashtag" && normalized.tag && !postMatchesTag(data, normalized.tag)) return null;
+        if (normalized.mode === "profile" && normalized.username) {
+          const extractedHandle = cleanText(data._handle || data.username).toLowerCase();
+          if (extractedHandle !== normalized.username.toLowerCase()) return null;
+        }
 
         return data.post_url ? data : null;
       } finally {
@@ -2205,8 +2409,8 @@ async function scrapePublicBrowser(
       if (handle) {
         const profile = profileCache.get(handle);
         if (profile) {
-          data.follower_count = profile.followerCount;
-          data.follower_count_display = profile.followerCountDisplay;
+          if (profile.followerCount !== null) data.follower_count = profile.followerCount;
+          if (profile.followerCountDisplay) data.follower_count_display = profile.followerCountDisplay;
           data.display_name = profile.displayName || data.display_name || handle;
           data.profile_url = `${instagramHost}/${handle}/`;
         }
@@ -2316,7 +2520,8 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
       normalized = {
         mode: "profile",
         label: `@${handle}`,
-        startUrl: `${instagramHost}/${handle}/`
+        startUrl: `${instagramHost}/${handle}/`,
+        username: handle
       };
       discoveryQuery = `@${handle}`;
     }

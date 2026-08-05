@@ -33,6 +33,8 @@ Jobs and completed runs use separate Netlify Blob keys, so concurrent users cann
 
 The scraper does not use Instagram API tokens, OAuth, shared accounts, user accounts, or saved Instagram sessions. It opens public pages with Playwright, dismisses public signup/cookie prompts, extracts visible post data, then opens the public owner profile to read follower count when Instagram exposes it.
 
+Netlify datacenter browsers do not always receive the public profile grid links that a home browser sees. For Profile and Profile URL jobs, the scraper therefore also reads the anonymous public profile/feed requests made by Instagram's logged-out page, merges those candidates with the visible grid, and opens each post page normally. Every extracted post is checked against the requested profile username before it can enter the dataset.
+
 ## Collection modes
 
 `collection_mode: "latest"` returns publicly discoverable posts newest-first. `collection_mode: "range"` supports inclusive date, month, and year ranges for profile, profile URL, and keyword/hashtag inputs. The range follows the selected direction: August to June returns August, July, then June, while June to August returns June, July, then August. Calendar boundaries use `timezone_offset_minutes`.

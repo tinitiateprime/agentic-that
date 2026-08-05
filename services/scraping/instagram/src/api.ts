@@ -148,6 +148,13 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
     timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     sortBy: input.sortBy
   });
+  if (
+    !scrape.results.length &&
+    input.collectionMode !== "range" &&
+    ["profile", "profile_url"].includes(input.requestedMode)
+  ) {
+    throw new Error("Instagram did not expose public posts for this profile. Try again in a minute.");
+  }
   return store.saveRun({
     query: scrape.query,
     requestedQuery: input.requestedQuery,
@@ -181,7 +188,8 @@ export async function executeInstagramJob(jobId: string) {
   if (current.status === "complete" || current.status === "failed") return jobResponse(current, store);
   if (current.status === "running") {
     const age = Date.now() - new Date(current.updatedAt).getTime();
-    if (age < 14 * 60_000) return jobResponse(current, store);
+    // Netlify retries a failed background invocation after about one minute.
+    if (age < 55_000) return jobResponse(current, store);
   }
 
   const running = await store.updateJob(jobId, { status: "running", error: undefined });

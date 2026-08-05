@@ -333,6 +333,7 @@ function InstagramScraperConsole() {
       setWorkingStatus("Scraping public pages");
       let data = await apiPost(`/jobs/${jobId}/run`, {});
       const deadline = Date.now() + 16 * 60_000;
+      let pollingFailures = 0;
       while (data?.job?.status !== "complete") {
         if (data?.job?.status === "failed") {
           throw new Error(data.job.error || "Scrape failed");
@@ -342,7 +343,14 @@ function InstagramScraperConsole() {
         }
         setWorkingStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        data = await apiGetRequired(`/jobs/${jobId}`);
+        try {
+          data = await apiGetRequired(`/jobs/${jobId}`);
+          pollingFailures = 0;
+        } catch (pollError) {
+          pollingFailures += 1;
+          if (pollingFailures >= 5) throw pollError;
+          setWorkingStatus("Reconnecting to background job");
+        }
       }
       setResults(data?.results || []);
       setAnalysis(data?.analysis || data?.run?.analysis || null);
