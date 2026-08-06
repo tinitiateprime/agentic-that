@@ -32,6 +32,7 @@ export type InstagramPost = {
   likes_hidden: boolean;
   views: number | null;
   views_display: string | null;
+  views_exact: boolean;
   follower_count: number | null;
   follower_count_display: string | null;
   engagement_score: number | null;
@@ -93,6 +94,7 @@ type Candidate = Partial<InstagramPost> & {
   _source?: string | null;
   _source_rank?: number | null;
   _views_verified?: boolean;
+  _views_exact?: boolean;
 };
 
 type ScrapeResult = {
@@ -113,6 +115,7 @@ type RawPageCandidate = {
   commentsCount?: string | number | null;
   views?: string | number | null;
   viewsVerified?: boolean;
+  viewsExact?: boolean;
   thumbnail?: string | null;
   caption?: string | null;
   rank?: number | null;
@@ -505,6 +508,23 @@ function parseCount(text?: string | null) {
   return Math.trunc(number);
 }
 
+export function viewDisplayMatchesExactCount(display: string | null | undefined, exactCount: number) {
+  if (!display || !Number.isFinite(exactCount) || exactCount < 0) return true;
+  const normalized = display.replace(/,/g, "").trim();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)\s*([KMB]?)$/i);
+  if (!match) return true;
+
+  const suffix = (match[2] || "").toUpperCase();
+  const multiplier = suffix === "B" ? 1_000_000_000 : suffix === "M" ? 1_000_000 : suffix === "K" ? 1_000 : 1;
+  const displayedValue = Number(match[1]) * multiplier;
+  if (!Number.isFinite(displayedValue)) return true;
+  if (!suffix) return exactCount === displayedValue;
+
+  const decimalPlaces = match[1].split(".")[1]?.length || 0;
+  const displayStep = multiplier / (10 ** decimalPlaces);
+  return Math.abs(exactCount - displayedValue) < displayStep;
+}
+
 function timestampValue(timestamp?: string | null) {
   if (!timestamp) return 0;
   const value = new Date(timestamp.replace("Z", "+00:00")).getTime();
@@ -605,7 +625,7 @@ function timestampInRange(timestamp: string | null | undefined, range: ScrapeRan
 
 function engagementValues(post: Pick<
   InstagramPost,
-  "likes" | "likes_hidden" | "comments_count" | "comments_hidden" | "views" | "follower_count"
+  "likes" | "likes_hidden" | "comments_count" | "comments_hidden" | "views" | "views_exact" | "follower_count"
 >) {
   if (post.views === null) return { score: null, rate: null };
   const views = post.views;
@@ -613,7 +633,7 @@ function engagementValues(post: Pick<
     post.likes !== null && post.comments_count !== null;
   return {
     score: views,
-    rate: metricsVisible && views > 0
+    rate: metricsVisible && post.views_exact && views > 0
       ? Math.round(((post.likes! + post.comments_count!) / views) * 10_000) / 100
       : null
   };
@@ -698,7 +718,8 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
       .filter((post) => !post.likes_hidden && !post.comments_hidden && post.likes !== null && post.comments_count !== null)
       .map((post) => ((post.likes! + post.comments_count!) / followerCount) * 100)
     : [];
-  const verifiedViewPosts = results.filter((post) => post.views !== null && post.views !== undefined).length;
+  const visibleViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null).length;
+  const exactViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null && post.views_exact).length;
 
   return {
     username: firstProfile?.username ?? null,
@@ -711,7 +732,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
     averages: {
       likes: roundedAverage(results.map((post) => post.likes)),
       comments: roundedAverage(results.map((post) => post.comments_count)),
-      views: roundedAverage(results.map((post) => post.views))
+      views: roundedAverage(results.filter((post) => post.views_exact).map((post) => post.views))
     },
     engagement_rate: engagementRates.length
       ? Math.round((engagementRates.reduce((sum, value) => sum + value, 0) / engagementRates.length) * 100) / 100
@@ -720,7 +741,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
       posts_last_30_days: postsLast30Days,
       posts_per_week: Math.round((postsLast30Days / 30) * 700) / 100
     },
-    top_watched: rankedPosts(results, "views", maxResults),
+    top_watched: rankedPosts(results.filter((post) => /\/reel\//i.test(post.post_url)), "views", maxResults),
     top_liked: rankedPosts(results, "likes", maxResults),
     top_discussed: rankedPosts(results, "comments_count", maxResults),
     patterns: {
@@ -733,7 +754,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
     accuracy: {
       source: "Fresh public Instagram pages",
       followers: "Exact public profile count captured for this run",
-      views: `Exact public views verified for ${verifiedViewPosts} of ${results.length} analyzed posts`,
+      views: `${visibleViewPosts} current public Reels view labels captured; ${exactViewPosts} included exact counts`,
       missing_metrics: "Unverified values are shown as N/A"
     }
   };
@@ -833,7 +854,8 @@ function candidateToData(candidate: Candidate): Candidate {
     _reels_id: candidate._reels_id ?? null,
     _source: candidate._source ?? null,
     _source_rank: candidate._source_rank ?? null,
-    _views_verified: candidate._views_verified ?? false
+    _views_verified: candidate._views_verified ?? false,
+    _views_exact: candidate._views_exact ?? false
   };
 }
 
@@ -906,7 +928,8 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     _handle: handle,
     _source: sourceLabel,
     _source_rank: typeof raw.rank === "number" && Number.isFinite(raw.rank) ? raw.rank : null,
-    _views_verified: raw.viewsVerified === true
+    _views_verified: raw.viewsVerified === true,
+    _views_exact: raw.viewsExact === true
   };
 }
 
@@ -1082,7 +1105,17 @@ async function collectPublicProfileFeedCandidates(
   return candidates.slice(0, limit);
 }
 
-function mergeCandidateData(target: Candidate, source: Candidate) {
+export function mergeCandidateData(target: Candidate, source: Candidate) {
+  if (
+    target.post_url &&
+    source.post_url &&
+    postIdentity(target.post_url) === postIdentity(source.post_url) &&
+    /\/reel\//i.test(source.post_url) &&
+    !/\/reel\//i.test(target.post_url)
+  ) {
+    target.post_url = source.post_url;
+  }
+
   for (const key of [
     "username",
     "display_name",
@@ -1104,10 +1137,24 @@ function mergeCandidateData(target: Candidate, source: Candidate) {
   if (target._source_rank == null || (source._source_rank != null && source._source_rank < target._source_rank)) {
     target._source_rank = source._source_rank;
   }
-  if (source._views_verified && source.views !== null && source.views !== undefined) {
-    target.views = source.views;
-    target.views_display = source.views_display;
+  const sourceHasCurrentViews = source._views_verified && source.views !== null && source.views !== undefined;
+  const preferSourceViews = sourceHasCurrentViews && (
+    !target._views_verified ||
+    source._views_exact && !target._views_exact ||
+    source._source === "profile reels"
+  );
+  if (preferSourceViews) {
+    const reconciled = source._views_exact
+      ? reconcileVisibleReelView(target._views_verified ? target.views_display : null, target.views, source.views!)
+      : {
+          views: source.views!,
+          views_display: source.views_display ?? null,
+          views_exact: false
+        };
+    target.views = reconciled.views;
+    target.views_display = reconciled.views_display;
     target._views_verified = true;
+    target._views_exact = reconciled.views_exact;
   }
 }
 
@@ -1141,6 +1188,25 @@ export function currentReelViewsFromPayload(payload: unknown) {
   return metrics;
 }
 
+export function reconcileVisibleReelView(
+  visibleDisplay: string | null | undefined,
+  visibleCount: number | null | undefined,
+  exactCount: number
+) {
+  if (visibleDisplay && !viewDisplayMatchesExactCount(visibleDisplay, exactCount)) {
+    return {
+      views: visibleCount ?? parseCount(visibleDisplay),
+      views_display: visibleDisplay,
+      views_exact: false
+    };
+  }
+  return {
+    views: exactCount,
+    views_display: exactCount.toLocaleString("en-US"),
+    views_exact: true
+  };
+}
+
 async function verifyPublicProfileReelViews(page: Page, username: string, candidates: Candidate[]) {
   const targets = new Map<string, Candidate>();
   for (const candidate of candidates) {
@@ -1159,9 +1225,11 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
     for (const [code, views] of currentReelViewsFromPayload(payload)) {
       const candidate = targets.get(code);
       if (!candidate) continue;
-      candidate.views = views;
-      candidate.views_display = views.toLocaleString("en-US");
+      const reconciled = reconcileVisibleReelView(candidate.views_display, candidate.views, views);
+      candidate.views = reconciled.views;
+      candidate.views_display = reconciled.views_display;
       candidate._views_verified = true;
+      candidate._views_exact = reconciled.views_exact;
     }
   };
   const captureConnectionState = (payload: unknown) => {
@@ -1423,6 +1491,14 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
         const code = firstText(node.code, node.shortcode);
         if (!code || !/^[A-Za-z0-9_-]{6,}$/.test(code)) return null;
         const user = node.user || node.owner || node.taken_by || node.owner_user || {};
+        const views = largestMetric(
+          node.play_count,
+          node.view_count,
+          node.video_view_count,
+          node.ig_play_count,
+          node.clips_metadata && node.clips_metadata.play_count,
+          node.clips_metadata && node.clips_metadata.view_count
+        );
         return {
           code,
           username: firstText(user.username, user.user_name, user.handle),
@@ -1432,14 +1508,9 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           timestamp: firstValue(node.taken_at, node.taken_at_timestamp, node.caption && node.caption.created_at),
           likes: firstValue(node.like_count, node.edge_liked_by && node.edge_liked_by.count),
           commentsCount: firstValue(node.comment_count, node.edge_media_to_comment && node.edge_media_to_comment.count),
-          views: largestMetric(
-            node.play_count,
-            node.view_count,
-            node.video_view_count,
-            node.ig_play_count,
-            node.clips_metadata && node.clips_metadata.play_count,
-            node.clips_metadata && node.clips_metadata.view_count
-          ),
+          views,
+          viewsVerified: views !== null,
+          viewsExact: views !== null,
           thumbnail: firstImage(node),
           caption: firstText(
             node.caption && node.caption.text,
@@ -1473,7 +1544,8 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           code: parsed.code,
           mediaType: parsed.type === "reel" ? "reel" : "post",
           views: parsed.type === "reel" ? visibleMetric : null,
-          viewsVerified: parsed.type === "reel" && visibleMetric !== null
+          viewsVerified: parsed.type === "reel" && visibleMetric !== null,
+          viewsExact: false
         });
       }
 
@@ -1556,6 +1628,15 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
   const caption = media.caption && typeof media.caption === "object"
     ? cleanCaptionText((media.caption as Record<string, unknown>).text as string | undefined)
     : null;
+  const likesHidden = Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts);
+  const views = largestCountFromRaw(
+    media.play_count,
+    media.view_count,
+    media.video_view_count,
+    media.ig_play_count,
+    (media.clips_metadata as Record<string, unknown> | undefined)?.play_count,
+    (media.clips_metadata as Record<string, unknown> | undefined)?.view_count
+  );
 
   return {
     username,
@@ -1565,17 +1646,9 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     thumbnail_url: publicMediaThumbnail(media),
     comments_count: countFromRaw(media.comment_count),
     comments_hidden: Boolean(media.comments_disabled) && countFromRaw(media.comment_count) === null,
-    likes: countFromRaw(media.like_count),
-    likes_hidden: Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts) &&
-      countFromRaw(media.like_count) === null,
-    views: largestCountFromRaw(
-      media.play_count,
-      media.view_count,
-      media.video_view_count,
-      media.ig_play_count,
-      (media.clips_metadata as Record<string, unknown> | undefined)?.play_count,
-      (media.clips_metadata as Record<string, unknown> | undefined)?.view_count
-    ),
+    likes: likesHidden ? null : countFromRaw(media.like_count),
+    likes_hidden: likesHidden,
+    views,
     follower_count: countFromRaw(user.follower_count),
     follower_count_display: countFromRaw(user.follower_count) !== null
       ? countFromRaw(user.follower_count)!.toLocaleString("en-US")
@@ -1583,7 +1656,9 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     top_comments: publicMediaTopComments(media, username),
     timestamp: new Date(takenAt * 1000).toISOString(),
     caption,
-    _handle: username
+    _handle: username,
+    _views_verified: views !== null,
+    _views_exact: views !== null
   };
 }
 
@@ -2065,6 +2140,20 @@ async function waitForOpenPost(page: Page) {
   await sleep(700);
 }
 
+async function isExpectedPublicPost(page: Page, expectedUrl: string) {
+  const expectedCode = postIdentity(expectedUrl);
+  return page.evaluate<boolean>(`
+    ((expectedCode) => {
+      const codeFromUrl = (value) => String(value || "").match(/\\/(?:p|reel)\\/([^/?#]+)/i)?.[1] || "";
+      const canonical = document.querySelector('link[rel="canonical"]')?.href || "";
+      const openCode = codeFromUrl(canonical) || codeFromUrl(window.location.href);
+      const pageText = (document.body?.innerText || "").replace(/\\s+/g, " ").slice(0, 1200);
+      const unavailable = /page (?:isn't|is not) available|page not found|link you followed may be broken/i.test(pageText);
+      return !unavailable && openCode === expectedCode;
+    })(${JSON.stringify(expectedCode)})
+  `).catch(() => false);
+}
+
 function firstCountFromPatterns(text: string | null | undefined, patterns: RegExp[]) {
   if (!text) return null;
   for (const pattern of patterns) {
@@ -2084,6 +2173,38 @@ function firstMetricDisplay(text: string | null | undefined, patterns: RegExp[])
     return `${match[1]}${(match[2] || "").toUpperCase()}`;
   }
   return null;
+}
+
+export function resolvePublicPostCounts(raw: {
+  actionMetrics?: {
+    likes?: string | null;
+    comments?: string | null;
+    likesHidden?: boolean;
+    commentsHidden?: boolean;
+  };
+  description?: string | null;
+  embeddedLikes?: number[];
+  embeddedComments?: number[];
+  embeddedLikesHidden?: boolean;
+}) {
+  const descriptionLikes = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+likes?/i]);
+  const descriptionComments = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+comments?/i]);
+  const likesHiddenByInstagram = Boolean(raw.embeddedLikesHidden || raw.actionMetrics?.likesHidden);
+  const likes = likesHiddenByInstagram
+    ? null
+    : raw.embeddedLikes?.length
+      ? Math.max(...raw.embeddedLikes)
+      : descriptionLikes ?? parseCount(raw.actionMetrics?.likes);
+  const commentsCount = raw.embeddedComments?.length
+    ? Math.max(...raw.embeddedComments)
+    : descriptionComments ?? parseCount(raw.actionMetrics?.comments);
+
+  return {
+    likes,
+    likes_hidden: likes === null && likesHiddenByInstagram,
+    comments_count: commentsCount,
+    comments_hidden: commentsCount === null && Boolean(raw.actionMetrics?.commentsHidden)
+  };
 }
 
 function cleanCommentText(value: string, limit = 70) {
@@ -2161,6 +2282,7 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
     bodyText: string;
     embeddedLikes: number[];
     embeddedComments: number[];
+    embeddedLikesHidden: boolean;
     topComments: { username: string; text: string; timestamp?: string }[];
   }>(`
     (() => {
@@ -2236,13 +2358,13 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         }
 
         const labels = textNodes.filter(inSection).map((item) => item.text.trim());
+        const bareLikesLabel = labels.some((text) => /^likes?$/i.test(text));
+        const bareCommentsLabel = labels.some((text) => /^comments?$/i.test(text));
         const hasAssignedCount = Boolean(actionMetrics.likes || actionMetrics.comments);
-        actionMetrics.likesHidden = !actionMetrics.likes && (
-          labels.some((text) => /^likes?$/i.test(text)) || Boolean(mainLike && hasAssignedCount)
-        );
-        actionMetrics.commentsHidden = !actionMetrics.comments && (
-          labels.some((text) => /^comments?$/i.test(text)) || Boolean(mainComment && hasAssignedCount)
-        );
+        if (bareLikesLabel) actionMetrics.likes = null;
+        if (bareCommentsLabel) actionMetrics.comments = null;
+        actionMetrics.likesHidden = bareLikesLabel || (!actionMetrics.likes && Boolean(mainLike && hasAssignedCount));
+        actionMetrics.commentsHidden = bareCommentsLabel || (!actionMetrics.comments && Boolean(mainComment && hasAssignedCount));
       }
 
       const topComments = [];
@@ -2275,6 +2397,7 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
 
       const embeddedLikes = [];
       const embeddedComments = [];
+      let embeddedLikesHidden = false;
       const shortcode = window.location.pathname.match(/\\/(?:p|reel)\\/([^/]+)/i)?.[1] || "";
       const addMetric = (target, value) => {
         const number = Number(value);
@@ -2284,7 +2407,9 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         if (!node || typeof node !== "object" || depth > 60) return;
         const code = String(node.code || node.shortcode || "");
         if (shortcode && code === shortcode) {
-          addMetric(embeddedLikes, node.like_count);
+          const likesHidden = Boolean(node.like_and_view_counts_disabled || node.hide_like_and_view_counts);
+          embeddedLikesHidden = embeddedLikesHidden || likesHidden;
+          if (!likesHidden) addMetric(embeddedLikes, node.like_count);
           addMetric(embeddedComments, node.comment_count);
         }
         for (const value of Object.values(node)) {
@@ -2298,12 +2423,7 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         try {
           visitMedia(JSON.parse(text));
         } catch {
-          const shortcodeIndex = text.indexOf(shortcode);
-          const nearby = text.slice(Math.max(0, shortcodeIndex - 6000), shortcodeIndex + 12000);
-          for (const match of nearby.matchAll(/"(like_count|comment_count)"\\s*:\\s*(\\d+)/g)) {
-            if (match[1] === "like_count") addMetric(embeddedLikes, match[2]);
-            else addMetric(embeddedComments, match[2]);
-          }
+          // Non-JSON fragments can contain adjacent posts, so metrics from them are not trustworthy.
         }
       }
 
@@ -2314,19 +2434,13 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
         bodyText: document.body ? document.body.innerText || "" : "",
         embeddedLikes,
         embeddedComments,
+        embeddedLikesHidden,
         topComments
       };
     })()
   `);
 
-  let likes = raw.embeddedLikes?.length ? Math.max(...raw.embeddedLikes) : null;
-  let commentsCount = raw.embeddedComments?.length ? Math.max(...raw.embeddedComments) : null;
-  if (likes === null) likes = parseCount(raw.actionMetrics?.likes);
-  if (commentsCount === null) commentsCount = parseCount(raw.actionMetrics?.comments);
-  if (likes === null) likes = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+likes?/i]);
-  if (commentsCount === null) commentsCount = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+comments?/i]);
-  const likesHidden = likes === null && Boolean(raw.actionMetrics?.likesHidden);
-  const commentsHidden = commentsCount === null && Boolean(raw.actionMetrics?.commentsHidden);
+  const counts = resolvePublicPostCounts(raw);
   const views = firstCountFromPatterns(raw.bodyText, [
     /(?:^|\n)\s*([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+views?\s*(?:\n|$)/im,
     /(?:^|\n)\s*([\d,.]+(?:\.\d+)?)\s*([KMB]?)\s+plays?\s*(?:\n|$)/im
@@ -2342,10 +2456,10 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
   if (!topComments.length) topComments = extractTopCommentsFromText(raw.bodyText, ownerHandle);
 
   return {
-    likes,
-    likes_hidden: likesHidden,
-    comments_count: commentsCount,
-    comments_hidden: commentsHidden,
+    likes: counts.likes,
+    likes_hidden: counts.likes_hidden,
+    comments_count: counts.comments_count,
+    comments_hidden: counts.comments_hidden,
     views,
     views_display: viewsDisplay,
     thumbnail_url: raw.thumbnail,
@@ -2569,11 +2683,11 @@ async function scrapePublicBrowser(
       const reelsPage = await context.newPage();
       try {
         const perGridLimit = Math.max(12, Math.ceil(candidateCount / 2));
-        const [profileCandidates, reelCandidates] = await Promise.all([
-          collectLatestCandidates(page, discoveryQuery, perGridLimit, maxResults),
-          collectLatestCandidates(reelsPage, discoveryQuery, perGridLimit, maxResults, true)
+        const [reelCandidates, profileCandidates] = await Promise.all([
+          collectLatestCandidates(reelsPage, discoveryQuery, perGridLimit, maxResults, true),
+          collectLatestCandidates(page, discoveryQuery, perGridLimit, maxResults)
         ]);
-        visualCandidates.push(...profileCandidates, ...reelCandidates);
+        visualCandidates.push(...reelCandidates, ...profileCandidates);
       } finally {
         await reelsPage.close().catch(() => {});
       }
@@ -2700,6 +2814,7 @@ async function scrapePublicBrowser(
 
         await gotoPublicPage(postPage, postUrl, 30_000);
         await waitForOpenPost(postPage);
+        if (!await isExpectedPublicPost(postPage, postUrl)) return null;
         const data = await extractPostMeta(postPage, postUrl);
         const target = data as Record<string, unknown>;
         for (const [key, value] of Object.entries(candidate) as [keyof Candidate, unknown][]) {
@@ -2719,10 +2834,11 @@ async function scrapePublicBrowser(
         data.likes_hidden = stats.likes === null && stats.likes_hidden;
         data.comments_count = stats.comments_count;
         data.comments_hidden = stats.comments_count === null && stats.comments_hidden;
-        if (stats.views !== null) {
+        if (stats.views !== null && !data._views_verified) {
           data.views = stats.views;
           data.views_display = stats.views_display;
           data._views_verified = true;
+          data._views_exact = false;
         } else if (!data._views_verified) {
           data.views = null;
           data.views_display = null;
@@ -2781,6 +2897,7 @@ async function scrapePublicBrowser(
         likes_hidden: data.likes_hidden ?? false,
         views: sortBy === "engagement" ? data.views ?? null : null,
         views_display: sortBy === "engagement" ? data.views_display ?? null : null,
+        views_exact: sortBy === "engagement" && data._views_exact === true,
         follower_count: data.follower_count ?? null,
         follower_count_display: data.follower_count_display ?? null,
         engagement_score: null,

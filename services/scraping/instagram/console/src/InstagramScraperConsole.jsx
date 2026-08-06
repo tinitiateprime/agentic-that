@@ -156,7 +156,8 @@ const baseExportColumns = [
 const engagementExportColumns = [
   ...baseExportColumns,
   "views",
-  "views_display"
+  "views_display",
+  "views_exact"
 ];
 
 async function apiGet(path) {
@@ -392,6 +393,8 @@ function InstagramScraperConsole() {
     return hidden ? "Hidden" : formatNumber(post[metric]);
   };
 
+  const formatViewMetric = (post) => post.views_display || formatNumber(post.views);
+
   const download = (content, filename, type) => {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
@@ -490,10 +493,10 @@ function InstagramScraperConsole() {
                 </td>
                 <td className="is-primary-metric">
                   {primaryMetric === "views"
-                    ? formatNumber(post.views)
+                    ? formatViewMetric(post)
                     : formatPostMetric(post, primaryMetric)}
                 </td>
-                {primaryMetric !== "views" && <td>{formatNumber(post.views)}</td>}
+                {primaryMetric !== "views" && <td>{formatViewMetric(post)}</td>}
                 {primaryMetric !== "likes" && <td>{formatPostMetric(post, "likes")}</td>}
                 {primaryMetric !== "comments_count" && <td>{formatPostMetric(post, "comments_count")}</td>}
                 <td>{formatDate(post.timestamp)}</td>
