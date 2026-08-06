@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   currentReelViewsFromPayload,
   mergeCandidateData,
+  profileTileMetrics,
   reconcileVisibleReelView,
   resolvePublicPostCounts,
   viewDisplayMatchesExactCount
@@ -72,6 +73,42 @@ test("prefers the real reel URL for the same shortcode", () => {
   assert.equal(target.views_display, "267K");
 });
 
+test("maps normal and hovered Reel tile states to the correct metrics", () => {
+  assert.deepEqual(profileTileMetrics(["80.8M"], ["7.6M", "12.2K"], true), {
+    views_display: "80.8M",
+    likes_display: "7.6M",
+    comments_display: "12.2K"
+  });
+  assert.deepEqual(profileTileMetrics(["80.8M"], ["80.8M", "7.6M", "12.2K"], true), {
+    views_display: "80.8M",
+    likes_display: "7.6M",
+    comments_display: "12.2K"
+  });
+});
+
+test("does not let an anonymous hidden label replace visible grid likes", () => {
+  const target = {
+    likes: 7_600_000,
+    likes_display: "7.6M",
+    likes_exact: false,
+    likes_hidden: false,
+    _likes_verified: true,
+    _likes_exact: false
+  };
+  mergeCandidateData(target, {
+    likes: null,
+    likes_display: null,
+    likes_exact: false,
+    likes_hidden: true,
+    _likes_verified: true,
+    _likes_exact: false,
+    _source: "post page"
+  });
+
+  assert.equal(target.likes_display, "7.6M");
+  assert.equal(target.likes_hidden, false);
+});
+
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {
   assert.deepEqual(resolvePublicPostCounts({
     actionMetrics: {
@@ -86,8 +123,12 @@ test("never displays an embedded like count when Instagram labels likes as hidde
     embeddedLikesHidden: true
   }), {
     likes: null,
+    likes_display: null,
+    likes_exact: false,
     likes_hidden: true,
     comments_count: 6,
+    comments_display: "6",
+    comments_exact: true,
     comments_hidden: false
   });
 });

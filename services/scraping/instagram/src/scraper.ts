@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Response } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page, type Response } from "playwright-core";
 
 export type InstagramScrapeInput = {
   query: string;
@@ -27,8 +27,12 @@ export type InstagramPost = {
   post_url: string;
   thumbnail_url: string | null;
   comments_count: number | null;
+  comments_display: string | null;
+  comments_exact: boolean;
   comments_hidden: boolean;
   likes: number | null;
+  likes_display: string | null;
+  likes_exact: boolean;
   likes_hidden: boolean;
   views: number | null;
   views_display: string | null;
@@ -95,6 +99,10 @@ type Candidate = Partial<InstagramPost> & {
   _source_rank?: number | null;
   _views_verified?: boolean;
   _views_exact?: boolean;
+  _likes_verified?: boolean;
+  _likes_exact?: boolean;
+  _comments_verified?: boolean;
+  _comments_exact?: boolean;
 };
 
 type ScrapeResult = {
@@ -112,7 +120,15 @@ type RawPageCandidate = {
   productType?: string | null;
   timestamp?: string | number | null;
   likes?: string | number | null;
+  likesDisplay?: string | null;
+  likesHidden?: boolean;
+  likesVerified?: boolean;
+  likesExact?: boolean;
   commentsCount?: string | number | null;
+  commentsDisplay?: string | null;
+  commentsHidden?: boolean;
+  commentsVerified?: boolean;
+  commentsExact?: boolean;
   views?: string | number | null;
   viewsVerified?: boolean;
   viewsExact?: boolean;
@@ -508,6 +524,15 @@ function parseCount(text?: string | null) {
   return Math.trunc(number);
 }
 
+function metricDisplayIsExact(display?: string | null) {
+  return Boolean(display && /^[\d,]+$/.test(display.trim()));
+}
+
+function metricDisplayFromRaw(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value.toLocaleString("en-US");
+  return cleanText(value) || null;
+}
+
 export function viewDisplayMatchesExactCount(display: string | null | undefined, exactCount: number) {
   if (!display || !Number.isFinite(exactCount) || exactCount < 0) return true;
   const normalized = display.replace(/,/g, "").trim();
@@ -715,7 +740,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
   }).length;
   const engagementRates = followerCount && followerCount > 0
     ? results
-      .filter((post) => !post.likes_hidden && !post.comments_hidden && post.likes !== null && post.comments_count !== null)
+      .filter((post) => post.likes_exact && post.comments_exact && post.likes !== null && post.comments_count !== null)
       .map((post) => ((post.likes! + post.comments_count!) / followerCount) * 100)
     : [];
   const visibleViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null).length;
@@ -730,8 +755,8 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
     captured_at: new Date().toISOString(),
     analyzed_posts: results.length,
     averages: {
-      likes: roundedAverage(results.map((post) => post.likes)),
-      comments: roundedAverage(results.map((post) => post.comments_count)),
+      likes: roundedAverage(results.filter((post) => post.likes_exact).map((post) => post.likes)),
+      comments: roundedAverage(results.filter((post) => post.comments_exact).map((post) => post.comments_count)),
       views: roundedAverage(results.filter((post) => post.views_exact).map((post) => post.views))
     },
     engagement_rate: engagementRates.length
@@ -752,10 +777,10 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
       posting_hours: topCountEntries(postingHours, 8)
     },
     accuracy: {
-      source: "Fresh public Instagram pages",
+      source: "Fresh Profile and Reels grids, verified against public post pages",
       followers: "Exact public profile count captured for this run",
       views: `${visibleViewPosts} current public Reels view labels captured; ${exactViewPosts} included exact counts`,
-      missing_metrics: "Unverified values are shown as N/A"
+      missing_metrics: "Visible Instagram labels are preserved; unavailable values are shown as N/A"
     }
   };
 }
@@ -840,8 +865,12 @@ function candidateToData(candidate: Candidate): Candidate {
     follower_count: candidate.follower_count ?? null,
     follower_count_display: candidate.follower_count_display ?? null,
     likes: candidate.likes ?? null,
+    likes_display: candidate.likes_display ?? null,
+    likes_exact: candidate.likes_exact ?? candidate._likes_exact ?? false,
     likes_hidden: candidate.likes_hidden ?? false,
     comments_count: candidate.comments_count ?? null,
+    comments_display: candidate.comments_display ?? null,
+    comments_exact: candidate.comments_exact ?? candidate._comments_exact ?? false,
     comments_hidden: candidate.comments_hidden ?? false,
     views: candidate.views ?? null,
     views_display: candidate.views_display ?? null,
@@ -855,7 +884,11 @@ function candidateToData(candidate: Candidate): Candidate {
     _source: candidate._source ?? null,
     _source_rank: candidate._source_rank ?? null,
     _views_verified: candidate._views_verified ?? false,
-    _views_exact: candidate._views_exact ?? false
+    _views_exact: candidate._views_exact ?? false,
+    _likes_verified: candidate._likes_verified ?? false,
+    _likes_exact: candidate._likes_exact ?? false,
+    _comments_verified: candidate._comments_verified ?? false,
+    _comments_exact: candidate._comments_exact ?? false
   };
 }
 
@@ -917,8 +950,14 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     username: handle,
     display_name: displayName || null,
     profile_url: handle ? `${instagramHost}/${handle}/` : null,
-    likes: countFromRaw(raw.likes),
-    comments_count: countFromRaw(raw.commentsCount),
+    likes: raw.likesHidden ? null : countFromRaw(raw.likes),
+    likes_display: raw.likesHidden ? null : metricDisplayFromRaw(raw.likesDisplay ?? raw.likes),
+    likes_exact: raw.likesHidden ? false : raw.likesExact === true,
+    likes_hidden: raw.likesHidden === true,
+    comments_count: raw.commentsHidden ? null : countFromRaw(raw.commentsCount),
+    comments_display: raw.commentsHidden ? null : metricDisplayFromRaw(raw.commentsDisplay ?? raw.commentsCount),
+    comments_exact: raw.commentsHidden ? false : raw.commentsExact === true,
+    comments_hidden: raw.commentsHidden === true,
     views: countFromRaw(raw.views),
     views_display: cleanText(raw.views) || null,
     thumbnail_url: cleanText(raw.thumbnail) || null,
@@ -929,7 +968,11 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     _source: sourceLabel,
     _source_rank: typeof raw.rank === "number" && Number.isFinite(raw.rank) ? raw.rank : null,
     _views_verified: raw.viewsVerified === true,
-    _views_exact: raw.viewsExact === true
+    _views_exact: raw.viewsExact === true,
+    _likes_verified: raw.likesVerified === true,
+    _likes_exact: raw.likesExact === true,
+    _comments_verified: raw.commentsVerified === true,
+    _comments_exact: raw.commentsExact === true
   };
 }
 
@@ -1066,8 +1109,15 @@ async function collectPublicProfileFeedCandidates(
             mediaType: media.media_type,
             productType: media.product_type,
             timestamp: media.taken_at,
-            likes: media.like_count,
+            likes: media.like_and_view_counts_disabled || media.hide_like_and_view_counts ? null : media.like_count,
+            likesDisplay: media.like_and_view_counts_disabled || media.hide_like_and_view_counts ? null : media.like_count,
+            likesHidden: Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts),
+            likesVerified: media.like_count !== null && media.like_count !== undefined || Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts),
+            likesExact: !(media.like_and_view_counts_disabled || media.hide_like_and_view_counts) && media.like_count !== null && media.like_count !== undefined,
             commentsCount: media.comment_count,
+            commentsDisplay: media.comment_count,
+            commentsVerified: media.comment_count !== null && media.comment_count !== undefined,
+            commentsExact: media.comment_count !== null && media.comment_count !== undefined,
             views: [
               media.play_count,
               media.view_count,
@@ -1105,6 +1155,64 @@ async function collectPublicProfileFeedCandidates(
   return candidates.slice(0, limit);
 }
 
+function mergeCandidateVisibleMetric(
+  target: Candidate,
+  source: Candidate,
+  config: {
+    count: "likes" | "comments_count";
+    display: "likes_display" | "comments_display";
+    hidden: "likes_hidden" | "comments_hidden";
+    exact: "likes_exact" | "comments_exact";
+    verifiedInternal: "_likes_verified" | "_comments_verified";
+    exactInternal: "_likes_exact" | "_comments_exact";
+  }
+) {
+  const sourceVerified = source[config.verifiedInternal] === true;
+  if (!sourceVerified) return;
+  const targetVerified = target[config.verifiedInternal] === true;
+  const sourceHidden = source[config.hidden] === true;
+
+  if (sourceHidden) {
+    if (!targetVerified) {
+      target[config.count] = null;
+      target[config.display] = null;
+      target[config.hidden] = true;
+      target[config.exact] = false;
+      target[config.verifiedInternal] = true;
+      target[config.exactInternal] = false;
+    }
+    return;
+  }
+
+  const sourceCount = source[config.count];
+  if (typeof sourceCount !== "number" || !Number.isFinite(sourceCount)) return;
+  const sourceDisplay = source[config.display] || sourceCount.toLocaleString("en-US");
+  const sourceExact = source[config.exactInternal] === true;
+  const targetCount = target[config.count];
+  const targetExact = target[config.exactInternal] === true;
+  const sourceIsGrid = source._source === "profile" || source._source === "profile reels";
+
+  let resolved: { views: number | null; views_display: string; views_exact: boolean } = {
+    views: sourceCount,
+    views_display: sourceDisplay,
+    views_exact: sourceExact
+  };
+  if (sourceIsGrid && targetVerified && targetExact && typeof targetCount === "number") {
+    resolved = reconcileVisibleReelView(sourceDisplay, sourceCount, targetCount);
+  } else if (sourceExact && targetVerified && typeof targetCount === "number") {
+    resolved = reconcileVisibleReelView(target[config.display], targetCount, sourceCount);
+  } else if (targetVerified && !sourceIsGrid) {
+    return;
+  }
+
+  target[config.count] = resolved.views;
+  target[config.display] = resolved.views_display;
+  target[config.hidden] = false;
+  target[config.exact] = resolved.views_exact;
+  target[config.verifiedInternal] = true;
+  target[config.exactInternal] = resolved.views_exact;
+}
+
 export function mergeCandidateData(target: Candidate, source: Candidate) {
   if (
     target.post_url &&
@@ -1120,8 +1228,6 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     "username",
     "display_name",
     "profile_url",
-    "likes",
-    "comments_count",
     "views",
     "views_display",
     "thumbnail_url",
@@ -1137,6 +1243,22 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
   if (target._source_rank == null || (source._source_rank != null && source._source_rank < target._source_rank)) {
     target._source_rank = source._source_rank;
   }
+  mergeCandidateVisibleMetric(target, source, {
+    count: "likes",
+    display: "likes_display",
+    hidden: "likes_hidden",
+    exact: "likes_exact",
+    verifiedInternal: "_likes_verified",
+    exactInternal: "_likes_exact"
+  });
+  mergeCandidateVisibleMetric(target, source, {
+    count: "comments_count",
+    display: "comments_display",
+    hidden: "comments_hidden",
+    exact: "comments_exact",
+    verifiedInternal: "_comments_verified",
+    exactInternal: "_comments_exact"
+  });
   const sourceHasCurrentViews = source._views_verified && source.views !== null && source.views !== undefined;
   const preferSourceViews = sourceHasCurrentViews && (
     !target._views_verified ||
@@ -1499,6 +1621,9 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           node.clips_metadata && node.clips_metadata.play_count,
           node.clips_metadata && node.clips_metadata.view_count
         );
+        const likesHidden = Boolean(node.like_and_view_counts_disabled || node.hide_like_and_view_counts);
+        const likes = likesHidden ? null : firstValue(node.like_count, node.edge_liked_by && node.edge_liked_by.count);
+        const comments = firstValue(node.comment_count, node.edge_media_to_comment && node.edge_media_to_comment.count);
         return {
           code,
           username: firstText(user.username, user.user_name, user.handle),
@@ -1506,8 +1631,15 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
           mediaType: firstValue(node.media_type, node.__typename),
           productType: firstText(node.product_type),
           timestamp: firstValue(node.taken_at, node.taken_at_timestamp, node.caption && node.caption.created_at),
-          likes: firstValue(node.like_count, node.edge_liked_by && node.edge_liked_by.count),
-          commentsCount: firstValue(node.comment_count, node.edge_media_to_comment && node.edge_media_to_comment.count),
+          likes,
+          likesDisplay: likes === null ? null : String(likes),
+          likesHidden,
+          likesVerified: likes !== null || likesHidden,
+          likesExact: likes !== null,
+          commentsCount: comments,
+          commentsDisplay: comments === null ? null : String(comments),
+          commentsVerified: comments !== null,
+          commentsExact: comments !== null,
           views,
           viewsVerified: views !== null,
           viewsExact: views !== null,
@@ -1535,17 +1667,10 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
         const href = anchor.href || anchor.getAttribute("href") || "";
         const parsed = shortcodeFromHref(href);
         if (!parsed) continue;
-        const visibleMetric = (anchor.innerText || anchor.textContent || "")
-          .split(/\\n+/)
-          .map((text) => text.trim())
-          .find((text) => /^[\\d,.]+(?:\\.\\d+)?\\s*[KMB]?$/i.test(text)) || null;
         push({
           href,
           code: parsed.code,
-          mediaType: parsed.type === "reel" ? "reel" : "post",
-          views: parsed.type === "reel" ? visibleMetric : null,
-          viewsVerified: parsed.type === "reel" && visibleMetric !== null,
-          viewsExact: false
+          mediaType: parsed.type === "reel" ? "reel" : "post"
         });
       }
 
@@ -1589,6 +1714,92 @@ async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
   return [...candidates.values()].sort((a, b) => (a._source_rank ?? Number.MAX_SAFE_INTEGER) - (b._source_rank ?? Number.MAX_SAFE_INTEGER));
 }
 
+export function profileTileMetrics(beforeHover: string[], afterHover: string[], isReelsGrid: boolean) {
+  const viewsDisplay = isReelsGrid ? beforeHover[0] || null : null;
+  const hoverMetrics = [...afterHover];
+  if (viewsDisplay) {
+    const viewIndex = hoverMetrics.indexOf(viewsDisplay);
+    if (viewIndex !== -1) hoverMetrics.splice(viewIndex, 1);
+  }
+  return {
+    views_display: viewsDisplay,
+    likes_display: hoverMetrics[0] || null,
+    comments_display: hoverMetrics[1] || null
+  };
+}
+
+async function visibleMetricLabelsFromTile(tile: Locator) {
+  return tile.evaluate<string[]>((anchor) => {
+    const pattern = /^[\d,.]+(?:\.\d+)?\s*[KMB]?$/i;
+    const isVisible = (element: Element) => {
+      let current: Element | null = element;
+      while (current) {
+        const style = window.getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) < 0.05) return false;
+        if (current === anchor) break;
+        current = current.parentElement;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const labels = Array.from(anchor.querySelectorAll("*"))
+      .filter((element) => element.children.length === 0 && isVisible(element))
+      .map((element) => (element.textContent || "").trim())
+      .filter((text) => pattern.test(text));
+    return [...new Set(labels)];
+  }).catch((): string[] => []);
+}
+
+async function collectHoveredProfileTileMetrics(
+  page: Page,
+  sourceLabel: string,
+  processed: Set<string>
+) {
+  const selector = sourceLabel === "profile reels"
+    ? 'a[href*="/reel/"]'
+    : 'a[href*="/p/"], a[href*="/reel/"]';
+  const tiles = page.locator(selector);
+  const count = await tiles.count().catch(() => 0);
+  const candidates: Candidate[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const tile = tiles.nth(index);
+    const href = await tile.getAttribute("href").catch(() => null);
+    const postUrl = normalizePostUrl(href);
+    if (!postUrl) continue;
+    const identity = postIdentity(postUrl);
+    if (processed.has(identity)) continue;
+
+    const beforeHover = await visibleMetricLabelsFromTile(tile);
+    await tile.hover({ timeout: 2_000 }).catch(() => {});
+    await sleep(80);
+    const afterHover = await visibleMetricLabelsFromTile(tile);
+    const tileMetrics = profileTileMetrics(beforeHover, afterHover, sourceLabel === "profile reels");
+    const viewsDisplay = tileMetrics.views_display;
+    const likesDisplay = tileMetrics.likes_display;
+    const commentsDisplay = tileMetrics.comments_display;
+    processed.add(identity);
+
+    candidates.push(rawPageCandidateToCandidate({
+      href: postUrl,
+      mediaType: /\/reel\//i.test(postUrl) ? "reel" : "post",
+      views: viewsDisplay,
+      viewsVerified: viewsDisplay !== null,
+      viewsExact: metricDisplayIsExact(viewsDisplay),
+      likes: likesDisplay,
+      likesDisplay,
+      likesVerified: likesDisplay !== null,
+      likesExact: metricDisplayIsExact(likesDisplay),
+      commentsCount: commentsDisplay,
+      commentsDisplay,
+      commentsVerified: commentsDisplay !== null,
+      commentsExact: metricDisplayIsExact(commentsDisplay)
+    }, sourceLabel)!);
+  }
+
+  return candidates;
+}
+
 function publicMediaThumbnail(media: Record<string, unknown>): string | null {
   const imageVersions = media.image_versions2 as { candidates?: { url?: string }[] } | undefined;
   const candidate = imageVersions?.candidates?.[0]?.url;
@@ -1629,6 +1840,8 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     ? cleanCaptionText((media.caption as Record<string, unknown>).text as string | undefined)
     : null;
   const likesHidden = Boolean(media.like_and_view_counts_disabled || media.hide_like_and_view_counts);
+  const likes = likesHidden ? null : countFromRaw(media.like_count);
+  const comments = countFromRaw(media.comment_count);
   const views = largestCountFromRaw(
     media.play_count,
     media.view_count,
@@ -1644,9 +1857,13 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     profile_url: username ? `${instagramHost}/${username}/` : null,
     post_url: `${instagramHost}/${pathType}/${code}/`,
     thumbnail_url: publicMediaThumbnail(media),
-    comments_count: countFromRaw(media.comment_count),
-    comments_hidden: Boolean(media.comments_disabled) && countFromRaw(media.comment_count) === null,
-    likes: likesHidden ? null : countFromRaw(media.like_count),
+    comments_count: comments,
+    comments_display: comments === null ? null : comments.toLocaleString("en-US"),
+    comments_exact: comments !== null,
+    comments_hidden: Boolean(media.comments_disabled) && comments === null,
+    likes,
+    likes_display: likes === null ? null : likes.toLocaleString("en-US"),
+    likes_exact: likes !== null,
     likes_hidden: likesHidden,
     views,
     follower_count: countFromRaw(user.follower_count),
@@ -1658,7 +1875,11 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     caption,
     _handle: username,
     _views_verified: views !== null,
-    _views_exact: views !== null
+    _views_exact: views !== null,
+    _likes_verified: likes !== null || likesHidden,
+    _likes_exact: likes !== null,
+    _comments_verified: comments !== null,
+    _comments_exact: comments !== null
   };
 }
 
@@ -1932,7 +2153,8 @@ async function isLoginPage(page: Page) {
 }
 
 async function collectLatestCandidates(page: Page, query: string, limit: number, targetCount: number, profileReels = false) {
-  const seen = new Set<string>();
+  const candidateByIdentity = new Map<string, Candidate>();
+  const processedProfileTiles = new Set<string>();
   const candidates: Candidate[] = [];
   const profileUrl = profileReels ? normalizeProfileUrl(query) : null;
   const sources = profileUrl
@@ -1943,9 +2165,14 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
   const addCandidate = (candidate: Candidate | null | undefined) => {
     if (!candidate?.post_url) return false;
     const identity = postIdentity(candidate.post_url);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    candidates.push(candidateToData(candidate));
+    const existing = candidateByIdentity.get(identity);
+    if (existing) {
+      mergeCandidateData(existing, candidate);
+      return false;
+    }
+    const normalized = candidateToData(candidate);
+    candidateByIdentity.set(identity, normalized);
+    candidates.push(normalized);
     return true;
   };
 
@@ -1999,7 +2226,12 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
     for (let index = 0; index < scrollLimit; index += 1) {
       await dismissInstagramPrompts(page);
       const beforeCount = sourceCount;
-      const pageCandidates = await collectCurrentPageCandidates(page, source.label);
+      const pageCandidates = isProfileSource
+        ? [
+            ...await collectHoveredProfileTileMetrics(page, source.label, processedProfileTiles),
+            ...await collectCurrentPageCandidates(page, source.label)
+          ]
+        : await collectCurrentPageCandidates(page, source.label);
       if (process.env.INSTAGRAM_SCRAPER_DEBUG === "1" && index === 0) {
         console.log(JSON.stringify({
           discoverySource: source.label,
@@ -2187,22 +2419,43 @@ export function resolvePublicPostCounts(raw: {
   embeddedComments?: number[];
   embeddedLikesHidden?: boolean;
 }) {
-  const descriptionLikes = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+likes?/i]);
-  const descriptionComments = firstCountFromPatterns(raw.description, [/([\d,.]+)\s*([KMB]?)\s+comments?/i]);
-  const likesHiddenByInstagram = Boolean(raw.embeddedLikesHidden || raw.actionMetrics?.likesHidden);
+  const likePatterns = [/([\d,.]+)\s*([KMB]?)\s+likes?/i];
+  const commentPatterns = [/([\d,.]+)\s*([KMB]?)\s+comments?/i];
+  const descriptionLikes = firstCountFromPatterns(raw.description, likePatterns);
+  const descriptionLikesDisplay = firstMetricDisplay(raw.description, likePatterns);
+  const descriptionComments = firstCountFromPatterns(raw.description, commentPatterns);
+  const descriptionCommentsDisplay = firstMetricDisplay(raw.description, commentPatterns);
+  const embeddedLikes = raw.embeddedLikes?.length ? Math.max(...raw.embeddedLikes) : null;
+  const embeddedComments = raw.embeddedComments?.length ? Math.max(...raw.embeddedComments) : null;
+  const actionLikes = parseCount(raw.actionMetrics?.likes);
+  const actionComments = parseCount(raw.actionMetrics?.comments);
+  const likesHiddenByInstagram = Boolean(
+    raw.embeddedLikesHidden ||
+    raw.actionMetrics?.likesHidden && embeddedLikes === null && descriptionLikes === null
+  );
   const likes = likesHiddenByInstagram
     ? null
-    : raw.embeddedLikes?.length
-      ? Math.max(...raw.embeddedLikes)
-      : descriptionLikes ?? parseCount(raw.actionMetrics?.likes);
-  const commentsCount = raw.embeddedComments?.length
-    ? Math.max(...raw.embeddedComments)
-    : descriptionComments ?? parseCount(raw.actionMetrics?.comments);
+    : embeddedLikes ?? descriptionLikes ?? actionLikes;
+  const commentsCount = embeddedComments ?? descriptionComments ?? actionComments;
+  const likesDisplay = likes === null
+    ? null
+    : embeddedLikes !== null
+      ? likes.toLocaleString("en-US")
+      : descriptionLikesDisplay || raw.actionMetrics?.likes || likes.toLocaleString("en-US");
+  const commentsDisplay = commentsCount === null
+    ? null
+    : embeddedComments !== null
+      ? commentsCount.toLocaleString("en-US")
+      : descriptionCommentsDisplay || raw.actionMetrics?.comments || commentsCount.toLocaleString("en-US");
 
   return {
     likes,
+    likes_display: likesDisplay,
+    likes_exact: likes !== null && (embeddedLikes !== null || metricDisplayIsExact(likesDisplay)),
     likes_hidden: likes === null && likesHiddenByInstagram,
     comments_count: commentsCount,
+    comments_display: commentsDisplay,
+    comments_exact: commentsCount !== null && (embeddedComments !== null || metricDisplayIsExact(commentsDisplay)),
     comments_hidden: commentsCount === null && Boolean(raw.actionMetrics?.commentsHidden)
   };
 }
@@ -2457,8 +2710,12 @@ async function extractPostStats(page: Page, ownerHandle?: string | null) {
 
   return {
     likes: counts.likes,
+    likes_display: counts.likes_display,
+    likes_exact: counts.likes_exact,
     likes_hidden: counts.likes_hidden,
     comments_count: counts.comments_count,
+    comments_display: counts.comments_display,
+    comments_exact: counts.comments_exact,
     comments_hidden: counts.comments_hidden,
     views,
     views_display: viewsDisplay,
@@ -2830,10 +3087,37 @@ async function scrapePublicBrowser(
 
         const stats = await extractPostStats(postPage, data._handle || data.username);
         data.top_comments = stats.top_comments;
-        data.likes = stats.likes;
-        data.likes_hidden = stats.likes === null && stats.likes_hidden;
-        data.comments_count = stats.comments_count;
-        data.comments_hidden = stats.comments_count === null && stats.comments_hidden;
+        const postPageMetrics: Candidate = {
+          likes: stats.likes,
+          likes_display: stats.likes_display,
+          likes_exact: stats.likes_exact,
+          likes_hidden: stats.likes_hidden,
+          comments_count: stats.comments_count,
+          comments_display: stats.comments_display,
+          comments_exact: stats.comments_exact,
+          comments_hidden: stats.comments_hidden,
+          _likes_verified: stats.likes !== null || stats.likes_hidden,
+          _likes_exact: stats.likes_exact,
+          _comments_verified: stats.comments_count !== null || stats.comments_hidden,
+          _comments_exact: stats.comments_exact,
+          _source: "post page"
+        };
+        mergeCandidateVisibleMetric(data, postPageMetrics, {
+          count: "likes",
+          display: "likes_display",
+          hidden: "likes_hidden",
+          exact: "likes_exact",
+          verifiedInternal: "_likes_verified",
+          exactInternal: "_likes_exact"
+        });
+        mergeCandidateVisibleMetric(data, postPageMetrics, {
+          count: "comments_count",
+          display: "comments_display",
+          hidden: "comments_hidden",
+          exact: "comments_exact",
+          verifiedInternal: "_comments_verified",
+          exactInternal: "_comments_exact"
+        });
         if (stats.views !== null && !data._views_verified) {
           data.views = stats.views;
           data.views_display = stats.views_display;
@@ -2892,8 +3176,12 @@ async function scrapePublicBrowser(
         post_url: data.post_url as string,
         thumbnail_url: data.thumbnail_url ?? null,
         comments_count: data.comments_count ?? null,
+        comments_display: data.comments_display ?? null,
+        comments_exact: data.comments_exact ?? (data._comments_exact === true),
         comments_hidden: data.comments_hidden ?? false,
         likes: data.likes ?? null,
+        likes_display: data.likes_display ?? null,
+        likes_exact: data.likes_exact ?? (data._likes_exact === true),
         likes_hidden: data.likes_hidden ?? false,
         views: sortBy === "engagement" ? data.views ?? null : null,
         views_display: sortBy === "engagement" ? data.views_display ?? null : null,

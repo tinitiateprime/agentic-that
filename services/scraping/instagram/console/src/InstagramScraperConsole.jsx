@@ -144,8 +144,12 @@ const baseExportColumns = [
   "display_name",
   "post_url",
   "comments_count",
+  "comments_display",
+  "comments_exact",
   "comments_hidden",
   "likes",
+  "likes_display",
+  "likes_exact",
   "likes_hidden",
   "follower_count",
   "follower_count_display",
@@ -390,7 +394,8 @@ function InstagramScraperConsole() {
 
   const formatPostMetric = (post, metric) => {
     const hidden = metric === "likes" ? post.likes_hidden : post.comments_hidden;
-    return hidden ? "Hidden" : formatNumber(post[metric]);
+    const display = metric === "likes" ? post.likes_display : post.comments_display;
+    return hidden ? "Hidden" : display || formatNumber(post[metric]);
   };
 
   const formatViewMetric = (post) => post.views_display || formatNumber(post.views);
