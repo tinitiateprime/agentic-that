@@ -700,7 +700,8 @@ export function selectAnalysisEnrichmentCandidates(results: Candidate[], limit: 
 }
 
 export function profileAnalysisCandidateTarget(maxResults: number) {
-  return Math.min(Math.max(Math.max(1, Math.trunc(maxResults)) * 5, 50), 150);
+  void maxResults;
+  return 50;
 }
 
 function topCountEntries(counts: Map<string, number>, limit: number) {
@@ -1108,14 +1109,17 @@ async function collectPublicProfileFeedCandidates(
       (async () => {
         const userId = ${JSON.stringify(userId)};
         const maxId = ${JSON.stringify(maxId)};
-        const params = new URLSearchParams({ count: "12", _: String(Date.now()) });
+        const params = new URLSearchParams({ count: String(Math.min(${limit}, 50)), _: String(Date.now()) });
         if (maxId) params.set("max_id", maxId);
         const response = await fetch("/api/v1/feed/user/" + encodeURIComponent(userId) + "/?" + params, {
           cache: "no-store",
+          credentials: "include",
           headers: {
             "cache-control": "no-cache",
             "pragma": "no-cache",
+            "x-asbd-id": "129477",
             "x-ig-app-id": "936619743392459",
+            "x-ig-www-claim": "0",
             "x-requested-with": "XMLHttpRequest"
           }
         });
@@ -1341,6 +1345,97 @@ export function currentReelViewsFromPayload(payload: unknown) {
   return metrics;
 }
 
+export function publicProfileCandidatesFromPayload(payload: unknown, sourceLabel = "public profile pagination") {
+  const candidates = new Map<string, Candidate>();
+  const visited = new Set<object>();
+  const asRecord = (value: unknown): Record<string, unknown> => (
+    value && typeof value === "object" ? value as Record<string, unknown> : {}
+  );
+  const firstImage = (node: Record<string, unknown>) => {
+    const imageVersions = asRecord(node.image_versions2).candidates;
+    const imageCandidates = Array.isArray(imageVersions) ? imageVersions : [];
+    const firstVersion = asRecord(imageCandidates[0]);
+    const image = asRecord(node.image);
+    return cleanText(
+      firstVersion.url ||
+      node.display_url ||
+      node.thumbnail_src ||
+      node.thumbnail_url ||
+      image.uri ||
+      image.url
+    ) || null;
+  };
+
+  const visit = (value: unknown, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 70 || visited.has(value)) return;
+    visited.add(value);
+    const node = value as Record<string, unknown>;
+    const code = cleanText(node.code || node.shortcode);
+    if (isShortcode(code)) {
+      const user = asRecord(node.user || node.owner || node.taken_by || node.owner_user);
+      const edgeLikes = asRecord(node.edge_liked_by);
+      const edgeComments = asRecord(node.edge_media_to_comment);
+      const captionNode = asRecord(asRecord(Array.isArray(asRecord(node.edge_media_to_caption).edges)
+        ? (asRecord(node.edge_media_to_caption).edges as unknown[])[0]
+        : null).node);
+      const caption = asRecord(node.caption);
+      const likesHidden = Boolean(node.like_and_view_counts_disabled || node.hide_like_and_view_counts);
+      const likes = likesHidden ? null : largestCountFromRaw(node.like_count, edgeLikes.count);
+      const comments = largestCountFromRaw(node.comment_count, edgeComments.count);
+      const views = largestCountFromRaw(
+        node.play_count,
+        node.view_count,
+        node.video_view_count,
+        node.ig_play_count,
+        asRecord(node.clips_metadata).play_count,
+        asRecord(node.clips_metadata).view_count
+      );
+      const typeText = `${cleanText(node.product_type)} ${cleanText(node.__typename)}`;
+      const raw: RawPageCandidate = {
+        code,
+        username: cleanText(user.username || user.user_name || user.handle) || null,
+        displayName: cleanText(user.full_name || user.name) || null,
+        mediaType: node.media_type as string | number | null | undefined,
+        productType: typeText || null,
+        timestamp: (node.taken_at || node.taken_at_timestamp || caption.created_at) as string | number | null | undefined,
+        likes,
+        likesDisplay: likes === null ? null : String(likes),
+        likesHidden,
+        likesVerified: likes !== null || likesHidden,
+        likesExact: likes !== null,
+        commentsCount: comments,
+        commentsDisplay: comments === null ? null : String(comments),
+        commentsHidden: Boolean(node.comments_disabled) && comments === null,
+        commentsVerified: comments !== null || Boolean(node.comments_disabled),
+        commentsExact: comments !== null,
+        views,
+        viewsVerified: views !== null,
+        viewsExact: views !== null,
+        thumbnail: firstImage(node),
+        caption: cleanText(caption.text || captionNode.text) || null
+      };
+      if (node.media_type === 2 || /video|clips|reel/i.test(typeText)) raw.mediaType = "reel";
+      const candidate = rawPageCandidateToCandidate(raw, sourceLabel);
+      if (candidate?.post_url) {
+        candidate._owner_id = cleanText(user.pk || user.id || user.__id) || null;
+        candidate._reels_id = cleanText(user.fbid || user.fbid_v2) || null;
+        const identity = postIdentity(candidate.post_url);
+        const existing = candidates.get(identity);
+        if (existing) mergeCandidateData(existing, candidate);
+        else candidates.set(identity, candidate);
+      }
+    }
+
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
+      else if (child && typeof child === "object") visit(child, depth + 1);
+    }
+  };
+
+  visit(payload);
+  return [...candidates.values()];
+}
+
 export function reconcileVisibleReelView(
   visibleDisplay: string | null | undefined,
   visibleCount: number | null | undefined,
@@ -1360,13 +1455,20 @@ export function reconcileVisibleReelView(
   };
 }
 
-async function verifyPublicProfileReelViews(page: Page, username: string, candidates: Candidate[]) {
+async function verifyPublicProfileReelViews(
+  page: Page,
+  username: string,
+  candidates: Candidate[],
+  candidateLimit = 50
+) {
   const targets = new Map<string, Candidate>();
   for (const candidate of candidates) {
     if (!candidate.post_url || !/\/reel\//i.test(candidate.post_url)) continue;
     targets.set(postIdentity(candidate.post_url), candidate);
   }
-  if (!targets.size) return;
+  const discovered = new Map<string, Candidate>();
+  const inheritedOwnerId = cleanText(candidates.find((candidate) => candidate._owner_id)?._owner_id) || null;
+  const inheritedReelsId = cleanText(candidates.find((candidate) => candidate._reels_id)?._reels_id) || null;
 
   const pending = new Set<Promise<void>>();
   let graphqlTemplate = "";
@@ -1374,7 +1476,22 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
   let pageQueryDocId = process.env.INSTAGRAM_REELS_PAGE_DOC_ID || "27402742122690167";
   let reelsCursor = "";
   let discoveredReelsId = "";
+  let discoveredOwnerId = "";
   const applyPayload = (payload: unknown) => {
+    for (const candidate of publicProfileCandidatesFromPayload(payload)) {
+      if (!candidate.post_url) continue;
+      candidate.username = candidate.username || username;
+      candidate._handle = candidate._handle || candidate.username || username;
+      candidate.profile_url = candidate.profile_url || `${instagramHost}/${username}/`;
+      candidate._owner_id = candidate._owner_id || inheritedOwnerId;
+      candidate._reels_id = candidate._reels_id || inheritedReelsId;
+      const identity = postIdentity(candidate.post_url);
+      const existing = discovered.get(identity);
+      if (existing) mergeCandidateData(existing, candidate);
+      else discovered.set(identity, candidate);
+      const target = targets.get(identity);
+      if (target) mergeCandidateData(target, candidate);
+    }
     for (const [code, views] of currentReelViewsFromPayload(payload)) {
       const candidate = targets.get(code);
       if (!candidate) continue;
@@ -1396,6 +1513,11 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
       if (cursor && /^AQ/i.test(cursor)) reelsCursor = cursor;
       const fbid = cleanText(node.fbid || node.fbid_v2);
       if (fbid && /^\d{12,}$/.test(fbid)) discoveredReelsId = fbid;
+      const payloadUsername = cleanText(node.username).toLowerCase();
+      const ownerId = cleanText(node.pk || node.id || node.__id);
+      if (payloadUsername === username.toLowerCase() && ownerId && /^\d{8,}$/.test(ownerId)) {
+        discoveredOwnerId = ownerId;
+      }
       for (const child of Object.values(node)) {
         if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
         else if (child && typeof child === "object") visit(child, depth + 1);
@@ -1438,10 +1560,12 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
   try {
     const url = `${instagramHost}/${username}/reels/?hl=en&fresh=${Date.now()}`;
     await gotoPublicPage(page, url, 30_000);
-    const routeState = await page.evaluate<{ cursor: string; reelsId: string }>(`
+    const routeState = await page.evaluate<{ cursor: string; reelsId: string; ownerId: string }>(`
       (() => {
+        const targetUsername = ${JSON.stringify(username.toLowerCase())};
         const cursors = [];
         const ids = [];
+        const ownerIds = [];
         const visited = new Set();
         const visit = (value, depth = 0) => {
           if (!value || typeof value !== "object" || depth > 60 || visited.has(value)) return;
@@ -1452,6 +1576,9 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
           }
           const fbid = String(value.fbid || value.fbid_v2 || "").trim();
           if (/^\\d{12,}$/.test(fbid)) ids.push(fbid);
+          const payloadUsername = String(value.username || "").trim().toLowerCase();
+          const ownerId = String(value.pk || value.id || value.__id || "").trim();
+          if (payloadUsername === targetUsername && /^\\d{8,}$/.test(ownerId)) ownerIds.push(ownerId);
           for (const child of Object.values(value)) {
             if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
             else if (child && typeof child === "object") visit(child, depth + 1);
@@ -1468,14 +1595,15 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
             for (const match of text.matchAll(/\\?"(?:fbid|fbid_v2)\\?":\\?"(\\d{12,})/g)) ids.push(match[1]);
           }
         }
-        return { cursor: cursors[0] || "", reelsId: ids[0] || "" };
+        return { cursor: cursors[0] || "", reelsId: ids[0] || "", ownerId: ownerIds[0] || "" };
       })()
-    `).catch(() => ({ cursor: "", reelsId: "" }));
+    `).catch(() => ({ cursor: "", reelsId: "", ownerId: "" }));
     if (routeState.cursor) reelsCursor = routeState.cursor;
     if (routeState.reelsId) discoveredReelsId = routeState.reelsId;
+    if (routeState.ownerId) discoveredOwnerId = routeState.ownerId;
     let previousCount = 0;
     let staleScrolls = 0;
-    const scrollLimit = Math.max(4, Math.min(20, Math.ceil(targets.size / 4) + 3));
+    const scrollLimit = Math.max(6, Math.min(20, Math.ceil(candidateLimit / 4) + 3));
 
     for (let index = 0; index < scrollLimit; index += 1) {
       await sleep(700);
@@ -1483,13 +1611,13 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
       const count = await page.locator('a[href*="/reel/"]').count().catch(() => 0);
       staleScrolls = count > previousCount ? 0 : staleScrolls + 1;
       previousCount = Math.max(previousCount, count);
-      if ([...targets.values()].every((candidate) => candidate._views_verified) || staleScrolls >= 2) break;
+      if (discovered.size >= candidateLimit || staleScrolls >= 2) break;
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     }
     await settleResponses();
 
-    const ownerId = cleanText([...targets.values()].find((candidate) => candidate._owner_id)?._owner_id);
-    const reelsId = cleanText([...targets.values()].find((candidate) => candidate._reels_id)?._reels_id) || discoveredReelsId;
+    const ownerId = inheritedOwnerId || discoveredOwnerId;
+    const reelsId = inheritedReelsId || discoveredReelsId;
     if (ownerId) {
       const payloads = await page.evaluate<unknown[], {
         ownerId: string;
@@ -1585,6 +1713,7 @@ async function verifyPublicProfileReelViews(page: Page, username: string, candid
   } finally {
     page.off("response", responseHandler);
   }
+  return [...discovered.values()].slice(0, candidateLimit);
 }
 
 async function collectCurrentPageCandidates(page: Page, sourceLabel: string) {
@@ -1781,6 +1910,91 @@ async function visibleMetricLabelsFromTile(tile: Locator) {
   }).catch((): string[] => []);
 }
 
+async function captureTileThumbnailBeforeHover(tile: Locator) {
+  const image = tile.locator("img").first();
+  const source = await image.evaluate((element) => {
+    const value = element as HTMLImageElement;
+    return value.currentSrc || value.src || null;
+  }).catch(() => null);
+
+  try {
+    const loaded = await image.evaluate((element) => {
+      const value = element as HTMLImageElement;
+      return value.complete && value.naturalWidth > 0 && value.naturalHeight > 0;
+    });
+    if (loaded) {
+      const screenshot = await image.screenshot({
+        type: "jpeg",
+        quality: 58,
+        animations: "disabled",
+        timeout: 3_000
+      });
+      return `data:image/jpeg;base64,${screenshot.toString("base64")}`;
+    }
+  } catch {
+    // Fall back to the original public image URL when pixel capture is unavailable.
+  }
+
+  return source && /^https?:\/\//i.test(source) ? source : null;
+}
+
+async function durableThumbnailUrl(value: string | null | undefined) {
+  if (!value || value.startsWith("data:image/")) return value || null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const hostname = url.hostname.toLowerCase();
+  const allowed = url.protocol === "https:" && (
+    hostname === "instagram.com" ||
+    hostname.endsWith(".instagram.com") ||
+    hostname.endsWith(".cdninstagram.com") ||
+    hostname.endsWith(".fbcdn.net")
+  );
+  if (!allowed) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "image/avif,image/webp,image/apng,image/jpeg,image/*,*/*;q=0.8",
+        referer: `${instagramHost}/`,
+        "user-agent": defaultUserAgent
+      },
+      signal: controller.signal
+    });
+    const contentLength = Number(response.headers.get("content-length"));
+    if (!response.ok || (Number.isFinite(contentLength) && contentLength > 5_000_000)) return value;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 5_000_000) return value;
+    const sharp = (await import("sharp")).default;
+    const thumbnail = await sharp(bytes, { failOn: "none" })
+      .rotate()
+      .resize(128, 128, { fit: "cover", position: "centre", withoutEnlargement: true })
+      .jpeg({ quality: 72, progressive: true })
+      .toBuffer();
+    return `data:image/jpeg;base64,${thumbnail.toString("base64")}`;
+  } catch {
+    return value;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function makeRankingThumbnailsDurable(analysis: InstagramProfileAnalysis) {
+  const posts = new Map<string, InstagramPost>();
+  for (const post of [...analysis.top_watched, ...analysis.top_liked, ...analysis.top_discussed]) {
+    posts.set(postIdentity(post.post_url), post);
+  }
+  await mapWithConcurrency([...posts.values()], 4, async (post) => {
+    post.thumbnail_url = await durableThumbnailUrl(post.thumbnail_url);
+    return post;
+  });
+}
+
 async function collectHoveredProfileTileMetrics(
   page: Page,
   sourceLabel: string,
@@ -1802,10 +2016,7 @@ async function collectHoveredProfileTileMetrics(
     if (processed.has(identity)) continue;
 
     const beforeHover = await visibleMetricLabelsFromTile(tile);
-    const thumbnail = await tile.locator("img").first().evaluate((image) => (
-      (image as HTMLImageElement).currentSrc || (image as HTMLImageElement).src || null
-    )).catch(() => null);
-    const publicThumbnail = thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : null;
+    const thumbnail = await captureTileThumbnailBeforeHover(tile);
     await tile.hover({ timeout: 2_000 }).catch(() => {});
     await sleep(80);
     const afterHover = await visibleMetricLabelsFromTile(tile);
@@ -1818,7 +2029,7 @@ async function collectHoveredProfileTileMetrics(
     candidates.push(rawPageCandidateToCandidate({
       href: postUrl,
       mediaType: /\/reel\//i.test(postUrl) ? "reel" : "post",
-      thumbnail: publicThumbnail,
+      thumbnail,
       views: viewsDisplay,
       viewsVerified: viewsDisplay !== null,
       viewsExact: metricDisplayIsExact(viewsDisplay),
@@ -2994,13 +3205,26 @@ async function scrapePublicBrowser(
 
     if (normalized.mode === "profile" && normalized.username) {
       const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
-      if (process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
+      if (sortBy === "engagement" || process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
         visualCandidates.push(...await collectPublicProfileFeedCandidates(
           page,
           normalized.username,
           candidateCount,
           range
         ));
+      }
+      if (sortBy === "engagement") {
+        const uniqueCandidateCount = new Set(
+          visualCandidates.filter((candidate) => candidate.post_url).map((candidate) => postIdentity(candidate.post_url!))
+        ).size;
+        if (uniqueCandidateCount < candidateCount) {
+          visualCandidates.push(...await verifyPublicProfileReelViews(
+            page,
+            normalized.username,
+            visualCandidates,
+            candidateCount
+          ));
+        }
       }
     }
 
@@ -3283,13 +3507,12 @@ async function scrapePublicBrowser(
     const analysis = sortBy === "engagement"
       ? buildProfileAnalysis(results, maxResults, timezoneOffsetMinutes, candidateCount)
       : undefined;
+    if (analysis) await makeRankingThumbnailsDurable(analysis);
     return {
       query: normalized.label,
       results: analysis
         ? (analysis.top_watched.length ? analysis.top_watched : analysis.top_liked)
-        : normalized.mode === "hashtag" && sortBy === "recent"
-          ? selectDiverseResults(sorted, maxResults, range.start, range.start)
-          : sorted.slice(0, maxResults),
+        : sorted.slice(0, maxResults),
       analysis
     };
   } finally {

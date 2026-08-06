@@ -4,6 +4,7 @@ import {
   currentReelViewsFromPayload,
   mergeCandidateData,
   profileAnalysisCandidateTarget,
+  publicProfileCandidatesFromPayload,
   profileTileMetrics,
   reconcileVisibleReelView,
   resolvePublicPostCounts,
@@ -159,8 +160,39 @@ test("opens only unique final ranking winners for comment enrichment", () => {
 
 test("treats requested count as output rows while scanning at least 50 candidates", () => {
   assert.equal(profileAnalysisCandidateTarget(10), 50);
-  assert.equal(profileAnalysisCandidateTarget(12), 60);
-  assert.equal(profileAnalysisCandidateTarget(50), 150);
+  assert.equal(profileAnalysisCandidateTarget(12), 50);
+  assert.equal(profileAnalysisCandidateTarget(50), 50);
+});
+
+test("turns public profile pagination payloads into complete unique candidates", () => {
+  const candidates = publicProfileCandidatesFromPayload({
+    data: {
+      node: {
+        polaris_clips_connection: {
+          edges: [{
+            node: {
+              code: "DeepReel1",
+              media_type: 2,
+              product_type: "clips",
+              taken_at: 1_752_000_000,
+              play_count: 8_045_321,
+              like_count: 745_200,
+              comment_count: 12_300,
+              image_versions2: { candidates: [{ url: "https://scontent.cdninstagram.com/deep-reel.jpg" }] },
+              user: { id: "123456789012345", fbid: "987654321098765", username: "public_profile" }
+            }
+          }]
+        }
+      }
+    }
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].post_url, "https://www.instagram.com/reel/DeepReel1/");
+  assert.equal(candidates[0].thumbnail_url, "https://scontent.cdninstagram.com/deep-reel.jpg");
+  assert.equal(candidates[0].views, 8_045_321);
+  assert.equal(candidates[0].likes, 745_200);
+  assert.equal(candidates[0].comments_count, 12_300);
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {
