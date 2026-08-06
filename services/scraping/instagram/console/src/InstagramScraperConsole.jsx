@@ -418,7 +418,20 @@ function InstagramScraperConsole() {
     return hidden ? "Hidden" : display || formatNumber(post[metric]);
   };
 
-  const formatViewMetric = (post) => post.views_display || formatNumber(post.views);
+  const formatViewMetric = (post) => {
+    const display = String(post.views_display || "").trim();
+    if (/[KMB]$/i.test(display)) return display.toUpperCase().replace(/\s+/g, "");
+    const value = Number(post.views);
+    if (!Number.isFinite(value)) return display || "N/A";
+    if (value < 10_000) return display || Math.trunc(value).toLocaleString();
+    const [divisor, suffix] = value >= 1_000_000_000
+      ? [1_000_000_000, "B"]
+      : value >= 1_000_000
+        ? [1_000_000, "M"]
+        : [1_000, "K"];
+    const amount = value / divisor;
+    return `${amount.toFixed(amount < 100 ? 1 : 0).replace(/\.0$/, "")}${suffix}`;
+  };
 
   const download = (content, filename, type) => {
     const blob = new Blob([content], { type });
@@ -485,6 +498,7 @@ function InstagramScraperConsole() {
               {primaryMetric !== "views" && <th>Views</th>}
               {primaryMetric !== "likes" && <th>Likes</th>}
               {primaryMetric !== "comments_count" && <th>Comments</th>}
+              <th>Top comments</th>
               <th>Posted</th>
               <th>Post</th>
             </tr>
@@ -522,6 +536,16 @@ function InstagramScraperConsole() {
                 {primaryMetric !== "views" && <td>{formatViewMetric(post)}</td>}
                 {primaryMetric !== "likes" && <td>{formatPostMetric(post, "likes")}</td>}
                 {primaryMetric !== "comments_count" && <td>{formatPostMetric(post, "comments_count")}</td>}
+                <td>
+                  <div className="comment-list ranking-comments">
+                    {(post.top_comments || []).slice(0, 3).map((comment, commentIndex) => (
+                      <p key={`${post.post_url}-${comment.username}-${commentIndex}`}>
+                        <strong>{comment.username ? `@${comment.username}` : "Comment"}</strong> {comment.text}
+                      </p>
+                    ))}
+                    {(!post.top_comments || post.top_comments.length === 0) && <span>Not publicly available</span>}
+                  </div>
+                </td>
                 <td>{formatDate(post.timestamp)}</td>
                 <td>
                   <a

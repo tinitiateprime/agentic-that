@@ -534,6 +534,20 @@ function metricDisplayFromRaw(value: unknown) {
   return cleanText(value) || null;
 }
 
+export function instagramVisibleMetric(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  const count = Math.trunc(value);
+  if (count < 10_000) return count.toLocaleString("en-US");
+  const [divisor, suffix] = count >= 1_000_000_000
+    ? [1_000_000_000, "B"] as const
+    : count >= 1_000_000
+      ? [1_000_000, "M"] as const
+      : [1_000, "K"] as const;
+  const amount = count / divisor;
+  const digits = amount < 100 ? 1 : 0;
+  return `${amount.toFixed(digits).replace(/\.0$/, "")}${suffix}`;
+}
+
 export function viewDisplayMatchesExactCount(display: string | null | undefined, exactCount: number) {
   if (!display || !Number.isFinite(exactCount) || exactCount < 0) return true;
   const normalized = display.replace(/,/g, "").trim();
@@ -991,7 +1005,9 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     comments_exact: raw.commentsHidden ? false : raw.commentsExact === true,
     comments_hidden: raw.commentsHidden === true,
     views: countFromRaw(raw.views),
-    views_display: cleanText(raw.views) || null,
+    views_display: typeof raw.views === "string"
+      ? cleanText(raw.views) || null
+      : instagramVisibleMetric(countFromRaw(raw.views)),
     thumbnail_url: cleanText(raw.thumbnail) || null,
     caption: cleanCaptionText(raw.caption),
     timestamp: timestamp || timestampFromPostUrl(postUrl),
@@ -1441,16 +1457,23 @@ export function reconcileVisibleReelView(
   visibleCount: number | null | undefined,
   exactCount: number
 ) {
-  if (visibleDisplay && !viewDisplayMatchesExactCount(visibleDisplay, exactCount)) {
-    return {
-      views: visibleCount ?? parseCount(visibleDisplay),
-      views_display: visibleDisplay,
-      views_exact: false
-    };
+  if (visibleDisplay) {
+    const matches = viewDisplayMatchesExactCount(visibleDisplay, exactCount);
+    return matches
+      ? {
+          views: exactCount,
+          views_display: visibleDisplay,
+          views_exact: true
+        }
+      : {
+          views: visibleCount ?? parseCount(visibleDisplay),
+          views_display: visibleDisplay,
+          views_exact: false
+        };
   }
   return {
     views: exactCount,
-    views_display: exactCount.toLocaleString("en-US"),
+    views_display: instagramVisibleMetric(exactCount) || exactCount.toLocaleString("en-US"),
     views_exact: true
   };
 }
@@ -2113,6 +2136,7 @@ function publicMediaToCandidate(media: Record<string, unknown>): Candidate | nul
     likes_exact: likes !== null,
     likes_hidden: likesHidden,
     views,
+    views_display: instagramVisibleMetric(views),
     follower_count: countFromRaw(user.follower_count),
     follower_count_display: countFromRaw(user.follower_count) !== null
       ? countFromRaw(user.follower_count)!.toLocaleString("en-US")

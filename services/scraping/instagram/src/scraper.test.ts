@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   currentReelViewsFromPayload,
+  instagramVisibleMetric,
   mergeCandidateData,
   profileAnalysisCandidateTarget,
   publicProfileCandidatesFromPayload,
@@ -52,7 +53,18 @@ test("uses an exact count when it agrees with the visible Reels-grid value", () 
   assert.equal(viewDisplayMatchesExactCount("18.8M", 18_845_321), true);
   assert.deepEqual(reconcileVisibleReelView("18.8M", 18_800_000, 18_845_321), {
     views: 18_845_321,
-    views_display: "18,845,321",
+    views_display: "18.8M",
+    views_exact: true
+  });
+});
+
+test("formats payload view counts like Instagram when no grid label is available", () => {
+  assert.equal(instagramVisibleMetric(2_345_678), "2.3M");
+  assert.equal(instagramVisibleMetric(400_200), "400K");
+  assert.equal(instagramVisibleMetric(9_593), "9,593");
+  assert.deepEqual(reconcileVisibleReelView(null, null, 2_345_678), {
+    views: 2_345_678,
+    views_display: "2.3M",
     views_exact: true
   });
 });

@@ -594,7 +594,7 @@
 }
 
 .instagram-scraper-app .analysis-ranking-table {
-  min-width: 980px;
+  min-width: 1240px;
 }
 
 .instagram-scraper-app .analysis-ranking-table th,
@@ -893,6 +893,11 @@
 
 .instagram-scraper-app .comment-list span {
   color: #98a2b3;
+}
+
+.instagram-scraper-app .ranking-comments {
+  min-width: 230px;
+  max-width: 320px;
 }
 
 .instagram-scraper-app .empty-panel {
