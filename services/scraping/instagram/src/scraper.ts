@@ -54,6 +54,7 @@ export type InstagramProfileAnalysis = {
   follower_count_display: string | null;
   captured_at: string;
   analyzed_posts: number;
+  candidate_target: number;
   averages: {
     likes: number | null;
     comments: number | null;
@@ -658,7 +659,7 @@ function engagementValues(post: Pick<
     post.likes !== null && post.comments_count !== null;
   return {
     score: views,
-    rate: metricsVisible && post.views_exact && views > 0
+    rate: metricsVisible && views > 0
       ? Math.round(((post.likes! + post.comments_count!) / views) * 10_000) / 100
       : null
   };
@@ -698,6 +699,10 @@ export function selectAnalysisEnrichmentCandidates(results: Candidate[], limit: 
   return [...selected.values()];
 }
 
+export function profileAnalysisCandidateTarget(maxResults: number) {
+  return Math.min(Math.max(Math.max(1, Math.trunc(maxResults)) * 5, 50), 150);
+}
+
 function topCountEntries(counts: Map<string, number>, limit: number) {
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -705,7 +710,12 @@ function topCountEntries(counts: Map<string, number>, limit: number) {
     .map(([label, count]) => ({ label, count }));
 }
 
-function buildProfileAnalysis(results: InstagramPost[], maxResults: number, timezoneOffsetMinutes = 0): InstagramProfileAnalysis {
+function buildProfileAnalysis(
+  results: InstagramPost[],
+  maxResults: number,
+  timezoneOffsetMinutes = 0,
+  candidateTarget = 50
+): InstagramProfileAnalysis {
   const firstProfile = results.find((post) => post.username || post.profile_url) || null;
   const followerCount = results.find((post) => post.follower_count !== null)?.follower_count ?? null;
   const followerCountDisplay = results.find((post) => post.follower_count_display)?.follower_count_display ?? null;
@@ -760,7 +770,7 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
   }).length;
   const engagementRates = followerCount && followerCount > 0
     ? results
-      .filter((post) => post.likes_exact && post.comments_exact && post.likes !== null && post.comments_count !== null)
+      .filter((post) => !post.likes_hidden && !post.comments_hidden && post.likes !== null && post.comments_count !== null)
       .map((post) => ((post.likes! + post.comments_count!) / followerCount) * 100)
     : [];
   const visibleViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null).length;
@@ -774,10 +784,11 @@ function buildProfileAnalysis(results: InstagramPost[], maxResults: number, time
     follower_count_display: followerCountDisplay,
     captured_at: new Date().toISOString(),
     analyzed_posts: results.length,
+    candidate_target: candidateTarget,
     averages: {
-      likes: roundedAverage(results.filter((post) => post.likes_exact).map((post) => post.likes)),
-      comments: roundedAverage(results.filter((post) => post.comments_exact).map((post) => post.comments_count)),
-      views: roundedAverage(results.filter((post) => post.views_exact).map((post) => post.views))
+      likes: roundedAverage(results.filter((post) => !post.likes_hidden).map((post) => post.likes)),
+      comments: roundedAverage(results.filter((post) => !post.comments_hidden).map((post) => post.comments_count)),
+      views: roundedAverage(results.filter((post) => /\/reel\//i.test(post.post_url)).map((post) => post.views))
     },
     engagement_rate: engagementRates.length
       ? Math.round((engagementRates.reduce((sum, value) => sum + value, 0) / engagementRates.length) * 100) / 100
@@ -1791,6 +1802,10 @@ async function collectHoveredProfileTileMetrics(
     if (processed.has(identity)) continue;
 
     const beforeHover = await visibleMetricLabelsFromTile(tile);
+    const thumbnail = await tile.locator("img").first().evaluate((image) => (
+      (image as HTMLImageElement).currentSrc || (image as HTMLImageElement).src || null
+    )).catch(() => null);
+    const publicThumbnail = thumbnail && /^https?:\/\//i.test(thumbnail) ? thumbnail : null;
     await tile.hover({ timeout: 2_000 }).catch(() => {});
     await sleep(80);
     const afterHover = await visibleMetricLabelsFromTile(tile);
@@ -1803,6 +1818,7 @@ async function collectHoveredProfileTileMetrics(
     candidates.push(rawPageCandidateToCandidate({
       href: postUrl,
       mediaType: /\/reel\//i.test(postUrl) ? "reel" : "post",
+      thumbnail: publicThumbnail,
       views: viewsDisplay,
       viewsVerified: viewsDisplay !== null,
       viewsExact: metricDisplayIsExact(viewsDisplay),
@@ -2959,12 +2975,16 @@ async function scrapePublicBrowser(
     if (sortBy === "engagement" && normalized.mode === "profile") {
       const reelsPage = await context.newPage();
       try {
-        const perGridLimit = Math.max(12, Math.ceil(candidateCount / 2));
+        const perGridLimit = Math.max(50, candidateCount);
         const [reelCandidates, profileCandidates] = await Promise.all([
           collectLatestCandidates(reelsPage, discoveryQuery, perGridLimit, maxResults, true),
           collectLatestCandidates(page, discoveryQuery, perGridLimit, maxResults)
         ]);
-        visualCandidates.push(...reelCandidates, ...profileCandidates);
+        const longestGrid = Math.max(reelCandidates.length, profileCandidates.length);
+        for (let index = 0; index < longestGrid; index += 1) {
+          if (reelCandidates[index]) visualCandidates.push(reelCandidates[index]);
+          if (profileCandidates[index]) visualCandidates.push(profileCandidates[index]);
+        }
       } finally {
         await reelsPage.close().catch(() => {});
       }
@@ -3048,7 +3068,10 @@ async function scrapePublicBrowser(
         if (index < visualLimit) addCandidate(visualCandidates[index]);
       }
     } else {
-      for (const candidate of visualCandidates.slice(0, candidateCount)) addCandidate(candidate);
+      for (const candidate of visualCandidates) {
+        addCandidate(candidate);
+        if (candidates.length >= candidateCount) break;
+      }
     }
 
     const candidatesInRange = candidates
@@ -3258,7 +3281,7 @@ async function scrapePublicBrowser(
         return range.direction === "ascending" ? -byTime || -byPost : byTime || byPost;
       });
     const analysis = sortBy === "engagement"
-      ? buildProfileAnalysis(results, maxResults, timezoneOffsetMinutes)
+      ? buildProfileAnalysis(results, maxResults, timezoneOffsetMinutes, candidateCount)
       : undefined;
     return {
       query: normalized.label,
@@ -3326,7 +3349,7 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
     const candidateCount = normalized.mode === "post"
       ? 1
       : sortBy === "engagement"
-        ? 60
+        ? profileAnalysisCandidateTarget(maxResults)
         : needsDeepHistory
           ? 150
         : normalized.mode === "profile"

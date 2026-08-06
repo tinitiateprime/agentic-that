@@ -101,6 +101,26 @@ const localDateValue = (date) => {
   return `${year}-${month}-${day}`;
 };
 
+const ResultThumbnail = ({ post }) => {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [post.thumbnail_url]);
+
+  return (
+    <div className="mini-thumb">
+      {post.thumbnail_url && !failed ? (
+        <img
+          src={post.thumbnail_url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : <span />}
+    </div>
+  );
+};
+
 const defaultRange = (type) => {
   const now = new Date();
   if (type === "month") {
@@ -475,9 +495,7 @@ function InstagramScraperConsole() {
                 <td className="rank-number">{index + 1}</td>
                 <td>
                   <div className="rank-content">
-                    <div className="mini-thumb">
-                      {post.thumbnail_url ? <img src={post.thumbnail_url} alt="" /> : <span />}
-                    </div>
+                    <ResultThumbnail post={post} />
                     <div>
                       <strong>{/\/reel\//i.test(post.post_url) ? "Reel" : "Post"}</strong>
                       <span>{relativeDate(post.timestamp)}</span>
@@ -614,22 +632,22 @@ function InstagramScraperConsole() {
               <article className="metric-card">
                 <span>Posts analyzed</span>
                 <strong>{formatNumber(analysis.analyzed_posts)}</strong>
-                <small>{formatNumber(analysis.posting_frequency?.posts_last_30_days)} in the last 30 days</small>
+                <small>Target {formatNumber(analysis.candidate_target || 50)} public posts and reels</small>
               </article>
               <article className="metric-card">
                 <span>Average views</span>
                 <strong>{formatNumber(analysis.averages?.views)}</strong>
-                <small>Reels with public views</small>
+                <small>From visible Reels values</small>
               </article>
               <article className="metric-card">
                 <span>Average likes</span>
                 <strong>{formatNumber(analysis.averages?.likes)}</strong>
-                <small>Visible likes only</small>
+                <small>From visible grid values</small>
               </article>
               <article className="metric-card">
                 <span>Average comments</span>
                 <strong>{formatNumber(analysis.averages?.comments)}</strong>
-                <small>Visible comments only</small>
+                <small>From visible grid values</small>
               </article>
               <article className="metric-card">
                 <span>Estimated engagement rate</span>
@@ -724,9 +742,7 @@ function InstagramScraperConsole() {
                       <td>{index + 1}</td>
                       <td>
                         <div className="post-cell">
-                          <div className="mini-thumb">
-                            {post.thumbnail_url ? <img src={post.thumbnail_url} alt="" /> : <span />}
-                          </div>
+                          <ResultThumbnail post={post} />
                           <span>{relativeDate(post.timestamp)}</span>
                         </div>
                       </td>
@@ -908,7 +924,7 @@ function InstagramScraperConsole() {
         <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`}>
           {!isPostInput(inputMode) && (
             <div className="count-field">
-              <label htmlFor="count">Count</label>
+              <label htmlFor="count">Results per ranking</label>
               <input
                 id="count"
                 type="number"

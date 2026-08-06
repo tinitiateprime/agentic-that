@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   currentReelViewsFromPayload,
   mergeCandidateData,
+  profileAnalysisCandidateTarget,
   profileTileMetrics,
   reconcileVisibleReelView,
   resolvePublicPostCounts,
@@ -154,6 +155,12 @@ test("opens only unique final ranking winners for comment enrichment", () => {
       "https://www.instagram.com/p/TopComments1/"
     ]
   );
+});
+
+test("treats requested count as output rows while scanning at least 50 candidates", () => {
+  assert.equal(profileAnalysisCandidateTarget(10), 50);
+  assert.equal(profileAnalysisCandidateTarget(12), 60);
+  assert.equal(profileAnalysisCandidateTarget(50), 150);
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {
