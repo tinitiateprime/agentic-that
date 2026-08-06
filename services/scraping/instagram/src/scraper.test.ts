@@ -6,6 +6,7 @@ import {
   profileTileMetrics,
   reconcileVisibleReelView,
   resolvePublicPostCounts,
+  selectAnalysisEnrichmentCandidates,
   viewDisplayMatchesExactCount
 } from "./scraper.ts";
 
@@ -107,6 +108,52 @@ test("does not let an anonymous hidden label replace visible grid likes", () => 
 
   assert.equal(target.likes_display, "7.6M");
   assert.equal(target.likes_hidden, false);
+});
+
+test("opens only unique final ranking winners for comment enrichment", () => {
+  const candidates = [
+    {
+      post_url: "https://www.instagram.com/reel/TopViews1/",
+      views: 100,
+      likes: 1,
+      comments_count: 1,
+      _views_verified: true,
+      _likes_verified: true,
+      _comments_verified: true
+    },
+    {
+      post_url: "https://www.instagram.com/reel/TopLikes1/",
+      views: 50,
+      likes: 100,
+      comments_count: 2,
+      _views_verified: true,
+      _likes_verified: true,
+      _comments_verified: true
+    },
+    {
+      post_url: "https://www.instagram.com/p/TopComments1/",
+      views: null,
+      likes: 50,
+      comments_count: 100,
+      _likes_verified: true,
+      _comments_verified: true
+    },
+    {
+      post_url: "https://www.instagram.com/p/HiddenLikes1/",
+      likes: 1_000,
+      likes_hidden: true,
+      _likes_verified: true
+    }
+  ];
+
+  assert.deepEqual(
+    selectAnalysisEnrichmentCandidates(candidates, 1).map((candidate) => candidate.post_url),
+    [
+      "https://www.instagram.com/reel/TopViews1/",
+      "https://www.instagram.com/reel/TopLikes1/",
+      "https://www.instagram.com/p/TopComments1/"
+    ]
+  );
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {

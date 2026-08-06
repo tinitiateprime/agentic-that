@@ -678,6 +678,26 @@ function rankedPosts(results: InstagramPost[], metric: "views" | "likes" | "comm
     .slice(0, limit);
 }
 
+export function selectAnalysisEnrichmentCandidates(results: Candidate[], limit: number) {
+  const selected = new Map<string, Candidate>();
+  const addRanked = (
+    metric: "views" | "likes" | "comments_count",
+    include: (candidate: Candidate) => boolean
+  ) => {
+    results
+      .filter((candidate) => candidate.post_url && candidate[metric] !== null && candidate[metric] !== undefined && include(candidate))
+      .slice()
+      .sort((a, b) => (b[metric] ?? -1) - (a[metric] ?? -1) || timestampValue(b.timestamp) - timestampValue(a.timestamp))
+      .slice(0, limit)
+      .forEach((candidate) => selected.set(postIdentity(candidate.post_url!), candidate));
+  };
+
+  addRanked("views", (candidate) => /\/reel\//i.test(candidate.post_url || "") && candidate._views_verified === true);
+  addRanked("likes", (candidate) => !candidate.likes_hidden && candidate._likes_verified === true);
+  addRanked("comments_count", (candidate) => !candidate.comments_hidden && candidate._comments_verified === true);
+  return [...selected.values()];
+}
+
 function topCountEntries(counts: Map<string, number>, limit: number) {
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -3031,10 +3051,6 @@ async function scrapePublicBrowser(
       for (const candidate of visualCandidates.slice(0, candidateCount)) addCandidate(candidate);
     }
 
-    if (sortBy === "engagement" && normalized.mode === "profile" && normalized.username) {
-      await verifyPublicProfileReelViews(page, normalized.username, candidates);
-    }
-
     const candidatesInRange = candidates
       .filter((candidate) => timestampInRange(candidate.timestamp, range))
       .sort((a, b) => {
@@ -3061,7 +3077,7 @@ async function scrapePublicBrowser(
         ? 1
         : Math.min(candidatesInRange.length, poolLimit)
     );
-    const extractionConcurrency = normalized.mode === "post" ? 1 : 3;
+    const extractionConcurrency = normalized.mode === "post" ? 1 : sortBy === "engagement" ? 2 : 3;
     const extractCandidate = async (candidate: Candidate) => {
       const postPage = await context.newPage();
       try {
@@ -3140,10 +3156,31 @@ async function scrapePublicBrowser(
         await postPage.close().catch(() => {});
       }
     };
-    const extracted = sortBy === "engagement"
-      ? (await mapWithConcurrency(candidatePool, extractionConcurrency, extractCandidate))
-        .filter((item): item is Candidate => Boolean(item?.post_url))
-      : await mapUntilValidCount(candidatePool, extractionConcurrency, maxResults, extractCandidate);
+    let extracted: Candidate[];
+    if (sortBy === "engagement" && normalized.mode === "profile" && normalized.username) {
+      const profileCandidates = candidatePool.map((candidate) => candidateToData({
+        ...candidate,
+        username: candidate.username || normalized.username,
+        profile_url: candidate.profile_url || `${instagramHost}/${normalized.username}/`,
+        _handle: candidate._handle || candidate.username || normalized.username
+      }));
+      const enrichmentTargets = selectAnalysisEnrichmentCandidates(profileCandidates, maxResults);
+      const enrichedCandidates = await mapWithConcurrency(
+        enrichmentTargets,
+        extractionConcurrency,
+        extractCandidate
+      );
+      const enrichedByIdentity = new Map(
+        enrichedCandidates
+          .filter((candidate): candidate is Candidate => Boolean(candidate?.post_url))
+          .map((candidate) => [postIdentity(candidate.post_url!), candidate] as const)
+      );
+      extracted = profileCandidates.map((candidate) => (
+        enrichedByIdentity.get(postIdentity(candidate.post_url!)) || candidate
+      ));
+    } else {
+      extracted = await mapUntilValidCount(candidatePool, extractionConcurrency, maxResults, extractCandidate);
+    }
 
     const handles = [...new Set(extracted.map((item) => item._handle || item.username).filter(Boolean) as string[])];
     const profileEntries = await mapWithConcurrency(handles, 3, async (handle) => {
