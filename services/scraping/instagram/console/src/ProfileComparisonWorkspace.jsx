@@ -291,8 +291,18 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       error: ""
     })));
     let completed = 0;
+    const failedProfiles = [];
     for (let index = 0; index < profiles.length; index += 1) {
-      if (await collectOneProfile({ ...profiles[index], username: normalized[index] }, index, profiles.length)) completed += 1;
+      const profile = { ...profiles[index], username: normalized[index] };
+      if (await collectOneProfile(profile, index, profiles.length)) completed += 1;
+      else failedProfiles.push({ profile, index });
+    }
+    if (failedProfiles.length > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, 3500));
+      for (const { profile, index } of failedProfiles) {
+        updateProfile(profile.id, { status: "queued", statusText: "Automatic retry", error: "" });
+        if (await collectOneProfile(profile, index, profiles.length)) completed += 1;
+      }
     }
     setStage("select");
     if (completed < 2) setError("At least two profiles must load before a benchmark can be built.");

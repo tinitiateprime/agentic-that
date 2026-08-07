@@ -402,6 +402,35 @@ async function mapUntilValidCount<T, R>(
   return results;
 }
 
+export function backfillVisibleProfileCandidates(
+  extracted: Candidate[],
+  candidatePool: Candidate[],
+  username: string,
+  maxResults: number,
+  range: ScrapeRange
+) {
+  if (extracted.length >= maxResults) return extracted;
+  const recovered = extracted.slice();
+  const identities = new Set(
+    recovered.filter((candidate) => candidate.post_url).map((candidate) => postIdentity(candidate.post_url!))
+  );
+  for (const candidate of candidatePool) {
+    if (!candidate.post_url || !timestampInRange(candidate.timestamp, range)) continue;
+    const identity = postIdentity(candidate.post_url);
+    if (identities.has(identity)) continue;
+    identities.add(identity);
+    recovered.push(candidateToData({
+      ...candidate,
+      username: candidate.username || username,
+      profile_url: candidate.profile_url || `${instagramHost}/${username}/`,
+      _handle: candidate._handle || candidate.username || username,
+      top_comments: candidate.top_comments || []
+    }));
+    if (recovered.length >= maxResults) break;
+  }
+  return recovered;
+}
+
 function splitInputs(query: string) {
   return (query || "").split(/[\n,]+/).map((part) => part.trim()).filter(Boolean);
 }
@@ -3254,6 +3283,23 @@ async function scrapePublicBrowser(
       }
     } else {
       visualCandidates.push(...await collectLatestCandidates(page, discoveryQuery, candidateCount, maxResults));
+      if (normalized.mode === "profile" && normalized.username) {
+        const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
+        if (visualCandidates.length < desiredCandidates) {
+          const reelsPage = await context.newPage();
+          try {
+            visualCandidates.push(...await collectLatestCandidates(
+              reelsPage,
+              discoveryQuery,
+              candidateCount,
+              maxResults,
+              true
+            ));
+          } finally {
+            await reelsPage.close().catch(() => {});
+          }
+        }
+      }
     }
 
     if (normalized.mode === "profile" && normalized.username) {
@@ -3480,6 +3526,10 @@ async function scrapePublicBrowser(
       ));
     } else {
       extracted = await mapUntilValidCount(candidatePool, extractionConcurrency, maxResults, extractCandidate);
+    }
+
+    if (normalized.mode === "profile" && normalized.username && extracted.length < maxResults) {
+      extracted = backfillVisibleProfileCandidates(extracted, candidatePool, normalized.username, maxResults, range);
     }
 
     const handles = [...new Set(extracted.map((item) => item._handle || item.username).filter(Boolean) as string[])];
