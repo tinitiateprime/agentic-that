@@ -100,6 +100,7 @@ type Candidate = Partial<InstagramPost> & {
   _source_rank?: number | null;
   _views_verified?: boolean;
   _views_exact?: boolean;
+  _views_from_grid?: boolean;
   _likes_verified?: boolean;
   _likes_exact?: boolean;
   _comments_verified?: boolean;
@@ -133,6 +134,7 @@ type RawPageCandidate = {
   views?: string | number | null;
   viewsVerified?: boolean;
   viewsExact?: boolean;
+  viewsFromGrid?: boolean;
   thumbnail?: string | null;
   caption?: string | null;
   rank?: number | null;
@@ -931,6 +933,7 @@ function candidateToData(candidate: Candidate): Candidate {
     _source_rank: candidate._source_rank ?? null,
     _views_verified: candidate._views_verified ?? false,
     _views_exact: candidate._views_exact ?? false,
+    _views_from_grid: candidate._views_from_grid ?? false,
     _likes_verified: candidate._likes_verified ?? false,
     _likes_exact: candidate._likes_exact ?? false,
     _comments_verified: candidate._comments_verified ?? false,
@@ -1017,6 +1020,7 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     _source_rank: typeof raw.rank === "number" && Number.isFinite(raw.rank) ? raw.rank : null,
     _views_verified: raw.viewsVerified === true,
     _views_exact: raw.viewsExact === true,
+    _views_from_grid: raw.viewsFromGrid === true,
     _likes_verified: raw.likesVerified === true,
     _likes_exact: raw.likesExact === true,
     _comments_verified: raw.commentsVerified === true,
@@ -1311,13 +1315,21 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     exactInternal: "_comments_exact"
   });
   const sourceHasCurrentViews = source._views_verified && source.views !== null && source.views !== undefined;
+  const sourceViewsFromGrid = sourceHasCurrentViews && source._views_from_grid === true;
+  const targetViewsFromGrid = target._views_verified === true && target._views_from_grid === true;
   const preferSourceViews = sourceHasCurrentViews && (
+    sourceViewsFromGrid ||
     !target._views_verified ||
-    source._views_exact && !target._views_exact ||
-    source._source === "profile reels"
+    !targetViewsFromGrid && source._views_exact && !target._views_exact
   );
   if (preferSourceViews) {
-    const reconciled = source._views_exact
+    const reconciled = sourceViewsFromGrid
+      ? {
+          views: source.views!,
+          views_display: source.views_display ?? instagramVisibleMetric(source.views!),
+          views_exact: source._views_exact === true
+        }
+      : source._views_exact
       ? reconcileVisibleReelView(target._views_verified ? target.views_display : null, target.views, source.views!)
       : {
           views: source.views!,
@@ -1328,6 +1340,7 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     target.views_display = reconciled.views_display;
     target._views_verified = true;
     target._views_exact = reconciled.views_exact;
+    target._views_from_grid = sourceViewsFromGrid;
   }
 }
 
@@ -2038,8 +2051,8 @@ async function collectHoveredProfileTileMetrics(
     const identity = postIdentity(postUrl);
     if (processed.has(identity)) continue;
 
-    const beforeHover = await visibleMetricLabelsFromTile(tile);
     const thumbnail = await captureTileThumbnailBeforeHover(tile);
+    const beforeHover = await visibleMetricLabelsFromTile(tile);
     await tile.hover({ timeout: 2_000 }).catch(() => {});
     await sleep(80);
     const afterHover = await visibleMetricLabelsFromTile(tile);
@@ -2047,6 +2060,15 @@ async function collectHoveredProfileTileMetrics(
     const viewsDisplay = tileMetrics.views_display;
     const likesDisplay = tileMetrics.likes_display;
     const commentsDisplay = tileMetrics.comments_display;
+    const hasVisibleMetrics = viewsDisplay !== null || likesDisplay !== null || commentsDisplay !== null;
+    if (!hasVisibleMetrics) {
+      await page.mouse.move(0, 0).catch(() => {});
+      continue;
+    }
+    if (sourceLabel === "profile reels" && viewsDisplay === null) {
+      await page.mouse.move(0, 0).catch(() => {});
+      continue;
+    }
     processed.add(identity);
 
     candidates.push(rawPageCandidateToCandidate({
@@ -2056,6 +2078,7 @@ async function collectHoveredProfileTileMetrics(
       views: viewsDisplay,
       viewsVerified: viewsDisplay !== null,
       viewsExact: metricDisplayIsExact(viewsDisplay),
+      viewsFromGrid: viewsDisplay !== null,
       likes: likesDisplay,
       likesDisplay,
       likesVerified: likesDisplay !== null,
@@ -2492,6 +2515,12 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
     const scrollLimit = isProfileSource
       ? Math.max(2, Math.min(16, Math.floor(activeSourceLimit / 12) + 2))
       : Math.max(8, Math.min(14, Math.floor(activeSourceLimit / 12) + 1));
+
+    if (source.label === "profile reels") {
+      await page.waitForFunction(() => Array.from(document.querySelectorAll('a[href*="/reel/"]'))
+        .some((anchor) => /\b[\d,.]+\s*[KMB]?\b/i.test(anchor.textContent || "")), undefined, { timeout: 3_000 })
+        .catch(() => {});
+    }
 
     let staleScrolls = 0;
     for (let index = 0; index < scrollLimit; index += 1) {

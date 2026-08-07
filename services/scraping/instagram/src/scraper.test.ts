@@ -88,6 +88,53 @@ test("prefers the real reel URL for the same shortcode", () => {
   assert.equal(target.views_display, "267K");
 });
 
+test("never lets a payload counter replace a visible Reels-grid view label", () => {
+  const target = {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 2_300_000,
+    views_display: "2.3M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_from_grid: true
+  };
+  mergeCandidateData(target, {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 1_100_000,
+    views_display: "1.1M",
+    _views_verified: true,
+    _views_exact: true,
+    _source: "public profile pagination"
+  });
+
+  assert.equal(target.views, 2_300_000);
+  assert.equal(target.views_display, "2.3M");
+  assert.equal(target._views_from_grid, true);
+});
+
+test("lets a visible Reels-grid view label correct an earlier payload counter", () => {
+  const target = {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 1_100_000,
+    views_display: "1.1M",
+    _views_verified: true,
+    _views_exact: true,
+    _views_from_grid: false
+  };
+  mergeCandidateData(target, {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 2_300_000,
+    views_display: "2.3M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_from_grid: true,
+    _source: "profile reels"
+  });
+
+  assert.equal(target.views, 2_300_000);
+  assert.equal(target.views_display, "2.3M");
+  assert.equal(target._views_from_grid, true);
+});
+
 test("maps normal and hovered Reel tile states to the correct metrics", () => {
   assert.deepEqual(profileTileMetrics(["80.8M"], ["7.6M", "12.2K"], true), {
     views_display: "80.8M",
