@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import ProfileComparisonWorkspace from "./ProfileComparisonWorkspace";
 
 const API_URL = process.env.NEXT_PUBLIC_INSTAGRAM_API_URL || "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
@@ -8,7 +9,8 @@ const RANGE_TYPES = ["date", "month", "year"];
 const COLLECTION_MODES = [
   { id: "latest", label: "Latest" },
   { id: "range", label: "Range" },
-  { id: "engagement", label: "Analyze Profile" }
+  { id: "engagement", label: "Analyze Profile" },
+  { id: "compare", label: "Compare Profiles" }
 ];
 const ANALYSIS_TABS = [
   { id: "watched", label: "Most Watched" },
@@ -212,6 +214,36 @@ async function apiPost(path, body) {
   return data;
 }
 
+async function runInstagramJob(payload, onStatus = () => {}) {
+  const created = await apiPost("/jobs", payload);
+  const jobId = created?.job?.id;
+  if (!jobId) throw new Error("The background scrape could not be created.");
+
+  onStatus("Scraping public pages");
+  let data = await apiPost(`/jobs/${jobId}/run`, {});
+  const deadline = Date.now() + 16 * 60_000;
+  let pollingFailures = 0;
+  while (data?.job?.status !== "complete") {
+    if (data?.job?.status === "failed") {
+      throw new Error(data.job.error || "Scrape failed");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("The scrape took too long. Try a smaller count or range.");
+    }
+    onStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    try {
+      data = await apiGetRequired(`/jobs/${jobId}`);
+      pollingFailures = 0;
+    } catch (pollError) {
+      pollingFailures += 1;
+      if (pollingFailures >= 5) throw pollError;
+      onStatus("Reconnecting to background job");
+    }
+  }
+  return data;
+}
+
 function InstagramScraperConsole() {
   const [inputMode, setInputMode] = useState(null);
   const [inputValue, setInputValue] = useState("");
@@ -259,7 +291,7 @@ function InstagramScraperConsole() {
   const selectInputMode = (mode) => {
     setInputMode(mode);
     setInputValue((value) => cleanModeValue(mode, value));
-    if (isPostInput(mode) || (!isProfileInput(mode) && collectionMode === "engagement")) {
+    if (isPostInput(mode) || (!isProfileInput(mode) && ["engagement", "compare"].includes(collectionMode))) {
       setCollectionMode("latest");
     }
     setError(null);
@@ -269,14 +301,14 @@ function InstagramScraperConsole() {
     const detected = detectInputMode(value);
     setInputMode(detected.mode);
     setInputValue(detected.value);
-    if (isPostInput(detected.mode) || (!isProfileInput(detected.mode) && collectionMode === "engagement")) {
+    if (isPostInput(detected.mode) || (!isProfileInput(detected.mode) && ["engagement", "compare"].includes(collectionMode))) {
       setCollectionMode("latest");
     }
     setError(null);
   };
 
   const selectCollectionMode = (mode) => {
-    if (isPostInput(inputMode) || (mode === "engagement" && !isProfileInput(inputMode))) return;
+    if (isPostInput(inputMode) || (["engagement", "compare"].includes(mode) && !isProfileInput(inputMode))) return;
     setCollectionMode(mode);
     setError(null);
   };
@@ -290,6 +322,7 @@ function InstagramScraperConsole() {
   };
 
   const startScrape = async () => {
+    if (collectionMode === "compare") return;
     if (!inputMode) {
       setError("Select Profile, Keyword, Profile URL, or Post URL first.");
       return;
@@ -351,32 +384,7 @@ function InstagramScraperConsole() {
         auto_expand_days: false,
         max_auto_expand_days: 1
       };
-      const created = await apiPost("/jobs", payload);
-      const jobId = created?.job?.id;
-      if (!jobId) throw new Error("The background scrape could not be created.");
-
-      setWorkingStatus("Scraping public pages");
-      let data = await apiPost(`/jobs/${jobId}/run`, {});
-      const deadline = Date.now() + 16 * 60_000;
-      let pollingFailures = 0;
-      while (data?.job?.status !== "complete") {
-        if (data?.job?.status === "failed") {
-          throw new Error(data.job.error || "Scrape failed");
-        }
-        if (Date.now() >= deadline) {
-          throw new Error("The scrape took too long. Try a smaller count or range.");
-        }
-        setWorkingStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
-        await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        try {
-          data = await apiGetRequired(`/jobs/${jobId}`);
-          pollingFailures = 0;
-        } catch (pollError) {
-          pollingFailures += 1;
-          if (pollingFailures >= 5) throw pollError;
-          setWorkingStatus("Reconnecting to background job");
-        }
-      }
+      const data = await runInstagramJob(payload, setWorkingStatus);
       setResults(data?.results || []);
       setAnalysis(data?.analysis || data?.run?.analysis || null);
       setLastQuery(data?.run?.query || cleanQuery);
@@ -821,7 +829,7 @@ function InstagramScraperConsole() {
   }
 
   return (
-    <main className="instagram-scraper-app start-page">
+    <main className={`instagram-scraper-app start-page ${collectionMode === "compare" ? "compare-mode" : ""}`}>
       <section className="intro-panel">
         <p className="eyebrow">Instagram intelligence</p>
         <h1>Instagram scraper</h1>
@@ -829,7 +837,7 @@ function InstagramScraperConsole() {
       </section>
 
       <section className="launch-panel">
-        <div className={`input-builder ${inputMode ? "is-active" : ""}`}>
+        <div className={`input-builder ${inputMode ? "is-active" : ""} ${collectionMode === "compare" ? "is-compare" : ""}`}>
           <fieldset className="mode-picker">
             <legend>Choose input type</legend>
             <div className="mode-options">
@@ -847,7 +855,7 @@ function InstagramScraperConsole() {
             </div>
           </fieldset>
 
-          <div className={`guided-input ${inputMode ? "is-visible" : ""}`}>
+          {collectionMode !== "compare" && <div className={`guided-input ${inputMode ? "is-visible" : ""}`}>
             {activeInputMode && (
               <>
                 <label htmlFor="query">{activeInputMode.fieldLabel}</label>
@@ -869,7 +877,7 @@ function InstagramScraperConsole() {
                 </div>
               </>
             )}
-          </div>
+          </div>}
         </div>
 
         {!isPostInput(inputMode) && (
@@ -877,7 +885,7 @@ function InstagramScraperConsole() {
             <legend>Choose collection</legend>
             <div className="workflow-options">
               {COLLECTION_MODES
-                .filter((item) => item.id !== "engagement" || isProfileInput(inputMode))
+                .filter((item) => !["engagement", "compare"].includes(item.id) || isProfileInput(inputMode))
                 .map((item) => (
                   <button
                     key={item.id}
@@ -890,6 +898,10 @@ function InstagramScraperConsole() {
                 ))}
             </div>
           </fieldset>
+        )}
+
+        {collectionMode === "compare" && isProfileInput(inputMode) && (
+          <ProfileComparisonWorkspace seedProfile={inputValue} runJob={runInstagramJob} />
         )}
 
         {!isPostInput(inputMode) && collectionMode === "range" && (
@@ -945,7 +957,7 @@ function InstagramScraperConsole() {
           </div>
         )}
 
-        <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`}>
+        {collectionMode !== "compare" && <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`}>
           {!isPostInput(inputMode) && (
             <div className="count-field">
               <label htmlFor="count">Results per ranking</label>
@@ -962,9 +974,9 @@ function InstagramScraperConsole() {
           <button className="primary-button" onClick={() => startScrape()}>
             {isPostInput(inputMode) ? "Scrape Post" : "Start Scraping"}
           </button>
-        </div>
+        </div>}
 
-        {keywords.length > 0 && (
+        {collectionMode !== "compare" && keywords.length > 0 && (
           <div className="quick-row">
             {keywords.slice(0, 7).map((item) => (
               <button key={item} onClick={() => selectSavedQuery(item)}>{item}</button>
@@ -972,7 +984,7 @@ function InstagramScraperConsole() {
           </div>
         )}
 
-        {error && <div className="error-box">{error}</div>}
+        {collectionMode !== "compare" && error && <div className="error-box">{error}</div>}
       </section>
     </main>
   );
