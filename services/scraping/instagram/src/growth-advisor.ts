@@ -310,7 +310,7 @@ export function buildGeminiRequest(request: AdvisorRequest) {
       maxOutputTokens: request.operation === "question" ? 1800 : 4200,
       responseFormat: {
         text: {
-          mimeType: "application/json",
+          mimeType: "APPLICATION_JSON",
           schema: request.operation === "question" ? QUESTION_SCHEMA : PLAN_SCHEMA
         }
       }

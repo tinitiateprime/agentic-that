@@ -110,7 +110,7 @@ test("prompt treats scraped text as evidence rather than instructions", () => {
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /Missing, null, hidden, and unavailable values are unknown/);
   const request = buildGeminiRequest({ operation: "plan", report });
-  assert.equal(request.generationConfig.responseFormat.text.mimeType, "application/json");
+  assert.equal(request.generationConfig.responseFormat.text.mimeType, "APPLICATION_JSON");
 });
 
 test("calls Gemini server-side and parses its structured response", async () => {

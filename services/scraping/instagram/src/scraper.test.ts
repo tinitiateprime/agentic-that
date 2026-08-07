@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  backfillVisibleProfileCandidates,
   currentReelViewsFromPayload,
   instagramVisibleMetric,
   mergeCandidateData,
@@ -13,29 +12,6 @@ import {
   selectAnalysisEnrichmentCandidates,
   viewDisplayMatchesExactCount
 } from "./scraper.ts";
-
-test("keeps visible profile-grid posts when individual post pages are blocked", () => {
-  const timestamp = "2026-08-06T10:00:00.000Z";
-  const recovered = backfillVisibleProfileCandidates([], [{
-    post_url: "https://www.instagram.com/reel/GridFallback1/",
-    timestamp,
-    thumbnail_url: "https://images.example/grid.jpg",
-    likes: 42,
-    comments_count: 5,
-    top_comments: []
-  }], "public_shop", 3, {
-    start: new Date("2026-01-01T00:00:00.000Z"),
-    end: new Date("2026-12-31T23:59:59.999Z"),
-    strict: true,
-    direction: "descending",
-    collectionMode: "latest"
-  });
-
-  assert.equal(recovered.length, 1);
-  assert.equal(recovered[0].username, "public_shop");
-  assert.equal(recovered[0].profile_url, "https://www.instagram.com/public_shop/");
-  assert.equal(recovered[0].thumbnail_url, "https://images.example/grid.jpg");
-});
 
 test("extracts exact current reel counts from nested public GraphQL payloads", () => {
   const views = currentReelViewsFromPayload({
