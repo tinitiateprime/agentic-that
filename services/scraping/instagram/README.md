@@ -50,6 +50,8 @@ Profile Analysis scans up to 300 unique Reels by default before selecting rankin
 
 Public login/sign-up dialogs are dismissed through semantic Close and Not Now controls. A login input or incidental login text does not classify a page as login-only when public post or Reel anchors are present. Comparison mode does not label recent posts as Most Viewed when Instagram supplies no trustworthy current view labels, and it does not automatically duplicate a failed job after server-side recovery has already run.
 
+When Instagram's public `web_profile_info` response is unavailable or broken for a profile, the scraper can recover the numeric profile ID from the public route document and continue through the same logged-out Reels query and public feed pagination. An exact Reels-query view is accepted without a visible grid label only when the fresh payload exposes one unambiguous counter for that shortcode; conflicting counters remain unavailable rather than being guessed.
+
 Runs expose a `discoveryStatus` value (`ok`, `partial`, `temporarily_unavailable`, `login_required`, or `not_found`). Empty public loads are retried through the current profile and Reels pages in a fresh browser context before a temporary status is returned. The scraper does not bypass login walls, challenges, CAPTCHA, or rate limits.
 
 `follower_count` is refreshed from the public profile payload with browser caching disabled, and `follower_count_display` preserves Instagram's visible profile label such as `23.9K`.

@@ -178,6 +178,20 @@ export function classifyInstagramAccess(snapshot: InstagramAccessSnapshot) {
   return "unknown" as const;
 }
 
+export function publicProfileIdFromHtml(html: string, requestedUsername: string) {
+  const username = requestedUsername.replace(/^@+/, "").trim().toLowerCase();
+  if (!isInstagramHandle(username) || !html) return null;
+
+  const normalized = html
+    .replace(/\\u0040/gi, "@")
+    .replace(/\\\//g, "/");
+  const lower = normalized.toLowerCase();
+  if (!lower.includes(`@${username}`) && !lower.includes(`/${username}/`)) return null;
+
+  const profileId = normalized.match(/["']profile_id["']\s*:\s*["'](\d{8,})["']/i)?.[1] || null;
+  return profileId && /^\d{8,}$/.test(profileId) ? profileId : null;
+}
+
 type RawPageCandidate = {
   href?: string | null;
   code?: string | null;
@@ -594,7 +608,9 @@ function timestampFromPostUrl(postUrl: string) {
   const mediaId = mediaIdFromPostUrl(postUrl);
   if (mediaId === null) return null;
   const timestamp = Number(mediaId >> 23n) + instagramEpochMilliseconds;
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+  if (!Number.isFinite(timestamp)) return null;
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function parseCount(text?: string | null) {
@@ -1150,7 +1166,8 @@ async function collectPublicProfileFeedCandidates(
   page: Page,
   requestedHandle: string,
   limit: number,
-  range: ScrapeRange
+  range: ScrapeRange,
+  knownUserId?: string | null
 ) {
   const handle = requestedHandle.replace(/^@+/, "").trim().toLowerCase();
   if (!isInstagramHandle(handle)) return [];
@@ -1225,9 +1242,12 @@ async function collectPublicProfileFeedCandidates(
     })()
   `).catch((): PublicProfileBootstrap => ({ ok: false }));
 
+  const routeProfileId = publicProfileIdFromHtml(
+    await page.content().catch(() => ""),
+    handle
+  );
   if (!bootstrap.ok) {
     console.warn(`Instagram public profile feed bootstrap failed for ${handle} (${bootstrap.status || "unknown"}).`);
-    return [];
   }
 
   const profileHandle = cleanText(bootstrap.username).toLowerCase() || handle;
@@ -1236,6 +1256,7 @@ async function collectPublicProfileFeedCandidates(
   const exactFollowerCount = Number.isFinite(followerCount) && followerCount >= 0 ? Math.trunc(followerCount) : null;
   const followerCountDisplay = exactFollowerCount === null ? null : exactFollowerCount.toLocaleString("en-US");
   const displayName = cleanText(bootstrap.displayName) || profileHandle;
+  const recoveredUserId = cleanText(bootstrap.userId || knownUserId || routeProfileId);
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
   const addRawCandidate = (raw: RawPageCandidate, source: string) => {
@@ -1248,7 +1269,7 @@ async function collectPublicProfileFeedCandidates(
     seen.add(identity);
     candidate.username = handle;
     candidate._handle = handle;
-    candidate._owner_id = cleanText(bootstrap.userId) || null;
+    candidate._owner_id = recoveredUserId || null;
     candidate._reels_id = cleanText(bootstrap.reelsId) || null;
     candidate.display_name = displayName;
     candidate.profile_url = `${instagramHost}/${handle}/`;
@@ -1259,11 +1280,16 @@ async function collectPublicProfileFeedCandidates(
 
   for (const item of bootstrap.items || []) addRawCandidate(item, "public profile bootstrap");
 
-  const userId = cleanText(bootstrap.userId);
+  const userId = recoveredUserId;
   if (!userId) return candidates.slice(0, limit);
   let maxId = "";
-  const pageLimit = Math.max(2, Math.min(16, Math.ceil(limit / 12) + 2));
-  for (let pageIndex = 0; pageIndex < pageLimit && candidates.length < limit; pageIndex += 1) {
+  const pageLimit = Math.max(2, Math.min(26, Math.ceil(limit / 12) + 1));
+  const feedDeadline = Date.now() + 45_000;
+  for (
+    let pageIndex = 0;
+    pageIndex < pageLimit && candidates.length < limit && Date.now() < feedDeadline;
+    pageIndex += 1
+  ) {
     const feed: PublicProfileFeedPage = await page.evaluate<PublicProfileFeedPage>(`
       (async () => {
         const userId = ${JSON.stringify(userId)};
@@ -1751,6 +1777,57 @@ export function publicProfileCandidatesFromPayload(payload: unknown, sourceLabel
   return [...candidates.values()];
 }
 
+export function currentReelsCandidatesFromAuthoritativePayload(payload: unknown, requestedUsername: string) {
+  const username = requestedUsername.replace(/^@+/, "").trim().toLowerCase();
+  if (!isInstagramHandle(username)) return [];
+  const metricsByCode = currentReelViewCandidatesFromPayload(payload);
+
+  return publicProfileCandidatesFromPayload(payload, "current reels payload")
+    .filter((candidate) => {
+      const handle = cleanText(candidate._handle || candidate.username).toLowerCase();
+      return /\/reel\//i.test(candidate.post_url || "") && (!handle || handle === username);
+    })
+    .map((candidate) => {
+      const normalized = candidateToData(candidate);
+      normalized.username = normalized.username || username;
+      normalized._handle = normalized._handle || normalized.username || username;
+      normalized.profile_url = normalized.profile_url || `${instagramHost}/${username}/`;
+      normalized.views = null;
+      normalized.views_display = null;
+      normalized.views_exact = false;
+      normalized.views_fresh = false;
+      normalized.views_source = null;
+      normalized.views_captured_at = null;
+      normalized._views_verified = false;
+      normalized._views_exact = false;
+      normalized._views_fresh = false;
+      normalized._views_source = null;
+      normalized._views_captured_at = null;
+
+      const code = postIdentity(normalized.post_url || "");
+      const metrics = metricsByCode.get(code) || [];
+      const distinctCounts = new Set(metrics.map((metric) => metric.value));
+      const selected = distinctCounts.size === 1 ? selectFreshReelViewMetric(null, metrics) : null;
+      if (selected) {
+        const capturedAt = new Date().toISOString();
+        assignCandidateViews(normalized, {
+          views: selected.value,
+          views_display: instagramVisibleMetric(selected.value),
+          views_exact: true,
+          views_fresh: true,
+          views_source: "current_reels_payload",
+          views_captured_at: capturedAt,
+          _views_verified: true,
+          _views_exact: true,
+          _views_fresh: true,
+          _views_source: "current_reels_payload",
+          _views_captured_at: capturedAt
+        });
+      }
+      return normalized;
+    });
+}
+
 export function reconcileVisibleReelView(
   visibleDisplay: string | null | undefined,
   visibleCount: number | null | undefined,
@@ -1901,6 +1978,19 @@ async function verifyPublicProfileReelViews(
     }
     applyObservedPayloadData();
   };
+  const applyAuthoritativePayload = (payload: unknown) => {
+    applyPayload(payload);
+    for (const candidate of currentReelsCandidatesFromAuthoritativePayload(payload, username)) {
+      if (!candidate.post_url) continue;
+      const identity = postIdentity(candidate.post_url);
+      seenShortcodes.add(identity);
+      const existing = discovered.get(identity);
+      if (existing) mergeCandidateData(existing, candidate);
+      else discovered.set(identity, candidateToData(candidate));
+      const target = targets.get(identity);
+      if (target) mergeCandidateData(target, candidate);
+    }
+  };
   const captureConnectionState = (payload: unknown) => {
     const visited = new Set<object>();
     const visit = (value: unknown, depth = 0) => {
@@ -1925,8 +2015,33 @@ async function verifyPublicProfileReelViews(
     visit(payload);
   };
   const responseHandler = (response: Response) => {
-    if (!/instagram\.com\/(?:api\/)?graphql/i.test(response.url())) return;
     const request = response.request();
+    const resourceType = request.resourceType();
+    if (
+      resourceType === "document" &&
+      response.url().toLowerCase().includes(`instagram.com/${username.toLowerCase()}/`)
+    ) {
+      let documentTask: Promise<void>;
+      let documentTimeout: ReturnType<typeof setTimeout> | undefined;
+      const html = Promise.race([
+        response.text(),
+        new Promise<never>((_, reject) => {
+          documentTimeout = setTimeout(() => reject(new Error("Instagram document body timed out")), 5_000);
+        })
+      ]);
+      documentTask = html
+        .then((body) => {
+          const profileId = publicProfileIdFromHtml(body, username);
+          if (profileId) discoveredOwnerId = profileId;
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (documentTimeout) clearTimeout(documentTimeout);
+          pending.delete(documentTask);
+        });
+      pending.add(documentTask);
+    }
+    if (!/instagram\.com\/(?:api\/)?graphql/i.test(response.url())) return;
     const postData = request.postData();
     if (postData) {
       const params = new URLSearchParams(postData);
@@ -1939,7 +2054,6 @@ async function verifyPublicProfileReelViews(
       const docId = new URL(response.url()).searchParams.get("doc_id");
       if (docId && /edge_owner_to_timeline_media/i.test(response.url()) === false) initialQueryDocId = docId;
     }
-    const resourceType = request.resourceType();
     if (resourceType !== "xhr" && resourceType !== "fetch") return;
     let task: Promise<void>;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -2018,6 +2132,7 @@ async function verifyPublicProfileReelViews(
               cursors.push(match[1].replace(/\\\\u003d/g, "="));
             }
             for (const match of text.matchAll(/\\?"(?:fbid|fbid_v2)\\?":\\?"(\\d{12,})/g)) ids.push(match[1]);
+            for (const match of text.matchAll(/\\?"profile_id\\?":\\?"(\\d{8,})/g)) ownerIds.push(match[1]);
           }
         }
         return { cursor: cursors[0] || "", reelsId: ids[0] || "", ownerId: ownerIds[0] || "" };
@@ -2026,6 +2141,9 @@ async function verifyPublicProfileReelViews(
     if (routeState.cursor) reelsCursor = routeState.cursor;
     if (routeState.reelsId) discoveredReelsId = routeState.reelsId;
     if (routeState.ownerId) discoveredOwnerId = routeState.ownerId;
+    if (!discoveredOwnerId) {
+      discoveredOwnerId = publicProfileIdFromHtml(await page.content().catch(() => ""), username) || "";
+    }
     const scrollLimit = Math.max(10, Math.min(40, Math.ceil(candidateLimit / 6) + 8));
     const configuredDeadline = Number(process.env.INSTAGRAM_REELS_DISCOVERY_TIMEOUT_MS);
     const discoveryDeadline = Date.now() + (Number.isFinite(configuredDeadline)
@@ -2197,7 +2315,7 @@ async function verifyPublicProfileReelViews(
         pageLimit: Math.min(3, scrollLimit),
         startCursor: reelsCursor
       }).catch(() => []);
-      payloads.forEach(applyPayload);
+      payloads.forEach(applyAuthoritativePayload);
     }
   } catch {
     finalUrl = page.url() || finalUrl;
@@ -3782,14 +3900,6 @@ async function scrapePublicBrowser(
 
     if (normalized.mode === "profile" && normalized.username) {
       const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
-      if (sortBy === "engagement" || process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
-        visualCandidates.push(...await collectPublicProfileFeedCandidates(
-          page,
-          normalized.username,
-          candidateCount,
-          range
-        ));
-      }
       if (sortBy === "engagement") {
         const verified = await verifyPublicProfileReelViews(
           page,
@@ -3799,6 +3909,16 @@ async function scrapePublicBrowser(
         );
         reelsDiagnostics = verified.diagnostics;
         visualCandidates.unshift(...verified.candidates);
+      }
+      if (sortBy === "engagement" || process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
+        const knownUserId = cleanText(visualCandidates.find((candidate) => candidate._owner_id)?._owner_id) || null;
+        visualCandidates.push(...await collectPublicProfileFeedCandidates(
+          page,
+          normalized.username,
+          candidateCount,
+          range,
+          knownUserId
+        ));
       }
     }
 

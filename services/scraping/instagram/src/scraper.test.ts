@@ -5,6 +5,7 @@ import {
   buildProfileAnalysis,
   canUpgradeCurrentReelsGridView,
   classifyInstagramAccess,
+  currentReelsCandidatesFromAuthoritativePayload,
   currentReelViewCandidatesFromPayload,
   engagementValues,
   instagramVisibleMetric,
@@ -14,6 +15,7 @@ import {
   profileAnalysisCandidateTarget,
   publicProfileCandidatesFromPayload,
   profileTileMetrics,
+  publicProfileIdFromHtml,
   reconcileVisibleReelView,
   recordUniqueReelShortcodes,
   resolvePublicPostCounts,
@@ -69,6 +71,56 @@ test("classifies a true login-only page with no public anchors", () => {
     postAnchorCount: 0,
     visibleLoginInputCount: 1
   }), "login_required");
+});
+
+test("recovers the requested profile ID from public route HTML", () => {
+  const html = String.raw`<script type="application/json">{"meta":{"title":"pickels & sweets (\u0040hathiya_pickels_homemade)"},"page_logging":{"name":"profilePage","params":{"profile_id":"61507532657"}}}</script>`;
+
+  assert.equal(publicProfileIdFromHtml(html, "hathiya_pickels_homemade"), "61507532657");
+  assert.equal(publicProfileIdFromHtml(html, "different_profile"), null);
+});
+
+test("uses an unambiguous exact count from the fresh public Reels query when the grid is hidden", () => {
+  const candidates = currentReelsCandidatesFromAuthoritativePayload({
+    data: {
+      user: {
+        edge_owner_to_timeline_media: {
+          edges: [{
+            node: {
+              shortcode: "FreshQueryReel1",
+              product_type: "clips",
+              video_view_count: 24_638,
+              edge_liked_by: { count: 91 },
+              edge_media_to_comment: { count: 7 },
+              owner: { id: "61507532657", username: "hathiya_pickels_homemade" }
+            }
+          }]
+        }
+      }
+    }
+  }, "hathiya_pickels_homemade");
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].views, 24_638);
+  assert.equal(candidates[0].views_exact, true);
+  assert.equal(candidates[0].views_fresh, true);
+  assert.equal(candidates[0].views_source, "current_reels_payload");
+  assert.equal(candidates[0].likes, 91);
+  assert.equal(candidates[0].comments_count, 7);
+});
+
+test("does not guess when a hidden grid payload exposes conflicting view counters", () => {
+  const [candidate] = currentReelsCandidatesFromAuthoritativePayload({
+    shortcode: "AmbiguousQueryReel1",
+    product_type: "clips",
+    play_count: 24_638,
+    video_view_count: 22_100,
+    owner: { id: "61507532657", username: "hathiya_pickels_homemade" }
+  }, "hathiya_pickels_homemade");
+
+  assert.equal(candidate.views, null);
+  assert.equal(candidate.views_fresh, false);
+  assert.equal(candidate.views_source, null);
 });
 
 test("extracts exact current reel counts from nested public GraphQL payloads", () => {
