@@ -106,32 +106,111 @@ test("keeps hidden metrics unknown and removes unrelated URLs", () => {
 
 test("prompt treats scraped text as evidence rather than instructions", () => {
   const prompt = buildGrowthAdvisorPrompt({ operation: "plan", report });
-  assert.match(prompt, /Never invent or estimate Instagram metrics/);
+  assert.match(prompt, /Never invent metrics/);
   assert.match(prompt, /untrusted data/);
-  assert.match(prompt, /Missing, null, hidden, and unavailable values are unknown/);
+  assert.match(prompt, /Missing, null, hidden, or unavailable values are unknown/);
   const request = buildGeminiRequest({ operation: "plan", report });
   assert.equal(request.generationConfig.responseFormat.text.mimeType, "APPLICATION_JSON");
+  assert.equal(request.generationConfig.maxOutputTokens, 2200);
+  assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
+  const questionRequest = buildGeminiRequest({ operation: "question", report, question: "What should I do first?" });
+  assert.equal(questionRequest.generationConfig.maxOutputTokens, 1200);
+  assert.equal(questionRequest.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
+});
+
+test("compacts large reports before sending them to Gemini", () => {
+  const verboseReport = {
+    ...report,
+    business_context: {
+      ...report.business_context,
+      target_customer: "customer ".repeat(100),
+      offers: "offer ".repeat(200),
+      current_challenge: "challenge ".repeat(200)
+    },
+    profiles: Array.from({ length: 4 }, (_, profileIndex) => ({
+      ...report.profiles[profileIndex % report.profiles.length],
+      username: `profile_${profileIndex}`,
+      selected_posts: Array.from({ length: 4 }, (_, postIndex) => ({
+        ...report.profiles[profileIndex % report.profiles.length].selected_posts[0],
+        post_url: `https://www.instagram.com/reel/PROFILE${profileIndex}POST${postIndex}/`,
+        caption: "caption ".repeat(300),
+        hashtags: Array.from({ length: 30 }, (_, index) => `hashtag-${index}-${"x".repeat(80)}`),
+        top_comments: Array.from({ length: 4 }, (_, index) => ({
+          username: `customer_${index}`,
+          text: "comment ".repeat(100)
+        }))
+      }))
+    }))
+  };
+
+  const sanitized = sanitizeComparisonReport(verboseReport);
+  assert.equal(sanitized.profiles.length, 4);
+  assert.equal(sanitized.profiles[0].selected_posts.length, 2);
+  assert.equal(sanitized.profiles[0].selected_posts[0].caption?.length, 600);
+  assert.equal(sanitized.profiles[0].selected_posts[0].hashtags.length, 10);
+  assert.equal(sanitized.profiles[0].selected_posts[0].top_comments.length, 1);
+  assert.equal(sanitized.profiles[0].selected_posts[0].top_comments[0].text.length, 300);
+  assert.ok(Buffer.byteLength(buildGrowthAdvisorPrompt({ operation: "plan", report: verboseReport }), "utf8") < 30_000);
 });
 
 test("calls Gemini server-side and parses its structured response", async () => {
   let calledUrl = "";
   let sentKey = "";
+  const telemetry: Array<Record<string, unknown>> = [];
   const result = await requestGeminiGrowthAdvice({
     operation: "plan",
     report,
     apiKey: "server-only-key",
     model: "gemini-3.6-flash",
+    onTelemetry: (event) => telemetry.push(event),
     fetchImpl: async (input, init) => {
       calledUrl = String(input);
       sentKey = String((init?.headers as Record<string, string>)["x-goog-api-key"]);
       return new Response(JSON.stringify({
-        candidates: [{ content: { parts: [{ text: JSON.stringify(plan) }] } }]
+        candidates: [{ content: { parts: [{ text: JSON.stringify(plan) }] } }],
+        usageMetadata: {
+          promptTokenCount: 500,
+          candidatesTokenCount: 250,
+          thoughtsTokenCount: 100,
+          totalTokenCount: 850
+        }
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
   });
   assert.match(calledUrl, /gemini-3\.6-flash:generateContent$/);
   assert.equal(sentKey, "server-only-key");
   assert.equal(result.executive_summary, plan.executive_summary);
+  assert.equal(telemetry[0].event, "request_started");
+  assert.equal(telemetry[1].event, "response_received");
+  assert.deepEqual(telemetry[1].usage, {
+    promptTokens: 500,
+    outputTokens: 250,
+    thinkingTokens: 100,
+    totalTokens: 850
+  });
+});
+
+test("reports an aborted Gemini request through telemetry", async () => {
+  const controller = new AbortController();
+  const telemetry: Array<Record<string, unknown>> = [];
+  const requestPromise = requestGeminiGrowthAdvice({
+    operation: "plan",
+    report,
+    apiKey: "server-only-key",
+    signal: controller.signal,
+    onTelemetry: (event) => telemetry.push(event),
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const rejectAbort = () => reject(new DOMException("The request was aborted.", "AbortError"));
+      if (init?.signal?.aborted) rejectAbort();
+      else init?.signal?.addEventListener("abort", rejectAbort, { once: true });
+    })
+  });
+
+  controller.abort();
+  await assert.rejects(requestPromise, (error: unknown) => error instanceof Error && error.name === "AbortError");
+  assert.equal(telemetry[0].event, "request_started");
+  assert.equal(telemetry[1].event, "request_failed");
+  assert.equal(telemetry[1].errorName, "AbortError");
 });
 
 test("fails clearly when the Gemini key is missing", async () => {

@@ -12,10 +12,18 @@ export const runtime = "nodejs";
 const MAX_REQUEST_BYTES = 300_000;
 const RATE_WINDOW_MS = 10 * 60_000;
 const RATE_LIMIT = 12;
+const DEFAULT_AI_TIMEOUT_MS = 25_000;
 const rateBuckets = globalThis.__agenticThatGrowthAdvisorRateBuckets || new Map();
 globalThis.__agenticThatGrowthAdvisorRateBuckets = rateBuckets;
 
 const configuredApiKey = () => process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
+
+const configuredTimeoutMs = () => {
+  const value = Number(process.env.GEMINI_TIMEOUT_MS);
+  return Number.isFinite(value) && value >= 5_000
+    ? Math.min(Math.round(value), 50_000)
+    : DEFAULT_AI_TIMEOUT_MS;
+};
 
 function consumeRateLimit(userId) {
   const now = Date.now();
@@ -73,13 +81,14 @@ export async function POST(request) {
     }
     const input = validateAdvisorRequest(body);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45_000);
+    const timeout = setTimeout(() => controller.abort(), configuredTimeoutMs());
     try {
       const result = await requestGeminiGrowthAdvice({
         ...input,
         apiKey,
         model: growthAdvisorModel(),
-        signal: controller.signal
+        signal: controller.signal,
+        onTelemetry: (event) => console.info("Instagram growth advisor Gemini", event)
       });
       return Response.json({ ok: true, result, provider: "gemini", model: growthAdvisorModel() });
     } finally {
@@ -87,6 +96,7 @@ export async function POST(request) {
     }
   } catch (error) {
     if (error?.name === "AbortError") {
+      console.warn("Instagram growth advisor Gemini timed out", { timeoutMs: configuredTimeoutMs() });
       return Response.json({ error: "AI took too long. Please try again.", code: "AI_TIMEOUT" }, { status: 504 });
     }
     if (error instanceof GrowthAdvisorError) {
