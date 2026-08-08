@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { handleInstagramRequest } from "./api.ts";
 import {
   currentReelViewsFromPayload,
   instagramVisibleMetric,
+  liveRequestHeaders,
   mergeCandidateData,
   profileAnalysisCandidateTarget,
   publicProfileCandidatesFromPayload,
@@ -12,6 +14,28 @@ import {
   selectAnalysisEnrichmentCandidates,
   viewDisplayMatchesExactCount
 } from "./scraper.ts";
+
+test("uses the launched browser user agent for live no-cache requests", () => {
+  const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/149.0.0.0 Safari/537.36";
+  const headers = liveRequestHeaders(userAgent, { accept: "application/json" });
+
+  assert.deepEqual(headers, {
+    accept: "application/json",
+    "cache-control": "no-cache",
+    pragma: "no-cache",
+    "user-agent": userAgent
+  });
+  assert.doesNotMatch(JSON.stringify(headers), /Chrome\/122\.0\.0\.0/);
+});
+
+test("prevents scraper API and polling responses from being cached", async () => {
+  const response = await handleInstagramRequest(new Request("http://localhost/api/scraping/instagram/health"));
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("expires"), "0");
+});
 
 test("extracts exact current reel counts from nested public GraphQL payloads", () => {
   const views = currentReelViewsFromPayload({

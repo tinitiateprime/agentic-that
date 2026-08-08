@@ -7,9 +7,12 @@ import {
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store, no-cache, must-revalidate",
+  pragma: "no-cache",
+  expires: "0",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type"
+  "access-control-allow-headers": "content-type, cache-control, pragma"
 };
 
 class InstagramRequestError extends Error {}

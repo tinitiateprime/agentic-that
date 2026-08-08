@@ -179,12 +179,21 @@ const instagramHost = "https://www.instagram.com";
 const postSelector = 'a[href*="/p/"], a[href*="/reel/"]';
 const shortcodeAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const instagramEpochMilliseconds = 1_314_220_021_721;
-const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function cleanText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function liveRequestHeaders(userAgent: string, headers: Record<string, string> = {}) {
+  const runtimeUserAgent = cleanText(userAgent);
+  return {
+    ...headers,
+    "cache-control": "no-cache",
+    pragma: "no-cache",
+    ...(runtimeUserAgent ? { "user-agent": runtimeUserAgent } : {})
+  };
 }
 
 function compactNumber(value: string | null | undefined) {
@@ -311,12 +320,17 @@ async function launchBrowser() {
 async function createPage(browser: Browser) {
   const contextOptions: BrowserContextOptions = {
     locale: "en-US",
-    userAgent: defaultUserAgent,
     viewport: { width: 1280, height: 900 },
-    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" }
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache"
+    }
   };
   const context = await browser.newContext(contextOptions);
-  return { context, page: await context.newPage() };
+  const page = await context.newPage();
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+  return { context, page, userAgent };
 }
 
 async function dismissInstagramPrompts(page: Page) {
@@ -1974,7 +1988,7 @@ async function captureTileThumbnailBeforeHover(tile: Locator) {
   return source && /^https?:\/\//i.test(source) ? source : null;
 }
 
-async function durableThumbnailUrl(value: string | null | undefined) {
+async function durableThumbnailUrl(value: string | null | undefined, userAgent: string) {
   if (!value || value.startsWith("data:image/")) return value || null;
   let url: URL;
   try {
@@ -1995,11 +2009,11 @@ async function durableThumbnailUrl(value: string | null | undefined) {
   const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
     const response = await fetch(url, {
-      headers: {
+      cache: "no-store",
+      headers: liveRequestHeaders(userAgent, {
         accept: "image/avif,image/webp,image/apng,image/jpeg,image/*,*/*;q=0.8",
-        referer: `${instagramHost}/`,
-        "user-agent": defaultUserAgent
-      },
+        referer: `${instagramHost}/`
+      }),
       signal: controller.signal
     });
     const contentLength = Number(response.headers.get("content-length"));
@@ -2020,13 +2034,13 @@ async function durableThumbnailUrl(value: string | null | undefined) {
   }
 }
 
-async function makeRankingThumbnailsDurable(analysis: InstagramProfileAnalysis) {
+async function makeRankingThumbnailsDurable(analysis: InstagramProfileAnalysis, userAgent: string) {
   const posts = new Map<string, InstagramPost>();
   for (const post of [...analysis.top_watched, ...analysis.top_liked, ...analysis.top_discussed]) {
     posts.set(postIdentity(post.post_url), post);
   }
   await mapWithConcurrency([...posts.values()], 4, async (post) => {
-    post.thumbnail_url = await durableThumbnailUrl(post.thumbnail_url);
+    post.thumbnail_url = await durableThumbnailUrl(post.thumbnail_url, userAgent);
     return post;
   });
 }
@@ -2335,15 +2349,15 @@ function extractInstagramPostUrlsFromSearchHtml(html: string) {
   return [...urls];
 }
 
-async function fetchSearchHtml(url: string) {
+async function fetchSearchHtml(url: string, userAgent: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
     const response = await fetch(url, {
-      headers: {
-        "user-agent": defaultUserAgent,
+      cache: "no-store",
+      headers: liveRequestHeaders(userAgent, {
         "accept-language": "en-US,en;q=0.9"
-      },
+      }),
       signal: controller.signal
     });
     if (!response.ok && response.status !== 202) return "";
@@ -2355,7 +2369,7 @@ async function fetchSearchHtml(url: string) {
   }
 }
 
-async function collectRecentSearchCandidates(tag: string, limit: number, range: ScrapeRange) {
+async function collectRecentSearchCandidates(tag: string, limit: number, range: ScrapeRange, userAgent: string) {
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
   const filters = recentSearchWindows(range);
@@ -2389,7 +2403,7 @@ async function collectRecentSearchCandidates(tag: string, limit: number, range: 
     const batch = urls.slice(offset, offset + searchBatchSize);
     const pages = await Promise.all(batch.map(async (source) => ({
       source,
-      html: await fetchSearchHtml(source.url)
+      html: await fetchSearchHtml(source.url, userAgent)
     })));
     for (const page of pages) {
       if (!page.html) continue;
@@ -3223,7 +3237,7 @@ async function scrapePublicBrowser(
   sortBy: "recent" | "engagement",
   timezoneOffsetMinutes = 0
 ): Promise<ScrapeResult> {
-  const { context, page } = await createPage(browser);
+  const { context, page, userAgent } = await createPage(browser);
   try {
     const discoveryQuery = normalized.mode === "post"
       ? normalized.postUrl || normalized.startUrl
@@ -3233,7 +3247,7 @@ async function scrapePublicBrowser(
     const visualCandidates: Candidate[] = [];
 
     if (normalized.mode === "hashtag" && normalized.tag) {
-      searchCandidates.push(...await collectRecentSearchCandidates(normalized.tag, candidateCount, range));
+      searchCandidates.push(...await collectRecentSearchCandidates(normalized.tag, candidateCount, range, userAgent));
     }
 
     if (sortBy === "engagement" && normalized.mode === "profile") {
@@ -3577,7 +3591,7 @@ async function scrapePublicBrowser(
     const analysis = sortBy === "engagement"
       ? buildProfileAnalysis(results, maxResults, timezoneOffsetMinutes, candidateCount)
       : undefined;
-    if (analysis) await makeRankingThumbnailsDurable(analysis);
+    if (analysis) await makeRankingThumbnailsDurable(analysis, userAgent);
     return {
       query: normalized.label,
       results: analysis

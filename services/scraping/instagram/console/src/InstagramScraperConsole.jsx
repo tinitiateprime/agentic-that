@@ -187,13 +187,13 @@ const engagementExportColumns = [
 ];
 
 async function apiGet(path) {
-  const response = await fetch(`${API_URL}${path}`);
+  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   if (!response.ok) return {};
   return response.json();
 }
 
 async function apiGetRequired(path) {
-  const response = await fetch(`${API_URL}${path}`);
+  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.detail || data.message || `Request failed (${response.status})`);
@@ -203,6 +203,7 @@ async function apiGetRequired(path) {
 
 async function apiPost(path, body) {
   const response = await fetch(`${API_URL}${path}`, {
+    cache: "no-store",
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
