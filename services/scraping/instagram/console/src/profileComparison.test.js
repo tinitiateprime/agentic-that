@@ -45,7 +45,25 @@ test("uses recent job order and most-viewed analysis rankings", () => {
   const newer = post("NEW", "brand", { timestamp: "2026-08-01T00:00:00Z", views: 100 });
   assert.deepEqual(postsFromComparisonJob({ results: [older, newer] }, "recent", 2).map((item) => canonicalPostKey(item.post_url)), ["reel:NEW", "reel:OLD"]);
   assert.deepEqual(postsFromComparisonJob({ analysis: { top_watched: [older, newer] } }, "views", 1).map((item) => canonicalPostKey(item.post_url)), ["reel:OLD"]);
-  assert.deepEqual(postsFromComparisonJob({ results: [older], analysis: { top_watched: [] } }, "views", 1), []);
+  assert.deepEqual(
+    postsFromComparisonJob({ results: [older], analysis: { top_watched: [] } }, "views", 1)
+      .map((item) => canonicalPostKey(item.post_url)),
+    ["reel:OLD"]
+  );
+});
+
+test("keeps exact view winners first and fills missing slots with scraped Reels", () => {
+  const exact = post("EXACT", "brand", { views: 500, viewsExact: true });
+  const approximateHigh = post("APPROX_HIGH", "brand", { views: 2_000, viewsExact: false });
+  const approximateLow = post("APPROX_LOW", "brand", { views: 1_000, viewsExact: false });
+
+  assert.deepEqual(
+    postsFromComparisonJob({
+      results: [approximateLow, approximateHigh],
+      analysis: { top_watched: [exact] }
+    }, "views", 3).map((item) => canonicalPostKey(item.post_url)),
+    ["reel:EXACT", "reel:APPROX_HIGH", "reel:APPROX_LOW"]
+  );
 });
 
 test("pins selected posts in selection order", () => {

@@ -64,9 +64,14 @@ const metricLabel = (post, metric) => {
   const display = metric === "comments_count"
     ? post.comments_display
     : post[`${metric}_display`];
-  if (display) return String(display).replace(/\s+/g, "");
+  if (display) {
+    const label = String(display).replace(/\s+/g, "");
+    return metric === "views" && post.views_exact !== true ? `~${label}` : label;
+  }
   const value = Number(post[metric]);
-  return Number.isFinite(value) ? value.toLocaleString() : "N/A";
+  if (!Number.isFinite(value)) return "N/A";
+  const label = value.toLocaleString();
+  return metric === "views" && post.views_exact !== true ? `~${label}` : label;
 };
 
 const formatAverage = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "N/A";
@@ -241,9 +246,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       }, (status) => updateProfile(profile.id, { statusText: status }));
       const posts = postsFromComparisonJob(data, selectionMode, postCount);
       if (!posts.length) {
-        throw new Error(selectionMode === "views"
-          ? "Instagram did not expose public Reel view counts for this profile."
-          : "Instagram did not expose public posts for this profile.");
+        throw new Error("Instagram did not expose public posts for this profile.");
       }
       updateProfile(profile.id, {
         username,

@@ -711,23 +711,32 @@ function rankedPosts(results: InstagramPost[], metric: "views" | "likes" | "comm
 }
 
 export function selectAnalysisEnrichmentCandidates(results: Candidate[], limit: number) {
-  const selected = new Map<string, Candidate>();
-  const addRanked = (
+  const rankedGroups: Candidate[][] = [];
+  const rankBy = (
     metric: "views" | "likes" | "comments_count",
     include: (candidate: Candidate) => boolean
   ) => {
-    results
+    rankedGroups.push(results
       .filter((candidate) => candidate.post_url && candidate[metric] !== null && candidate[metric] !== undefined && include(candidate))
       .slice()
       .sort((a, b) => (b[metric] ?? -1) - (a[metric] ?? -1) || timestampValue(b.timestamp) - timestampValue(a.timestamp))
-      .slice(0, limit)
-      .forEach((candidate) => selected.set(postIdentity(candidate.post_url!), candidate));
+      .slice(0, limit));
   };
 
-  addRanked("views", (candidate) => /\/reel\//i.test(candidate.post_url || "") &&
+  rankBy("views", (candidate) => /\/reel\//i.test(candidate.post_url || "") &&
     candidate._views_exact === true && candidate._views_live === true);
-  addRanked("likes", (candidate) => !candidate.likes_hidden && candidate._likes_verified === true);
-  addRanked("comments_count", (candidate) => !candidate.comments_hidden && candidate._comments_verified === true);
+  rankBy("likes", (candidate) => !candidate.likes_hidden && candidate._likes_verified === true);
+  rankBy("comments_count", (candidate) => !candidate.comments_hidden && candidate._comments_verified === true);
+
+  const selected = new Map<string, Candidate>();
+  const enrichmentBudget = Math.min(results.length, Math.max(6, Math.min(15, limit * 2)));
+  for (let rank = 0; rank < limit && selected.size < enrichmentBudget; rank += 1) {
+    for (const group of rankedGroups) {
+      const candidate = group[rank];
+      if (candidate?.post_url) selected.set(postIdentity(candidate.post_url), candidate);
+      if (selected.size >= enrichmentBudget) break;
+    }
+  }
   return [...selected.values()];
 }
 
@@ -1067,17 +1076,26 @@ async function collectPublicProfileFeedCandidates(
   const bootstrap: PublicProfileBootstrap = await page.evaluate<PublicProfileBootstrap>(`
     (async () => {
       const handle = ${JSON.stringify(handle)};
-      const response = await fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(handle) + "&_=" + Date.now(), {
-        cache: "no-store",
-        headers: {
-          "cache-control": "no-cache",
-          "pragma": "no-cache",
-          "x-ig-app-id": "936619743392459",
-          "x-requested-with": "XMLHttpRequest"
-        }
-      });
-      if (!response.ok) return { ok: false, status: response.status };
-      const payload = await response.json();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      let response;
+      let payload;
+      try {
+        response = await fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(handle) + "&_=" + Date.now(), {
+          cache: "no-store",
+          signal: controller.signal,
+          headers: {
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+            "x-ig-app-id": "936619743392459",
+            "x-requested-with": "XMLHttpRequest"
+          }
+        });
+        if (!response.ok) return { ok: false, status: response.status };
+        payload = await response.json();
+      } finally {
+        clearTimeout(timeout);
+      }
       const user = payload && payload.data && payload.data.user;
       if (!user || !user.id) return { ok: false, status: response.status };
       const nodes = ((user.edge_owner_to_timeline_media && user.edge_owner_to_timeline_media.edges) || [])
@@ -1170,20 +1188,29 @@ async function collectPublicProfileFeedCandidates(
         const maxId = ${JSON.stringify(maxId)};
         const params = new URLSearchParams({ count: String(Math.min(${limit}, 50)), _: String(Date.now()) });
         if (maxId) params.set("max_id", maxId);
-        const response = await fetch("/api/v1/feed/user/" + encodeURIComponent(userId) + "/?" + params, {
-          cache: "no-store",
-          credentials: "include",
-          headers: {
-            "cache-control": "no-cache",
-            "pragma": "no-cache",
-            "x-asbd-id": "129477",
-            "x-ig-app-id": "936619743392459",
-            "x-ig-www-claim": "0",
-            "x-requested-with": "XMLHttpRequest"
-          }
-        });
-        if (!response.ok) return { ok: false, status: response.status };
-        const payload = await response.json();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10_000);
+        let response;
+        let payload;
+        try {
+          response = await fetch("/api/v1/feed/user/" + encodeURIComponent(userId) + "/?" + params, {
+            cache: "no-store",
+            credentials: "include",
+            signal: controller.signal,
+            headers: {
+              "cache-control": "no-cache",
+              "pragma": "no-cache",
+              "x-asbd-id": "129477",
+              "x-ig-app-id": "936619743392459",
+              "x-ig-www-claim": "0",
+              "x-requested-with": "XMLHttpRequest"
+            }
+          });
+          if (!response.ok) return { ok: false, status: response.status };
+          payload = await response.json();
+        } finally {
+          clearTimeout(timeout);
+        }
         const thumbnail = (media) => {
           const own = media && media.image_versions2 && media.image_versions2.candidates;
           if (own && own[0] && own[0].url) return own[0].url;
@@ -1667,17 +1694,30 @@ async function verifyPublicProfileReelViews(
     const resourceType = request.resourceType();
     if (resourceType !== "xhr" && resourceType !== "fetch") return;
     let task: Promise<void>;
-    task = response.json()
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const payload = Promise.race([
+      response.json(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Instagram response body timed out")), 5_000);
+      })
+    ]);
+    task = payload
       .then((payload) => {
         applyPayload(payload);
         captureConnectionState(payload);
       })
       .catch(() => {})
-      .finally(() => pending.delete(task));
+      .finally(() => {
+        if (timeout) clearTimeout(timeout);
+        pending.delete(task);
+      });
     pending.add(task);
   };
   const settleResponses = async () => {
-    while (pending.size) await Promise.allSettled([...pending]);
+    const deadline = Date.now() + 5_000;
+    while (pending.size && Date.now() < deadline) {
+      await Promise.race([Promise.allSettled([...pending]), sleep(500)]);
+    }
   };
 
   page.on("response", responseHandler);
@@ -1753,6 +1793,16 @@ async function verifyPublicProfileReelViews(
         startCursor: string;
       }>(async ({ ownerId, reelsId, template, initialDocId, pageDocId, pageLimit, startCursor }) => {
         const payloads: unknown[] = [];
+        const fetchTextLive = async (url: string, init: RequestInit = {}) => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10_000);
+          try {
+            const response = await fetch(url, { ...init, signal: controller.signal });
+            return await response.text();
+          } finally {
+            clearTimeout(timeout);
+          }
+        };
         const parseJson = (text: string) => {
           try {
             return JSON.parse(text.replace(/^for\s*\(;;\);/, ""));
@@ -1763,11 +1813,11 @@ async function verifyPublicProfileReelViews(
         const initialVariables = { id: ownerId, include_clips_attribution_info: false, first: 12 };
         const initialUrl = "/graphql/query/?hl=en&doc_id=" + encodeURIComponent(initialDocId) +
           "&variables=" + encodeURIComponent(JSON.stringify(initialVariables)) + "&_=" + Date.now();
-        const initialResponse = await fetch(initialUrl, {
+        const initialText = await fetchTextLive(initialUrl, {
           cache: "no-store",
           headers: { "cache-control": "no-cache", "pragma": "no-cache", "x-requested-with": "XMLHttpRequest" }
         });
-        const initialPayload = parseJson(await initialResponse.text());
+        const initialPayload = parseJson(initialText);
         if (initialPayload) payloads.push(initialPayload);
 
         const initialConnection = initialPayload?.data?.user?.edge_owner_to_timeline_media;
@@ -1782,15 +1832,20 @@ async function verifyPublicProfileReelViews(
           const variables = { after, first: 4, id: connectionId };
           const pageUrl = "/graphql/query/?hl=en&doc_id=" + encodeURIComponent(pageDocId) +
             "&variables=" + encodeURIComponent(JSON.stringify(variables)) + "&_=" + Date.now();
-          let response = await fetch(pageUrl, {
-            cache: "no-store",
-            headers: {
-              "cache-control": "no-cache",
-              "pragma": "no-cache",
-              "x-requested-with": "XMLHttpRequest"
-            }
-          });
-          let payload = parseJson(await response.text());
+          let responseText;
+          try {
+            responseText = await fetchTextLive(pageUrl, {
+              cache: "no-store",
+              headers: {
+                "cache-control": "no-cache",
+                "pragma": "no-cache",
+                "x-requested-with": "XMLHttpRequest"
+              }
+            });
+          } catch {
+            break;
+          }
+          let payload = parseJson(responseText);
           let connection = payload?.data?.node?.polaris_clips_connection;
 
           if (!connection && template) {
@@ -1800,19 +1855,23 @@ async function verifyPublicProfileReelViews(
             body.set("variables", JSON.stringify(variables));
             body.set("doc_id", pageDocId);
             const lsd = body.get("lsd") || "";
-            response = await fetch("/api/graphql", {
-              method: "POST",
-              cache: "no-store",
-              headers: {
-                "cache-control": "no-cache",
-                "content-type": "application/x-www-form-urlencoded",
-                "pragma": "no-cache",
-                "x-fb-lsd": lsd,
-                "x-requested-with": "XMLHttpRequest"
-              },
-              body
-            });
-            payload = parseJson(await response.text());
+            try {
+              responseText = await fetchTextLive("/api/graphql", {
+                method: "POST",
+                cache: "no-store",
+                headers: {
+                  "cache-control": "no-cache",
+                  "content-type": "application/x-www-form-urlencoded",
+                  "pragma": "no-cache",
+                  "x-fb-lsd": lsd,
+                  "x-requested-with": "XMLHttpRequest"
+                },
+                body
+              });
+            } catch {
+              break;
+            }
+            payload = parseJson(responseText);
             connection = payload?.data?.node?.polaris_clips_connection;
           }
           if (!payload) break;
@@ -1827,7 +1886,7 @@ async function verifyPublicProfileReelViews(
         template: graphqlTemplate,
         initialDocId: initialQueryDocId,
         pageDocId: pageQueryDocId,
-        pageLimit: scrollLimit,
+        pageLimit: Math.min(3, scrollLimit),
         startCursor: reelsCursor
       }).catch(() => []);
       payloads.forEach(applyPayload);
@@ -2036,30 +2095,10 @@ async function visibleMetricLabelsFromTile(tile: Locator) {
 
 async function captureTileThumbnailBeforeHover(tile: Locator) {
   const image = tile.locator("img").first();
-  const source = await image.evaluate((element) => {
+  return image.evaluate((element) => {
     const value = element as HTMLImageElement;
     return value.currentSrc || value.src || null;
-  }).catch(() => null);
-
-  try {
-    const loaded = await image.evaluate((element) => {
-      const value = element as HTMLImageElement;
-      return value.complete && value.naturalWidth > 0 && value.naturalHeight > 0;
-    });
-    if (loaded) {
-      const screenshot = await image.screenshot({
-        type: "jpeg",
-        quality: 58,
-        animations: "disabled",
-        timeout: 3_000
-      });
-      return `data:image/jpeg;base64,${screenshot.toString("base64")}`;
-    }
-  } catch {
-    // Fall back to the original public image URL when pixel capture is unavailable.
-  }
-
-  return source && /^https?:\/\//i.test(source) ? source : null;
+  }, undefined, { timeout: 1_000 }).catch(() => null);
 }
 
 async function durableThumbnailUrl(value: string | null | undefined, userAgent: string) {
@@ -3258,20 +3297,29 @@ async function getProfileInfo(handle: string, context: BrowserContext) {
       displayName: string | null;
     }>(`
       (async () => {
-        const response = await fetch(
-          "/api/v1/users/web_profile_info/?username=" + encodeURIComponent(${JSON.stringify(handle)}) + "&_=" + Date.now(),
-          {
-            cache: "no-store",
-            headers: {
-              "cache-control": "no-cache",
-              "pragma": "no-cache",
-              "x-ig-app-id": "936619743392459",
-              "x-requested-with": "XMLHttpRequest"
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8_000);
+        let response;
+        let payload;
+        try {
+          response = await fetch(
+            "/api/v1/users/web_profile_info/?username=" + encodeURIComponent(${JSON.stringify(handle)}) + "&_=" + Date.now(),
+            {
+              cache: "no-store",
+              signal: controller.signal,
+              headers: {
+                "cache-control": "no-cache",
+                "pragma": "no-cache",
+                "x-ig-app-id": "936619743392459",
+                "x-requested-with": "XMLHttpRequest"
+              }
             }
-          }
-        );
-        if (!response.ok) return { followerCount: null, displayName: null };
-        const payload = await response.json();
+          );
+          if (!response.ok) return { followerCount: null, displayName: null };
+          payload = await response.json();
+        } finally {
+          clearTimeout(timeout);
+        }
         const user = payload && payload.data && payload.data.user;
         const count = Number(user && user.edge_followed_by && user.edge_followed_by.count);
         return {
@@ -3489,7 +3537,7 @@ async function scrapePublicBrowser(
         if (!postUrl) return null;
         if (!timestampInRange(candidate.timestamp, range)) return null;
 
-        await gotoPublicPage(postPage, postUrl, 30_000);
+        await gotoPublicPage(postPage, postUrl, 15_000);
         await waitForOpenPost(postPage);
         if (!await isExpectedPublicPost(postPage, postUrl)) return null;
         const data = await extractPostMeta(postPage, postUrl);
@@ -3674,9 +3722,7 @@ async function scrapePublicBrowser(
     if (analysis) await makeRankingThumbnailsDurable(analysis, userAgent);
     return {
       query: normalized.label,
-      results: analysis
-        ? (analysis.top_watched.length ? analysis.top_watched : analysis.top_liked)
-        : sorted.slice(0, maxResults),
+      results: sorted.slice(0, maxResults),
       analysis
     };
   } finally {

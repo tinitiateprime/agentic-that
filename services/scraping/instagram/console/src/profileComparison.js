@@ -59,9 +59,10 @@ export function canonicalPostKey(value) {
 
 export function postsFromComparisonJob(data, selectionMode, limit) {
   const analysis = data?.analysis || data?.run?.analysis || null;
+  const results = data?.results || data?.run?.results || [];
   const source = selectionMode === "views"
-    ? (analysis ? analysis.top_watched || [] : (data?.results || []).filter((post) => postMetric(post, "views") !== null))
-    : data?.results || [];
+    ? [...(analysis?.top_watched || []), ...results.filter((post) => /\/reel\//i.test(post.post_url || ""))]
+    : results;
   const seen = new Set();
   const posts = source.filter((post) => {
     const key = canonicalPostKey(post.post_url);
@@ -69,9 +70,16 @@ export function postsFromComparisonJob(data, selectionMode, limit) {
     seen.add(key);
     return true;
   });
-  posts.sort((a, b) => selectionMode === "views"
-    ? (postMetric(b, "views") ?? -1) - (postMetric(a, "views") ?? -1)
-    : new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  posts.sort((a, b) => {
+    if (selectionMode === "views") {
+      const aExact = a.views_exact === true;
+      const bExact = b.views_exact === true;
+      if (aExact !== bExact) return bExact ? 1 : -1;
+      const byViews = (postMetric(b, "views") ?? -1) - (postMetric(a, "views") ?? -1);
+      if (byViews) return byViews;
+    }
+    return new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime();
+  });
   return posts.slice(0, Math.max(1, Number(limit) || 10));
 }
 
