@@ -61,7 +61,11 @@ export function postsFromComparisonJob(data, selectionMode, limit) {
   const analysis = data?.analysis || data?.run?.analysis || null;
   const results = data?.results || data?.run?.results || [];
   const source = selectionMode === "views"
-    ? [...(analysis?.top_watched || []), ...results.filter((post) => /\/reel\//i.test(post.post_url || ""))]
+    ? [
+        ...(analysis?.top_watched || []),
+        ...results.filter((post) => /\/reel\//i.test(post.post_url || "")),
+        ...results
+      ]
     : results;
   const seen = new Set();
   const posts = source.filter((post) => {

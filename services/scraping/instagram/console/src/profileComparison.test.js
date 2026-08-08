@@ -66,6 +66,19 @@ test("keeps exact view winners first and fills missing slots with scraped Reels"
   );
 });
 
+test("falls back to scraped posts when Instagram exposes no public Reels", () => {
+  const regularPost = post("POST_ONLY", "brand", { views: null, viewsExact: false });
+  regularPost.post_url = "https://www.instagram.com/p/POST_ONLY/";
+  regularPost.views = null;
+  regularPost.views_display = null;
+
+  assert.deepEqual(
+    postsFromComparisonJob({ results: [regularPost], analysis: { top_watched: [] } }, "views", 3)
+      .map((item) => canonicalPostKey(item.post_url)),
+    ["p:POST_ONLY"]
+  );
+});
+
 test("pins selected posts in selection order", () => {
   const posts = [post("A", "brand"), post("B", "brand"), post("C", "brand")];
   const ordered = pinSelectedPosts(posts, ["reel:C", "reel:B"]);
