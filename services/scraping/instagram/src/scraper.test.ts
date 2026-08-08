@@ -3,15 +3,18 @@ import test from "node:test";
 import { handleInstagramRequest } from "./api.ts";
 import {
   buildProfileAnalysis,
+  canUpgradeCurrentReelsGridView,
   currentReelViewCandidatesFromPayload,
   engagementValues,
   instagramVisibleMetric,
   liveRequestHeaders,
   mergeCandidateData,
+  mergeProfileDiscoveryCandidates,
   profileAnalysisCandidateTarget,
   publicProfileCandidatesFromPayload,
   profileTileMetrics,
   reconcileVisibleReelView,
+  recordUniqueReelShortcodes,
   resolvePublicPostCounts,
   selectAnalysisEnrichmentCandidates,
   selectFreshReelViewMetric,
@@ -125,14 +128,16 @@ test("prefers the real reel URL for the same shortcode", () => {
   assert.equal(target.views_display, "267K");
 });
 
-test("never lets a payload counter replace a visible Reels-grid view label", () => {
+test("never lets a stale feed counter replace a visible current Reels-grid label", () => {
   const target = {
     post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
     views: 2_300_000,
     views_display: "2.3M",
     _views_verified: true,
     _views_exact: false,
-    _views_from_grid: true
+    _views_from_grid: true,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const
   };
   mergeCandidateData(target, {
     post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
@@ -140,6 +145,8 @@ test("never lets a payload counter replace a visible Reels-grid view label", () 
     views_display: "1.1M",
     _views_verified: true,
     _views_exact: true,
+    _views_fresh: false,
+    _views_source: "profile_feed" as const,
     _source: "public profile pagination"
   });
 
@@ -148,14 +155,15 @@ test("never lets a payload counter replace a visible Reels-grid view label", () 
   assert.equal(target._views_from_grid, true);
 });
 
-test("lets a visible Reels-grid view label correct an earlier payload counter", () => {
+test("lets a visible Reels-grid label correct a conflicting current payload counter", () => {
   const target = {
     post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
     views: 1_100_000,
     views_display: "1.1M",
     _views_verified: true,
     _views_exact: true,
-    _views_live: true,
+    _views_fresh: true,
+    _views_source: "current_reels_payload" as const,
     _views_from_grid: false
   };
   mergeCandidateData(target, {
@@ -164,6 +172,8 @@ test("lets a visible Reels-grid view label correct an earlier payload counter", 
     views_display: "2.3M",
     _views_verified: true,
     _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const,
     _views_from_grid: true,
     _source: "profile reels"
   });
@@ -171,7 +181,8 @@ test("lets a visible Reels-grid view label correct an earlier payload counter", 
   assert.equal(target.views, 2_300_000);
   assert.equal(target.views_display, "2.3M");
   assert.equal(target._views_from_grid, true);
-  assert.equal(target._views_live, false);
+  assert.equal(target._views_fresh, true);
+  assert.equal(target._views_source, "current_reels_grid");
 });
 
 test("keeps a fresh exact counter when a current grid label agrees with it", () => {
@@ -181,7 +192,8 @@ test("keeps a fresh exact counter when a current grid label agrees with it", () 
     views_display: "2.3M",
     _views_verified: true,
     _views_exact: true,
-    _views_live: true,
+    _views_fresh: true,
+    _views_source: "current_reels_payload" as const,
     _views_from_grid: false
   };
   mergeCandidateData(target, {
@@ -190,6 +202,8 @@ test("keeps a fresh exact counter when a current grid label agrees with it", () 
     views_display: "2.3M",
     _views_verified: true,
     _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const,
     _views_from_grid: true,
     _source: "profile reels"
   });
@@ -197,8 +211,120 @@ test("keeps a fresh exact counter when a current grid label agrees with it", () 
   assert.equal(target.views, 2_345_678);
   assert.equal(target.views_display, "2.3M");
   assert.equal(target._views_exact, true);
-  assert.equal(target._views_live, true);
+  assert.equal(target._views_fresh, true);
+  assert.equal(target._views_source, "current_reels_payload");
   assert.equal(target._views_from_grid, false);
+});
+
+test("current 24.6K Reels views beat stale 1,759 feed views in every merge order", () => {
+  const grid = () => ({
+    post_url: "https://www.instagram.com/reel/FreshGrid1/",
+    views: 24_600,
+    views_display: "24.6K",
+    _views_verified: true,
+    _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const,
+    _views_from_grid: true,
+    _source: "profile reels"
+  });
+  const feed = () => ({
+    post_url: "https://www.instagram.com/reel/FreshGrid1/",
+    views: 1_759,
+    views_display: "1,759",
+    _views_verified: true,
+    _views_exact: true,
+    _views_fresh: false,
+    _views_source: "profile_feed" as const,
+    _source: "public profile feed"
+  });
+
+  const feedThenGrid = feed();
+  mergeCandidateData(feedThenGrid, grid());
+  const gridThenFeed = grid();
+  mergeCandidateData(gridThenFeed, feed());
+
+  for (const result of [feedThenGrid, gridThenFeed]) {
+    assert.equal(result.views, 24_600);
+    assert.equal(result.views_display, "24.6K");
+    assert.equal(result._views_exact, false);
+    assert.equal(result._views_fresh, true);
+    assert.equal(result._views_source, "current_reels_grid");
+  }
+});
+
+test("upgrades a matching current 1.2M grid label with an exact fresh payload count", () => {
+  const target = {
+    post_url: "https://www.instagram.com/reel/FreshGrid2/",
+    views: 1_200_000,
+    views_display: "1.2M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const,
+    _views_from_grid: true
+  };
+  mergeCandidateData(target, {
+    post_url: target.post_url,
+    views: 1_248_713,
+    views_display: "1,248,713",
+    _views_verified: true,
+    _views_exact: true,
+    _views_fresh: true,
+    _views_source: "current_reels_payload"
+  });
+
+  assert.equal(target.views, 1_248_713);
+  assert.equal(target.views_display, "1.2M");
+  assert.equal(target._views_exact, true);
+  assert.equal(target._views_fresh, true);
+  assert.equal(target._views_source, "current_reels_payload");
+});
+
+test("does not treat a payload-only counter as current without a visible Reels-grid label", () => {
+  assert.equal(canUpgradeCurrentReelsGridView({
+    post_url: "https://www.instagram.com/reel/PayloadOnly1/",
+    views: null,
+    views_display: null,
+    _views_verified: false,
+    _views_exact: false,
+    _views_fresh: false,
+    _views_source: null
+  }), false);
+  assert.equal(canUpgradeCurrentReelsGridView({
+    post_url: "https://www.instagram.com/reel/GridVisible1/",
+    views: 1_200_000,
+    views_display: "1.2M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid"
+  }), true);
+});
+
+test("tracks new Reel shortcodes even when Instagram recycles the same number of DOM anchors", () => {
+  const seen = new Set<string>();
+  assert.equal(recordUniqueReelShortcodes(seen, Array.from({ length: 12 }, (_, index) => `/reel/First${index}Code/`)), 12);
+  assert.equal(recordUniqueReelShortcodes(seen, Array.from({ length: 12 }, (_, index) => `/reel/Second${index}Code/`)), 12);
+  assert.equal(seen.size, 24);
+});
+
+test("uses current Reels candidates when profile and fallback discovery are empty", () => {
+  const reels = [{
+    post_url: "https://www.instagram.com/reel/RecoveryReel1/",
+    views: 1_200_000,
+    views_display: "1.2M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_fresh: true,
+    _views_source: "current_reels_grid" as const,
+    _source: "profile reels"
+  }];
+  const merged = mergeProfileDiscoveryCandidates(reels, [], []);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].post_url, reels[0].post_url);
+  assert.equal(merged[0]._views_fresh, true);
 });
 
 test("maps normal and hovered Reel tile states to the correct metrics", () => {
@@ -246,7 +372,8 @@ test("opens only unique final ranking winners for comment enrichment", () => {
       comments_count: 1,
       _views_verified: true,
       _views_exact: true,
-      _views_live: true,
+      _views_fresh: true,
+      _views_source: "current_reels_payload" as const,
       _likes_verified: true,
       _comments_verified: true
     },
@@ -285,10 +412,45 @@ test("opens only unique final ranking winners for comment enrichment", () => {
   );
 });
 
-test("treats requested count as output rows while scanning at least 50 candidates", () => {
-  assert.equal(profileAnalysisCandidateTarget(10), 50);
-  assert.equal(profileAnalysisCandidateTarget(12), 50);
-  assert.equal(profileAnalysisCandidateTarget(50), 50);
+test("treats requested count as output rows while scanning a deeper configurable candidate pool", () => {
+  assert.equal(profileAnalysisCandidateTarget(10), 120);
+  assert.equal(profileAnalysisCandidateTarget(12), 120);
+  assert.equal(profileAnalysisCandidateTarget(50), 120);
+});
+
+test("finds a Most Watched winner discovered after Reel position 50", () => {
+  const posts = Array.from({ length: 60 }, (_, index) => ({
+    username: "deep_profile",
+    display_name: "Deep Profile",
+    profile_url: "https://www.instagram.com/deep_profile/",
+    post_url: `https://www.instagram.com/reel/DepthReel${String(index).padStart(2, "0")}/`,
+    thumbnail_url: null,
+    comments_count: null,
+    comments_display: null,
+    comments_exact: false,
+    comments_hidden: false,
+    likes: null,
+    likes_display: null,
+    likes_exact: false,
+    likes_hidden: false,
+    views: index === 55 ? 9_900_000 : 100_000 + index,
+    views_display: index === 55 ? "9.9M" : "100K",
+    views_exact: false,
+    views_fresh: true,
+    views_source: "current_reels_grid" as const,
+    views_captured_at: "2026-08-08T00:00:00.000Z",
+    follower_count: null,
+    follower_count_display: null,
+    engagement_score: null,
+    engagement_rate: null,
+    top_comments: [],
+    timestamp: new Date(Date.UTC(2026, 7, 8) - index * 60_000).toISOString(),
+    caption: null
+  }));
+
+  const analysis = buildProfileAnalysis(posts, 3, 0, profileAnalysisCandidateTarget(3));
+  assert.equal(analysis.candidate_target, 120);
+  assert.equal(analysis.top_watched[0].post_url, posts[55].post_url);
 });
 
 test("turns public profile pagination payloads into complete unique candidates", () => {
@@ -324,7 +486,7 @@ test("turns public profile pagination payloads into complete unique candidates",
   assert.equal(candidates[0]._comments_live, true);
 });
 
-test("excludes approximate metrics from profile rankings, averages, and engagement", () => {
+test("ranks fresh approximate Reel views while keeping approximate likes and comments excluded", () => {
   const exact = {
     username: "public_profile",
     display_name: "Public Profile",
@@ -342,6 +504,9 @@ test("excludes approximate metrics from profile rankings, averages, and engageme
     views: 2_000,
     views_display: "2,000",
     views_exact: true,
+    views_fresh: true,
+    views_source: "current_reels_payload" as const,
+    views_captured_at: "2026-08-08T00:00:01.000Z",
     follower_count: 10_000,
     follower_count_display: "10,000",
     engagement_score: 2_000,
@@ -356,6 +521,8 @@ test("excludes approximate metrics from profile rankings, averages, and engageme
     views: 9_000_000,
     views_display: "9M",
     views_exact: false,
+    views_fresh: true,
+    views_source: "current_reels_grid" as const,
     likes: 900_000,
     likes_display: "900K",
     likes_exact: false,
@@ -365,13 +532,13 @@ test("excludes approximate metrics from profile rankings, averages, and engageme
   };
 
   const analysis = buildProfileAnalysis([approximate, exact], 5);
-  assert.equal(analysis.averages.views, 2_000);
+  assert.equal(analysis.averages.views, 4_501_000);
   assert.equal(analysis.averages.likes, 200);
   assert.equal(analysis.averages.comments, 20);
-  assert.deepEqual(analysis.top_watched.map((post) => post.post_url), [exact.post_url]);
+  assert.deepEqual(analysis.top_watched.map((post) => post.post_url), [approximate.post_url, exact.post_url]);
   assert.deepEqual(analysis.top_liked.map((post) => post.post_url), [exact.post_url]);
   assert.deepEqual(analysis.top_discussed.map((post) => post.post_url), [exact.post_url]);
-  assert.deepEqual(engagementValues(approximate), { score: null, rate: null });
+  assert.deepEqual(engagementValues(approximate), { score: 9_000_000, rate: null });
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {
@@ -394,6 +561,30 @@ test("never displays an embedded like count when Instagram labels likes as hidde
     comments_count: 6,
     comments_display: "6",
     comments_exact: true,
+    comments_hidden: false
+  });
+});
+
+test("keeps unavailable likes and comments null instead of manufacturing zeroes", () => {
+  assert.deepEqual(resolvePublicPostCounts({
+    actionMetrics: {
+      likes: null,
+      comments: null,
+      likesHidden: false,
+      commentsHidden: false
+    },
+    description: "Public Instagram post",
+    embeddedLikes: [],
+    embeddedComments: [],
+    embeddedLikesHidden: false
+  }), {
+    likes: null,
+    likes_display: null,
+    likes_exact: false,
+    likes_hidden: false,
+    comments_count: null,
+    comments_display: null,
+    comments_exact: false,
     comments_hidden: false
   });
 });

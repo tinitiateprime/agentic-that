@@ -246,7 +246,12 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       }, (status) => updateProfile(profile.id, { statusText: status }));
       const posts = postsFromComparisonJob(data, selectionMode, postCount);
       if (!posts.length) {
-        throw new Error("Instagram did not expose public posts for this profile.");
+        const discoveryStatus = data?.discoveryStatus || data?.discovery_status || data?.run?.discoveryStatus;
+        throw new Error(discoveryStatus === "login_required"
+          ? "Instagram requires sign in before this public profile can be read."
+          : discoveryStatus === "not_found"
+            ? "Instagram could not find this public profile."
+            : "Instagram public discovery is temporarily unavailable for this profile. Retry in a minute.");
       }
       updateProfile(profile.id, {
         username,

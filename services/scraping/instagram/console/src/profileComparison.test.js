@@ -22,6 +22,8 @@ const post = (code, username, values = {}) => ({
   views: values.views ?? 100,
   views_display: values.viewsDisplay || String(values.views ?? 100),
   views_exact: values.viewsExact ?? true,
+  views_fresh: values.viewsFresh ?? true,
+  views_source: values.viewsFresh === false ? "profile_feed" : "current_reels_grid",
   likes: values.likes ?? 20,
   likes_display: String(values.likes ?? 20),
   likes_exact: true,
@@ -52,7 +54,7 @@ test("uses recent job order and most-viewed analysis rankings", () => {
   );
 });
 
-test("keeps exact view winners first and fills missing slots with scraped Reels", () => {
+test("ranks fresh current view values by count regardless of exact precision", () => {
   const exact = post("EXACT", "brand", { views: 500, viewsExact: true });
   const approximateHigh = post("APPROX_HIGH", "brand", { views: 2_000, viewsExact: false });
   const approximateLow = post("APPROX_LOW", "brand", { views: 1_000, viewsExact: false });
@@ -62,7 +64,18 @@ test("keeps exact view winners first and fills missing slots with scraped Reels"
       results: [approximateLow, approximateHigh],
       analysis: { top_watched: [exact] }
     }, "views", 3).map((item) => canonicalPostKey(item.post_url)),
-    ["reel:EXACT", "reel:APPROX_HIGH", "reel:APPROX_LOW"]
+    ["reel:APPROX_HIGH", "reel:APPROX_LOW", "reel:EXACT"]
+  );
+});
+
+test("does not let stale feed views outrank fresh current Reels views", () => {
+  const stale = post("STALE", "brand", { views: 9_000_000, viewsExact: true, viewsFresh: false });
+  const fresh = post("FRESH", "brand", { views: 850_000, viewsExact: false, viewsFresh: true });
+
+  assert.deepEqual(
+    postsFromComparisonJob({ results: [stale, fresh] }, "views", 2)
+      .map((item) => canonicalPostKey(item.post_url)),
+    ["reel:FRESH", "reel:STALE"]
   );
 });
 

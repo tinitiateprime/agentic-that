@@ -183,7 +183,10 @@ const engagementExportColumns = [
   ...baseExportColumns,
   "views",
   "views_display",
-  "views_exact"
+  "views_exact",
+  "views_fresh",
+  "views_source",
+  "views_captured_at"
 ];
 
 async function apiGet(path) {
@@ -429,17 +432,26 @@ function InstagramScraperConsole() {
 
   const formatViewMetric = (post) => {
     const display = String(post.views_display || "").trim();
-    if (/[KMB]$/i.test(display)) return display.toUpperCase().replace(/\s+/g, "");
+    if (post.views === null || post.views === undefined) return display || "N/A";
+    const approximate = post.views_exact !== true;
+    if (/[KMB]$/i.test(display)) {
+      const label = display.toUpperCase().replace(/\s+/g, "");
+      return approximate ? `~${label}` : label;
+    }
     const value = Number(post.views);
     if (!Number.isFinite(value)) return display || "N/A";
-    if (value < 10_000) return display || Math.trunc(value).toLocaleString();
+    if (value < 10_000) {
+      const label = display || Math.trunc(value).toLocaleString();
+      return approximate ? `~${label}` : label;
+    }
     const [divisor, suffix] = value >= 1_000_000_000
       ? [1_000_000_000, "B"]
       : value >= 1_000_000
         ? [1_000_000, "M"]
         : [1_000, "K"];
     const amount = value / divisor;
-    return `${amount.toFixed(amount < 100 ? 1 : 0).replace(/\.0$/, "")}${suffix}`;
+    const label = `${amount.toFixed(amount < 100 ? 1 : 0).replace(/\.0$/, "")}${suffix}`;
+    return approximate ? `~${label}` : label;
   };
 
   const download = (content, filename, type) => {

@@ -151,13 +151,6 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
     timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     sortBy: input.sortBy
   });
-  if (
-    !scrape.results.length &&
-    input.collectionMode !== "range" &&
-    ["profile", "profile_url"].includes(input.requestedMode)
-  ) {
-    throw new Error("Instagram did not expose public posts for this profile. Try again in a minute.");
-  }
   return store.saveRun({
     query: scrape.query,
     requestedQuery: input.requestedQuery,
@@ -169,7 +162,8 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
     rangeTo: input.rangeTo,
     sortBy: input.sortBy,
     results: scrape.results,
-    analysis: scrape.analysis
+    analysis: scrape.analysis,
+    discoveryStatus: scrape.discoveryStatus
   });
 }
 
@@ -180,6 +174,8 @@ async function jobResponse(job: InstagramJob, store: InstagramRunStore) {
     run,
     results: run?.results,
     analysis: run?.analysis,
+    discoveryStatus: run?.discoveryStatus,
+    discovery_status: run?.discoveryStatus,
     message: job.status === "complete" && run ? `Scraped ${run.results.length} posts` : undefined
   };
 }
@@ -258,6 +254,8 @@ export async function handleInstagramRequest(request: Request) {
         run,
         results: run.results,
         analysis: run.analysis,
+        discoveryStatus: run.discoveryStatus,
+        discovery_status: run.discoveryStatus,
         message: `Scraped ${run.results.length} posts`
       });
     }

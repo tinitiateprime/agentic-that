@@ -4,6 +4,7 @@ import path from "node:path";
 import { getStore } from "@netlify/blobs";
 import {
   instagramServiceInfo,
+  type InstagramDiscoveryStatus,
   type InstagramPost,
   type InstagramProfileAnalysis
 } from "./scraper.ts";
@@ -22,6 +23,7 @@ export type InstagramRun = {
   createdAt: string;
   results: InstagramPost[];
   analysis?: InstagramProfileAnalysis;
+  discoveryStatus?: InstagramDiscoveryStatus;
 };
 
 export type InstagramJobInput = {

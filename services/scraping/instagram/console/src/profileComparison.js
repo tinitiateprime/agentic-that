@@ -9,6 +9,7 @@ const finiteMetric = (value) => {
 const postMetric = (post, metric) => {
   if (metric === "likes" && post.likes_hidden) return null;
   if (metric === "comments_count" && post.comments_hidden) return null;
+  if (metric === "views" && post.views_fresh === false) return null;
   return finiteMetric(post[metric]);
 };
 
@@ -76,9 +77,9 @@ export function postsFromComparisonJob(data, selectionMode, limit) {
   });
   posts.sort((a, b) => {
     if (selectionMode === "views") {
-      const aExact = a.views_exact === true;
-      const bExact = b.views_exact === true;
-      if (aExact !== bExact) return bExact ? 1 : -1;
+      const aFresh = a.views_fresh !== false && postMetric(a, "views") !== null;
+      const bFresh = b.views_fresh !== false && postMetric(b, "views") !== null;
+      if (aFresh !== bFresh) return bFresh ? 1 : -1;
       const byViews = (postMetric(b, "views") ?? -1) - (postMetric(a, "views") ?? -1);
       if (byViews) return byViews;
     }
