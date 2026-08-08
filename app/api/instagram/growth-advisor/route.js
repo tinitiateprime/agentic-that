@@ -2,9 +2,13 @@ import { getCurrentPlatformUser } from "@platform/server/auth-store";
 import {
   GrowthAdvisorError,
   growthAdvisorModel,
-  requestGeminiGrowthAdvice,
   validateAdvisorRequest
 } from "@instagram/src/growth-advisor";
+import {
+  failStaleGrowthAdvisorJob,
+  GrowthAdvisorJobStore,
+  growthAdvisorJobPayload
+} from "@instagram/src/growth-advisor-jobs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,18 +16,11 @@ export const runtime = "nodejs";
 const MAX_REQUEST_BYTES = 300_000;
 const RATE_WINDOW_MS = 10 * 60_000;
 const RATE_LIMIT = 12;
-const DEFAULT_AI_TIMEOUT_MS = 25_000;
 const rateBuckets = globalThis.__agenticThatGrowthAdvisorRateBuckets || new Map();
 globalThis.__agenticThatGrowthAdvisorRateBuckets = rateBuckets;
+const jobStore = new GrowthAdvisorJobStore();
 
 const configuredApiKey = () => process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
-
-const configuredTimeoutMs = () => {
-  const value = Number(process.env.GEMINI_TIMEOUT_MS);
-  return Number.isFinite(value) && value >= 5_000
-    ? Math.min(Math.round(value), 50_000)
-    : DEFAULT_AI_TIMEOUT_MS;
-};
 
 function consumeRateLimit(userId) {
   const now = Date.now();
@@ -39,9 +36,20 @@ function consumeRateLimit(userId) {
   return true;
 }
 
-export async function GET() {
+export async function GET(request) {
   const user = await getCurrentPlatformUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const jobId = new URL(request.url).searchParams.get("job_id")?.trim();
+  if (jobId) {
+    const storedJob = await jobStore.getJob(jobId);
+    if (!storedJob || storedJob.userId !== user.id) {
+      return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
+    }
+    const job = await failStaleGrowthAdvisorJob(storedJob, jobStore);
+    return Response.json({ ok: true, ...growthAdvisorJobPayload(job) }, {
+      headers: { "Cache-Control": "no-store" }
+    });
+  }
   return Response.json({
     configured: Boolean(configuredApiKey()),
     provider: "gemini",
@@ -80,25 +88,12 @@ export async function POST(request) {
       throw new GrowthAdvisorError("The AI request is not valid JSON.", "INVALID_REQUEST", 400);
     }
     const input = validateAdvisorRequest(body);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), configuredTimeoutMs());
-    try {
-      const result = await requestGeminiGrowthAdvice({
-        ...input,
-        apiKey,
-        model: growthAdvisorModel(),
-        signal: controller.signal,
-        onTelemetry: (event) => console.info("Instagram growth advisor Gemini", event)
-      });
-      return Response.json({ ok: true, result, provider: "gemini", model: growthAdvisorModel() });
-    } finally {
-      clearTimeout(timeout);
-    }
+    const job = await jobStore.createJob(user.id, input, growthAdvisorModel());
+    return Response.json({ ok: true, ...growthAdvisorJobPayload(job) }, {
+      status: 201,
+      headers: { "Cache-Control": "no-store" }
+    });
   } catch (error) {
-    if (error?.name === "AbortError") {
-      console.warn("Instagram growth advisor Gemini timed out", { timeoutMs: configuredTimeoutMs() });
-      return Response.json({ error: "AI took too long. Please try again.", code: "AI_TIMEOUT" }, { status: 504 });
-    }
     if (error instanceof GrowthAdvisorError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status });
     }

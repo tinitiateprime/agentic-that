@@ -25,6 +25,8 @@ import {
 
 const MAX_PROFILES = 4;
 const MAX_SELECTED_POSTS = 3;
+const ADVISOR_POLL_INTERVAL_MS = 2_500;
+const ADVISOR_JOB_DEADLINE_MS = 10 * 60_000;
 const GOAL_OPTIONS = [
   "Get more customers",
   "Increase sales",
@@ -170,6 +172,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
   const [report, setReport] = useState(null);
   const [advisorConfigured, setAdvisorConfigured] = useState(null);
   const [advisorStatus, setAdvisorStatus] = useState("idle");
+  const [advisorProgress, setAdvisorProgress] = useState("");
   const [advisorError, setAdvisorError] = useState("");
   const [advisorPlan, setAdvisorPlan] = useState(null);
   const [advisorQuestion, setAdvisorQuestion] = useState("");
@@ -353,6 +356,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
     setAdvisorQuestion("");
     setAdvisorError("");
     setAdvisorStatus("idle");
+    setAdvisorProgress("");
     setQuestionStatus("idle");
     setStage("report");
     setError("");
@@ -374,6 +378,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
     setAdvisorQuestion("");
     setAdvisorError("");
     setAdvisorStatus("idle");
+    setAdvisorProgress("");
     setQuestionStatus("idle");
     setStage("setup");
     setError("");
@@ -390,7 +395,8 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
     URL.revokeObjectURL(url);
   };
 
-  const requestAdvisor = async (payload) => {
+  const requestAdvisor = async (payload, onProgress) => {
+    onProgress("Preparing the benchmark for Gemini...");
     const response = await fetch("/api/instagram/growth-advisor", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -402,21 +408,92 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       failure.code = data.code;
       throw failure;
     }
-    return data.result;
+    const jobId = data?.job?.id;
+    if (!jobId) throw new Error("The AI job could not be started.");
+
+    const runUrl = `/api/instagram/growth-advisor/jobs/${encodeURIComponent(jobId)}/run`;
+    let dispatched = false;
+    for (let attempt = 0; attempt < 3 && !dispatched; attempt += 1) {
+      try {
+        const runResponse = await fetch(runUrl, { method: "POST", cache: "no-store" });
+        if (!runResponse.ok) {
+          const failureData = await runResponse.json().catch(() => ({}));
+          const failure = new Error(failureData.error || "The AI analysis could not be started.");
+          failure.code = failureData.code;
+          throw failure;
+        }
+        dispatched = true;
+      } catch (cause) {
+        if (attempt === 2) throw cause;
+        await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+      }
+    }
+
+    onProgress(payload.operation === "question"
+      ? "Gemini is answering your question..."
+      : "Gemini is building your growth plan...");
+    const deadline = Date.now() + ADVISOR_JOB_DEADLINE_MS;
+    let pollingFailures = 0;
+    let pendingRedispatched = false;
+    const startedAt = Date.now();
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, ADVISOR_POLL_INTERVAL_MS));
+      let statusResponse;
+      try {
+        statusResponse = await fetch(
+          `/api/instagram/growth-advisor?job_id=${encodeURIComponent(jobId)}`,
+          { cache: "no-store" }
+        );
+      } catch {
+        pollingFailures += 1;
+        if (pollingFailures >= 4) throw new Error("The AI status connection was interrupted. Please try again.");
+        continue;
+      }
+
+      const statusData = await statusResponse.json().catch(() => ({}));
+      if (!statusResponse.ok) {
+        const failure = new Error(statusData.error || "The AI job status could not be read.");
+        failure.code = statusData.code;
+        throw failure;
+      }
+      pollingFailures = 0;
+      if (statusData?.job?.status === "complete") {
+        if (!statusData.result) throw new Error("Gemini returned an incomplete result.");
+        return statusData.result;
+      }
+      if (statusData?.job?.status === "failed") {
+        const failure = new Error(statusData.job.error?.message || "AI advice could not be generated.");
+        failure.code = statusData.job.error?.code;
+        throw failure;
+      }
+      if (statusData?.job?.status === "running") {
+        onProgress(payload.operation === "question"
+          ? "Gemini is answering your question..."
+          : "Gemini is reviewing the evidence and building your plan...");
+      } else if (!pendingRedispatched && Date.now() - startedAt > 15_000) {
+        pendingRedispatched = true;
+        fetch(runUrl, { method: "POST", cache: "no-store" }).catch(() => undefined);
+      }
+    }
+
+    throw new Error("AI analysis is still taking too long. Please generate it again.");
   };
 
   const generateGrowthPlan = async () => {
     setAdvisorStatus("loading");
     setAdvisorError("");
     try {
-      const result = await requestAdvisor({ operation: "plan", report });
+      const result = await requestAdvisor({ operation: "plan", report }, setAdvisorProgress);
       setAdvisorPlan(result);
       setAdvisorConfigured(true);
       setAdvisorStatus("ready");
+      setAdvisorProgress("");
     } catch (cause) {
       if (cause.code === "AI_NOT_CONFIGURED") setAdvisorConfigured(false);
       setAdvisorError(cause.message);
       setAdvisorStatus("error");
+      setAdvisorProgress("");
     }
   };
 
@@ -432,13 +509,15 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
         report,
         question,
         history: advisorAnswers.map((item) => ({ question: item.question, answer: item.result.answer }))
-      });
+      }, setAdvisorProgress);
       setAdvisorAnswers((current) => [...current, { question, result }]);
       setAdvisorQuestion("");
       setQuestionStatus("idle");
+      setAdvisorProgress("");
     } catch (cause) {
       setAdvisorError(cause.message);
       setQuestionStatus("error");
+      setAdvisorProgress("");
     }
   };
 
@@ -578,7 +657,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
               type="button"
               className="primary-button"
               onClick={generateGrowthPlan}
-              disabled={advisorStatus === "loading" || advisorConfigured === false}
+              disabled={advisorStatus === "loading" || questionStatus === "loading" || advisorConfigured === false}
             >
               <Sparkles size={17} aria-hidden="true" />
               {advisorStatus === "loading" ? "Creating plan..." : advisorPlan ? "Refresh plan" : "Generate growth plan"}
@@ -591,8 +670,8 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
             </div>
           )}
           {advisorError && <div className="error-box advisor-error">{advisorError}</div>}
-          {advisorStatus === "loading" && (
-            <div className="advisor-loading"><div className="loader-ring" /><span>Reviewing the selected evidence...</span></div>
+          {(advisorStatus === "loading" || questionStatus === "loading") && (
+            <div className="advisor-loading"><div className="loader-ring" /><span>{advisorProgress || "Starting Gemini..."}</span></div>
           )}
 
           {advisorPlan && (
@@ -676,7 +755,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
                     onChange={(event) => setAdvisorQuestion(event.target.value)}
                     maxLength={600}
                   />
-                  <button type="submit" title="Ask advisor" aria-label="Ask advisor" disabled={!advisorQuestion.trim() || questionStatus === "loading"}>
+                  <button type="submit" title="Ask advisor" aria-label="Ask advisor" disabled={!advisorQuestion.trim() || questionStatus === "loading" || advisorStatus === "loading"}>
                     <Send size={18} aria-hidden="true" />
                   </button>
                 </form>

@@ -111,10 +111,10 @@ test("prompt treats scraped text as evidence rather than instructions", () => {
   assert.match(prompt, /Missing, null, hidden, or unavailable values are unknown/);
   const request = buildGeminiRequest({ operation: "plan", report });
   assert.equal(request.generationConfig.responseFormat.text.mimeType, "APPLICATION_JSON");
-  assert.equal(request.generationConfig.maxOutputTokens, 6000);
+  assert.equal(request.generationConfig.maxOutputTokens, 4096);
   assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
   const questionRequest = buildGeminiRequest({ operation: "question", report, question: "What should I do first?" });
-  assert.equal(questionRequest.generationConfig.maxOutputTokens, 3500);
+  assert.equal(questionRequest.generationConfig.maxOutputTokens, 2048);
   assert.equal(questionRequest.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
 });
 

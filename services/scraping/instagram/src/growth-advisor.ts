@@ -99,16 +99,16 @@ const QUESTION_SCHEMA = {
   required: ["answer", "evidence_urls", "assumptions", "next_actions"]
 } as const;
 
-type AdvisorOperation = "plan" | "question";
+export type AdvisorOperation = "plan" | "question";
 
-type AdvisorRequest = {
+export type AdvisorRequest = {
   operation: AdvisorOperation;
   report: Record<string, unknown>;
   question?: string;
   history?: Array<{ question?: string; answer?: string }>;
 };
 
-type GeminiRequestOptions = AdvisorRequest & {
+export type GeminiRequestOptions = AdvisorRequest & {
   apiKey: string;
   model?: string;
   fetchImpl?: typeof fetch;
@@ -323,8 +323,7 @@ export function buildGeminiRequest(request: AdvisorRequest) {
   return {
     contents: [{ role: "user", parts: [{ text: buildGrowthAdvisorPrompt(request) }] }],
     generationConfig: {
-      temperature: 0.25,
-      maxOutputTokens: request.operation === "question" ? 3500 : 6000,
+      maxOutputTokens: request.operation === "question" ? 2048 : 4096,
       thinkingConfig: {
         thinkingLevel: "MEDIUM"
       },

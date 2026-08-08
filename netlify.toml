@@ -25,6 +25,9 @@
   external_node_modules = ["@sparticuz/chromium", "playwright-core", "sharp"]
   included_files = ["node_modules/@sparticuz/chromium/bin/**"]
 
+[functions.growth-advisor-background]
+  node_bundler = "esbuild"
+
 [[redirects]]
   from = "/console"
   to = "/console/index.html"
