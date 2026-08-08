@@ -101,10 +101,18 @@ type Candidate = Partial<InstagramPost> & {
   _views_verified?: boolean;
   _views_exact?: boolean;
   _views_from_grid?: boolean;
+  _views_live?: boolean;
   _likes_verified?: boolean;
   _likes_exact?: boolean;
+  _likes_live?: boolean;
   _comments_verified?: boolean;
   _comments_exact?: boolean;
+  _comments_live?: boolean;
+};
+
+export type ReelViewMetric = {
+  value: number;
+  source: "play_count" | "ig_play_count" | "clips.play_count" | "view_count" | "video_view_count" | "clips.view_count";
 };
 
 type ScrapeResult = {
@@ -565,20 +573,12 @@ export function instagramVisibleMetric(value: number | null | undefined) {
 }
 
 export function viewDisplayMatchesExactCount(display: string | null | undefined, exactCount: number) {
-  if (!display || !Number.isFinite(exactCount) || exactCount < 0) return true;
-  const normalized = display.replace(/,/g, "").trim();
-  const match = normalized.match(/^(\d+(?:\.\d+)?)\s*([KMB]?)$/i);
-  if (!match) return true;
-
-  const suffix = (match[2] || "").toUpperCase();
-  const multiplier = suffix === "B" ? 1_000_000_000 : suffix === "M" ? 1_000_000 : suffix === "K" ? 1_000 : 1;
-  const displayedValue = Number(match[1]) * multiplier;
-  if (!Number.isFinite(displayedValue)) return true;
-  if (!suffix) return exactCount === displayedValue;
-
-  const decimalPlaces = match[1].split(".")[1]?.length || 0;
-  const displayStep = multiplier / (10 ** decimalPlaces);
-  return Math.abs(exactCount - displayedValue) < displayStep;
+  if (!Number.isFinite(exactCount) || exactCount < 0) return false;
+  if (!display) return true;
+  const expected = instagramVisibleMetric(exactCount);
+  if (!expected) return false;
+  const normalize = (value: string) => value.replace(/,/g, "").replace(/\s+/g, "").toUpperCase();
+  return normalize(display) === normalize(expected);
 }
 
 function timestampValue(timestamp?: string | null) {
@@ -679,14 +679,15 @@ function timestampInRange(timestamp: string | null | undefined, range: ScrapeRan
   return value >= range.start.getTime() && value <= range.end.getTime();
 }
 
-function engagementValues(post: Pick<
+export function engagementValues(post: Pick<
   InstagramPost,
-  "likes" | "likes_hidden" | "comments_count" | "comments_hidden" | "views" | "views_exact" | "follower_count"
+  "likes" | "likes_exact" | "likes_hidden" | "comments_count" | "comments_exact" | "comments_hidden" |
+  "views" | "views_exact" | "follower_count"
 >) {
-  if (post.views === null) return { score: null, rate: null };
+  if (post.views === null || post.views_exact !== true) return { score: null, rate: null };
   const views = post.views;
   const metricsVisible = !post.likes_hidden && !post.comments_hidden &&
-    post.likes !== null && post.comments_count !== null;
+    post.likes !== null && post.likes_exact === true && post.comments_count !== null && post.comments_exact === true;
   return {
     score: views,
     rate: metricsVisible && views > 0
@@ -723,7 +724,8 @@ export function selectAnalysisEnrichmentCandidates(results: Candidate[], limit: 
       .forEach((candidate) => selected.set(postIdentity(candidate.post_url!), candidate));
   };
 
-  addRanked("views", (candidate) => /\/reel\//i.test(candidate.post_url || "") && candidate._views_verified === true);
+  addRanked("views", (candidate) => /\/reel\//i.test(candidate.post_url || "") &&
+    candidate._views_exact === true && candidate._views_live === true);
   addRanked("likes", (candidate) => !candidate.likes_hidden && candidate._likes_verified === true);
   addRanked("comments_count", (candidate) => !candidate.comments_hidden && candidate._comments_verified === true);
   return [...selected.values()];
@@ -741,7 +743,7 @@ function topCountEntries(counts: Map<string, number>, limit: number) {
     .map(([label, count]) => ({ label, count }));
 }
 
-function buildProfileAnalysis(
+export function buildProfileAnalysis(
   results: InstagramPost[],
   maxResults: number,
   timezoneOffsetMinutes = 0,
@@ -801,11 +803,15 @@ function buildProfileAnalysis(
   }).length;
   const engagementRates = followerCount && followerCount > 0
     ? results
-      .filter((post) => !post.likes_hidden && !post.comments_hidden && post.likes !== null && post.comments_count !== null)
+      .filter((post) => !post.likes_hidden && post.likes_exact === true &&
+        !post.comments_hidden && post.comments_exact === true && post.likes !== null && post.comments_count !== null)
       .map((post) => ((post.likes! + post.comments_count!) / followerCount) * 100)
     : [];
   const visibleViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null).length;
   const exactViewPosts = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null && post.views_exact).length;
+  const exactViewReels = results.filter((post) => /\/reel\//i.test(post.post_url) && post.views !== null && post.views_exact === true);
+  const exactLikePosts = results.filter((post) => !post.likes_hidden && post.likes !== null && post.likes_exact === true);
+  const exactCommentPosts = results.filter((post) => !post.comments_hidden && post.comments_count !== null && post.comments_exact === true);
 
   return {
     username: firstProfile?.username ?? null,
@@ -817,9 +823,9 @@ function buildProfileAnalysis(
     analyzed_posts: results.length,
     candidate_target: candidateTarget,
     averages: {
-      likes: roundedAverage(results.filter((post) => !post.likes_hidden).map((post) => post.likes)),
-      comments: roundedAverage(results.filter((post) => !post.comments_hidden).map((post) => post.comments_count)),
-      views: roundedAverage(results.filter((post) => /\/reel\//i.test(post.post_url)).map((post) => post.views))
+      likes: roundedAverage(exactLikePosts.map((post) => post.likes)),
+      comments: roundedAverage(exactCommentPosts.map((post) => post.comments_count)),
+      views: roundedAverage(exactViewReels.map((post) => post.views))
     },
     engagement_rate: engagementRates.length
       ? Math.round((engagementRates.reduce((sum, value) => sum + value, 0) / engagementRates.length) * 100) / 100
@@ -828,9 +834,9 @@ function buildProfileAnalysis(
       posts_last_30_days: postsLast30Days,
       posts_per_week: Math.round((postsLast30Days / 30) * 700) / 100
     },
-    top_watched: rankedPosts(results.filter((post) => /\/reel\//i.test(post.post_url)), "views", maxResults),
-    top_liked: rankedPosts(results, "likes", maxResults),
-    top_discussed: rankedPosts(results, "comments_count", maxResults),
+    top_watched: rankedPosts(exactViewReels, "views", maxResults),
+    top_liked: rankedPosts(exactLikePosts, "likes", maxResults),
+    top_discussed: rankedPosts(exactCommentPosts, "comments_count", maxResults),
     patterns: {
       formats: { reels, posts },
       hashtags: topCountEntries(hashtags, 10),
@@ -839,10 +845,10 @@ function buildProfileAnalysis(
       posting_hours: topCountEntries(postingHours, 8)
     },
     accuracy: {
-      source: "Fresh Profile and Reels grids, verified against public post pages",
+      source: "Fresh Profile and Reels responses, with ranking candidates checked on public post pages",
       followers: "Exact public profile count captured for this run",
       views: `${visibleViewPosts} current public Reels view labels captured; ${exactViewPosts} included exact counts`,
-      missing_metrics: "Visible Instagram labels are preserved; unavailable values are shown as N/A"
+      missing_metrics: `${exactLikePosts.length} posts had fresh exact likes; ${exactCommentPosts.length} had fresh exact comments. Unverified values are excluded from rankings.`
     }
   };
 }
@@ -948,10 +954,13 @@ function candidateToData(candidate: Candidate): Candidate {
     _views_verified: candidate._views_verified ?? false,
     _views_exact: candidate._views_exact ?? false,
     _views_from_grid: candidate._views_from_grid ?? false,
+    _views_live: candidate._views_live ?? false,
     _likes_verified: candidate._likes_verified ?? false,
     _likes_exact: candidate._likes_exact ?? false,
+    _likes_live: candidate._likes_live ?? false,
     _comments_verified: candidate._comments_verified ?? false,
-    _comments_exact: candidate._comments_exact ?? false
+    _comments_exact: candidate._comments_exact ?? false,
+    _comments_live: candidate._comments_live ?? false
   };
 }
 
@@ -1008,6 +1017,7 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
   const displayName = cleanText(raw.displayName);
   const timestamp = timestampFromRaw(raw.timestamp);
 
+  const sourceIsFresh = /^(?:profile|profile reels|public profile bootstrap|public profile feed|public profile pagination)$/i.test(sourceLabel);
   return {
     post_url: postUrl,
     username: handle,
@@ -1035,10 +1045,13 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
     _views_verified: raw.viewsVerified === true,
     _views_exact: raw.viewsExact === true,
     _views_from_grid: raw.viewsFromGrid === true,
+    _views_live: false,
     _likes_verified: raw.likesVerified === true,
     _likes_exact: raw.likesExact === true,
+    _likes_live: sourceIsFresh && raw.likesExact === true,
     _comments_verified: raw.commentsVerified === true,
-    _comments_exact: raw.commentsExact === true
+    _comments_exact: raw.commentsExact === true,
+    _comments_live: sourceIsFresh && raw.commentsExact === true
   };
 }
 
@@ -1078,24 +1091,36 @@ async function collectPublicProfileFeedCandidates(
         username: user.username || handle,
         displayName: user.full_name || user.username || handle,
         followerCount: user.edge_followed_by && Number(user.edge_followed_by.count),
-        items: nodes.map((node) => ({
-          code: node.shortcode,
-          username: (node.owner && node.owner.username) || user.username || handle,
-          displayName: user.full_name || user.username || handle,
-          mediaType: node.is_video ? 2 : 1,
-          productType: node.product_type || (node.is_video ? "clips" : "feed"),
-          timestamp: node.taken_at_timestamp,
-          likes: node.edge_liked_by && node.edge_liked_by.count,
-          commentsCount: node.edge_media_to_comment && node.edge_media_to_comment.count,
-          views: [node.play_count, node.view_count, node.video_view_count, node.ig_play_count]
-            .map(Number)
-            .filter((value) => Number.isFinite(value) && value >= 0)
-            .reduce((largest, value) => Math.max(largest, value), 0) || null,
-          thumbnail: node.display_url || node.thumbnail_src,
-          caption: node.edge_media_to_caption && node.edge_media_to_caption.edges &&
-            node.edge_media_to_caption.edges[0] && node.edge_media_to_caption.edges[0].node &&
-            node.edge_media_to_caption.edges[0].node.text
-        }))
+        items: nodes.map((node) => {
+          const likesHidden = Boolean(node.like_and_view_counts_disabled || node.hide_like_and_view_counts);
+          const likes = likesHidden ? null : node.edge_liked_by && node.edge_liked_by.count;
+          const comments = node.edge_media_to_comment && node.edge_media_to_comment.count;
+          return {
+            code: node.shortcode,
+            username: (node.owner && node.owner.username) || user.username || handle,
+            displayName: user.full_name || user.username || handle,
+            mediaType: node.is_video ? 2 : 1,
+            productType: node.product_type || (node.is_video ? "clips" : "feed"),
+            timestamp: node.taken_at_timestamp,
+            likes,
+            likesDisplay: likes,
+            likesHidden,
+            likesVerified: likes !== null && likes !== undefined || likesHidden,
+            likesExact: likes !== null && likes !== undefined,
+            commentsCount: comments,
+            commentsDisplay: comments,
+            commentsVerified: comments !== null && comments !== undefined,
+            commentsExact: comments !== null && comments !== undefined,
+            views: [node.play_count, node.view_count, node.video_view_count, node.ig_play_count]
+              .map(Number)
+              .filter((value) => Number.isFinite(value) && value >= 0)
+              .reduce((largest, value) => Math.max(largest, value), 0) || null,
+            thumbnail: node.display_url || node.thumbnail_src,
+            caption: node.edge_media_to_caption && node.edge_media_to_caption.edges &&
+              node.edge_media_to_caption.edges[0] && node.edge_media_to_caption.edges[0].node &&
+              node.edge_media_to_caption.edges[0].node.text
+          };
+        })
       };
     })()
   `).catch((): PublicProfileBootstrap => ({ ok: false }));
@@ -1234,6 +1259,7 @@ function mergeCandidateVisibleMetric(
     exact: "likes_exact" | "comments_exact";
     verifiedInternal: "_likes_verified" | "_comments_verified";
     exactInternal: "_likes_exact" | "_comments_exact";
+    liveInternal: "_likes_live" | "_comments_live";
   }
 ) {
   const sourceVerified = source[config.verifiedInternal] === true;
@@ -1249,6 +1275,7 @@ function mergeCandidateVisibleMetric(
       target[config.exact] = false;
       target[config.verifiedInternal] = true;
       target[config.exactInternal] = false;
+      target[config.liveInternal] = false;
     }
     return;
   }
@@ -1257,8 +1284,10 @@ function mergeCandidateVisibleMetric(
   if (typeof sourceCount !== "number" || !Number.isFinite(sourceCount)) return;
   const sourceDisplay = source[config.display] || sourceCount.toLocaleString("en-US");
   const sourceExact = source[config.exactInternal] === true;
+  const sourceLive = source[config.liveInternal] === true;
   const targetCount = target[config.count];
   const targetExact = target[config.exactInternal] === true;
+  const targetLive = target[config.liveInternal] === true;
   const sourceIsGrid = source._source === "profile" || source._source === "profile reels";
 
   let resolved: { views: number | null; views_display: string; views_exact: boolean } = {
@@ -1280,6 +1309,7 @@ function mergeCandidateVisibleMetric(
   target[config.exact] = resolved.views_exact;
   target[config.verifiedInternal] = true;
   target[config.exactInternal] = resolved.views_exact;
+  target[config.liveInternal] = resolved.views_exact && (sourceLive || (sourceIsGrid && targetLive));
 }
 
 export function mergeCandidateData(target: Candidate, source: Candidate) {
@@ -1318,7 +1348,8 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     hidden: "likes_hidden",
     exact: "likes_exact",
     verifiedInternal: "_likes_verified",
-    exactInternal: "_likes_exact"
+    exactInternal: "_likes_exact",
+    liveInternal: "_likes_live"
   });
   mergeCandidateVisibleMetric(target, source, {
     count: "comments_count",
@@ -1326,19 +1357,24 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     hidden: "comments_hidden",
     exact: "comments_exact",
     verifiedInternal: "_comments_verified",
-    exactInternal: "_comments_exact"
+    exactInternal: "_comments_exact",
+    liveInternal: "_comments_live"
   });
   const sourceHasCurrentViews = source._views_verified && source.views !== null && source.views !== undefined;
   const sourceViewsFromGrid = sourceHasCurrentViews && source._views_from_grid === true;
   const targetViewsFromGrid = target._views_verified === true && target._views_from_grid === true;
+  const sourceViewsLive = source._views_live === true;
+  const targetViewsLive = target._views_live === true;
   const preferSourceViews = sourceHasCurrentViews && (
     sourceViewsFromGrid ||
     !target._views_verified ||
     !targetViewsFromGrid && source._views_exact && !target._views_exact
   );
   if (preferSourceViews) {
-    const reconciled = sourceViewsFromGrid
-      ? {
+    const reconciled = sourceViewsFromGrid && targetViewsLive && target._views_exact && typeof target.views === "number"
+      ? reconcileVisibleReelView(source.views_display, source.views, target.views)
+      : sourceViewsFromGrid
+        ? {
           views: source.views!,
           views_display: source.views_display ?? instagramVisibleMetric(source.views!),
           views_exact: source._views_exact === true
@@ -1354,13 +1390,24 @@ export function mergeCandidateData(target: Candidate, source: Candidate) {
     target.views_display = reconciled.views_display;
     target._views_verified = true;
     target._views_exact = reconciled.views_exact;
-    target._views_from_grid = sourceViewsFromGrid;
+    target._views_from_grid = sourceViewsFromGrid && !reconciled.views_exact;
+    target._views_live = reconciled.views_exact && (sourceViewsLive || (sourceViewsFromGrid && targetViewsLive));
   }
 }
 
-export function currentReelViewsFromPayload(payload: unknown) {
-  const metrics = new Map<string, number>();
+export function currentReelViewCandidatesFromPayload(payload: unknown) {
+  const metrics = new Map<string, ReelViewMetric[]>();
   const visited = new Set<object>();
+
+  const add = (code: string, source: ReelViewMetric["source"], raw: unknown) => {
+    const value = countFromRaw(raw);
+    if (value === null || value < 0) return;
+    const existing = metrics.get(code) || [];
+    if (!existing.some((metric) => metric.source === source && metric.value === value)) {
+      existing.push({ source, value });
+      metrics.set(code, existing);
+    }
+  };
 
   const visit = (value: unknown, depth = 0) => {
     if (!value || typeof value !== "object" || depth > 60 || visited.has(value)) return;
@@ -1368,15 +1415,15 @@ export function currentReelViewsFromPayload(payload: unknown) {
     const node = value as Record<string, unknown>;
     const code = cleanText(node.code || node.shortcode);
     if (code && /^[A-Za-z0-9_-]{6,}$/.test(code)) {
-      const views = largestCountFromRaw(
-        node.play_count,
-        node.view_count,
-        node.video_view_count,
-        node.ig_play_count,
-        (node.clips_metadata as Record<string, unknown> | undefined)?.play_count,
-        (node.clips_metadata as Record<string, unknown> | undefined)?.view_count
-      );
-      if (views !== null) metrics.set(code, Math.max(metrics.get(code) ?? 0, views));
+      const clips = node.clips_metadata && typeof node.clips_metadata === "object"
+        ? node.clips_metadata as Record<string, unknown>
+        : {};
+      add(code, "play_count", node.play_count);
+      add(code, "ig_play_count", node.ig_play_count);
+      add(code, "clips.play_count", clips.play_count);
+      add(code, "view_count", node.view_count);
+      add(code, "video_view_count", node.video_view_count);
+      add(code, "clips.view_count", clips.view_count);
     }
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) child.forEach((item) => visit(item, depth + 1));
@@ -1386,6 +1433,25 @@ export function currentReelViewsFromPayload(payload: unknown) {
 
   visit(payload);
   return metrics;
+}
+
+export function selectFreshReelViewMetric(
+  visibleDisplay: string | null | undefined,
+  metrics: ReelViewMetric[]
+) {
+  const matching = visibleDisplay
+    ? metrics.filter((metric) => viewDisplayMatchesExactCount(visibleDisplay, metric.value))
+    : metrics.slice();
+  if (!matching.length) return null;
+  const priority: ReelViewMetric["source"][] = [
+    "play_count",
+    "ig_play_count",
+    "clips.play_count",
+    "view_count",
+    "video_view_count",
+    "clips.view_count"
+  ];
+  return matching.slice().sort((a, b) => priority.indexOf(a.source) - priority.indexOf(b.source))[0];
 }
 
 export function publicProfileCandidatesFromPayload(payload: unknown, sourceLabel = "public profile pagination") {
@@ -1542,14 +1608,22 @@ async function verifyPublicProfileReelViews(
       const target = targets.get(identity);
       if (target) mergeCandidateData(target, candidate);
     }
-    for (const [code, views] of currentReelViewsFromPayload(payload)) {
-      const candidate = targets.get(code);
+    for (const [code, metrics] of currentReelViewCandidatesFromPayload(payload)) {
+      const candidate = targets.get(code) || discovered.get(code);
       if (!candidate) continue;
-      const reconciled = reconcileVisibleReelView(candidate.views_display, candidate.views, views);
+      const selected = selectFreshReelViewMetric(candidate.views_display, metrics);
+      if (!selected) {
+        candidate._views_exact = false;
+        candidate._views_live = false;
+        continue;
+      }
+      const reconciled = reconcileVisibleReelView(candidate.views_display, candidate.views, selected.value);
       candidate.views = reconciled.views;
       candidate.views_display = reconciled.views_display;
       candidate._views_verified = true;
       candidate._views_exact = reconciled.views_exact;
+      candidate._views_from_grid = false;
+      candidate._views_live = reconciled.views_exact;
     }
   };
   const captureConnectionState = (payload: unknown) => {
@@ -3298,17 +3372,12 @@ async function scrapePublicBrowser(
         ));
       }
       if (sortBy === "engagement") {
-        const uniqueCandidateCount = new Set(
-          visualCandidates.filter((candidate) => candidate.post_url).map((candidate) => postIdentity(candidate.post_url!))
-        ).size;
-        if (uniqueCandidateCount < candidateCount) {
-          visualCandidates.push(...await verifyPublicProfileReelViews(
-            page,
-            normalized.username,
-            visualCandidates,
-            candidateCount
-          ));
-        }
+        visualCandidates.push(...await verifyPublicProfileReelViews(
+          page,
+          normalized.username,
+          visualCandidates,
+          candidateCount
+        ));
       }
     }
 
@@ -3386,9 +3455,13 @@ async function scrapePublicBrowser(
       .filter((candidate) => timestampInRange(candidate.timestamp, range))
       .sort((a, b) => {
         if (sortBy === "engagement") {
-          const byViews = (b._views_verified ? b.views ?? -1 : -1) -
-            (a._views_verified ? a.views ?? -1 : -1);
-          if (byViews) return byViews;
+          const aExact = a._views_live === true && a._views_exact === true;
+          const bExact = b._views_live === true && b._views_exact === true;
+          if (aExact !== bExact) return bExact ? 1 : -1;
+          if (aExact && bExact) {
+            const byViews = (b.views ?? -1) - (a.views ?? -1);
+            if (byViews) return byViews;
+          }
         }
         const byTime = timestampValue(a.timestamp) - timestampValue(b.timestamp);
         return range.direction === "ascending" ? byTime : -byTime;
@@ -3445,8 +3518,10 @@ async function scrapePublicBrowser(
           comments_hidden: stats.comments_hidden,
           _likes_verified: stats.likes !== null || stats.likes_hidden,
           _likes_exact: stats.likes_exact,
+          _likes_live: stats.likes_exact,
           _comments_verified: stats.comments_count !== null || stats.comments_hidden,
           _comments_exact: stats.comments_exact,
+          _comments_live: stats.comments_exact,
           _source: "post page"
         };
         mergeCandidateVisibleMetric(data, postPageMetrics, {
@@ -3455,7 +3530,8 @@ async function scrapePublicBrowser(
           hidden: "likes_hidden",
           exact: "likes_exact",
           verifiedInternal: "_likes_verified",
-          exactInternal: "_likes_exact"
+          exactInternal: "_likes_exact",
+          liveInternal: "_likes_live"
         });
         mergeCandidateVisibleMetric(data, postPageMetrics, {
           count: "comments_count",
@@ -3463,7 +3539,8 @@ async function scrapePublicBrowser(
           hidden: "comments_hidden",
           exact: "comments_exact",
           verifiedInternal: "_comments_verified",
-          exactInternal: "_comments_exact"
+          exactInternal: "_comments_exact",
+          liveInternal: "_comments_live"
         });
         if (stats.views !== null && !data._views_verified) {
           data.views = stats.views;
@@ -3545,15 +3622,15 @@ async function scrapePublicBrowser(
         thumbnail_url: data.thumbnail_url ?? null,
         comments_count: data.comments_count ?? null,
         comments_display: data.comments_display ?? null,
-        comments_exact: data.comments_exact ?? (data._comments_exact === true),
+        comments_exact: data._comments_exact === true && data._comments_live === true,
         comments_hidden: data.comments_hidden ?? false,
         likes: data.likes ?? null,
         likes_display: data.likes_display ?? null,
-        likes_exact: data.likes_exact ?? (data._likes_exact === true),
+        likes_exact: data._likes_exact === true && data._likes_live === true,
         likes_hidden: data.likes_hidden ?? false,
         views: sortBy === "engagement" ? data.views ?? null : null,
         views_display: sortBy === "engagement" ? data.views_display ?? null : null,
-        views_exact: sortBy === "engagement" && data._views_exact === true,
+        views_exact: sortBy === "engagement" && data._views_exact === true && data._views_live === true,
         follower_count: data.follower_count ?? null,
         follower_count_display: data.follower_count_display ?? null,
         engagement_score: null,
@@ -3581,8 +3658,11 @@ async function scrapePublicBrowser(
       })
       .sort((a, b) => {
         if (sortBy === "engagement") {
-          const byViews = (b.views ?? -1) - (a.views ?? -1);
-          if (byViews) return byViews;
+          if (a.views_exact !== b.views_exact) return b.views_exact ? 1 : -1;
+          if (a.views_exact && b.views_exact) {
+            const byViews = (b.views ?? -1) - (a.views ?? -1);
+            if (byViews) return byViews;
+          }
         }
         const byTime = timestampValue(b.timestamp) - timestampValue(a.timestamp);
         const byPost = postOrderValue(b.post_url) - postOrderValue(a.post_url);

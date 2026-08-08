@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { handleInstagramRequest } from "./api.ts";
 import {
-  currentReelViewsFromPayload,
+  buildProfileAnalysis,
+  currentReelViewCandidatesFromPayload,
+  engagementValues,
   instagramVisibleMetric,
   liveRequestHeaders,
   mergeCandidateData,
@@ -12,6 +14,7 @@ import {
   reconcileVisibleReelView,
   resolvePublicPostCounts,
   selectAnalysisEnrichmentCandidates,
+  selectFreshReelViewMetric,
   viewDisplayMatchesExactCount
 } from "./scraper.ts";
 
@@ -38,7 +41,7 @@ test("prevents scraper API and polling responses from being cached", async () =>
 });
 
 test("extracts exact current reel counts from nested public GraphQL payloads", () => {
-  const views = currentReelViewsFromPayload({
+  const views = currentReelViewCandidatesFromPayload({
     data: {
       node: {
         edges: [
@@ -49,19 +52,28 @@ test("extracts exact current reel counts from nested public GraphQL payloads", (
     }
   });
 
-  assert.equal(views.get("CurrentReel1"), 14_967_100);
-  assert.equal(views.get("CurrentReel2"), 24_492_436);
+  assert.deepEqual(views.get("CurrentReel1"), [{ source: "play_count", value: 14_967_100 }]);
+  assert.deepEqual(views.get("CurrentReel2"), [{ source: "video_view_count", value: 24_492_436 }]);
 });
 
-test("uses the largest explicit counter without converting compact display text", () => {
-  const views = currentReelViewsFromPayload({
+test("keeps conflicting view counters separate and selects the one matching the visible label", () => {
+  const views = currentReelViewCandidatesFromPayload({
     code: "CurrentReel3",
-    play_count: 14_967_100,
-    video_view_count: 14_900_000,
-    display_text: "14.9M"
+    play_count: 18_845_321,
+    ig_play_count: 19_002_311,
+    video_view_count: 17_911_201
   });
 
-  assert.equal(views.get("CurrentReel3"), 14_967_100);
+  assert.deepEqual(views.get("CurrentReel3"), [
+    { source: "play_count", value: 18_845_321 },
+    { source: "ig_play_count", value: 19_002_311 },
+    { source: "video_view_count", value: 17_911_201 }
+  ]);
+  assert.deepEqual(selectFreshReelViewMetric("18.8M", views.get("CurrentReel3")!), {
+    source: "play_count",
+    value: 18_845_321
+  });
+  assert.equal(selectFreshReelViewMetric("20M", views.get("CurrentReel3")!), null);
 });
 
 test("keeps the visible Reels-grid value when a payload exposes a conflicting counter", () => {
@@ -74,6 +86,7 @@ test("keeps the visible Reels-grid value when a payload exposes a conflicting co
 });
 
 test("uses an exact count when it agrees with the visible Reels-grid value", () => {
+  assert.equal(viewDisplayMatchesExactCount("18.8M", 18_749_999), false);
   assert.equal(viewDisplayMatchesExactCount("18.8M", 18_845_321), true);
   assert.deepEqual(reconcileVisibleReelView("18.8M", 18_800_000, 18_845_321), {
     views: 18_845_321,
@@ -142,6 +155,7 @@ test("lets a visible Reels-grid view label correct an earlier payload counter", 
     views_display: "1.1M",
     _views_verified: true,
     _views_exact: true,
+    _views_live: true,
     _views_from_grid: false
   };
   mergeCandidateData(target, {
@@ -157,6 +171,34 @@ test("lets a visible Reels-grid view label correct an earlier payload counter", 
   assert.equal(target.views, 2_300_000);
   assert.equal(target.views_display, "2.3M");
   assert.equal(target._views_from_grid, true);
+  assert.equal(target._views_live, false);
+});
+
+test("keeps a fresh exact counter when a current grid label agrees with it", () => {
+  const target = {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 2_345_678,
+    views_display: "2.3M",
+    _views_verified: true,
+    _views_exact: true,
+    _views_live: true,
+    _views_from_grid: false
+  };
+  mergeCandidateData(target, {
+    post_url: "https://www.instagram.com/reel/DZHamI0CInF/",
+    views: 2_300_000,
+    views_display: "2.3M",
+    _views_verified: true,
+    _views_exact: false,
+    _views_from_grid: true,
+    _source: "profile reels"
+  });
+
+  assert.equal(target.views, 2_345_678);
+  assert.equal(target.views_display, "2.3M");
+  assert.equal(target._views_exact, true);
+  assert.equal(target._views_live, true);
+  assert.equal(target._views_from_grid, false);
 });
 
 test("maps normal and hovered Reel tile states to the correct metrics", () => {
@@ -203,6 +245,8 @@ test("opens only unique final ranking winners for comment enrichment", () => {
       likes: 1,
       comments_count: 1,
       _views_verified: true,
+      _views_exact: true,
+      _views_live: true,
       _likes_verified: true,
       _comments_verified: true
     },
@@ -276,6 +320,58 @@ test("turns public profile pagination payloads into complete unique candidates",
   assert.equal(candidates[0].views, 8_045_321);
   assert.equal(candidates[0].likes, 745_200);
   assert.equal(candidates[0].comments_count, 12_300);
+  assert.equal(candidates[0]._likes_live, true);
+  assert.equal(candidates[0]._comments_live, true);
+});
+
+test("excludes approximate metrics from profile rankings, averages, and engagement", () => {
+  const exact = {
+    username: "public_profile",
+    display_name: "Public Profile",
+    profile_url: "https://www.instagram.com/public_profile/",
+    post_url: "https://www.instagram.com/reel/ExactReel1/",
+    thumbnail_url: null,
+    comments_count: 20,
+    comments_display: "20",
+    comments_exact: true,
+    comments_hidden: false,
+    likes: 200,
+    likes_display: "200",
+    likes_exact: true,
+    likes_hidden: false,
+    views: 2_000,
+    views_display: "2,000",
+    views_exact: true,
+    follower_count: 10_000,
+    follower_count_display: "10,000",
+    engagement_score: 2_000,
+    engagement_rate: 11,
+    top_comments: [],
+    timestamp: "2026-08-08T00:00:00.000Z",
+    caption: "#exact current metrics"
+  };
+  const approximate = {
+    ...exact,
+    post_url: "https://www.instagram.com/reel/ApproximateReel1/",
+    views: 9_000_000,
+    views_display: "9M",
+    views_exact: false,
+    likes: 900_000,
+    likes_display: "900K",
+    likes_exact: false,
+    comments_count: 90_000,
+    comments_display: "90K",
+    comments_exact: false
+  };
+
+  const analysis = buildProfileAnalysis([approximate, exact], 5);
+  assert.equal(analysis.averages.views, 2_000);
+  assert.equal(analysis.averages.likes, 200);
+  assert.equal(analysis.averages.comments, 20);
+  assert.deepEqual(analysis.top_watched.map((post) => post.post_url), [exact.post_url]);
+  assert.deepEqual(analysis.top_liked.map((post) => post.post_url), [exact.post_url]);
+  assert.deepEqual(analysis.top_discussed.map((post) => post.post_url), [exact.post_url]);
+  assert.deepEqual(engagementValues(approximate), { score: null, rate: null });
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {
