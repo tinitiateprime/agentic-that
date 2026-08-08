@@ -111,10 +111,10 @@ test("prompt treats scraped text as evidence rather than instructions", () => {
   assert.match(prompt, /Missing, null, hidden, or unavailable values are unknown/);
   const request = buildGeminiRequest({ operation: "plan", report });
   assert.equal(request.generationConfig.responseFormat.text.mimeType, "APPLICATION_JSON");
-  assert.equal(request.generationConfig.maxOutputTokens, 2200);
+  assert.equal(request.generationConfig.maxOutputTokens, 6000);
   assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
   const questionRequest = buildGeminiRequest({ operation: "question", report, question: "What should I do first?" });
-  assert.equal(questionRequest.generationConfig.maxOutputTokens, 1200);
+  assert.equal(questionRequest.generationConfig.maxOutputTokens, 3500);
   assert.equal(questionRequest.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
 });
 
@@ -167,7 +167,7 @@ test("calls Gemini server-side and parses its structured response", async () => 
       calledUrl = String(input);
       sentKey = String((init?.headers as Record<string, string>)["x-goog-api-key"]);
       return new Response(JSON.stringify({
-        candidates: [{ content: { parts: [{ text: JSON.stringify(plan) }] } }],
+        candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(plan) }] } }],
         usageMetadata: {
           promptTokenCount: 500,
           candidatesTokenCount: 250,
@@ -182,12 +182,28 @@ test("calls Gemini server-side and parses its structured response", async () => 
   assert.equal(result.executive_summary, plan.executive_summary);
   assert.equal(telemetry[0].event, "request_started");
   assert.equal(telemetry[1].event, "response_received");
+  assert.equal(telemetry[1].finishReason, "STOP");
+  assert.equal(telemetry[1].outputCharacters, JSON.stringify(plan).length);
   assert.deepEqual(telemetry[1].usage, {
     promptTokens: 500,
     outputTokens: 250,
     thinkingTokens: 100,
     totalTokens: 850
   });
+});
+
+test("identifies a structured response truncated by the generation limit", () => {
+  assert.throws(
+    () => parseGeminiResponse("plan", {
+      candidates: [{
+        finishReason: "MAX_TOKENS",
+        content: { parts: [{ text: '{"executive_summary":"Started but not finished"' }] }
+      }]
+    }, report),
+    (error: unknown) => error instanceof GrowthAdvisorError
+      && error.code === "AI_OUTPUT_TRUNCATED"
+      && error.status === 502
+  );
 });
 
 test("reports an aborted Gemini request through telemetry", async () => {

@@ -124,6 +124,8 @@ type GeminiTelemetryEvent = {
   promptCharacters?: number;
   requestBytes?: number;
   status?: number;
+  finishReason?: string | null;
+  outputCharacters?: number;
   errorName?: string;
   usage?: {
     promptTokens: number | null;
@@ -322,7 +324,7 @@ export function buildGeminiRequest(request: AdvisorRequest) {
     contents: [{ role: "user", parts: [{ text: buildGrowthAdvisorPrompt(request) }] }],
     generationConfig: {
       temperature: 0.25,
-      maxOutputTokens: request.operation === "question" ? 1200 : 2200,
+      maxOutputTokens: request.operation === "question" ? 3500 : 6000,
       thinkingConfig: {
         thinkingLevel: "MEDIUM"
       },
@@ -407,13 +409,22 @@ export function parseGeminiResponse(operation: "plan", payload: unknown, report:
 export function parseGeminiResponse(operation: "question", payload: unknown, report: Record<string, unknown>): AdvisorQuestionResult;
 export function parseGeminiResponse(operation: AdvisorOperation, payload: unknown, report: Record<string, unknown>): AdvisorPlanResult | AdvisorQuestionResult;
 export function parseGeminiResponse(operation: AdvisorOperation, payload: unknown, report: Record<string, unknown>): AdvisorPlanResult | AdvisorQuestionResult {
-  const candidates = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })?.candidates;
-  const text = candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
-  if (!text) throw new GrowthAdvisorError("AI did not return an answer.", "EMPTY_AI_RESPONSE", 502);
+  const candidates = (payload as { candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }> })?.candidates;
+  const candidate = candidates?.[0];
+  const text = candidate?.content?.parts?.map((part) => part.text || "").join("").trim();
+  if (!text) {
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      throw new GrowthAdvisorError("AI ran out of generation tokens. Please try again.", "AI_OUTPUT_TRUNCATED", 502);
+    }
+    throw new GrowthAdvisorError("AI did not return an answer.", "EMPTY_AI_RESPONSE", 502);
+  }
   try {
     return normalizeAdvisorResult(operation, JSON.parse(text), report);
   } catch (error) {
     if (error instanceof GrowthAdvisorError) throw error;
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      throw new GrowthAdvisorError("AI ran out of generation tokens. Please try again.", "AI_OUTPUT_TRUNCATED", 502);
+    }
     throw new GrowthAdvisorError("AI returned invalid structured data.", "INVALID_AI_RESPONSE", 502);
   }
 }
@@ -468,6 +479,10 @@ export async function requestGeminiGrowthAdvice(options: GeminiRequestOptions): 
   }
 
   const payload = await response.json().catch(() => null);
+  const candidate = (payload as {
+    candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
+  } | null)?.candidates?.[0];
+  const outputCharacters = candidate?.content?.parts?.reduce((sum, part) => sum + (part.text?.length || 0), 0) || 0;
   const usage = (payload as { usageMetadata?: Record<string, unknown> } | null)?.usageMetadata;
   emitTelemetry({
     event: "response_received",
@@ -475,6 +490,8 @@ export async function requestGeminiGrowthAdvice(options: GeminiRequestOptions): 
     model,
     durationMs: Date.now() - startedAt,
     status: response.status,
+    finishReason: cleanText(candidate?.finishReason, 80) || null,
+    outputCharacters,
     usage: {
       promptTokens: cleanNumber(usage?.promptTokenCount),
       outputTokens: cleanNumber(usage?.candidatesTokenCount),
