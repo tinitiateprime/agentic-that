@@ -188,7 +188,10 @@ export function publicProfileIdFromHtml(html: string, requestedUsername: string)
   const lower = normalized.toLowerCase();
   if (!lower.includes(`@${username}`) && !lower.includes(`/${username}/`)) return null;
 
-  const profileId = normalized.match(/["']profile_id["']\s*:\s*["'](\d{8,})["']/i)?.[1] || null;
+  const profileId = normalized.match(/["']profile_id["']\s*:\s*["'](\d{8,})["']/i)?.[1] ||
+    normalized.match(/data-owner-id=["'](\d{8,})["']/i)?.[1] ||
+    normalized.match(/\\?["']owner_id\\?["']\s*:\s*\\?["']?(\d{8,})/i)?.[1] ||
+    null;
   return profileId && /^\d{8,}$/.test(profileId) ? profileId : null;
 }
 
@@ -1162,6 +1165,29 @@ function rawPageCandidateToCandidate(raw: RawPageCandidate, sourceLabel: string)
   };
 }
 
+async function publicProfileIdFromEmbed(page: Page, requestedHandle: string) {
+  const handle = requestedHandle.replace(/^@+/, "").trim().toLowerCase();
+  if (!isInstagramHandle(handle)) return null;
+  const html = await page.evaluate<string>(`
+    (async (url) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const response = await fetch(url, {
+          cache: "no-store",
+          credentials: "omit",
+          signal: controller.signal,
+          headers: { "cache-control": "no-cache", "pragma": "no-cache" }
+        });
+        return response.ok ? await response.text() : "";
+      } finally {
+        clearTimeout(timeout);
+      }
+    })(${JSON.stringify(`${instagramHost}/${handle}/embed/?fresh=${Date.now()}`)})
+  `).catch(() => "");
+  return publicProfileIdFromHtml(html, handle);
+}
+
 async function collectPublicProfileFeedCandidates(
   page: Page,
   requestedHandle: string,
@@ -1242,10 +1268,13 @@ async function collectPublicProfileFeedCandidates(
     })()
   `).catch((): PublicProfileBootstrap => ({ ok: false }));
 
-  const routeProfileId = publicProfileIdFromHtml(
+  let routeProfileId = publicProfileIdFromHtml(
     await page.content().catch(() => ""),
     handle
   );
+  if (!bootstrap.ok && !knownUserId && !routeProfileId) {
+    routeProfileId = await publicProfileIdFromEmbed(page, handle);
+  }
   if (!bootstrap.ok) {
     console.warn(`Instagram public profile feed bootstrap failed for ${handle} (${bootstrap.status || "unknown"}).`);
   }
@@ -2206,6 +2235,9 @@ async function verifyPublicProfileReelViews(
     }
     await settleResponses();
 
+    if (!inheritedOwnerId && !discoveredOwnerId) {
+      discoveredOwnerId = await publicProfileIdFromEmbed(page, username) || "";
+    }
     const ownerId = inheritedOwnerId || discoveredOwnerId;
     const reelsId = inheritedReelsId || discoveredReelsId;
     if (ownerId) {

@@ -75,8 +75,10 @@ test("classifies a true login-only page with no public anchors", () => {
 
 test("recovers the requested profile ID from public route HTML", () => {
   const html = String.raw`<script type="application/json">{"meta":{"title":"pickels & sweets (\u0040hathiya_pickels_homemade)"},"page_logging":{"name":"profilePage","params":{"profile_id":"61507532657"}}}</script>`;
+  const embed = `<main data-owner-id="61507532657"><a href="https://www.instagram.com/hathiya_pickels_homemade/">Profile</a></main>`;
 
   assert.equal(publicProfileIdFromHtml(html, "hathiya_pickels_homemade"), "61507532657");
+  assert.equal(publicProfileIdFromHtml(embed, "hathiya_pickels_homemade"), "61507532657");
   assert.equal(publicProfileIdFromHtml(html, "different_profile"), null);
 });
 
