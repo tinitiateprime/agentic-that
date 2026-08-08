@@ -64,8 +64,11 @@ export function postsFromComparisonJob(data, selectionMode, limit) {
   const source = selectionMode === "views"
     ? [
         ...(analysis?.top_watched || []),
-        ...results.filter((post) => /\/reel\//i.test(post.post_url || "")),
-        ...results
+        ...results.filter((post) => (
+          /\/reel\//i.test(post.post_url || "") &&
+          post.views_fresh === true &&
+          postMetric(post, "views") !== null
+        ))
       ]
     : results;
   const seen = new Set();

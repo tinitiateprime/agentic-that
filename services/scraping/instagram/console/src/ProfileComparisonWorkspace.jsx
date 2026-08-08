@@ -231,7 +231,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
     updateProfile(profile.id, {
       username,
       status: "working",
-      statusText: `Profile ${index + 1} of ${total}`,
+      statusText: `Fetching current Instagram data (${index + 1} of ${total})`,
       error: ""
     });
     try {
@@ -247,7 +247,9 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       const posts = postsFromComparisonJob(data, selectionMode, postCount);
       if (!posts.length) {
         const discoveryStatus = data?.discoveryStatus || data?.discovery_status || data?.run?.discoveryStatus;
-        throw new Error(discoveryStatus === "login_required"
+        throw new Error(selectionMode === "views" && (data?.results?.length || data?.run?.results?.length)
+          ? "Current public Reel view counts were unavailable. Choose Recent or retry later."
+          : discoveryStatus === "login_required"
           ? "Instagram requires sign in before this public profile can be read."
           : discoveryStatus === "not_found"
             ? "Instagram could not find this public profile."
@@ -299,18 +301,9 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       error: ""
     })));
     let completed = 0;
-    const failedProfiles = [];
     for (let index = 0; index < profiles.length; index += 1) {
       const profile = { ...profiles[index], username: normalized[index] };
       if (await collectOneProfile(profile, index, profiles.length)) completed += 1;
-      else failedProfiles.push({ profile, index });
-    }
-    if (failedProfiles.length > 0) {
-      await new Promise((resolve) => window.setTimeout(resolve, 3500));
-      for (const { profile, index } of failedProfiles) {
-        updateProfile(profile.id, { status: "queued", statusText: "Automatic retry", error: "" });
-        if (await collectOneProfile(profile, index, profiles.length)) completed += 1;
-      }
     }
     setStage("select");
     if (completed < 2) setError("At least two profiles must load before a benchmark can be built.");

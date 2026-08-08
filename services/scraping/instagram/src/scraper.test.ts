@@ -4,6 +4,7 @@ import { handleInstagramRequest } from "./api.ts";
 import {
   buildProfileAnalysis,
   canUpgradeCurrentReelsGridView,
+  classifyInstagramAccess,
   currentReelViewCandidatesFromPayload,
   engagementValues,
   instagramVisibleMetric,
@@ -41,6 +42,33 @@ test("prevents scraper API and polling responses from being cached", async () =>
   assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("expires"), "0");
+});
+
+test("treats a sign-in modal over public Reel anchors as public content", () => {
+  assert.equal(classifyInstagramAccess({
+    url: "https://www.instagram.com/public_profile/reels/",
+    reelAnchorCount: 12,
+    postAnchorCount: 0,
+    visibleLoginInputCount: 1
+  }), "public_content");
+});
+
+test("ignores incidental login text when public post anchors exist", () => {
+  assert.equal(classifyInstagramAccess({
+    url: "https://www.instagram.com/public_profile/",
+    reelAnchorCount: 0,
+    postAnchorCount: 9,
+    visibleLoginInputCount: 0
+  }), "public_content");
+});
+
+test("classifies a true login-only page with no public anchors", () => {
+  assert.equal(classifyInstagramAccess({
+    url: "https://www.instagram.com/accounts/login/",
+    reelAnchorCount: 0,
+    postAnchorCount: 0,
+    visibleLoginInputCount: 1
+  }), "login_required");
 });
 
 test("extracts exact current reel counts from nested public GraphQL payloads", () => {
@@ -253,6 +281,72 @@ test("current 24.6K Reels views beat stale 1,759 feed views in every merge order
   }
 });
 
+test("preserves view-source priority across every source merge permutation", () => {
+  const postUrl = "https://www.instagram.com/reel/SourceOrder1/";
+  const sources = [
+    {
+      post_url: postUrl,
+      views: 1_500,
+      views_display: "1,500",
+      _views_verified: true,
+      _views_exact: true,
+      _views_fresh: false,
+      _views_source: "bootstrap" as const
+    },
+    {
+      post_url: postUrl,
+      views: 1_759,
+      views_display: "1,759",
+      _views_verified: true,
+      _views_exact: true,
+      _views_fresh: false,
+      _views_source: "profile_feed" as const
+    },
+    {
+      post_url: postUrl,
+      views: 24_000,
+      views_display: "24K",
+      _views_verified: true,
+      _views_exact: false,
+      _views_fresh: true,
+      _views_source: "post_page" as const
+    },
+    {
+      post_url: postUrl,
+      views: 24_600,
+      views_display: "24.6K",
+      _views_verified: true,
+      _views_exact: false,
+      _views_fresh: true,
+      _views_source: "current_reels_grid" as const,
+      _views_from_grid: true
+    },
+    {
+      post_url: postUrl,
+      views: 24_638,
+      views_display: "24.6K",
+      _views_verified: true,
+      _views_exact: true,
+      _views_fresh: true,
+      _views_source: "current_reels_payload" as const
+    }
+  ];
+  const permutations = <T>(items: T[]): T[][] => items.length <= 1
+    ? [items]
+    : items.flatMap((item, index) => permutations([...items.slice(0, index), ...items.slice(index + 1)])
+      .map((rest) => [item, ...rest]));
+
+  for (const order of permutations(sources)) {
+    const target = { ...order[0] };
+    for (const source of order.slice(1)) mergeCandidateData(target, { ...source });
+    assert.equal(target.views, 24_638);
+    assert.equal(target.views_display, "24.6K");
+    assert.equal(target._views_exact, true);
+    assert.equal(target._views_fresh, true);
+    assert.equal(target._views_source, "current_reels_payload");
+  }
+});
+
 test("upgrades a matching current 1.2M grid label with an exact fresh payload count", () => {
   const target = {
     post_url: "https://www.instagram.com/reel/FreshGrid2/",
@@ -413,13 +507,13 @@ test("opens only unique final ranking winners for comment enrichment", () => {
 });
 
 test("treats requested count as output rows while scanning a deeper configurable candidate pool", () => {
-  assert.equal(profileAnalysisCandidateTarget(10), 120);
-  assert.equal(profileAnalysisCandidateTarget(12), 120);
-  assert.equal(profileAnalysisCandidateTarget(50), 120);
+  assert.equal(profileAnalysisCandidateTarget(10), 300);
+  assert.equal(profileAnalysisCandidateTarget(12), 300);
+  assert.equal(profileAnalysisCandidateTarget(50), 300);
 });
 
-test("finds a Most Watched winner discovered after Reel position 50", () => {
-  const posts = Array.from({ length: 60 }, (_, index) => ({
+test("finds a Most Watched winner at Reel position 120", () => {
+  const posts = Array.from({ length: 140 }, (_, index) => ({
     username: "deep_profile",
     display_name: "Deep Profile",
     profile_url: "https://www.instagram.com/deep_profile/",
@@ -433,8 +527,8 @@ test("finds a Most Watched winner discovered after Reel position 50", () => {
     likes_display: null,
     likes_exact: false,
     likes_hidden: false,
-    views: index === 55 ? 9_900_000 : 100_000 + index,
-    views_display: index === 55 ? "9.9M" : "100K",
+    views: index === 119 ? 9_900_000 : 100_000 + index,
+    views_display: index === 119 ? "9.9M" : "100K",
     views_exact: false,
     views_fresh: true,
     views_source: "current_reels_grid" as const,
@@ -449,8 +543,8 @@ test("finds a Most Watched winner discovered after Reel position 50", () => {
   }));
 
   const analysis = buildProfileAnalysis(posts, 3, 0, profileAnalysisCandidateTarget(3));
-  assert.equal(analysis.candidate_target, 120);
-  assert.equal(analysis.top_watched[0].post_url, posts[55].post_url);
+  assert.equal(analysis.candidate_target, 300);
+  assert.equal(analysis.top_watched[0].post_url, posts[119].post_url);
 });
 
 test("turns public profile pagination payloads into complete unique candidates", () => {
@@ -501,15 +595,15 @@ test("ranks fresh approximate Reel views while keeping approximate likes and com
     likes_display: "200",
     likes_exact: true,
     likes_hidden: false,
-    views: 2_000,
-    views_display: "2,000",
+    views: 934_281,
+    views_display: "934K",
     views_exact: true,
     views_fresh: true,
     views_source: "current_reels_payload" as const,
     views_captured_at: "2026-08-08T00:00:01.000Z",
     follower_count: 10_000,
     follower_count_display: "10,000",
-    engagement_score: 2_000,
+    engagement_score: 934_281,
     engagement_rate: 11,
     top_comments: [],
     timestamp: "2026-08-08T00:00:00.000Z",
@@ -518,8 +612,8 @@ test("ranks fresh approximate Reel views while keeping approximate likes and com
   const approximate = {
     ...exact,
     post_url: "https://www.instagram.com/reel/ApproximateReel1/",
-    views: 9_000_000,
-    views_display: "9M",
+    views: 2_400_000,
+    views_display: "2.4M",
     views_exact: false,
     views_fresh: true,
     views_source: "current_reels_grid" as const,
@@ -532,13 +626,13 @@ test("ranks fresh approximate Reel views while keeping approximate likes and com
   };
 
   const analysis = buildProfileAnalysis([approximate, exact], 5);
-  assert.equal(analysis.averages.views, 4_501_000);
+  assert.equal(analysis.averages.views, 1_667_141);
   assert.equal(analysis.averages.likes, 200);
   assert.equal(analysis.averages.comments, 20);
   assert.deepEqual(analysis.top_watched.map((post) => post.post_url), [approximate.post_url, exact.post_url]);
   assert.deepEqual(analysis.top_liked.map((post) => post.post_url), [exact.post_url]);
   assert.deepEqual(analysis.top_discussed.map((post) => post.post_url), [exact.post_url]);
-  assert.deepEqual(engagementValues(approximate), { score: 9_000_000, rate: null });
+  assert.deepEqual(engagementValues(approximate), { score: 2_400_000, rate: null });
 });
 
 test("never displays an embedded like count when Instagram labels likes as hidden", () => {

@@ -75,11 +75,11 @@ test("does not let stale feed views outrank fresh current Reels views", () => {
   assert.deepEqual(
     postsFromComparisonJob({ results: [stale, fresh] }, "views", 2)
       .map((item) => canonicalPostKey(item.post_url)),
-    ["reel:FRESH", "reel:STALE"]
+    ["reel:FRESH"]
   );
 });
 
-test("falls back to scraped posts when Instagram exposes no public Reels", () => {
+test("does not present recent regular posts as Most Viewed", () => {
   const regularPost = post("POST_ONLY", "brand", { views: null, viewsExact: false });
   regularPost.post_url = "https://www.instagram.com/p/POST_ONLY/";
   regularPost.views = null;
@@ -88,7 +88,7 @@ test("falls back to scraped posts when Instagram exposes no public Reels", () =>
   assert.deepEqual(
     postsFromComparisonJob({ results: [regularPost], analysis: { top_watched: [] } }, "views", 3)
       .map((item) => canonicalPostKey(item.post_url)),
-    ["p:POST_ONLY"]
+    []
   );
 });
 

@@ -143,16 +143,40 @@ type ScrapeResult = {
 
 type ReelsDiscoveryDiagnostics = {
   username: string;
+  requestedProfileUrl: string;
   requestedUrl: string;
   finalUrl: string;
+  pageTitle: string;
+  dismissClicks: number;
+  dialogRemaining: boolean;
+  reelAnchorVisible: boolean;
   uniqueShortcodes: number;
   scrollRounds: number;
+  staleRounds: number;
+  scanLimit: number;
+  endReached: boolean;
+  stopReason: "scan_limit" | "end_reached" | "deadline" | "round_limit" | "navigation_finished";
   freshGridViewCount: number;
   exactReconciledViewCount: number;
   fallbackDiscoveryCount: number;
   loginRequired: boolean;
   notFound: boolean;
 };
+
+export type InstagramAccessSnapshot = {
+  url: string;
+  reelAnchorCount: number;
+  postAnchorCount: number;
+  visibleLoginInputCount: number;
+};
+
+export function classifyInstagramAccess(snapshot: InstagramAccessSnapshot) {
+  if (snapshot.reelAnchorCount > 0 || snapshot.postAnchorCount > 0) return "public_content" as const;
+  if (/\/accounts\/login\/?/i.test(snapshot.url) || snapshot.visibleLoginInputCount > 0) {
+    return "login_required" as const;
+  }
+  return "unknown" as const;
+}
 
 type RawPageCandidate = {
   href?: string | null;
@@ -375,6 +399,7 @@ async function createPage(browser: Browser) {
 }
 
 async function dismissInstagramPrompts(page: Page) {
+  let clickCount = 0;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await page.keyboard.press("Escape").catch(() => {});
     const clicked = await page.evaluate<boolean>(`
@@ -406,14 +431,17 @@ async function dismissInstagramPrompts(page: Page) {
       })()
     `).catch(() => false);
     if (!clicked) break;
+    clickCount += 1;
     await sleep(650);
   }
+  const dialogRemaining = await page.locator('[role="dialog"]:visible').count().then((count) => count > 0).catch(() => false);
+  return { clickCount, dialogRemaining };
 }
 
 async function gotoPublicPage(page: Page, url: string, timeout = 45_000) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-  await sleep(800);
-  await dismissInstagramPrompts(page);
+  await sleep(200);
+  return dismissInstagramPrompts(page);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -739,7 +767,12 @@ function rankedPosts(results: InstagramPost[], metric: "views" | "likes" | "comm
   return results
     .filter((post) => post[metric] !== null)
     .slice()
-    .sort((a, b) => (b[metric] ?? -1) - (a[metric] ?? -1) || timestampValue(b.timestamp) - timestampValue(a.timestamp))
+    .sort((a, b) => {
+      const byMetric = (b[metric] ?? -1) - (a[metric] ?? -1);
+      if (byMetric) return byMetric;
+      if (metric === "views" && a.views_exact !== b.views_exact) return b.views_exact ? 1 : -1;
+      return timestampValue(b.timestamp) - timestampValue(a.timestamp);
+    })
     .slice(0, limit);
 }
 
@@ -777,8 +810,8 @@ export function profileAnalysisCandidateTarget(maxResults: number) {
   const rawConfigured = process.env.INSTAGRAM_MAX_REELS_SCAN?.trim();
   const configured = rawConfigured ? Number(rawConfigured) : Number.NaN;
   const scanLimit = Number.isFinite(configured)
-    ? Math.max(50, Math.min(300, Math.trunc(configured)))
-    : 120;
+    ? Math.max(50, Math.min(600, Math.trunc(configured)))
+    : 300;
   return Math.max(maxResults, scanLimit);
 }
 
@@ -793,7 +826,7 @@ export function buildProfileAnalysis(
   results: InstagramPost[],
   maxResults: number,
   timezoneOffsetMinutes = 0,
-  candidateTarget = 50
+  candidateTarget = 300
 ): InstagramProfileAnalysis {
   const firstProfile = results.find((post) => post.username || post.profile_url) || null;
   const followerCount = results.find((post) => post.follower_count !== null)?.follower_count ?? null;
@@ -1787,8 +1820,15 @@ async function verifyPublicProfileReelViews(
   const requestedUrl = `${instagramHost}/${username}/reels/?hl=en`;
   let finalUrl = requestedUrl;
   let scrollRounds = 0;
+  let staleScrolls = 0;
   let loginRequired = false;
   let notFound = false;
+  let pageTitle = "";
+  let dismissClicks = 0;
+  let dialogRemaining = false;
+  let reelAnchorVisible = false;
+  let endReached = false;
+  let stopReason: ReelsDiscoveryDiagnostics["stopReason"] = "navigation_finished";
   const payloadCandidates = new Map<string, Candidate>();
   const payloadMetrics = new Map<string, ReelViewMetric[]>();
   const applyObservedPayloadData = () => {
@@ -1931,12 +1971,20 @@ async function verifyPublicProfileReelViews(
   page.on("response", responseHandler);
   try {
     const url = `${requestedUrl}&fresh=${Date.now()}`;
-    await gotoPublicPage(page, url, 30_000);
+    const navigationPrompt = await gotoPublicPage(page, url, 30_000);
+    dismissClicks += navigationPrompt.clickCount;
+    dialogRemaining = navigationPrompt.dialogRemaining;
     finalUrl = page.url();
-    loginRequired = await isLoginPage(page);
     const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
     notFound = /(?:page isn't available|page is not available|user not found|profile isn't available)/i.test(pageText);
     await page.waitForSelector('a[href*="/reel/"]', { timeout: 10_000 }).catch(() => {});
+    const promptAfterWait = await dismissInstagramPrompts(page);
+    dismissClicks += promptAfterWait.clickCount;
+    dialogRemaining = promptAfterWait.dialogRemaining;
+    const access = await inspectInstagramAccess(page);
+    reelAnchorVisible = access.reelAnchorCount > 0;
+    loginRequired = classifyInstagramAccess(access) === "login_required";
+    pageTitle = await page.title().catch(() => "");
     const routeState = await page.evaluate<{ cursor: string; reelsId: string; ownerId: string }>(`
       (() => {
         const targetUsername = ${JSON.stringify(username.toLowerCase())};
@@ -1978,10 +2026,13 @@ async function verifyPublicProfileReelViews(
     if (routeState.cursor) reelsCursor = routeState.cursor;
     if (routeState.reelsId) discoveredReelsId = routeState.reelsId;
     if (routeState.ownerId) discoveredOwnerId = routeState.ownerId;
-    let staleScrolls = 0;
     const scrollLimit = Math.max(10, Math.min(40, Math.ceil(candidateLimit / 6) + 8));
+    const configuredDeadline = Number(process.env.INSTAGRAM_REELS_DISCOVERY_TIMEOUT_MS);
+    const discoveryDeadline = Date.now() + (Number.isFinite(configuredDeadline)
+      ? Math.max(30_000, Math.min(180_000, Math.trunc(configuredDeadline)))
+      : 90_000);
 
-    for (let index = 0; index < scrollLimit; index += 1) {
+    for (let index = 0; index < scrollLimit && Date.now() < discoveryDeadline; index += 1) {
       scrollRounds = index + 1;
       const previousUniqueCount = seenShortcodes.size;
       const previousDiscoveryCount = discovered.size;
@@ -2020,9 +2071,20 @@ async function verifyPublicProfileReelViews(
       }
       const progress = seenShortcodes.size > previousUniqueCount || discovered.size > previousDiscoveryCount;
       staleScrolls = progress ? 0 : staleScrolls + 1;
-      if (seenShortcodes.size >= candidateLimit || staleScrolls >= 4) break;
+      if (seenShortcodes.size >= candidateLimit) {
+        stopReason = "scan_limit";
+        break;
+      }
+      if (staleScrolls >= 4) {
+        endReached = true;
+        stopReason = "end_reached";
+        break;
+      }
       await page.mouse.wheel(0, 2600).catch(() => {});
       await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight * 2, 1800))).catch(() => {});
+    }
+    if (stopReason === "navigation_finished") {
+      stopReason = Date.now() >= discoveryDeadline ? "deadline" : "round_limit";
     }
     await settleResponses();
 
@@ -2139,6 +2201,14 @@ async function verifyPublicProfileReelViews(
     }
   } catch {
     finalUrl = page.url() || finalUrl;
+    pageTitle = pageTitle || await page.title().catch(() => "");
+    const access = await inspectInstagramAccess(page).catch((): InstagramAccessSnapshot => ({
+      url: finalUrl,
+      reelAnchorCount: 0,
+      postAnchorCount: 0,
+      visibleLoginInputCount: 0
+    }));
+    reelAnchorVisible = reelAnchorVisible || access.reelAnchorCount > 0;
     loginRequired = loginRequired || await isLoginPage(page).catch(() => false);
     // Keep view values unverified when Instagram does not expose the live Reels response.
   } finally {
@@ -2151,10 +2221,19 @@ async function verifyPublicProfileReelViews(
     candidates: [...discovered.values()].slice(0, candidateLimit),
     diagnostics: {
       username,
+      requestedProfileUrl: `${instagramHost}/${username}/?hl=en`,
       requestedUrl,
       finalUrl,
+      pageTitle,
+      dismissClicks,
+      dialogRemaining,
+      reelAnchorVisible,
       uniqueShortcodes: seenShortcodes.size,
       scrollRounds,
+      staleRounds: staleScrolls,
+      scanLimit: candidateLimit,
+      endReached,
+      stopReason,
       freshGridViewCount: freshViewCandidates.length,
       exactReconciledViewCount: freshViewCandidates.filter((candidate) => candidate._views_exact === true).length,
       fallbackDiscoveryCount: candidates.filter((candidate) => (
@@ -2584,6 +2663,8 @@ async function collectRecentPublicHashtagCandidates(page: Page, tag: string, lim
   } catch {
     return candidates;
   }
+  await page.waitForSelector(postSelector, { timeout: 6_000 }).catch(() => {});
+  await dismissInstagramPrompts(page);
   if (await isLoginPage(page)) return candidates;
 
   const pageLimit = Math.max(2, Math.min(8, Math.ceil(limit / 12) + 2));
@@ -2839,8 +2920,17 @@ function searchSources(query: string): { label: string; url: string }[] {
   }];
 }
 
+async function inspectInstagramAccess(page: Page): Promise<InstagramAccessSnapshot> {
+  const [reelAnchorCount, postAnchorCount, visibleLoginInputCount] = await Promise.all([
+    page.locator('a[href*="/reel/"]').count().catch(() => 0),
+    page.locator('a[href*="/p/"]').count().catch(() => 0),
+    page.locator('input[name="username"]:visible').count().catch(() => 0)
+  ]);
+  return { url: page.url(), reelAnchorCount, postAnchorCount, visibleLoginInputCount };
+}
+
 async function isLoginPage(page: Page) {
-  return page.url().includes("/accounts/login") || Boolean(await page.$('input[name="username"]'));
+  return classifyInstagramAccess(await inspectInstagramAccess(page)) === "login_required";
 }
 
 async function collectLatestCandidates(page: Page, query: string, limit: number, targetCount: number, profileReels = false) {
@@ -2873,10 +2963,23 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
       continue;
     }
 
-    await gotoPublicPage(page, source.url, 30_000);
-    if (await isLoginPage(page)) continue;
+    const navigationPrompt = await gotoPublicPage(page, source.url, 30_000);
     try {
       await page.waitForSelector(postSelector, { timeout: source.label === "latest keyword" ? 4000 : 10_000 });
+      const promptAfterWait = await dismissInstagramPrompts(page);
+      if (process.env.INSTAGRAM_SCRAPER_DEBUG === "1") {
+        console.log(JSON.stringify({
+          discoveryAccess: {
+            source: source.label,
+            requestedUrl: source.url,
+            finalUrl: page.url(),
+            pageTitle: await page.title().catch(() => ""),
+            dismissClicks: navigationPrompt.clickCount + promptAfterWait.clickCount,
+            dialogRemaining: promptAfterWait.dialogRemaining,
+            access: classifyInstagramAccess(await inspectInstagramAccess(page))
+          }
+        }));
+      }
     } catch {
       const embeddedOnly = await collectCurrentPageCandidates(page, source.label);
       for (const candidate of embeddedOnly) addCandidate(candidate);
@@ -2899,6 +3002,7 @@ async function collectLatestCandidates(page: Page, query: string, limit: number,
           ...diagnostic
         }));
       }
+      if (!embeddedOnly.length && await isLoginPage(page)) continue;
       continue;
     }
     if (source.label.includes("topic")) {
