@@ -6,6 +6,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   safeStorage,
   screen,
   session,
@@ -73,6 +74,16 @@ let browserZoomFactors = new Map();
 let publishingPermissionPromise = null;
 let publishingRunPermissionActive = false;
 let resolvedDesktopDebugPort = REQUESTED_DESKTOP_DEBUG_PORT || null;
+let unsubscribeScrapingActivity = null;
+let scrapingWorkActive = false;
+let rebuildTrayMenu = null;
+let scrapingActivityState = {
+  activeJob: null,
+  queuedJobs: [],
+  recentJobs: [],
+  concurrency: 1,
+  updatedAt: new Date().toISOString(),
+};
 
 function randomSecret(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
@@ -235,6 +246,9 @@ async function startPublishingService() {
   publishingRuntime = await import(
     `${pathToFileURL(runtimeEntry).href}?v=${createHash("sha1").update(APP_VERSION).digest("hex")}`
   );
+  if (typeof publishingRuntime.subscribeInstagramCompanionActivity === "function") {
+    unsubscribeScrapingActivity = publishingRuntime.subscribeInstagramCompanionActivity(handleScrapingActivity);
+  }
   publishingServer = publishingRuntime.createPublishingHttpServer({
     host: "127.0.0.1",
     port: SERVICE_PORT,
@@ -350,6 +364,65 @@ function workspaceState() {
       .slice(0, MAX_ACTIVITY_HISTORY)
       .map(publicBrowserSession),
   };
+}
+
+function scrapingActivity() {
+  return scrapingActivityState;
+}
+
+function scrapingWorkCount(state = scrapingActivityState) {
+  const active = state.activeJob && ["queued", "running"].includes(state.activeJob.status) ? 1 : 0;
+  return active + (Array.isArray(state.queuedJobs) ? state.queuedJobs.length : 0);
+}
+
+function showScrapingNotification(title, body) {
+  if (process.env.AGENTICTHAT_COMPANION_DISABLE_NOTIFICATIONS === "1" || !Notification.isSupported()) return;
+  const notification = new Notification({ title, body, silent: true });
+  notification.on("click", () => showCompanion("scraping"));
+  notification.show();
+}
+
+function handleScrapingActivity(state) {
+  const previousWorkActive = scrapingWorkActive;
+  scrapingActivityState = state && typeof state === "object" ? state : scrapingActivityState;
+  const workCount = scrapingWorkCount(scrapingActivityState);
+  scrapingWorkActive = workCount > 0;
+
+  if (!previousWorkActive && scrapingWorkActive) {
+    const query = scrapingActivityState.activeJob?.query || scrapingActivityState.queuedJobs?.[0]?.query || "Instagram request";
+    showScrapingNotification(
+      "Instagram scraping started",
+      `${query} is running privately. Open Companion to follow progress.`,
+    );
+    const publishingIsVisible = [...managedBrowsers.values()].some(session => !session.closedAt);
+    if (mainWindow?.isVisible() && !publishingIsVisible) {
+      mainWindow.webContents.send("companion:navigate", "scraping");
+    }
+  } else if (previousWorkActive && !scrapingWorkActive) {
+    const latest = scrapingActivityState.recentJobs?.[0];
+    if (latest?.status === "complete") {
+      showScrapingNotification(
+        "Instagram scraping complete",
+        `${latest.query}: ${latest.resultCount ?? 0} live ${latest.resultCount === 1 ? "result" : "results"} ready.`,
+      );
+    } else if (latest?.status === "failed") {
+      showScrapingNotification(
+        "Instagram scraping needs attention",
+        `${latest.query}: ${latest.error?.message || "The scrape did not complete."}`,
+      );
+    }
+  }
+
+  if (tray) {
+    const active = scrapingActivityState.activeJob;
+    tray.setToolTip(active && scrapingWorkActive
+      ? `AgenticThat Companion - Scraping ${active.query}`
+      : "AgenticThat Publishing Companion");
+  }
+  rebuildTrayMenu?.();
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("companion:scraping-state", scrapingActivityState);
+  }
 }
 
 function notifyWorkspaceState({ revealActivity = false } = {}) {
@@ -808,6 +881,12 @@ async function emergencyStop() {
   return Boolean(stopped || scrapingStopped || activeSessions.length);
 }
 
+async function stopScraping() {
+  return Boolean(await publishingRuntime?.cancelAllInstagramCompanionJobs?.(
+    "Instagram scraping was stopped from Companion."
+  ));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -855,7 +934,13 @@ function createTray() {
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open AgenticThat Publishing", click: () => shell.openExternal(DASHBOARD_URL) },
     { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
-    { label: "Emergency stop all publishing", click: () => void emergencyStop() },
+    {
+      label: scrapingWorkCount() > 0
+        ? `View Instagram Scraping (${scrapingWorkCount()} active)`
+        : "View Instagram Scraping",
+      click: () => showCompanion("scraping"),
+    },
+    { label: "Emergency stop all activity", click: () => void emergencyStop() },
     { type: "separator" },
     {
       label: "Start with Windows",
@@ -872,8 +957,9 @@ function createTray() {
       app.quit();
     } },
   ]));
+  rebuildTrayMenu = rebuildMenu;
   rebuildMenu();
-  tray.on("double-click", () => showCompanion("activity"));
+  tray.on("double-click", () => showCompanion(scrapingWorkCount() > 0 ? "scraping" : "activity"));
 }
 
 function safeProxyPath(value) {
@@ -943,6 +1029,7 @@ async function proxyDashboardRequest(message) {
 function registerIpc() {
   ipcMain.handle("companion:status", () => serviceStatus());
   ipcMain.handle("companion:workspace-state", () => workspaceState());
+  ipcMain.handle("companion:scraping-state", () => scrapingActivity());
   ipcMain.handle("companion:set-layout", (_event, layout) => {
     dashboardBounds = EMBED_FULL_PUBLISHING_WORKSPACE ? safeBounds(layout?.dashboard) : null;
     browserBounds = new Map(
@@ -985,6 +1072,7 @@ function registerIpc() {
   ipcMain.handle("companion:focus-external-window", (_event, sessionId) => (
     publishingRuntime?.focusExternalBrowserWindow?.(String(sessionId || ""))
   ));
+  ipcMain.handle("companion:stop-scraping", () => stopScraping());
   ipcMain.handle("companion:emergency-stop", () => emergencyStop());
   ipcMain.handle("companion:dashboard-proxy", (event, message) => {
     if (!EMBED_FULL_PUBLISHING_WORKSPACE || !dashboardView || event.sender.id !== dashboardView.webContents.id) {
@@ -997,7 +1085,7 @@ function registerIpc() {
 if (started || !ownsSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => showCompanion("activity"));
+  app.on("second-instance", () => showCompanion(scrapingWorkCount() > 0 ? "scraping" : "activity"));
 
   app.whenReady().then(async () => {
     settings = loadSettings();
@@ -1034,6 +1122,8 @@ if (started || !ownsSingleInstanceLock) {
   });
   app.on("window-all-closed", () => {});
   app.on("will-quit", () => {
+    unsubscribeScrapingActivity?.();
+    unsubscribeScrapingActivity = null;
     void publishingRuntime?.cancelAllInstagramCompanionJobs?.("Companion is shutting down.");
     void stopInstagramScrapingBrowsers();
     publishingServer?.close();

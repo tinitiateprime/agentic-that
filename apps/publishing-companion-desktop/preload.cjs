@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("publishingCompanion", {
   status: () => ipcRenderer.invoke("companion:status"),
   workspaceState: () => ipcRenderer.invoke("companion:workspace-state"),
+  scrapingState: () => ipcRenderer.invoke("companion:scraping-state"),
   setLayout: layout => ipcRenderer.invoke("companion:set-layout", layout),
   openDashboard: () => ipcRenderer.invoke("companion:open-dashboard"),
   reloadDashboard: () => ipcRenderer.invoke("companion:reload-dashboard"),
@@ -14,9 +15,11 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   revokePublishingConsent: () => ipcRenderer.invoke("companion:revoke-publishing-consent"),
   arrangeExternalWindows: () => ipcRenderer.invoke("companion:arrange-external-windows"),
   focusExternalWindow: sessionId => ipcRenderer.invoke("companion:focus-external-window", sessionId),
+  stopScraping: () => ipcRenderer.invoke("companion:stop-scraping"),
   emergencyStop: () => ipcRenderer.invoke("companion:emergency-stop"),
   onStatusChanged: callback => ipcRenderer.on("companion:status-changed", callback),
   onWorkspaceState: callback => ipcRenderer.on("companion:workspace-state", (_event, state) => callback(state)),
+  onScrapingState: callback => ipcRenderer.on("companion:scraping-state", (_event, state) => callback(state)),
   onNavigate: callback => ipcRenderer.on("companion:navigate", (_event, section) => callback(section)),
   onLog: callback => ipcRenderer.on("companion:log", (_event, entry) => callback(entry)),
 });

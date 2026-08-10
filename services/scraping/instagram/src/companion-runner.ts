@@ -32,7 +32,10 @@ class CompanionSessionFactory implements InstagramBrowserSessionFactory {
   constructor(
     private readonly jobId: string,
     private readonly signal: AbortSignal,
+    private readonly onBrowserReady?: () => void,
   ) {}
+
+  private browserReadyReported = false;
 
   async create(): Promise<InstagramBrowserSession> {
     if (this.signal.aborted) throw new InstagramCompanionCancelledError();
@@ -72,6 +75,10 @@ class CompanionSessionFactory implements InstagramBrowserSessionFactory {
       const userAgent = await page.evaluate(() => navigator.userAgent);
       session = { context, page, userAgent, close };
       this.active.add(session);
+      if (!this.browserReadyReported) {
+        this.browserReadyReported = true;
+        this.onBrowserReady?.();
+      }
       this.signal.addEventListener("abort", onAbort, { once: true });
       if (this.signal.aborted) {
         await close();
@@ -93,8 +100,9 @@ export async function runInstagramCompanionScrape(
   jobId: string,
   input: InstagramScrapeInput,
   signal: AbortSignal,
+  onBrowserReady?: () => void,
 ) {
-  const factory = new CompanionSessionFactory(jobId, signal);
+  const factory = new CompanionSessionFactory(jobId, signal, onBrowserReady);
   try {
     return await runInstagramScrapeWithSessionFactory(input, factory);
   } catch (error) {

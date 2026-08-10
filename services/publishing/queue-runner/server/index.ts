@@ -13,7 +13,9 @@ import {
   cancelInstagramCompanionJob,
   createInstagramCompanionJob,
   getInstagramCompanionJob,
+  instagramCompanionActivityState,
   instagramCompanionQueueHealth,
+  subscribeInstagramCompanionActivity,
 } from "../../../scraping/instagram/src/companion-jobs.js";
 import {
   createUserProfileSchema,
@@ -100,7 +102,11 @@ export {
   focusExternalBrowserWindow,
   stopAllExternalBrowserWindows,
 } from "./engines/external-browser/index.js";
-export { cancelAllInstagramCompanionJobs };
+export {
+  cancelAllInstagramCompanionJobs,
+  instagramCompanionActivityState,
+  subscribeInstagramCompanionActivity,
+};
 
 export const publishingApp = express();
 const app = publishingApp;

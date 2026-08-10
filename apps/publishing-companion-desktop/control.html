@@ -27,6 +27,11 @@
             <span><strong>Publishing activity</strong><small>Visible and managed</small></span>
             <b id="activity-badge" hidden>0</b>
           </button>
+          <button class="nav-item" data-view="scraping" type="button">
+            <span class="nav-icon">IG</span>
+            <span><strong>Instagram scraping</strong><small>Private local activity</small></span>
+            <b id="scraping-badge" hidden>0</b>
+          </button>
           <button class="nav-item" data-view="settings" type="button">
             <span class="nav-icon">⚙</span>
             <span><strong>Companion</strong><small>Status and settings</small></span>
@@ -96,6 +101,52 @@
             <div class="section-heading"><div><span class="eyebrow">RECENT ACTIONS</span><h3>Platform timeline</h3></div><span id="activity-summary">Waiting for activity</span></div>
             <div class="timeline" id="activity-timeline"></div>
           </section>
+        </section>
+
+        <section class="view-panel scraping-view" id="scraping-panel">
+          <div class="scraping-layout">
+            <section class="scrape-stage-card" id="scrape-stage-card" data-status="idle">
+              <div class="scrape-visual" aria-hidden="true">
+                <div class="scrape-radar"><i></i><i></i><i></i><span>IG</span></div>
+                <div class="scrape-signal"><i></i><i></i><i></i></div>
+              </div>
+              <div class="scrape-stage-content">
+                <div class="scrape-state-line">
+                  <span class="scrape-live-label" id="scrape-live-label">LOCAL ENGINE READY</span>
+                  <time id="scrape-elapsed">Waiting for a request</time>
+                </div>
+                <h2 id="scrape-title">Ready for private Instagram scraping</h2>
+                <p id="scrape-detail">Start a Local Companion scrape from AgenticThat. The hidden browser runs separately from publishing and its progress will appear here.</p>
+                <div class="scrape-meta" id="scrape-meta" hidden>
+                  <span id="scrape-mode">Latest</span>
+                  <span id="scrape-target">10 requested</span>
+                  <span id="scrape-queue-position">No queue</span>
+                </div>
+                <div class="scrape-progress-track" id="scrape-progress-track"><i id="scrape-progress-fill"></i></div>
+                <div class="scrape-steps" id="scrape-steps">
+                  <div data-stage="queued"><i></i><span><strong>Queued</strong><small>Request accepted</small></span></div>
+                  <div data-stage="opening_browser"><i></i><span><strong>Browser</strong><small>Private session</small></span></div>
+                  <div data-stage="scraping"><i></i><span><strong>Collecting</strong><small>Live public data</small></span></div>
+                  <div data-stage="preparing_results"><i></i><span><strong>Preparing</strong><small>Checking results</small></span></div>
+                </div>
+                <div class="scrape-stage-actions">
+                  <div class="scrape-isolation-note"><i></i><span><strong>Publishing remains independent</strong><small>Scraping uses separate hidden, temporary browser sessions.</small></span></div>
+                  <button class="danger" id="stop-scraping" type="button" hidden>Stop scraping</button>
+                </div>
+              </div>
+            </section>
+
+            <div class="scrape-lists">
+              <section class="scrape-list-card">
+                <div class="section-heading"><div><span class="eyebrow">UP NEXT</span><h3>Scraping queue</h3></div><span id="scrape-queue-summary">No requests waiting</span></div>
+                <div class="scrape-job-list" id="scrape-queue-list"><span class="timeline-empty">New requests will appear here.</span></div>
+              </section>
+              <section class="scrape-list-card">
+                <div class="section-heading"><div><span class="eyebrow">COMPLETED LOCALLY</span><h3>Recent scraping</h3></div><span id="scrape-history-summary">No recent jobs</span></div>
+                <div class="scrape-job-list" id="scrape-history-list"><span class="timeline-empty">Completed and failed requests will appear here.</span></div>
+              </section>
+            </div>
+          </div>
         </section>
 
         <section class="view-panel settings-view" id="settings-panel">

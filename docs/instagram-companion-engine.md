@@ -37,4 +37,4 @@ The Companion engine reuses the server scraper's normalized output, parsing, sou
 
 This engine improves reliability by moving requests away from shared server IPs, but Instagram can still change public markup, require login, rate-limit a network, remove a profile, or experience an outage. These conditions return typed failures instead of cached or cross-profile data. Product rate limits can be added above the existing one-job local concurrency without changing the scraping engine.
 
-Desktop release containing the Electron multi-page compatibility fix: `1.4.2`.
+Desktop release containing live scraping activity and the Electron multi-page compatibility fix: `1.4.3`.

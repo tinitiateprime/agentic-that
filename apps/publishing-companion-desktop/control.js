@@ -2,12 +2,14 @@ const api = window.publishingCompanion;
 const byId = id => document.getElementById(id);
 const views = {
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
+  scraping: { panel: byId("scraping-panel"), title: "Instagram scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
 let activeView = "activity";
 let currentStatus = null;
 let currentWorkspace = { sessions: [] };
+let currentScraping = { activeJob: null, queuedJobs: [], recentJobs: [], concurrency: 1 };
 let logEntries = [];
 let layoutFrame = null;
 let liveLayoutMode = "focus";
@@ -94,6 +96,15 @@ function scheduleLayout() {
 
 function activeSessions() {
   return currentWorkspace.sessions.filter(session => session.active);
+}
+
+function scrapingWorkCount() {
+  const active = currentScraping.activeJob && ["queued", "running"].includes(currentScraping.activeJob.status) ? 1 : 0;
+  return active + (currentScraping.queuedJobs?.length || 0);
+}
+
+function updateGlobalStop() {
+  byId("global-stop").disabled = activeSessions().length === 0 && scrapingWorkCount() === 0;
 }
 
 function platformMark(session) {
@@ -310,9 +321,133 @@ function renderWorkspace() {
   const badge = byId("activity-badge");
   badge.hidden = active.length === 0;
   badge.textContent = String(active.length);
-  byId("global-stop").disabled = active.length === 0;
+  updateGlobalStop();
   byId("live-stop").disabled = active.length === 0;
   scheduleLayout();
+}
+
+const scrapingStageOrder = ["queued", "opening_browser", "scraping", "preparing_results"];
+
+function scrapingModeLabel(value) {
+  const labels = { latest: "Latest posts", range: "Date range", engagement: "Profile analysis" };
+  return labels[value] || "Instagram scrape";
+}
+
+function durationLabel(startValue, endValue = Date.now()) {
+  const start = new Date(startValue || "").getTime();
+  const end = typeof endValue === "number" ? endValue : new Date(endValue || "").getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "Just now";
+  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s elapsed`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s elapsed`;
+}
+
+function scrapeJobStateLabel(job) {
+  if (job.status === "complete") return `${job.resultCount ?? 0} results`;
+  if (job.status === "failed") return "Needs attention";
+  if (job.status === "cancelled") return "Stopped";
+  if (job.status === "queued") return job.queuePosition ? `Queue ${job.queuePosition}` : "Queued";
+  return job.progress?.message || "Working";
+}
+
+function createScrapeJobItem(job) {
+  const item = document.createElement("article");
+  item.className = `scrape-job-item ${job.status || "queued"}`;
+
+  const mark = document.createElement("span");
+  mark.className = "scrape-job-mark";
+  mark.textContent = job.status === "complete" ? "OK" : job.status === "failed" ? "!" : job.status === "cancelled" ? "X" : "IG";
+
+  const content = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = job.query || "Instagram request";
+  const detail = document.createElement("small");
+  detail.textContent = job.error?.message || `${scrapingModeLabel(job.collectionMode)} - ${scrapeJobStateLabel(job)}`;
+  content.append(title, detail);
+
+  const time = document.createElement("time");
+  const value = new Date(job.completedAt || job.updatedAt || job.createdAt || "");
+  time.textContent = Number.isNaN(value.getTime())
+    ? scrapeJobStateLabel(job)
+    : value.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  item.append(mark, content, time);
+  return item;
+}
+
+function renderScraping() {
+  const active = currentScraping.activeJob && ["queued", "running"].includes(currentScraping.activeJob.status)
+    ? currentScraping.activeJob
+    : null;
+  const stageCard = byId("scrape-stage-card");
+  const stage = active?.progress?.stage || "idle";
+  stageCard.dataset.status = active ? "working" : "idle";
+  stageCard.dataset.stage = stage;
+
+  byId("scrape-live-label").textContent = active ? "LIVE ON THIS COMPUTER" : "LOCAL ENGINE READY";
+  byId("scrape-title").textContent = active
+    ? `Scraping ${active.query || "Instagram"}`
+    : "Ready for private Instagram scraping";
+  byId("scrape-detail").textContent = active
+    ? active.progress?.message || "Collecting current public Instagram data."
+    : "Start a Local Companion scrape from AgenticThat. The hidden browser runs separately from publishing and its progress will appear here.";
+  byId("scrape-elapsed").textContent = active
+    ? durationLabel(active.startedAt || active.createdAt)
+    : currentScraping.recentJobs?.[0]
+      ? `Last activity ${new Date(currentScraping.recentJobs[0].updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      : "Waiting for a request";
+
+  byId("scrape-meta").hidden = !active;
+  if (active) {
+    byId("scrape-mode").textContent = scrapingModeLabel(active.collectionMode);
+    byId("scrape-target").textContent = `${active.maxResults} requested`;
+    const queued = currentScraping.queuedJobs?.length || 0;
+    byId("scrape-queue-position").textContent = queued ? `${queued} waiting next` : "No queue";
+  }
+
+  const stageIndex = scrapingStageOrder.indexOf(stage);
+  const progressByStage = { queued: 8, opening_browser: 28, scraping: 68, preparing_results: 92 };
+  byId("scrape-progress-fill").style.width = active ? `${progressByStage[stage] || 8}%` : "0%";
+  byId("scrape-progress-track").classList.toggle("working", Boolean(active));
+  document.querySelectorAll("#scrape-steps [data-stage]").forEach((element, index) => {
+    element.classList.toggle("active", Boolean(active) && index === stageIndex);
+    element.classList.toggle("complete", Boolean(active) && index < stageIndex);
+  });
+
+  byId("stop-scraping").hidden = !active && (currentScraping.queuedJobs?.length || 0) === 0;
+  byId("stop-scraping").disabled = !active && (currentScraping.queuedJobs?.length || 0) === 0;
+
+  const queuedJobs = currentScraping.queuedJobs || [];
+  byId("scrape-queue-summary").textContent = queuedJobs.length
+    ? `${queuedJobs.length} ${queuedJobs.length === 1 ? "request" : "requests"} waiting`
+    : "No requests waiting";
+  const queueList = byId("scrape-queue-list");
+  if (queuedJobs.length) queueList.replaceChildren(...queuedJobs.map(createScrapeJobItem));
+  else {
+    const empty = document.createElement("span");
+    empty.className = "timeline-empty";
+    empty.textContent = active ? "The active request has the private browser." : "New requests will appear here.";
+    queueList.replaceChildren(empty);
+  }
+
+  const recentJobs = currentScraping.recentJobs || [];
+  byId("scrape-history-summary").textContent = recentJobs.length
+    ? `${recentJobs.length} recent`
+    : "No recent jobs";
+  const historyList = byId("scrape-history-list");
+  if (recentJobs.length) historyList.replaceChildren(...recentJobs.slice(0, 8).map(createScrapeJobItem));
+  else {
+    const empty = document.createElement("span");
+    empty.className = "timeline-empty";
+    empty.textContent = "Completed and failed requests will appear here.";
+    historyList.replaceChildren(empty);
+  }
+
+  const badge = byId("scraping-badge");
+  const workCount = scrapingWorkCount();
+  badge.hidden = workCount === 0;
+  badge.textContent = String(workCount);
+  updateGlobalStop();
 }
 
 function renderStatus(status) {
@@ -363,6 +498,11 @@ async function refreshWorkspace() {
   renderWorkspace();
 }
 
+async function refreshScraping() {
+  currentScraping = await api.scrapingState();
+  renderScraping();
+}
+
 function renderLogs() {
   const container = byId("log-list");
   if (logEntries.length === 0) {
@@ -387,7 +527,7 @@ document.querySelectorAll(".nav-item").forEach(button => {
 });
 
 byId("refresh-current").addEventListener("click", async () => {
-  await Promise.all([refreshStatus(), refreshWorkspace()]);
+  await Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]);
 });
 byId("layout-focus").addEventListener("click", () => {
   liveLayoutMode = "focus";
@@ -417,6 +557,14 @@ async function stopPublishing(event) {
 
 byId("global-stop").addEventListener("click", stopPublishing);
 byId("live-stop").addEventListener("click", stopPublishing);
+byId("stop-scraping").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Stopping...";
+  await api.stopScraping();
+  button.textContent = "Stop scraping";
+  await refreshScraping();
+});
 byId("empty-open-dashboard").addEventListener("click", () => api.openDashboard());
 byId("open-data").addEventListener("click", () => api.openData());
 byId("open-logs").addEventListener("click", () => api.openLogs());
@@ -438,6 +586,10 @@ api.onWorkspaceState(state => {
   currentWorkspace = state;
   renderWorkspace();
 });
+api.onScrapingState(state => {
+  currentScraping = state;
+  renderScraping();
+});
 api.onNavigate(section => setView(views[section] ? section : "activity"));
 api.onLog(entry => {
   logEntries = [...logEntries.slice(-79), entry];
@@ -450,8 +602,11 @@ window.addEventListener("resize", () => {
 });
 document.addEventListener("visibilitychange", scheduleLayout);
 
-void Promise.all([refreshStatus(), refreshWorkspace()]).then(() => {
+void Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]).then(() => {
   renderLogs();
   scheduleLayout();
 });
 setInterval(refreshStatus, 5000);
+setInterval(() => {
+  if (scrapingWorkCount() > 0) renderScraping();
+}, 1000);

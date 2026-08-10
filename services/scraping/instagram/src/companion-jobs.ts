@@ -45,6 +45,66 @@ const queue: string[] = [];
 let activeJobId: string | null = null;
 type CompanionScrapeExecutor = typeof runInstagramCompanionScrape;
 let companionScrapeExecutor: CompanionScrapeExecutor = runInstagramCompanionScrape;
+type InstagramCompanionActivityListener = (state: ReturnType<typeof instagramCompanionActivityState>) => void;
+const activityListeners = new Set<InstagramCompanionActivityListener>();
+let activityNotificationQueued = false;
+
+function companionActivityJob(job: CompanionJob, queuePosition: number | null = null) {
+  return {
+    id: job.id,
+    query: job.requestedQuery,
+    collectionMode: job.input.collectionMode || "latest",
+    maxResults: Math.max(1, Number(job.input.maxResults) || 10),
+    status: job.status,
+    progress: { ...job.progress },
+    queuePosition,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    startedAt: job.startedAt || null,
+    completedAt: job.completedAt || null,
+    resultCount: job.result?.results.length ?? null,
+    discoveryStatus: job.result?.discoveryStatus || null,
+    error: job.error ? { ...job.error } : null,
+  };
+}
+
+export function instagramCompanionActivityState() {
+  const activeJob = activeJobId ? jobs.get(activeJobId) : null;
+  const queuedJobs = queue
+    .map((jobId, index) => {
+      const job = jobs.get(jobId);
+      return job ? companionActivityJob(job, index + 1) : null;
+    })
+    .filter((job): job is NonNullable<typeof job> => Boolean(job));
+  const recentJobs = [...jobs.values()]
+    .filter(job => ["complete", "failed", "cancelled"].includes(job.status))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 12)
+    .map(job => companionActivityJob(job));
+  return {
+    activeJob: activeJob ? companionActivityJob(activeJob) : null,
+    queuedJobs,
+    recentJobs,
+    concurrency: 1,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function notifyInstagramCompanionActivity() {
+  if (activityNotificationQueued) return;
+  activityNotificationQueued = true;
+  queueMicrotask(() => {
+    activityNotificationQueued = false;
+    const state = instagramCompanionActivityState();
+    for (const listener of activityListeners) listener(state);
+  });
+}
+
+export function subscribeInstagramCompanionActivity(listener: InstagramCompanionActivityListener) {
+  activityListeners.add(listener);
+  listener(instagramCompanionActivityState());
+  return () => activityListeners.delete(listener);
+}
 
 export function setInstagramCompanionScrapeExecutorForTests(executor: CompanionScrapeExecutor | null) {
   if (process.env.NODE_ENV !== "test") throw new Error("The Companion scrape executor can only be replaced in tests.");
@@ -200,6 +260,7 @@ export function instagramCompanionJobResponse(job: CompanionJob) {
 
 function touch(job: CompanionJob) {
   job.updatedAt = new Date().toISOString();
+  notifyInstagramCompanionActivity();
 }
 
 function pruneJobs() {
@@ -222,9 +283,11 @@ async function executeJob(job: CompanionJob) {
   }, 16 * 60_000);
 
   try {
-    job.progress = { stage: "scraping", message: "Collecting current public Instagram data" };
-    touch(job);
-    const result = await companionScrapeExecutor(job.id, job.input, controller.signal);
+    const result = await companionScrapeExecutor(job.id, job.input, controller.signal, () => {
+      if (controller.signal.aborted) return;
+      job.progress = { stage: "scraping", message: "Collecting current public Instagram data" };
+      touch(job);
+    });
     if (controller.signal.aborted) throw new InstagramCompanionCancelledError();
     if (!result.results.length && result.discoveryStatus !== "not_found") {
       throw new Error(result.discoveryStatus || "temporarily_unavailable");
@@ -260,6 +323,7 @@ async function pumpQueue() {
   } finally {
     activeJobId = null;
     pruneJobs();
+    notifyInstagramCompanionActivity();
     queueMicrotask(() => { void pumpQueue(); });
   }
 }
@@ -282,6 +346,7 @@ export function createInstagramCompanionJob(ownerKey: string, body: Record<strin
   };
   jobs.set(job.id, job);
   queue.push(job.id);
+  notifyInstagramCompanionActivity();
   queueMicrotask(() => { void pumpQueue(); });
   return instagramCompanionJobResponse(job);
 }
@@ -326,6 +391,7 @@ export async function cancelAllInstagramCompanionJobs(reason = "Instagram scrapi
     }
   }
   queue.splice(0);
+  notifyInstagramCompanionActivity();
   await Promise.resolve(instagramCompanionDesktopHost()?.stopBrowsers(reason)).catch(() => undefined);
   return cancelled > 0;
 }

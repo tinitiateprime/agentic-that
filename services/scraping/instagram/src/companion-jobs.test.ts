@@ -5,8 +5,10 @@ import {
   cancelInstagramCompanionJob,
   createInstagramCompanionJob,
   getInstagramCompanionJob,
+  instagramCompanionActivityState,
   prepareInstagramCompanionInput,
   setInstagramCompanionScrapeExecutorForTests,
+  subscribeInstagramCompanionActivity,
 } from "./companion-jobs.js";
 
 process.env.NODE_ENV = "test";
@@ -93,6 +95,62 @@ test("Companion jobs execute one at a time and return only fresh live results", 
   assert.equal(firstResult.dataSource, "live");
   assert.equal(firstResult.results?.[0]?.post_url, "https://www.instagram.com/p/first/");
   assert.equal(getInstagramCompanionJob("another:user", first.job.id), null);
+});
+
+test("Companion activity reports the active scrape, queue, progress, and safe recent result", async context => {
+  installFakeHost();
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const updates: ReturnType<typeof instagramCompanionActivityState>[] = [];
+  const unsubscribe = subscribeInstagramCompanionActivity(state => updates.push(state));
+  context.after(async () => {
+    releaseFirst();
+    unsubscribe();
+    await cancelAllInstagramCompanionJobs();
+    setInstagramCompanionScrapeExecutorForTests(null);
+    globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = undefined;
+  });
+
+  setInstagramCompanionScrapeExecutorForTests(async (_jobId, input, _signal, onBrowserReady) => {
+    onBrowserReady?.();
+    if (input.query === "activity-first") await firstGate;
+    return {
+      query: `@${input.query}`,
+      results: [{ post_url: `https://www.instagram.com/p/${input.query}/` }],
+      discoveryStatus: "ok",
+      diagnostics: {},
+    } as never;
+  });
+
+  const owner = "private-workspace:private-user";
+  const first = createInstagramCompanionJob(owner, {
+    mode: "profile",
+    keyword: "activity-first",
+    collection_mode: "engagement",
+    max_results: 3,
+  });
+  const second = createInstagramCompanionJob(owner, { mode: "profile", keyword: "activity-second" });
+
+  const deadline = Date.now() + 1_000;
+  let live = instagramCompanionActivityState();
+  while (Date.now() < deadline && live.activeJob?.id !== first.job.id) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    live = instagramCompanionActivityState();
+  }
+  assert.equal(live.activeJob?.query, "activity-first");
+  assert.equal(live.activeJob?.collectionMode, "engagement");
+  assert.equal(live.activeJob?.maxResults, 3);
+  assert.equal(live.activeJob?.progress.stage, "scraping");
+  assert.equal(live.queuedJobs[0]?.id, second.job.id);
+  assert.equal(live.queuedJobs[0]?.queuePosition, 1);
+  assert.equal(JSON.stringify(live).includes(owner), false);
+
+  releaseFirst();
+  await Promise.all([waitForJob(owner, first.job.id), waitForJob(owner, second.job.id)]);
+  const completed = instagramCompanionActivityState().recentJobs.find(job => job.id === second.job.id);
+  assert.equal(completed?.status, "complete");
+  assert.equal(completed?.resultCount, 1);
+  assert.ok(updates.some(state => state.activeJob?.progress.stage === "scraping"));
 });
 
 test("a queued Companion job can be cancelled without running", async context => {
