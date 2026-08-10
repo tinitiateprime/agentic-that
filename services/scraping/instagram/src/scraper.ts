@@ -63,6 +63,21 @@ export type InstagramDiscoveryStatus =
   | "login_required"
   | "not_found";
 
+export type InstagramScrapeDiagnostics = {
+  discoveredCandidates: number;
+  candidatePool: number;
+  extractionAttempts: number;
+  extractionSuccesses: number;
+  fallbackResults: number;
+  rejections: {
+    navigation: number;
+    unexpectedPost: number;
+    ownerMismatch: number;
+    outOfRange: number;
+    extraction: number;
+  };
+};
+
 export type InstagramProfileAnalysis = {
   username: string | null;
   display_name: string | null;
@@ -139,6 +154,7 @@ type ScrapeResult = {
   results: InstagramPost[];
   analysis?: InstagramProfileAnalysis;
   discoveryStatus?: InstagramDiscoveryStatus;
+  diagnostics?: InstagramScrapeDiagnostics;
 };
 
 type ReelsDiscoveryDiagnostics = {
@@ -1067,6 +1083,51 @@ function candidateToData(candidate: Candidate): Candidate {
     _comments_exact: candidate._comments_exact ?? false,
     _comments_live: candidate._comments_live ?? false
   };
+}
+
+const trustedProfileDiscoverySources = new Set([
+  "profile",
+  "profile reels",
+  "public profile bootstrap",
+  "public profile feed",
+  "public profile pagination",
+  "current reels payload"
+]);
+
+export function latestProfileCandidateTarget(maxResults: number) {
+  const requested = Math.max(1, Math.min(50, Number(maxResults) || 10));
+  return Math.min(Math.max(requested * 2, 12), 60);
+}
+
+export function trustedProfileFallbackCandidates(
+  candidates: Candidate[],
+  requestedUsername: string,
+  limit: number,
+  excludedPostUrls: string[] = []
+) {
+  const username = cleanText(requestedUsername).replace(/^@+/, "").toLowerCase();
+  if (!isInstagramHandle(username) || limit <= 0) return [];
+
+  const excluded = new Set(excludedPostUrls.map(postIdentity));
+  const selected: Candidate[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.post_url || excluded.has(postIdentity(candidate.post_url))) continue;
+    const source = cleanText(candidate._source).toLowerCase();
+    if (!trustedProfileDiscoverySources.has(source)) continue;
+    const candidateUsername = cleanText(candidate._handle || candidate.username).replace(/^@+/, "").toLowerCase();
+    if (candidateUsername && candidateUsername !== username) continue;
+
+    const fallback = candidateToData({
+      ...candidate,
+      username,
+      profile_url: `${instagramHost}/${username}/`,
+      _handle: username
+    });
+    selected.push(fallback);
+    excluded.add(postIdentity(candidate.post_url));
+    if (selected.length >= limit) break;
+  }
+  return selected;
 }
 
 function isShortcode(value?: string | null) {
@@ -3892,6 +3953,20 @@ async function scrapePublicBrowser(
     const searchCandidates: Candidate[] = [];
     const visualCandidates: Candidate[] = [];
     let reelsDiagnostics: ReelsDiscoveryDiagnostics | null = null;
+    const diagnostics: InstagramScrapeDiagnostics = {
+      discoveredCandidates: 0,
+      candidatePool: 0,
+      extractionAttempts: 0,
+      extractionSuccesses: 0,
+      fallbackResults: 0,
+      rejections: {
+        navigation: 0,
+        unexpectedPost: 0,
+        ownerMismatch: 0,
+        outOfRange: 0,
+        extraction: 0
+      }
+    };
 
     if (normalized.mode === "hashtag" && normalized.tag) {
       searchCandidates.push(...await collectRecentSearchCandidates(normalized.tag, candidateCount, range, userAgent));
@@ -3913,7 +3988,7 @@ async function scrapePublicBrowser(
       visualCandidates.push(...await collectLatestCandidates(page, discoveryQuery, candidateCount, maxResults));
       if (normalized.mode === "profile" && normalized.username) {
         const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
-        if (visualCandidates.length < desiredCandidates || normalized.mode === "profile") {
+        if (visualCandidates.length < desiredCandidates) {
           const reelsPage = await context.newPage();
           try {
             visualCandidates.push(...await collectLatestCandidates(
@@ -3942,7 +4017,7 @@ async function scrapePublicBrowser(
         reelsDiagnostics = verified.diagnostics;
         visualCandidates.unshift(...verified.candidates);
       }
-      if (sortBy === "engagement" || process.env.SERVERLESS === "true" || visualCandidates.length < desiredCandidates) {
+      if (sortBy === "engagement" || visualCandidates.length < desiredCandidates) {
         const knownUserId = cleanText(visualCandidates.find((candidate) => candidate._owner_id)?._owner_id) || null;
         visualCandidates.push(...await collectPublicProfileFeedCandidates(
           page,
@@ -3962,9 +4037,11 @@ async function scrapePublicBrowser(
       typeof candidate.views === "number" && candidate._views_fresh === true &&
       isCurrentReelsViewSource(candidate._views_source)
     ));
-    if (normalized.mode === "profile" && normalized.username && (
-      !hasCurrentReels || (sortBy === "engagement" && !hasFreshReelViews)
-    )) {
+    const desiredProfileCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
+    const needsProfileRecovery = sortBy === "engagement"
+      ? !hasCurrentReels || !hasFreshReelViews
+      : visualCandidates.length < desiredProfileCandidates;
+    if (normalized.mode === "profile" && normalized.username && needsProfileRecovery) {
       const recovery = await createPage(browser);
       try {
         const recoveryProfilePage = await recovery.context.newPage();
@@ -4088,6 +4165,7 @@ async function scrapePublicBrowser(
         const byTime = timestampValue(a.timestamp) - timestampValue(b.timestamp);
         return range.direction === "ascending" ? byTime : -byTime;
       });
+    diagnostics.discoveredCandidates = candidates.length;
     if (!candidatesInRange.length) {
       return {
         query: normalized.label,
@@ -4098,7 +4176,8 @@ async function scrapePublicBrowser(
             ? "login_required"
             : reelsDiagnostics?.notFound
               ? "not_found"
-              : "temporarily_unavailable"
+              : "temporarily_unavailable",
+        diagnostics
       };
     }
 
@@ -4115,6 +4194,7 @@ async function scrapePublicBrowser(
         ? 1
         : Math.min(candidatesInRange.length, poolLimit)
     );
+    diagnostics.candidatePool = candidatePool.length;
     if (process.env.INSTAGRAM_SCRAPER_DEBUG === "1" && sortBy === "engagement") {
       console.log(JSON.stringify({
         profileAnalysisBeforeEnrichment: candidatePool.slice(0, 10).map((candidate) => ({
@@ -4127,17 +4207,37 @@ async function scrapePublicBrowser(
         }))
       }, null, 2));
     }
-    const extractionConcurrency = normalized.mode === "post" ? 1 : sortBy === "engagement" ? 2 : 3;
+    const extractionConcurrency = normalized.mode === "post" ? 1 : 2;
     const extractCandidate = async (candidate: Candidate) => {
       const postPage = await context.newPage();
       try {
+        diagnostics.extractionAttempts += 1;
         const postUrl = candidate.post_url;
-        if (!postUrl) return null;
-        if (!timestampInRange(candidate.timestamp, range)) return null;
+        if (!postUrl) {
+          diagnostics.rejections.extraction += 1;
+          return null;
+        }
+        if (!timestampInRange(candidate.timestamp, range)) {
+          diagnostics.rejections.outOfRange += 1;
+          return null;
+        }
 
-        await gotoPublicPage(postPage, postUrl, 15_000);
+        if (sortBy === "recent") await sleep(250 + Math.random() * 350);
+        try {
+          await gotoPublicPage(postPage, postUrl, 15_000);
+        } catch (error) {
+          diagnostics.rejections.navigation += 1;
+          console.warn("Instagram post navigation failed", JSON.stringify({
+            postUrl,
+            message: error instanceof Error ? error.message : String(error)
+          }));
+          return null;
+        }
         await waitForOpenPost(postPage);
-        if (!await isExpectedPublicPost(postPage, postUrl)) return null;
+        if (!await isExpectedPublicPost(postPage, postUrl)) {
+          diagnostics.rejections.unexpectedPost += 1;
+          return null;
+        }
         const data = await extractPostMeta(postPage, postUrl);
         const target = data as Record<string, unknown>;
         for (const [key, value] of Object.entries(candidate) as [keyof Candidate, unknown][]) {
@@ -4149,7 +4249,10 @@ async function scrapePublicBrowser(
           else if (target[key] == null || target[key] === "") target[key] = value;
         }
 
-        if (!timestampInRange(data.timestamp, range)) return null;
+        if (!timestampInRange(data.timestamp, range)) {
+          diagnostics.rejections.outOfRange += 1;
+          return null;
+        }
 
         const stats = await extractPostStats(postPage, data._handle || data.username);
         data.top_comments = stats.top_comments;
@@ -4212,10 +4315,21 @@ async function scrapePublicBrowser(
         if (normalized.mode === "hashtag" && normalized.tag && !postMatchesTag(data, normalized.tag)) return null;
         if (normalized.mode === "profile" && normalized.username) {
           const extractedHandle = cleanText(data._handle || data.username).toLowerCase();
-          if (extractedHandle !== normalized.username.toLowerCase()) return null;
+          if (extractedHandle !== normalized.username.toLowerCase()) {
+            diagnostics.rejections.ownerMismatch += 1;
+            return null;
+          }
         }
 
+        diagnostics.extractionSuccesses += 1;
         return data.post_url ? data : null;
+      } catch (error) {
+        diagnostics.rejections.extraction += 1;
+        console.warn("Instagram post extraction failed", JSON.stringify({
+          postUrl: candidate.post_url || null,
+          message: error instanceof Error ? error.message : String(error)
+        }));
+        return null;
       } finally {
         await postPage.close().catch(() => {});
       }
@@ -4244,6 +4358,16 @@ async function scrapePublicBrowser(
       ));
     } else {
       extracted = await mapUntilValidCount(candidatePool, extractionConcurrency, maxResults, extractCandidate);
+    }
+    if (sortBy === "recent" && normalized.mode === "profile" && normalized.username && extracted.length < maxResults) {
+      const fallback = trustedProfileFallbackCandidates(
+        candidatePool,
+        normalized.username,
+        maxResults - extracted.length,
+        extracted.flatMap((candidate) => candidate.post_url ? [candidate.post_url] : [])
+      );
+      diagnostics.fallbackResults = fallback.length;
+      extracted.push(...fallback);
     }
     if (process.env.INSTAGRAM_SCRAPER_DEBUG === "1" && sortBy === "engagement") {
       console.log(JSON.stringify({
@@ -4357,14 +4481,17 @@ async function scrapePublicBrowser(
         : reelsDiagnostics?.notFound
           ? "not_found"
           : "temporarily_unavailable"
-      : sortBy === "engagement" && normalized.mode === "profile" && !hasFreshCurrentViews
+      : diagnostics.fallbackResults > 0
         ? "partial"
-        : "ok";
+        : sortBy === "engagement" && normalized.mode === "profile" && !hasFreshCurrentViews
+          ? "partial"
+          : "ok";
     return {
       query: normalized.label,
       results: sorted.slice(0, maxResults),
       analysis,
-      discoveryStatus
+      discoveryStatus,
+      diagnostics
     };
   } finally {
     await context.close();
@@ -4427,7 +4554,7 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
         : needsDeepHistory
           ? 150
         : normalized.mode === "profile"
-          ? Math.min(Math.max(maxResults * 3, 12), 150)
+          ? latestProfileCandidateTarget(maxResults)
           : Math.min(Math.max(maxResults * 6, 20), 150);
     return await scrapePublicBrowser(
       browser,

@@ -1250,6 +1250,17 @@
   color: #be123c;
 }
 
+.instagram-scraper-app .compare-profile-cache-note {
+  margin: 12px 14px 0;
+  padding: 9px 11px;
+  border: 1px solid #f4d58d;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #7c5b12;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .instagram-scraper-app .comparison-footer {
   display: flex;
   align-items: center;

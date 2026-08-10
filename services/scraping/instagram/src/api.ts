@@ -1,6 +1,7 @@
 import { getInstagramScraperInfo, runInstagramScrape } from "./scraper.ts";
 import {
   InstagramRunStore,
+  selectRecentRunFallback,
   type InstagramJob,
   type InstagramJobInput
 } from "./store.ts";
@@ -151,6 +152,37 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
     timezoneOffsetMinutes: input.timezoneOffsetMinutes,
     sortBy: input.sortBy
   });
+  let results = scrape.results;
+  let analysis = scrape.analysis;
+  let discoveryStatus = scrape.discoveryStatus;
+  let dataSource: "live" | "recent_cache" = "live";
+  let sourceRunId: string | undefined;
+  let sourceCreatedAt: string | undefined;
+
+  if (!results.length && discoveryStatus !== "not_found" && input.collectionMode !== "range") {
+    const configuredMinutes = Number(process.env.INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES);
+    const maxAgeMinutes = Number.isFinite(configuredMinutes) && configuredMinutes > 0
+      ? Math.min(configuredMinutes, 24 * 60)
+      : 6 * 60;
+    const fallback = selectRecentRunFallback(
+      await store.listRuns(),
+      input,
+      Date.now(),
+      maxAgeMinutes * 60_000
+    );
+    if (fallback) {
+      results = fallback.results
+        .slice()
+        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+        .slice(0, input.maxResults);
+      analysis = input.collectionMode === "engagement" ? fallback.analysis : undefined;
+      discoveryStatus = "partial";
+      dataSource = "recent_cache";
+      sourceRunId = fallback.id;
+      sourceCreatedAt = fallback.createdAt;
+    }
+  }
+
   return store.saveRun({
     query: scrape.query,
     requestedQuery: input.requestedQuery,
@@ -161,9 +193,13 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
     rangeFrom: input.rangeFrom,
     rangeTo: input.rangeTo,
     sortBy: input.sortBy,
-    results: scrape.results,
-    analysis: scrape.analysis,
-    discoveryStatus: scrape.discoveryStatus
+    results,
+    analysis,
+    discoveryStatus,
+    diagnostics: scrape.diagnostics,
+    dataSource,
+    sourceRunId,
+    sourceCreatedAt
   });
 }
 
@@ -176,6 +212,9 @@ async function jobResponse(job: InstagramJob, store: InstagramRunStore) {
     analysis: run?.analysis,
     discoveryStatus: run?.discoveryStatus,
     discovery_status: run?.discoveryStatus,
+    dataSource: run?.dataSource,
+    sourceCreatedAt: run?.sourceCreatedAt,
+    diagnostics: run?.diagnostics,
     message: job.status === "complete" && run ? `Scraped ${run.results.length} posts` : undefined
   };
 }
@@ -256,6 +295,9 @@ export async function handleInstagramRequest(request: Request) {
         analysis: run.analysis,
         discoveryStatus: run.discoveryStatus,
         discovery_status: run.discoveryStatus,
+        dataSource: run.dataSource,
+        sourceCreatedAt: run.sourceCreatedAt,
+        diagnostics: run.diagnostics,
         message: `Scraped ${run.results.length} posts`
       });
     }

@@ -9,6 +9,7 @@ import {
   currentReelViewCandidatesFromPayload,
   engagementValues,
   instagramVisibleMetric,
+  latestProfileCandidateTarget,
   liveRequestHeaders,
   mergeCandidateData,
   mergeProfileDiscoveryCandidates,
@@ -21,8 +22,10 @@ import {
   resolvePublicPostCounts,
   selectAnalysisEnrichmentCandidates,
   selectFreshReelViewMetric,
+  trustedProfileFallbackCandidates,
   viewDisplayMatchesExactCount
 } from "./scraper.ts";
+import { selectRecentRunFallback, type InstagramJobInput, type InstagramRun } from "./store.ts";
 
 test("uses the launched browser user agent for live no-cache requests", () => {
   const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/149.0.0.0 Safari/537.36";
@@ -44,6 +47,121 @@ test("prevents scraper API and polling responses from being cached", async () =>
   assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("expires"), "0");
+});
+
+test("bounds Latest profile discovery to a smaller reliability-focused pool", () => {
+  assert.equal(latestProfileCandidateTarget(3), 12);
+  assert.equal(latestProfileCandidateTarget(10), 20);
+  assert.equal(latestProfileCandidateTarget(50), 60);
+});
+
+test("keeps only trusted requested-profile discoveries when post pages are temporarily unavailable", () => {
+  const fallback = trustedProfileFallbackCandidates([
+    {
+      post_url: "https://www.instagram.com/p/ProfilePost1/",
+      username: "bakery",
+      timestamp: "2026-08-10T00:00:00.000Z",
+      _source: "profile"
+    },
+    {
+      post_url: "https://www.instagram.com/reel/ProfileReel2/",
+      username: null,
+      timestamp: "2026-08-09T00:00:00.000Z",
+      _source: "profile reels"
+    },
+    {
+      post_url: "https://www.instagram.com/p/UntrustedSearch3/",
+      username: "bakery",
+      timestamp: "2026-08-08T00:00:00.000Z",
+      _source: "latest keyword"
+    },
+    {
+      post_url: "https://www.instagram.com/p/WrongOwner4/",
+      username: "another_bakery",
+      timestamp: "2026-08-07T00:00:00.000Z",
+      _source: "public profile feed"
+    }
+  ], "bakery", 3, ["https://www.instagram.com/p/ProfilePost1/"]);
+
+  assert.deepEqual(fallback.map((post) => post.post_url), [
+    "https://www.instagram.com/reel/ProfileReel2/"
+  ]);
+  assert.equal(fallback[0].username, "bakery");
+  assert.equal(fallback[0]._handle, "bakery");
+});
+
+test("selects a recent live run as a cache fallback without chaining cached or ranged runs", () => {
+  const now = Date.parse("2026-08-10T06:00:00.000Z");
+  const post = {
+    username: "bakery",
+    display_name: "Bakery",
+    profile_url: "https://www.instagram.com/bakery/",
+    post_url: "https://www.instagram.com/p/CachedPost1/",
+    thumbnail_url: null,
+    comments_count: 1,
+    comments_display: "1",
+    comments_exact: true,
+    comments_hidden: false,
+    likes: 2,
+    likes_display: "2",
+    likes_exact: true,
+    likes_hidden: false,
+    views: null,
+    views_display: null,
+    views_exact: false,
+    follower_count: 10,
+    follower_count_display: "10",
+    engagement_score: null,
+    engagement_rate: null,
+    top_comments: [],
+    timestamp: "2026-08-10T00:00:00.000Z",
+    caption: null
+  };
+  const input: InstagramJobInput = {
+    requestedMode: "profile",
+    requestedQuery: "@bakery",
+    maxResults: 10,
+    collectionMode: "latest",
+    recentDays: 7,
+    autoExpandDays: false,
+    maxAutoExpandDays: 1,
+    timezoneOffsetMinutes: 0,
+    sortBy: "recent"
+  };
+  const runs: InstagramRun[] = [
+    {
+      id: "cached-chain",
+      query: "@bakery",
+      requestedQuery: "@bakery",
+      maxResults: 10,
+      collectionMode: "latest",
+      createdAt: "2026-08-10T05:59:00.000Z",
+      results: [post],
+      dataSource: "recent_cache"
+    },
+    {
+      id: "engagement-live",
+      query: "@bakery",
+      requestedQuery: "@bakery",
+      maxResults: 10,
+      collectionMode: "engagement",
+      createdAt: "2026-08-10T05:30:00.000Z",
+      results: [post]
+    },
+    {
+      id: "latest-live",
+      query: "@bakery",
+      requestedQuery: "@bakery",
+      maxResults: 10,
+      collectionMode: "latest",
+      createdAt: "2026-08-10T04:00:00.000Z",
+      results: [post]
+    }
+  ];
+
+  assert.equal(selectRecentRunFallback(runs, input, now)?.id, "latest-live");
+  assert.equal(selectRecentRunFallback(runs, { ...input, collectionMode: "range" }, now), null);
+  assert.equal(selectRecentRunFallback(runs, input, now, 60 * 60_000)?.id, "engagement-live");
 });
 
 test("treats a sign-in modal over public Reel anchors as public content", () => {

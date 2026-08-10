@@ -37,6 +37,7 @@ WA_FROM=<e164-whatsapp-number>
 CURRENCY=INR
 
 # Instagram scraping uses public Playwright pages; no Instagram session variables are required.
+INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES=360
 ```
 
 ## Scopes

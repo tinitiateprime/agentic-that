@@ -6,7 +6,8 @@ import {
   instagramServiceInfo,
   type InstagramDiscoveryStatus,
   type InstagramPost,
-  type InstagramProfileAnalysis
+  type InstagramProfileAnalysis,
+  type InstagramScrapeDiagnostics
 } from "./scraper.ts";
 
 export type InstagramRun = {
@@ -24,6 +25,10 @@ export type InstagramRun = {
   results: InstagramPost[];
   analysis?: InstagramProfileAnalysis;
   discoveryStatus?: InstagramDiscoveryStatus;
+  diagnostics?: InstagramScrapeDiagnostics;
+  dataSource?: "live" | "recent_cache";
+  sourceRunId?: string;
+  sourceCreatedAt?: string;
 };
 
 export type InstagramJobInput = {
@@ -64,6 +69,7 @@ type JobsDatabase = {
 
 const emptyDatabase = (): RunsDatabase => ({ version: 1, runs: [] });
 const emptyJobsDatabase = (): JobsDatabase => ({ version: 1, jobs: [] });
+export const DEFAULT_INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MS = 6 * 60 * 60_000;
 let localRunMutation = Promise.resolve();
 let localJobMutation = Promise.resolve();
 const shouldUseNetlifyBlobs = () => (
@@ -71,6 +77,32 @@ const shouldUseNetlifyBlobs = () => (
   process.env.NETLIFY === "true" ||
   Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+
+export function selectRecentRunFallback(
+  runs: InstagramRun[],
+  input: InstagramJobInput,
+  now = Date.now(),
+  maxAgeMs = DEFAULT_INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MS
+) {
+  if (input.collectionMode === "range" || maxAgeMs <= 0) return null;
+  const requestedQuery = input.requestedQuery.trim().toLowerCase();
+  const candidates = runs.filter((run) => {
+    const createdAt = new Date(run.createdAt).getTime();
+    const age = now - createdAt;
+    if (!Number.isFinite(createdAt) || age < 0 || age > maxAgeMs) return false;
+    if (run.requestedQuery.trim().toLowerCase() !== requestedQuery || !run.results.length) return false;
+    if (run.dataSource === "recent_cache") return false;
+    if (input.collectionMode === "engagement") {
+      return run.collectionMode === "engagement" && Boolean(run.analysis);
+    }
+    return run.collectionMode === "latest" || run.collectionMode === "engagement";
+  });
+  return candidates.sort((a, b) => {
+    const aSameMode = a.collectionMode === input.collectionMode ? 1 : 0;
+    const bSameMode = b.collectionMode === input.collectionMode ? 1 : 0;
+    return bSameMode - aSameMode || b.createdAt.localeCompare(a.createdAt);
+  })[0] || null;
+}
 
 export class InstagramRunStore {
   private readonly dataFile = path.join(instagramServiceInfo.dataDir, "runs.json");

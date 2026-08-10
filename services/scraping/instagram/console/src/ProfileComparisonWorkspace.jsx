@@ -44,6 +44,8 @@ const emptyProfile = (id, value = "") => ({
   posts: [],
   selectedKeys: [],
   analysis: null,
+  dataSource: "live",
+  sourceCreatedAt: "",
   status: "idle",
   statusText: "",
   error: ""
@@ -263,6 +265,8 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
         posts,
         selectedKeys: [],
         analysis: data?.analysis || data?.run?.analysis || null,
+        dataSource: data?.dataSource || data?.run?.dataSource || "live",
+        sourceCreatedAt: data?.sourceCreatedAt || data?.run?.sourceCreatedAt || "",
         status: "complete",
         statusText: "Ready",
         error: ""
@@ -299,6 +303,8 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       posts: [],
       selectedKeys: [],
       analysis: null,
+      dataSource: "live",
+      sourceCreatedAt: "",
       status: "queued",
       statusText: "Queued",
       error: ""
@@ -368,6 +374,8 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
       posts: [],
       selectedKeys: [],
       analysis: null,
+      dataSource: "live",
+      sourceCreatedAt: "",
       status: "idle",
       statusText: "",
       error: ""
@@ -843,6 +851,12 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
                   </div>
                   <span>{profile.selectedKeys.length}/{MAX_SELECTED_POSTS} selected</span>
                 </header>
+                {profile.status === "complete" && profile.dataSource === "recent_cache" ? (
+                  <div className="compare-profile-cache-note">
+                    Instagram was temporarily unavailable. Showing the most recent successful data
+                    {profile.sourceCreatedAt ? ` from ${new Date(profile.sourceCreatedAt).toLocaleString()}` : ""}.
+                  </div>
+                ) : null}
                 {profile.status === "working" || profile.status === "queued" ? (
                   <div className="compare-profile-status"><div className="loader-ring" /><span>{profile.statusText}</span></div>
                 ) : profile.status === "failed" ? (
