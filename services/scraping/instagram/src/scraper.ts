@@ -3858,8 +3858,7 @@ async function extractPostMeta(page: Page, fallbackUrl?: string | null): Promise
   return data;
 }
 
-async function getProfileInfo(handle: string, context: BrowserContext) {
-  const page = await context.newPage();
+async function getProfileInfo(handle: string, page: Page) {
   try {
     await sleep(200 + Math.random() * 250);
     await gotoPublicPage(page, `${instagramHost}/${handle}/`, 15_000);
@@ -3951,8 +3950,6 @@ async function getProfileInfo(handle: string, context: BrowserContext) {
   } catch (error) {
     console.warn(`Profile error for ${handle}: ${error instanceof Error ? error.message : String(error)}`);
     return { followerCount: null, followerCountDisplay: null, displayName: handle };
-  } finally {
-    await page.close();
   }
 }
 
@@ -3967,7 +3964,7 @@ async function scrapePublicBrowser(
   timezoneOffsetMinutes = 0
 ): Promise<ScrapeResult> {
   const session = await sessionFactory.create();
-  const { context, page, userAgent } = session;
+  const { page, userAgent } = session;
   try {
     const discoveryQuery = normalized.mode === "post"
       ? normalized.postUrl || normalized.startUrl
@@ -3996,33 +3993,33 @@ async function scrapePublicBrowser(
     }
 
     if (sortBy === "engagement" && normalized.mode === "profile") {
-      const reelsPage = await context.newPage();
+      const reelsSession = await sessionFactory.create();
       try {
         const perGridLimit = Math.max(50, candidateCount);
         const [reelCandidates, profileCandidates] = await Promise.all([
-          collectLatestCandidates(reelsPage, discoveryQuery, perGridLimit, maxResults, true),
+          collectLatestCandidates(reelsSession.page, discoveryQuery, perGridLimit, maxResults, true),
           collectLatestCandidates(page, discoveryQuery, perGridLimit, maxResults)
         ]);
         visualCandidates.push(...mergeProfileDiscoveryCandidates(reelCandidates, profileCandidates));
       } finally {
-        await reelsPage.close().catch(() => {});
+        await reelsSession.close();
       }
     } else {
       visualCandidates.push(...await collectLatestCandidates(page, discoveryQuery, candidateCount, maxResults));
       if (normalized.mode === "profile" && normalized.username) {
         const desiredCandidates = Math.min(candidateCount, Math.max(maxResults * 2, 12));
         if (visualCandidates.length < desiredCandidates) {
-          const reelsPage = await context.newPage();
+          const reelsSession = await sessionFactory.create();
           try {
             visualCandidates.push(...await collectLatestCandidates(
-              reelsPage,
+              reelsSession.page,
               discoveryQuery,
               candidateCount,
               maxResults,
               true
             ));
           } finally {
-            await reelsPage.close().catch(() => {});
+            await reelsSession.close();
           }
         }
       }
@@ -4066,41 +4063,37 @@ async function scrapePublicBrowser(
       : visualCandidates.length < desiredProfileCandidates;
     if (normalized.mode === "profile" && normalized.username && needsProfileRecovery) {
       const recovery = await sessionFactory.create();
+      const recoveryProfile = await sessionFactory.create();
       try {
-        const recoveryProfilePage = await recovery.context.newPage();
-        try {
-          const [recoveryReels, recoveryProfile] = await Promise.all([
-            collectLatestCandidates(recovery.page, discoveryQuery, candidateCount, maxResults, true),
-            collectLatestCandidates(recoveryProfilePage, discoveryQuery, Math.min(candidateCount, 50), maxResults)
-          ]);
-          if (sortBy === "engagement") {
-            const verified = await verifyPublicProfileReelViews(
-              recovery.page,
-              normalized.username,
-              [...recoveryReels, ...recoveryProfile, ...visualCandidates],
-              candidateCount
-            );
-            reelsDiagnostics = verified.diagnostics;
-            visualCandidates.unshift(...verified.candidates, ...recoveryReels, ...recoveryProfile);
-          } else {
-            visualCandidates.unshift(...recoveryProfile, ...recoveryReels);
-          }
-        } finally {
-          await recoveryProfilePage.close().catch(() => {});
+        const [recoveryReels, recoveryProfileCandidates] = await Promise.all([
+          collectLatestCandidates(recovery.page, discoveryQuery, candidateCount, maxResults, true),
+          collectLatestCandidates(recoveryProfile.page, discoveryQuery, Math.min(candidateCount, 50), maxResults)
+        ]);
+        if (sortBy === "engagement") {
+          const verified = await verifyPublicProfileReelViews(
+            recovery.page,
+            normalized.username,
+            [...recoveryReels, ...recoveryProfileCandidates, ...visualCandidates],
+            candidateCount
+          );
+          reelsDiagnostics = verified.diagnostics;
+          visualCandidates.unshift(...verified.candidates, ...recoveryReels, ...recoveryProfileCandidates);
+        } else {
+          visualCandidates.unshift(...recoveryProfileCandidates, ...recoveryReels);
         }
       } finally {
-        await recovery.close();
+        await Promise.all([recovery.close(), recoveryProfile.close()]);
       }
     }
 
     if (normalized.mode === "hashtag" && normalized.tag) {
-      const recentPage = await context.newPage();
+      const recentSession = await sessionFactory.create();
       try {
-        for (const candidate of await collectRecentPublicHashtagCandidates(recentPage, normalized.tag, candidateCount, range)) {
+        for (const candidate of await collectRecentPublicHashtagCandidates(recentSession.page, normalized.tag, candidateCount, range)) {
           if (candidate.post_url) recentCandidates.push(candidate);
         }
       } finally {
-        await recentPage.close().catch(() => {});
+        await recentSession.close();
       }
     }
     if (process.env.INSTAGRAM_SCRAPER_DEBUG === "1") {
@@ -4204,8 +4197,6 @@ async function scrapePublicBrowser(
       };
     }
 
-    await page.close().catch(() => {});
-
     const poolLimit = sortBy === "engagement"
       ? candidateCount
       : normalized.mode === "hashtag"
@@ -4232,7 +4223,8 @@ async function scrapePublicBrowser(
     }
     const extractionConcurrency = normalized.mode === "post" ? 1 : 2;
     const extractCandidate = async (candidate: Candidate) => {
-      const postPage = await context.newPage();
+      const postSession = await sessionFactory.create();
+      const postPage = postSession.page;
       try {
         diagnostics.extractionAttempts += 1;
         const postUrl = candidate.post_url;
@@ -4354,7 +4346,7 @@ async function scrapePublicBrowser(
         }));
         return null;
       } finally {
-        await postPage.close().catch(() => {});
+        await postSession.close();
       }
     };
     let extracted: Candidate[];
@@ -4410,7 +4402,12 @@ async function scrapePublicBrowser(
 
     const handles = [...new Set(extracted.map((item) => item._handle || item.username).filter(Boolean) as string[])];
     const profileEntries = await mapWithConcurrency(handles, 3, async (handle) => {
-      return [handle, await getProfileInfo(handle, context)] as const;
+      const profileSession = await sessionFactory.create();
+      try {
+        return [handle, await getProfileInfo(handle, profileSession.page)] as const;
+      } finally {
+        await profileSession.close();
+      }
     });
     const profileCache = new Map<string, {
       followerCount: number | null;
