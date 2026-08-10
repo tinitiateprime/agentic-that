@@ -296,10 +296,18 @@ function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile
 }
 
 type RequestWithUser = express.Request & { user?: UserProfile };
+type RequestWithInstagramOwner = express.Request & { instagramOwnerKey?: string };
 
 const tokenPayloadSchema = z.object({
   sub: z.string(),
   exp: z.number().int().positive()
+});
+
+const instagramScrapingTokenPayloadSchema = z.object({
+  sub: z.string().min(1),
+  workspaceId: z.string().min(1),
+  scope: z.literal("instagram:scraping"),
+  exp: z.number().int().positive(),
 });
 
 const scheduleOnlyUpdateSchema = z.object({
@@ -431,6 +439,16 @@ function signAuthToken(user: UserProfile) {
 }
 
 async function userFromAuthToken(token: string) {
+  const rawPayload = verifiedTokenPayload(token);
+  if (!rawPayload) return null;
+  const payload = tokenPayloadSchema.parse(rawPayload);
+  if (payload.exp <= Math.floor(Date.now() / 1000)) return null;
+
+  const user = await getUserProfile(payload.sub);
+  return user?.isActive ? user : null;
+}
+
+function verifiedTokenPayload(token: string) {
   const [payloadPart, signaturePart] = token.split(".");
   if (!payloadPart || !signaturePart) return null;
 
@@ -439,12 +457,11 @@ async function userFromAuthToken(token: string) {
   if (expectedSignature.length !== providedSignature.length || !timingSafeEqual(expectedSignature, providedSignature)) {
     return null;
   }
-
-  const payload = tokenPayloadSchema.parse(JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")));
-  if (payload.exp <= Math.floor(Date.now() / 1000)) return null;
-
-  const user = await getUserProfile(payload.sub);
-  return user?.isActive ? user : null;
+  try {
+    return JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 async function authenticateApi(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -848,6 +865,55 @@ function platformIdentity(token: string) {
   };
 }
 
+function signInstagramScrapingToken(identity: ReturnType<typeof platformIdentity>) {
+  const lifetimeSeconds = Math.max(300, Math.min(4 * 60 * 60, Number(process.env.INSTAGRAM_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60));
+  const payload = encodeBase64Url(JSON.stringify({
+    sub: identity.platformUserId,
+    workspaceId: identity.workspaceId,
+    scope: "instagram:scraping",
+    exp: Math.floor(Date.now() / 1000) + lifetimeSeconds,
+  }));
+  return `${payload}.${signPart(payload)}`;
+}
+
+async function authenticateInstagramScraping(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  try {
+    const header = req.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+    if (!token) {
+      res.status(401).json({ message: "Sign in to AgenticThat to use Local Companion scraping." });
+      return;
+    }
+
+    const user = await userFromAuthToken(token);
+    if (user) {
+      (req as RequestWithInstagramOwner).instagramOwnerKey = `${user.workspaceId}:${user.id}`;
+      next();
+      return;
+    }
+
+    const rawPayload = verifiedTokenPayload(token);
+    const payload = rawPayload ? instagramScrapingTokenPayloadSchema.safeParse(rawPayload) : null;
+    if (!payload?.success || payload.data.exp <= Math.floor(Date.now() / 1000)) {
+      res.status(401).json({ message: "Local Companion scraping session expired. Refresh the page and try again." });
+      return;
+    }
+    (req as RequestWithInstagramOwner).instagramOwnerKey = `${payload.data.workspaceId}:${payload.data.sub}`;
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function instagramCompanionOwner(req: RequestWithInstagramOwner) {
+  if (!req.instagramOwnerKey) throw new Error("Local Companion scraping authentication is missing.");
+  return req.instagramOwnerKey;
+}
+
 app.post("/api/auth/platform/status", async (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
@@ -881,18 +947,20 @@ app.post("/api/auth/platform/login", async (req, res, next) => {
   }
 });
 
-app.use("/api", authenticateApi);
-
-app.get("/api/auth/me", (req: RequestWithUser, res) => {
-  res.json(currentUser(req));
+app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
+  try {
+    const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
+    const identity = platformIdentity(token);
+    res.json({
+      token: signInstagramScrapingToken(identity),
+      expiresInSeconds: Math.max(300, Math.min(4 * 60 * 60, Number(process.env.INSTAGRAM_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60)),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
-function instagramCompanionOwner(req: RequestWithUser) {
-  const user = currentUser(req);
-  return `${user.workspaceId}:${user.id}`;
-}
-
-app.post("/api/scraping/instagram/jobs", (req: RequestWithUser, res, next) => {
+app.post("/api/scraping/instagram/jobs", authenticateInstagramScraping, (req: RequestWithInstagramOwner, res, next) => {
   try {
     res.status(202).json(createInstagramCompanionJob(instagramCompanionOwner(req), req.body || {}));
   } catch (error) {
@@ -907,7 +975,7 @@ app.post("/api/scraping/instagram/jobs", (req: RequestWithUser, res, next) => {
   }
 });
 
-app.get("/api/scraping/instagram/jobs/:id", (req: RequestWithUser, res) => {
+app.get("/api/scraping/instagram/jobs/:id", authenticateInstagramScraping, (req: RequestWithInstagramOwner, res) => {
   const response = getInstagramCompanionJob(instagramCompanionOwner(req), pathParam(req.params.id, "id"));
   if (!response) {
     res.status(404).json({ message: "Local Instagram scrape job not found." });
@@ -916,7 +984,7 @@ app.get("/api/scraping/instagram/jobs/:id", (req: RequestWithUser, res) => {
   res.json(response);
 });
 
-app.delete("/api/scraping/instagram/jobs/:id", async (req: RequestWithUser, res, next) => {
+app.delete("/api/scraping/instagram/jobs/:id", authenticateInstagramScraping, async (req: RequestWithInstagramOwner, res, next) => {
   try {
     const response = await cancelInstagramCompanionJob(
       instagramCompanionOwner(req),
@@ -930,6 +998,12 @@ app.delete("/api/scraping/instagram/jobs/:id", async (req: RequestWithUser, res,
   } catch (error) {
     next(error);
   }
+});
+
+app.use("/api", authenticateApi);
+
+app.get("/api/auth/me", (req: RequestWithUser, res) => {
+  res.json(currentUser(req));
 });
 
 app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {

@@ -4,12 +4,24 @@ import {
 } from "../../../../../lib/publishing-extension-bridge.ts";
 
 const SESSION_KEY = "agenticthat-publish-queue-session";
+const SCRAPING_SESSION_KEY = "agenticthat-instagram-companion-session";
 const JOBS_PATH = "/api/scraping/instagram/jobs";
 
 function readCompanionToken() {
   try {
     const session = JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || "null");
     return typeof session?.token === "string" ? session.token : "";
+  } catch {
+    return "";
+  }
+}
+
+function readScrapingToken() {
+  try {
+    const session = JSON.parse(window.sessionStorage.getItem(SCRAPING_SESSION_KEY) || "null");
+    return typeof session?.token === "string" && Number(session?.expiresAt) > Date.now() + 30_000
+      ? session.token
+      : "";
   } catch {
     return "";
   }
@@ -26,21 +38,14 @@ async function responsePayload(response) {
   return data;
 }
 
-async function companionFetch(path, init = {}, requireSession = true) {
+async function extensionJson(path, init = {}) {
   const extension = await detectPublishingExtension();
   if (!extension) {
     const error = new Error("The AgenticThat Companion extension is not connected.");
     error.code = "extension_unavailable";
     throw error;
   }
-  const token = requireSession ? readCompanionToken() : "";
-  if (requireSession && !token) {
-    const error = new Error("Connect to Companion in Connections first, then return here.");
-    error.code = "companion_sign_in_required";
-    throw error;
-  }
   const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   const response = await publishingExtensionFetch(path, {
     cache: "no-store",
@@ -51,16 +56,52 @@ async function companionFetch(path, init = {}, requireSession = true) {
   return responsePayload(response);
 }
 
-export async function getInstagramCompanionStatus() {
+async function scrapingAccessToken(publishingIdentityToken, force = false) {
+  const publishingToken = readCompanionToken();
+  if (publishingToken) return publishingToken;
+  if (!force) {
+    const existing = readScrapingToken();
+    if (existing) return existing;
+  }
+  if (!publishingIdentityToken) {
+    throw new Error("Refresh AgenticThat and try Local Companion again.");
+  }
+  const session = await extensionJson("/api/auth/platform/instagram-scraping", {
+    method: "POST",
+    body: JSON.stringify({ token: publishingIdentityToken })
+  });
+  if (!session?.token) throw new Error("Companion could not create a local scraping session.");
+  window.sessionStorage.setItem(SCRAPING_SESSION_KEY, JSON.stringify({
+    token: session.token,
+    expiresAt: Date.now() + Math.max(300, Number(session.expiresInSeconds) || 7200) * 1000
+  }));
+  return session.token;
+}
+
+async function companionFetch(path, init = {}, publishingIdentityToken = "", retry = true) {
+  const token = await scrapingAccessToken(publishingIdentityToken);
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${token}`);
   try {
-    const health = await companionFetch("/api/health", {}, false);
+    return await extensionJson(path, { ...init, headers });
+  } catch (error) {
+    if (retry && error?.status === 401 && !readCompanionToken()) {
+      window.sessionStorage.removeItem(SCRAPING_SESSION_KEY);
+      await scrapingAccessToken(publishingIdentityToken, true);
+      return companionFetch(path, init, publishingIdentityToken, false);
+    }
+    throw error;
+  }
+}
+
+export async function getInstagramCompanionStatus(publishingIdentityToken) {
+  try {
+    const health = await extensionJson("/api/health");
     const capability = health?.capabilities?.instagramScraping;
     if (!capability?.available) {
       return { ready: false, message: "Restart Companion to enable local scraping." };
     }
-    if (!readCompanionToken()) {
-      return { ready: false, message: "Connect to Companion in Connections first." };
-    }
+    await scrapingAccessToken(publishingIdentityToken);
     return {
       ready: true,
       message: capability.activeJobs ? "Local scraper is busy; your job will be queued." : "Ready on this computer"
@@ -73,17 +114,17 @@ export async function getInstagramCompanionStatus() {
   }
 }
 
-export async function runInstagramCompanionJob(payload, onStatus = () => {}, signal) {
+export async function runInstagramCompanionJob(payload, onStatus = () => {}, signal, publishingIdentityToken) {
   const created = await companionFetch(JOBS_PATH, {
     method: "POST",
     body: JSON.stringify(payload)
-  });
+  }, publishingIdentityToken);
   const jobId = created?.job?.id;
   if (!jobId) throw new Error("The local scrape job could not be created.");
 
   const cancelJob = () => companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, {
     method: "DELETE"
-  }).catch(() => {});
+  }, publishingIdentityToken).catch(() => {});
   if (signal?.aborted) {
     await cancelJob();
     throw new Error("Local Instagram scraping was cancelled.");
@@ -110,7 +151,7 @@ export async function runInstagramCompanionJob(payload, onStatus = () => {}, sig
       : "Collecting current public data"));
     await new Promise(resolve => window.setTimeout(resolve, 1_000));
     try {
-      current = await companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`);
+      current = await companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, {}, publishingIdentityToken);
       consecutiveFailures = 0;
     } catch (error) {
       consecutiveFailures += 1;

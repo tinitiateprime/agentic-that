@@ -1,6 +1,6 @@
 import InstagramScraperConsole from "@instagram/console/src/InstagramScraperConsole";
 import ProductShell from "@platform/ProductShell";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { createPublishingIdentityToken, getCurrentPlatformUser } from "@platform/server/auth-store";
 import { redirect } from "next/navigation";
 
 export const metadata = {
@@ -17,7 +17,7 @@ export default async function InstagramScraperPage() {
       user={{ id: user.id, name: user.name, email: user.email, businessName: user.businessName }}
       active="apps"
     >
-      <InstagramScraperConsole />
+      <InstagramScraperConsole publishingIdentityToken={await createPublishingIdentityToken(user)} />
     </ProductShell>
   );
 }

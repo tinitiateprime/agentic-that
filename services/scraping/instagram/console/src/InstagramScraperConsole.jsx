@@ -256,7 +256,7 @@ async function runInstagramJob(payload, onStatus = () => {}) {
   return data;
 }
 
-function InstagramScraperConsole() {
+function InstagramScraperConsole({ publishingIdentityToken = "" }) {
   const [scrapeEngine, setScrapeEngine] = useState("server");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
@@ -307,11 +307,11 @@ function InstagramScraperConsole() {
     if (scrapeEngine !== "companion") return;
     let active = true;
     setCompanionStatus({ checking: true, ready: false, message: "Checking Companion…" });
-    getInstagramCompanionStatus().then(status => {
+    getInstagramCompanionStatus(publishingIdentityToken).then(status => {
       if (active) setCompanionStatus({ checking: false, ...status });
     });
     return () => { active = false; };
-  }, [scrapeEngine]);
+  }, [publishingIdentityToken, scrapeEngine]);
 
   useEffect(() => {
     apiGet("/runs/keywords")
@@ -339,7 +339,7 @@ function InstagramScraperConsole() {
     const controller = new AbortController();
     setCancelActiveScrape(() => () => controller.abort());
     try {
-      return await runInstagramCompanionJob(payload, onStatus, controller.signal);
+      return await runInstagramCompanionJob(payload, onStatus, controller.signal, publishingIdentityToken);
     } finally {
       setCancelActiveScrape(null);
     }

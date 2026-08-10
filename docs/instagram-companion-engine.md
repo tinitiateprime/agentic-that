@@ -16,7 +16,7 @@ The existing Publishing Companion owns the authenticated loopback API on `127.0.
 - `GET /api/scraping/instagram/jobs/:id` returns product-level progress and the normalized result.
 - `DELETE /api/scraping/instagram/jobs/:id` cancels queued or active work.
 
-Job routes use the existing Companion bearer session and are scoped to the authenticated workspace and user. The current Chrome extension transports these loopback requests; it retains only its `http://127.0.0.1:8792/*` host permission and receives no Instagram host permission.
+Job routes use a short-lived scraping-only bearer session derived from the signed AgenticThat workspace identity and are scoped to the authenticated workspace and user. It is created automatically when Local Companion is selected; publishing permissions still require the separate Operations Manager session. The current Chrome extension transports these loopback requests; it retains only its `http://127.0.0.1:8792/*` host permission and receives no Instagram host permission.
 
 ## Browser isolation
 
@@ -37,4 +37,4 @@ The Companion engine reuses the server scraper's normalized output, parsing, sou
 
 This engine improves reliability by moving requests away from shared server IPs, but Instagram can still change public markup, require login, rate-limit a network, remove a profile, or experience an outage. These conditions return typed failures instead of cached or cross-profile data. Product rate limits can be added above the existing one-job local concurrency without changing the scraping engine.
 
-Desktop release containing this engine: `1.4.0`.
+Desktop release containing this engine: `1.4.1`.

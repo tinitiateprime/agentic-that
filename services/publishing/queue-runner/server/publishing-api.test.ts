@@ -143,6 +143,37 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(unsafeLinkError.issues?.some(issue => issue.code === "private_link"), true);
 
   const { signPublishingWorkspaceIdentity } = await import("../../../../lib/publishing-workspace-auth.js");
+  const scrapingIdentityToken = signPublishingWorkspaceIdentity({
+    sub: "instagram-scraping-user",
+    workspaceId: "instagram-scraping-workspace",
+    workspaceKey: "instagram-scraping-workspace-key-that-is-long-enough",
+    name: "Instagram Scraping User",
+    email: "scraping@example.test",
+    businessName: "Instagram Scraping Workspace",
+  });
+  const scrapingSessionResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: scrapingIdentityToken }),
+  });
+  assert.equal(scrapingSessionResponse.status, 200);
+  const scrapingSession = await scrapingSessionResponse.json() as { token: string; expiresInSeconds: number };
+  assert.ok(scrapingSession.token);
+  assert.ok(scrapingSession.expiresInSeconds >= 300);
+  const scopedScrapeResponse = await fetch(`${origin}/api/scraping/instagram/jobs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${scrapingSession.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(scopedScrapeResponse.status, 503);
+  const scopedPublishingResponse = await fetch(`${origin}/api/accounts`, {
+    headers: { Authorization: `Bearer ${scrapingSession.token}` },
+  });
+  assert.equal(scopedPublishingResponse.status, 401);
+
   async function platformSession(platformUserId: string, workspaceId: string, email: string) {
     const identityToken = signPublishingWorkspaceIdentity({
       sub: platformUserId,

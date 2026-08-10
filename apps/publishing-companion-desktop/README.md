@@ -24,7 +24,7 @@ launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 optional and used only for the system-browser login fallback.
 
-Version 1.4.0 also provides the Instagram Local Companion engine. Public
+Version 1.4.1 also provides the Instagram Local Companion engine. Public
 scraping runs in hidden, non-persistent browser partitions that never reuse or
 modify the persistent publishing sessions. See
 [`docs/instagram-companion-engine.md`](../../docs/instagram-companion-engine.md)
