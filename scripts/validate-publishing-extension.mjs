@@ -17,6 +17,13 @@ if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length 
 if ((manifest.host_permissions ?? []).some(permission => permission === "<all_urls>")) {
   throw new Error("Publishing extension must not request <all_urls>.");
 }
+const extensionPermissions = [
+  ...(manifest.host_permissions ?? []),
+  ...(manifest.content_scripts ?? []).flatMap(script => script.matches ?? []),
+];
+if (extensionPermissions.some(permission => /instagram\.com/i.test(permission))) {
+  throw new Error("Publishing extension must not request or inject on Instagram hosts.");
+}
 if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
   throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
 }

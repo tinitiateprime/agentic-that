@@ -31,6 +31,21 @@ test("publishing API supports login, media and text posts, queue scheduling, and
 
   const address = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${address.port}`;
+  const healthResponse = await fetch(`${origin}/api/health`);
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json() as {
+    capabilities?: { instagramScraping?: { available?: boolean; concurrency?: number } };
+  };
+  assert.equal(health.capabilities?.instagramScraping?.available, false);
+  assert.equal(health.capabilities?.instagramScraping?.concurrency, 1);
+
+  const unauthenticatedScrape = await fetch(`${origin}/api/scraping/instagram/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(unauthenticatedScrape.status, 401);
+
   const loginResponse = await fetch(`${origin}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -46,6 +61,16 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     if (typeof init.body === "string" && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     return fetch(`${origin}${route}`, { ...init, headers });
   }
+
+  const unavailableCompanionScrape = await api("/api/scraping/instagram/jobs", {
+    method: "POST",
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(unavailableCompanionScrape.status, 503);
+  assert.equal(
+    ((await unavailableCompanionScrape.json()) as { code?: string }).code,
+    "companion_unavailable",
+  );
 
   const missingApiRoute = await api("/api/compatibility-route-that-does-not-exist", {
     method: "POST",

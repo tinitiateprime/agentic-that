@@ -2,6 +2,10 @@
 
 import React, { useEffect, useState } from "react";
 import ProfileComparisonWorkspace from "./ProfileComparisonWorkspace";
+import {
+  getInstagramCompanionStatus,
+  runInstagramCompanionJob
+} from "./companionClient";
 
 const API_URL = process.env.NEXT_PUBLIC_INSTAGRAM_API_URL || "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
@@ -17,6 +21,10 @@ const ANALYSIS_TABS = [
   { id: "liked", label: "Most Liked" },
   { id: "discussed", label: "Most Discussed" },
   { id: "patterns", label: "Content Patterns" }
+];
+const SCRAPE_ENGINES = [
+  { id: "server", label: "Server", description: "Runs in the cloud" },
+  { id: "companion", label: "Local Companion", description: "Runs privately on this computer" }
 ];
 
 const inputModes = [
@@ -249,6 +257,8 @@ async function runInstagramJob(payload, onStatus = () => {}) {
 }
 
 function InstagramScraperConsole() {
+  const [scrapeEngine, setScrapeEngine] = useState("server");
+  const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
   const [inputValue, setInputValue] = useState("");
   const [maxResults, setMaxResults] = useState(DEFAULT_MAX_RESULTS);
@@ -267,6 +277,8 @@ function InstagramScraperConsole() {
   const [lastWorkflowLabel, setLastWorkflowLabel] = useState("Latest posts and reels");
   const [lastCollectionMode, setLastCollectionMode] = useState("latest");
   const [lastInputMode, setLastInputMode] = useState(null);
+  const [lastScrapeEngine, setLastScrapeEngine] = useState("server");
+  const [cancelActiveScrape, setCancelActiveScrape] = useState(null);
   const [workingStatus, setWorkingStatus] = useState("Preparing scrape");
   const activeInputMode = inputModes.find((item) => item.id === inputMode);
 
@@ -287,6 +299,21 @@ function InstagramScraperConsole() {
   }, []);
 
   useEffect(() => {
+    const savedEngine = window.localStorage.getItem("agenticthat-instagram-scrape-engine");
+    if (savedEngine === "server" || savedEngine === "companion") setScrapeEngine(savedEngine);
+  }, []);
+
+  useEffect(() => {
+    if (scrapeEngine !== "companion") return;
+    let active = true;
+    setCompanionStatus({ checking: true, ready: false, message: "Checking Companion…" });
+    getInstagramCompanionStatus().then(status => {
+      if (active) setCompanionStatus({ checking: false, ...status });
+    });
+    return () => { active = false; };
+  }, [scrapeEngine]);
+
+  useEffect(() => {
     apiGet("/runs/keywords")
       .then((data) => setKeywords(data.keywords || []))
       .catch(() => {});
@@ -299,6 +326,23 @@ function InstagramScraperConsole() {
       setCollectionMode("latest");
     }
     setError(null);
+  };
+
+  const selectScrapeEngine = (engine) => {
+    setScrapeEngine(engine);
+    window.localStorage.setItem("agenticthat-instagram-scrape-engine", engine);
+    setError(null);
+  };
+
+  const runSelectedInstagramJob = async (payload, onStatus) => {
+    if (scrapeEngine !== "companion") return runInstagramJob(payload, onStatus);
+    const controller = new AbortController();
+    setCancelActiveScrape(() => () => controller.abort());
+    try {
+      return await runInstagramCompanionJob(payload, onStatus, controller.signal);
+    } finally {
+      setCancelActiveScrape(null);
+    }
   };
 
   const selectSavedQuery = (value) => {
@@ -370,6 +414,7 @@ function InstagramScraperConsole() {
     );
     setLastCollectionMode(effectiveCollectionMode);
     setLastInputMode(inputMode);
+    setLastScrapeEngine(scrapeEngine);
     setWorkingStatus("Preparing scrape");
     setPage("working");
 
@@ -388,7 +433,7 @@ function InstagramScraperConsole() {
         auto_expand_days: false,
         max_auto_expand_days: 1
       };
-      const data = await runInstagramJob(payload, setWorkingStatus);
+      const data = await runSelectedInstagramJob(payload, setWorkingStatus);
       setResults(data?.results || []);
       setAnalysis(data?.analysis || data?.run?.analysis || null);
       setLastQuery(data?.run?.query || cleanQuery);
@@ -613,6 +658,9 @@ function InstagramScraperConsole() {
         <p className="work-copy">
           Opening public Instagram pages, closing popups, and collecting visible data for {lastQuery}.
         </p>
+        {lastScrapeEngine === "companion" && cancelActiveScrape && (
+          <button type="button" className="cancel-scrape-button" onClick={cancelActiveScrape}>Cancel local scrape</button>
+        )}
       </main>
     );
   }
@@ -622,7 +670,7 @@ function InstagramScraperConsole() {
       <main className="instagram-scraper-app results-page">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">Dataset ready</p>
+            <p className="eyebrow">Dataset ready · {lastScrapeEngine === "companion" ? "Local Companion" : "Server"}</p>
             <h1>{lastQuery}</h1>
             <p className="subtle">
               {lastWorkflowLabel}. {lastCollectionMode === "engagement"
@@ -850,6 +898,28 @@ function InstagramScraperConsole() {
       </section>
 
       <section className="launch-panel">
+        <fieldset className="engine-picker">
+          <legend>Choose scraping engine</legend>
+          <div className="engine-options">
+            {SCRAPE_ENGINES.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                className={scrapeEngine === item.id ? "is-selected" : ""}
+                onClick={() => selectScrapeEngine(item.id)}
+              >
+                <strong>{item.label}</strong>
+                <span>{item.description}</span>
+              </button>
+            ))}
+          </div>
+          {scrapeEngine === "companion" && (
+            <p className={`engine-status ${companionStatus.ready ? "is-ready" : "is-unavailable"}`}>
+              {companionStatus.message || "Checking Companion…"}
+            </p>
+          )}
+        </fieldset>
+
         <div className={`input-builder ${inputMode ? "is-active" : ""} ${collectionMode === "compare" ? "is-compare" : ""}`}>
           <fieldset className="mode-picker">
             <legend>Choose input type</legend>
@@ -914,7 +984,7 @@ function InstagramScraperConsole() {
         )}
 
         {collectionMode === "compare" && isProfileInput(inputMode) && (
-          <ProfileComparisonWorkspace seedProfile={inputValue} runJob={runInstagramJob} />
+          <ProfileComparisonWorkspace seedProfile={inputValue} runJob={runSelectedInstagramJob} />
         )}
 
         {!isPostInput(inputMode) && collectionMode === "range" && (

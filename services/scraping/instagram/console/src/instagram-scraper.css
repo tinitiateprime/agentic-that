@@ -93,6 +93,68 @@
   box-shadow: 0 22px 60px rgba(16, 24, 40, 0.08);
 }
 
+.instagram-scraper-app .engine-picker {
+  margin: 0 0 18px;
+  padding: 0 0 18px;
+  border: 0;
+  border-bottom: 1px solid #e5e9ee;
+}
+
+.instagram-scraper-app .engine-picker legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.instagram-scraper-app .engine-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.instagram-scraper-app .engine-options button {
+  display: grid;
+  gap: 2px;
+  min-height: 58px;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.instagram-scraper-app .engine-options button span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.instagram-scraper-app .engine-options button.is-selected {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #166534;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.instagram-scraper-app .engine-status {
+  margin: 9px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.instagram-scraper-app .engine-status.is-ready {
+  color: #166534;
+}
+
+.instagram-scraper-app .engine-status.is-unavailable {
+  color: #b42318;
+}
+
+.instagram-scraper-app .cancel-scrape-button {
+  margin-top: 14px;
+  border-color: #fda29b;
+  background: #fff;
+  color: #b42318;
+}
+
 .instagram-scraper-app .input-builder {
   display: grid;
   grid-template-columns: 1fr;

@@ -1,4 +1,3 @@
-import chromiumPack from "@sparticuz/chromium";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +17,17 @@ export type InstagramScrapeInput = {
   rangeTo?: string;
   timezoneOffsetMinutes?: number;
   sortBy?: "recent" | "engagement";
+};
+
+export type InstagramBrowserSession = {
+  context: BrowserContext;
+  page: Page;
+  userAgent: string;
+  close(): Promise<void>;
+};
+
+export type InstagramBrowserSessionFactory = {
+  create(): Promise<InstagramBrowserSession>;
 };
 
 export type InstagramPost = {
@@ -381,7 +391,7 @@ function localChromeCandidates() {
   return ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
 }
 
-async function chromiumExecutablePath() {
+async function chromiumExecutablePath(chromiumPack: typeof import("@sparticuz/chromium").default) {
   const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH;
   if (configured && existsSync(configured)) return configured;
 
@@ -402,7 +412,8 @@ export async function getInstagramScraperInfo() {
 }
 
 async function launchBrowser() {
-  const executablePath = await chromiumExecutablePath();
+  const chromiumPack = (await import("@sparticuz/chromium")).default;
+  const executablePath = await chromiumExecutablePath(chromiumPack);
   return chromium.launch({
     args: [
       ...chromiumPack.args,
@@ -415,7 +426,7 @@ async function launchBrowser() {
   });
 }
 
-async function createPage(browser: Browser) {
+async function createPage(browser: Browser): Promise<InstagramBrowserSession> {
   const contextOptions: BrowserContextOptions = {
     locale: "en-US",
     viewport: { width: 1280, height: 900 },
@@ -428,7 +439,18 @@ async function createPage(browser: Browser) {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   const userAgent = await page.evaluate(() => navigator.userAgent);
-  return { context, page, userAgent };
+  return {
+    context,
+    page,
+    userAgent,
+    close: async () => {
+      await context.close().catch(() => {});
+    }
+  };
+}
+
+function browserSessionFactory(browser: Browser): InstagramBrowserSessionFactory {
+  return { create: () => createPage(browser) };
 }
 
 async function dismissInstagramPrompts(page: Page) {
@@ -845,7 +867,7 @@ export function profileAnalysisCandidateTarget(maxResults: number) {
   const rawConfigured = process.env.INSTAGRAM_MAX_REELS_SCAN?.trim();
   const configured = rawConfigured ? Number(rawConfigured) : Number.NaN;
   const scanLimit = Number.isFinite(configured)
-    ? Math.max(50, Math.min(600, Math.trunc(configured)))
+    ? Math.max(50, Math.min(300, Math.trunc(configured)))
     : 300;
   return Math.max(maxResults, scanLimit);
 }
@@ -3935,7 +3957,7 @@ async function getProfileInfo(handle: string, context: BrowserContext) {
 }
 
 async function scrapePublicBrowser(
-  browser: Browser,
+  sessionFactory: InstagramBrowserSessionFactory,
   normalized: NormalizedQuery,
   requestedQuery: string,
   maxResults: number,
@@ -3944,7 +3966,8 @@ async function scrapePublicBrowser(
   sortBy: "recent" | "engagement",
   timezoneOffsetMinutes = 0
 ): Promise<ScrapeResult> {
-  const { context, page, userAgent } = await createPage(browser);
+  const session = await sessionFactory.create();
+  const { context, page, userAgent } = session;
   try {
     const discoveryQuery = normalized.mode === "post"
       ? normalized.postUrl || normalized.startUrl
@@ -4042,7 +4065,7 @@ async function scrapePublicBrowser(
       ? !hasCurrentReels || !hasFreshReelViews
       : visualCandidates.length < desiredProfileCandidates;
     if (normalized.mode === "profile" && normalized.username && needsProfileRecovery) {
-      const recovery = await createPage(browser);
+      const recovery = await sessionFactory.create();
       try {
         const recoveryProfilePage = await recovery.context.newPage();
         try {
@@ -4066,7 +4089,7 @@ async function scrapePublicBrowser(
           await recoveryProfilePage.close().catch(() => {});
         }
       } finally {
-        await recovery.context.close().catch(() => {});
+        await recovery.close();
       }
     }
 
@@ -4494,11 +4517,14 @@ async function scrapePublicBrowser(
       diagnostics
     };
   } finally {
-    await context.close();
+    await session.close();
   }
 }
 
-export async function runInstagramScrape(input: InstagramScrapeInput) {
+export async function runInstagramScrapeWithSessionFactory(
+  input: InstagramScrapeInput,
+  sessionFactory: InstagramBrowserSessionFactory
+) {
   let normalized = normalizeQuery(input.query);
   const maxResults = Math.max(1, Math.min(50, Number(input.maxResults) || 10));
   const collectionMode = input.collectionMode || (input.rangeFrom || input.rangeTo ? "range" : "latest");
@@ -4521,51 +4547,55 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
   const range = scrapeRangeFromInput(effectiveInput);
   const sortBy = collectionMode === "engagement" ? "engagement" : "recent";
 
-  const browser = await launchBrowser();
-  try {
-    let discoveryQuery = input.query;
-    if (normalized.mode === "post" && collectionMode === "engagement") {
-      const postResult = await scrapePublicBrowser(
-        browser,
-        normalized,
-        input.query,
-        1,
-        1,
-        { ...range, collectionMode: "latest" },
-        "recent",
-        input.timezoneOffsetMinutes
-      );
-      const handle = postResult.results[0]?.username;
-      if (!handle) throw new Error("The public post did not expose its profile username.");
-      normalized = {
-        mode: "profile",
-        label: `@${handle}`,
-        startUrl: `${instagramHost}/${handle}/`,
-        username: handle
-      };
-      discoveryQuery = `@${handle}`;
-    }
-
-    const needsDeepHistory = range.end.getTime() < Date.now() - 31 * 86_400_000 || range.direction === "ascending";
-    const candidateCount = normalized.mode === "post"
-      ? 1
-      : sortBy === "engagement"
-        ? profileAnalysisCandidateTarget(maxResults)
-        : needsDeepHistory
-          ? 150
-        : normalized.mode === "profile"
-          ? latestProfileCandidateTarget(maxResults)
-          : Math.min(Math.max(maxResults * 6, 20), 150);
-    return await scrapePublicBrowser(
-      browser,
+  let discoveryQuery = input.query;
+  if (normalized.mode === "post" && collectionMode === "engagement") {
+    const postResult = await scrapePublicBrowser(
+      sessionFactory,
       normalized,
-      discoveryQuery,
-      maxResults,
-      candidateCount,
-      range,
-      sortBy,
+      input.query,
+      1,
+      1,
+      { ...range, collectionMode: "latest" },
+      "recent",
       input.timezoneOffsetMinutes
     );
+    const handle = postResult.results[0]?.username;
+    if (!handle) throw new Error("The public post did not expose its profile username.");
+    normalized = {
+      mode: "profile",
+      label: `@${handle}`,
+      startUrl: `${instagramHost}/${handle}/`,
+      username: handle
+    };
+    discoveryQuery = `@${handle}`;
+  }
+
+  const needsDeepHistory = range.end.getTime() < Date.now() - 31 * 86_400_000 || range.direction === "ascending";
+  const candidateCount = normalized.mode === "post"
+    ? 1
+    : sortBy === "engagement"
+      ? profileAnalysisCandidateTarget(maxResults)
+      : needsDeepHistory
+        ? 150
+      : normalized.mode === "profile"
+        ? latestProfileCandidateTarget(maxResults)
+        : Math.min(Math.max(maxResults * 6, 20), 150);
+  return scrapePublicBrowser(
+    sessionFactory,
+    normalized,
+    discoveryQuery,
+    maxResults,
+    candidateCount,
+    range,
+    sortBy,
+    input.timezoneOffsetMinutes
+  );
+}
+
+export async function runInstagramScrape(input: InstagramScrapeInput) {
+  const browser = await launchBrowser();
+  try {
+    return await runInstagramScrapeWithSessionFactory(input, browserSessionFactory(browser));
   } finally {
     await browser.close();
   }

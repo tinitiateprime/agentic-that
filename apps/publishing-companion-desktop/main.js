@@ -26,7 +26,11 @@ const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 // so it can be restored without rebuilding the live-browser integration.
 const EMBED_FULL_PUBLISHING_WORKSPACE = false;
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
-const SERVICE_ORIGIN = "http://127.0.0.1:8792";
+const configuredServicePort = Number(process.env.AGENTICTHAT_COMPANION_SERVICE_PORT || 8792);
+const SERVICE_PORT = Number.isInteger(configuredServicePort) && configuredServicePort > 0 && configuredServicePort < 65536
+  ? configuredServicePort
+  : 8792;
+const SERVICE_ORIGIN = `http://127.0.0.1:${SERVICE_PORT}`;
 const configuredDesktopDebugPort = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 0);
 const REQUESTED_DESKTOP_DEBUG_PORT = Number.isInteger(configuredDesktopDebugPort) && configuredDesktopDebugPort > 0
   ? configuredDesktopDebugPort
@@ -53,6 +57,7 @@ if (ownsSingleInstanceLock) {
 
 const APP_VERSION = app.getVersion();
 const managedBrowsers = new Map();
+const instagramScrapingBrowsers = new Map();
 
 let mainWindow = null;
 let dashboardView = null;
@@ -186,7 +191,7 @@ function configureRuntimeEnvironment() {
 
   process.env.NODE_ENV = "production";
   process.env.PUBLISH_QUEUE_SERVICE_HOST = "127.0.0.1";
-  process.env.PUBLISH_QUEUE_SERVICE_PORT = "8792";
+  process.env.PUBLISH_QUEUE_SERVICE_PORT = String(SERVICE_PORT);
   process.env.PUBLISH_QUEUE_WEB_ORIGIN = DASHBOARD_ORIGIN;
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDirectory;
@@ -232,7 +237,7 @@ async function startPublishingService() {
   );
   publishingServer = publishingRuntime.createPublishingHttpServer({
     host: "127.0.0.1",
-    port: 8792,
+    port: SERVICE_PORT,
     startBackgroundServices: true,
   });
   await new Promise((resolve, reject) => {
@@ -515,6 +520,89 @@ async function desktopDebugEndpoint(timeoutMs = 10000) {
   throw new Error("The embedded browser debugging endpoint did not become ready.");
 }
 
+function isAllowedInstagramNavigation(value) {
+  if (value.startsWith("about:blank")) return true;
+  try {
+    const target = new URL(value);
+    const hostname = target.hostname.toLowerCase();
+    return target.protocol === "https:"
+      && (hostname === "instagram.com" || hostname.endsWith(".instagram.com"));
+  } catch {
+    return false;
+  }
+}
+
+async function openInstagramScrapingBrowser(request) {
+  const debugEndpoint = await desktopDebugEndpoint();
+  const id = randomUUID();
+  const targetUrl = `about:blank#agenticthat-instagram-scrape-${id}`;
+  const partition = `agenticthat-instagram-scrape-${id}`;
+  const workerWindow = new BrowserWindow({
+    width: 1280,
+    height: 900,
+    show: false,
+    skipTaskbar: true,
+    focusable: false,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      partition,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  workerWindow.removeMenu();
+  const isolatedSession = workerWindow.webContents.session;
+  const userAgent = chromiumUserAgent(workerWindow.webContents);
+  workerWindow.webContents.setUserAgent(userAgent);
+  isolatedSession.setUserAgent(userAgent, "en-US,en;q=0.9");
+  isolatedSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  workerWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedInstagramNavigation(url)) void workerWindow.webContents.loadURL(url);
+    return { action: "deny" };
+  });
+  const protectNavigation = (event, url) => {
+    if (!isAllowedInstagramNavigation(url)) event.preventDefault();
+  };
+  workerWindow.webContents.on("will-navigate", protectNavigation);
+  workerWindow.webContents.on("will-redirect", protectNavigation);
+  workerWindow.on("closed", () => instagramScrapingBrowsers.delete(id));
+
+  instagramScrapingBrowsers.set(id, {
+    id,
+    jobId: String(request?.jobId || ""),
+    window: workerWindow,
+    isolatedSession,
+  });
+  try {
+    await workerWindow.loadURL(targetUrl);
+    return { id, debugEndpoint, targetUrl };
+  } catch (error) {
+    await closeInstagramScrapingBrowser(id);
+    throw error;
+  }
+}
+
+async function closeInstagramScrapingBrowser(sessionId) {
+  const entry = instagramScrapingBrowsers.get(sessionId);
+  if (!entry) return;
+  instagramScrapingBrowsers.delete(sessionId);
+  if (!entry.window.isDestroyed()) {
+    entry.window.webContents.stop();
+    entry.window.destroy();
+  }
+  await Promise.allSettled([
+    entry.isolatedSession.clearStorageData(),
+    entry.isolatedSession.clearCache(),
+  ]);
+}
+
+async function stopInstagramScrapingBrowsers() {
+  await Promise.all([...instagramScrapingBrowsers.keys()].map(closeInstagramScrapingBrowser));
+}
+
 async function clearAccountBrowserData(accountId) {
   const accountSession = session.fromPartition(browserPartition(accountId));
   await accountSession.clearStorageData();
@@ -694,13 +782,22 @@ function installPublishingDesktopHost() {
     stopPublishingBrowsers,
     clearAccountBrowserData,
   };
+  globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {
+    openBrowser: openInstagramScrapingBrowser,
+    closeBrowser: closeInstagramScrapingBrowser,
+    stopBrowsers: stopInstagramScrapingBrowsers,
+  };
 }
 
 async function emergencyStop() {
   const activeSessions = [...managedBrowsers.values()].filter(session => !session.closedAt);
   const reason = "Publishing was stopped with the Companion emergency stop.";
   const stopped = await publishingRuntime?.cancelAutomation?.(reason);
+  const scrapingStopped = await publishingRuntime?.cancelAllInstagramCompanionJobs?.(
+    "Instagram scraping was stopped with the Companion emergency stop."
+  );
   await publishingRuntime?.stopAllExternalBrowserWindows?.(reason);
+  await stopInstagramScrapingBrowsers();
   await Promise.all(activeSessions.map(session => closeManagedBrowser(session.id, {
     state: "stopped",
     detail: session.request.purpose === "login"
@@ -708,7 +805,7 @@ async function emergencyStop() {
       : "Publishing was stopped with the Companion emergency stop.",
   })));
   notifyWorkspaceState();
-  return Boolean(stopped || activeSessions.length);
+  return Boolean(stopped || scrapingStopped || activeSessions.length);
 }
 
 function createWindow() {
@@ -937,7 +1034,10 @@ if (started || !ownsSingleInstanceLock) {
   });
   app.on("window-all-closed", () => {});
   app.on("will-quit", () => {
+    void publishingRuntime?.cancelAllInstagramCompanionJobs?.("Companion is shutting down.");
+    void stopInstagramScrapingBrowsers();
     publishingServer?.close();
     globalThis.__AGENTICTHAT_PUBLISHING_DESKTOP_HOST__ = undefined;
+    globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = undefined;
   });
 }

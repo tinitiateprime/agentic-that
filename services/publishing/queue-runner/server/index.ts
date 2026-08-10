@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import {
+  cancelAllInstagramCompanionJobs,
+  cancelInstagramCompanionJob,
+  createInstagramCompanionJob,
+  getInstagramCompanionJob,
+  instagramCompanionQueueHealth,
+} from "../../../scraping/instagram/src/companion-jobs.js";
+import {
   createUserProfileSchema,
   loginInputSchema,
   platformLabels,
@@ -93,6 +100,7 @@ export {
   focusExternalBrowserWindow,
   stopAllExternalBrowserWindows,
 } from "./engines/external-browser/index.js";
+export { cancelAllInstagramCompanionJobs };
 
 export const publishingApp = express();
 const app = publishingApp;
@@ -797,6 +805,10 @@ app.get("/api/health", async (_req, res) => {
       engines: browser.engines,
       companionInstanceId: process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID?.trim() || null,
       extensionBridge: true,
+      capabilities: {
+        publishing: true,
+        instagramScraping: instagramCompanionQueueHealth(),
+      },
       platforms,
     });
   } catch (error) {
@@ -873,6 +885,51 @@ app.use("/api", authenticateApi);
 
 app.get("/api/auth/me", (req: RequestWithUser, res) => {
   res.json(currentUser(req));
+});
+
+function instagramCompanionOwner(req: RequestWithUser) {
+  const user = currentUser(req);
+  return `${user.workspaceId}:${user.id}`;
+}
+
+app.post("/api/scraping/instagram/jobs", (req: RequestWithUser, res, next) => {
+  try {
+    res.status(202).json(createInstagramCompanionJob(instagramCompanionOwner(req), req.body || {}));
+  } catch (error) {
+    if (error instanceof Error && /Companion scraping is unavailable/i.test(error.message)) {
+      res.status(503).json({
+        message: error.message,
+        code: "companion_unavailable",
+      });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/scraping/instagram/jobs/:id", (req: RequestWithUser, res) => {
+  const response = getInstagramCompanionJob(instagramCompanionOwner(req), pathParam(req.params.id, "id"));
+  if (!response) {
+    res.status(404).json({ message: "Local Instagram scrape job not found." });
+    return;
+  }
+  res.json(response);
+});
+
+app.delete("/api/scraping/instagram/jobs/:id", async (req: RequestWithUser, res, next) => {
+  try {
+    const response = await cancelInstagramCompanionJob(
+      instagramCompanionOwner(req),
+      pathParam(req.params.id, "id"),
+    );
+    if (!response) {
+      res.status(404).json({ message: "Local Instagram scrape job not found." });
+      return;
+    }
+    res.json(response);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {

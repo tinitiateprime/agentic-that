@@ -19,7 +19,7 @@ await build({
   format: "esm",
   sourcemap: false,
   minify: false,
-  external: ["playwright-core", "@netlify/blobs"],
+  external: ["playwright-core", "@netlify/blobs", "@sparticuz/chromium", "sharp"],
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
 });
 
