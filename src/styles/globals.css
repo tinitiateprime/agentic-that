@@ -40,3 +40,145 @@ button {
 #root {
   min-height: 100vh;
 }
+
+/* ============================================================
+   Neural design system — shared AI-forward tokens & primitives
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --ai-bg: #050508;
+  --ai-bg-raised: #0a0a12;
+  --ai-surface: rgba(255, 255, 255, 0.03);
+  --ai-surface-strong: rgba(255, 255, 255, 0.06);
+  --ai-border: rgba(255, 255, 255, 0.09);
+  --ai-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --ai-text: #f2f3f8;
+  --ai-text-muted: #9aa0b5;
+  --ai-text-faint: #626880;
+
+  /* Accents */
+  --ai-indigo: #facc15;
+  --ai-violet: #fde047;
+  --ai-cyan: #f59e0b;
+  --ai-gradient: linear-gradient(135deg, #facc15 0%, #fde047 48%, #f59e0b 100%);
+  --ai-gradient-soft: linear-gradient(135deg, rgba(250, 204, 21, 0.16), rgba(253, 224, 71, 0.1) 48%, rgba(245, 158, 11, 0.14));
+  --ai-border-gradient: linear-gradient(135deg, rgba(250, 204, 21, 0.55), rgba(253, 224, 71, 0.35) 48%, rgba(245, 158, 11, 0.55));
+
+  /* Effects */
+  --ai-glow-indigo: 0 0 32px rgba(250, 204, 21, 0.22);
+  --ai-glow-cyan: 0 0 32px rgba(245, 158, 11, 0.18);
+  --ai-focus-ring: 0 0 0 3px rgba(250, 204, 21, 0.28);
+}
+
+@keyframes ai-aurora-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(4%, -6%, 0) scale(1.08); }
+  66% { transform: translate3d(-5%, 4%, 0) scale(0.95); }
+}
+
+@keyframes ai-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
+  50% { opacity: 0.72; box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+}
+
+@keyframes ai-shimmer {
+  from { background-position: 200% center; }
+  to { background-position: -200% center; }
+}
+
+/* Gradient text */
+.ai-gradient-text {
+  background: var(--ai-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Aurora backdrop: place inside a position:relative container */
+.ai-aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ai-aurora i {
+  position: absolute;
+  width: 46vw;
+  height: 46vw;
+  min-width: 380px;
+  min-height: 380px;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.4;
+  animation: ai-aurora-drift 22s ease-in-out infinite;
+}
+
+.ai-aurora i:nth-child(1) {
+  top: -18%;
+  left: -8%;
+  background: radial-gradient(circle, rgba(250, 204, 21, 0.5), transparent 65%);
+}
+
+.ai-aurora i:nth-child(2) {
+  top: -6%;
+  right: -12%;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.34), transparent 65%);
+  animation-delay: -8s;
+}
+
+.ai-aurora i:nth-child(3) {
+  bottom: -30%;
+  left: 26%;
+  background: radial-gradient(circle, rgba(253, 224, 71, 0.3), transparent 65%);
+  animation-delay: -15s;
+}
+
+/* Faint neural grid overlay */
+.ai-grid-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 90% 68% at 50% 0%, #000 35%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 68% at 50% 0%, #000 35%, transparent 78%);
+  pointer-events: none;
+}
+
+/* AI status chip */
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  border-radius: 999px;
+  color: #fef9c3;
+  background: rgba(250, 204, 21, 0.09);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.ai-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ai-cyan);
+  animation: ai-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-aurora i,
+  .ai-chip i {
+    animation: none;
+  }
+}

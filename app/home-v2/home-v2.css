@@ -1,0 +1,7 @@
+/* The shared globals paint html/body a light grey for the product surfaces.
+   This marketing route is dark end-to-end, so repaint the document itself —
+   otherwise macOS overscroll flashes white above and below the page. */
+html:has(body > [data-surface="marketing"]),
+html:has(body > [data-surface="marketing"]) body {
+  background: #0b0f17;
+}

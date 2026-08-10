@@ -1,10 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-const projectRoot = process.cwd();
-
-function loadEnvFile() {
-  const envPath = path.join(projectRoot, ".env");
+function parseEnvFile(envPath: string) {
   if (!existsSync(envPath)) return;
 
   for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
@@ -19,11 +16,33 @@ function loadEnvFile() {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
+    // First definition wins, so later (higher-precedence) files must be read first.
     process.env[key] ??= value;
   }
 }
 
-loadEnvFile();
+function loadEnvFiles() {
+  // The service is launched with its own working directory, but the shared
+  // credentials live in the monorepo root .env.local / .env. Walk from the
+  // current directory up to the filesystem root so those files are picked up
+  // regardless of where the process was started. .env.local takes precedence
+  // over .env (matching Next.js), and closer directories win over ancestors.
+  const dirs: string[] = [];
+  let dir = process.cwd();
+  while (true) {
+    dirs.push(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  for (const candidate of dirs) {
+    parseEnvFile(path.join(candidate, ".env.local"));
+    parseEnvFile(path.join(candidate, ".env"));
+  }
+}
+
+loadEnvFiles();
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();

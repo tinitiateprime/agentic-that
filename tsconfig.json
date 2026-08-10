@@ -44,21 +44,25 @@
     }
   },
   "include": [
+    ".next/types/**/*.ts",
     "app/**/*.js",
     "app/**/*.jsx",
-    "src/**/*.js",
-    "src/**/*.jsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
     "netlify/functions/**/*.mts",
+    "services/messaging/telegram/src/**/*.ts",
     "services/messaging/whatsapp/src/**/*.js",
     "services/messaging/whatsapp/src/**/*.jsx",
-    "services/messaging/telegram/src/**/*.ts",
-    "services/scraping/instagram/console/src/**/*.jsx",
-    "services/scraping/instagram/src/**/*.ts",
     "services/publishing/queue-runner/server/**/*.ts",
     "services/publishing/queue-runner/shared/**/*.ts",
     "services/publishing/queue-runner/src/**/*.ts",
     "services/publishing/queue-runner/src/**/*.tsx",
-    ".next/types/**/*.ts"
+    "services/scraping/instagram/console/src/**/*.jsx",
+    "services/scraping/instagram/src/**/*.ts",
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "src/**/*.ts",
+    "src/**/*.tsx"
   ],
   "exclude": [
     "node_modules"
