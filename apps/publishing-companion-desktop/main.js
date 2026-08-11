@@ -75,7 +75,7 @@ let browserZoomFactors = new Map();
 let publishingPermissionPromise = null;
 let publishingRunPermissionActive = false;
 let resolvedDesktopDebugPort = REQUESTED_DESKTOP_DEBUG_PORT || null;
-let unsubscribeScrapingActivity = null;
+let unsubscribeScrapingActivities = [];
 let scrapingWorkActive = false;
 let rebuildTrayMenu = null;
 let scrapingActivityState = {
@@ -84,6 +84,10 @@ let scrapingActivityState = {
   recentJobs: [],
   concurrency: 1,
   updatedAt: new Date().toISOString(),
+};
+const scrapingActivityByPlatform = {
+  Instagram: { ...scrapingActivityState },
+  Facebook: { ...scrapingActivityState },
 };
 
 function randomSecret(bytes = 32) {
@@ -248,7 +252,14 @@ async function startPublishingService() {
     `${pathToFileURL(runtimeEntry).href}?v=${createHash("sha1").update(APP_VERSION).digest("hex")}`
   );
   if (typeof publishingRuntime.subscribeInstagramCompanionActivity === "function") {
-    unsubscribeScrapingActivity = publishingRuntime.subscribeInstagramCompanionActivity(handleScrapingActivity);
+    unsubscribeScrapingActivities.push(
+      publishingRuntime.subscribeInstagramCompanionActivity(state => handleScrapingActivity("Instagram", state))
+    );
+  }
+  if (typeof publishingRuntime.subscribeFacebookCompanionActivity === "function") {
+    unsubscribeScrapingActivities.push(
+      publishingRuntime.subscribeFacebookCompanionActivity(state => handleScrapingActivity("Facebook", state))
+    );
   }
   publishingServer = publishingRuntime.createPublishingHttpServer({
     host: "127.0.0.1",
@@ -383,16 +394,43 @@ function showScrapingNotification(title, body) {
   notification.show();
 }
 
-function handleScrapingActivity(state) {
+function platformActivityJob(platform, job) {
+  return job ? { ...job, platform } : null;
+}
+
+function mergedScrapingActivity() {
+  const states = Object.entries(scrapingActivityByPlatform);
+  const activeJobs = states
+    .map(([platform, state]) => platformActivityJob(platform, state.activeJob))
+    .filter(Boolean)
+    .sort((left, right) => String(left.startedAt || left.createdAt).localeCompare(String(right.startedAt || right.createdAt)));
+  const queuedJobs = states.flatMap(([platform, state]) => (state.queuedJobs || []).map(job => platformActivityJob(platform, job)));
+  const recentJobs = states
+    .flatMap(([platform, state]) => (state.recentJobs || []).map(job => platformActivityJob(platform, job)))
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+    .slice(0, 16);
+  return {
+    activeJob: activeJobs[0] || null,
+    queuedJobs: [...activeJobs.slice(1), ...queuedJobs],
+    recentJobs,
+    concurrency: 2,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function handleScrapingActivity(platform, state) {
   const previousWorkActive = scrapingWorkActive;
-  scrapingActivityState = state && typeof state === "object" ? state : scrapingActivityState;
+  if (state && typeof state === "object") scrapingActivityByPlatform[platform] = state;
+  scrapingActivityState = mergedScrapingActivity();
   const workCount = scrapingWorkCount(scrapingActivityState);
   scrapingWorkActive = workCount > 0;
 
   if (!previousWorkActive && scrapingWorkActive) {
-    const query = scrapingActivityState.activeJob?.query || scrapingActivityState.queuedJobs?.[0]?.query || "Instagram request";
+    const job = scrapingActivityState.activeJob || scrapingActivityState.queuedJobs?.[0];
+    const jobPlatform = job?.platform || platform;
+    const query = job?.query || `${jobPlatform} request`;
     showScrapingNotification(
-      "Instagram scraping started",
+      `${jobPlatform} scraping started`,
       `${query} is running privately. Open Companion to follow progress.`,
     );
     const publishingIsVisible = [...managedBrowsers.values()].some(session => !session.closedAt);
@@ -401,14 +439,15 @@ function handleScrapingActivity(state) {
     }
   } else if (previousWorkActive && !scrapingWorkActive) {
     const latest = scrapingActivityState.recentJobs?.[0];
+    const latestPlatform = latest?.platform || platform;
     if (latest?.status === "complete") {
       showScrapingNotification(
-        "Instagram scraping complete",
+        `${latestPlatform} scraping complete`,
         `${latest.query}: ${latest.resultCount ?? 0} live ${latest.resultCount === 1 ? "result" : "results"} ready.`,
       );
     } else if (latest?.status === "failed") {
       showScrapingNotification(
-        "Instagram scraping needs attention",
+        `${latestPlatform} scraping needs attention`,
         `${latest.query}: ${latest.error?.message || "The scrape did not complete."}`,
       );
     }
@@ -554,6 +593,21 @@ function browserPartition(accountId) {
   return `persist:agenticthat-publishing-${digest}`;
 }
 
+function facebookScrapingAccount(ownerKey) {
+  const separator = String(ownerKey || "").lastIndexOf(":");
+  const workspaceId = separator > 0 ? String(ownerKey).slice(0, separator) : "";
+  if (!workspaceId) return null;
+  try {
+    const storePath = process.env.PUBLISH_QUEUE_DATA_PATH;
+    const store = storePath && fs.existsSync(storePath) ? JSON.parse(fs.readFileSync(storePath, "utf8")) : null;
+    const accounts = Array.isArray(store?.accounts) ? store.accounts : [];
+    return accounts.find(account => account?.workspaceId === workspaceId && account?.platform === "facebook" && account?.enabled !== false) || null;
+  } catch (error) {
+    console.warn("Could not select a connected Facebook session for scraping:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 async function desktopDebugEndpoint(timeoutMs = 10000) {
   const endpointIsReady = async endpoint => {
     try {
@@ -693,7 +747,8 @@ async function openFacebookScrapingBrowser(request) {
   const debugEndpoint = await desktopDebugEndpoint();
   const id = randomUUID();
   const targetUrl = `about:blank#agenticthat-facebook-scrape-${id}`;
-  const partition = `agenticthat-facebook-scrape-${id}`;
+  const connectedAccount = facebookScrapingAccount(request?.ownerKey);
+  const partition = connectedAccount ? browserPartition(connectedAccount.id) : `agenticthat-facebook-scrape-${id}`;
   const workerWindow = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -731,6 +786,7 @@ async function openFacebookScrapingBrowser(request) {
     jobId: String(request?.jobId || ""),
     window: workerWindow,
     isolatedSession,
+    persistentSession: Boolean(connectedAccount),
   });
   try {
     await workerWindow.loadURL(targetUrl);
@@ -750,7 +806,7 @@ async function closeFacebookScrapingBrowser(sessionId) {
     entry.window.destroy();
   }
   await Promise.allSettled([
-    entry.isolatedSession.clearStorageData(),
+    ...(entry.persistentSession ? [] : [entry.isolatedSession.clearStorageData()]),
     entry.isolatedSession.clearCache(),
   ]);
 }
@@ -1216,8 +1272,8 @@ if (started || !ownsSingleInstanceLock) {
   });
   app.on("window-all-closed", () => {});
   app.on("will-quit", () => {
-    unsubscribeScrapingActivity?.();
-    unsubscribeScrapingActivity = null;
+    for (const unsubscribe of unsubscribeScrapingActivities) unsubscribe?.();
+    unsubscribeScrapingActivities = [];
     void publishingRuntime?.cancelAllInstagramCompanionJobs?.("Companion is shutting down.");
     void publishingRuntime?.cancelAllFacebookCompanionJobs?.("Companion is shutting down.");
     void stopInstagramScrapingBrowsers();

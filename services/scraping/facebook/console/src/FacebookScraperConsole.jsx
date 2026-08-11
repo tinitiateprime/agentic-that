@@ -1,316 +1,239 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Download, ExternalLink, RotateCcw, Search, Square, X } from "lucide-react";
+import React from "react";
+import InstagramScraperConsole from "../../../instagram/console/src/InstagramScraperConsole";
 import { getFacebookCompanionStatus, runFacebookCompanionJob } from "./companionClient";
 
-const API_URL = process.env.NEXT_PUBLIC_FACEBOOK_API_URL || "/api/scraping/facebook";
-const ENGINES = [
-  { id: "server", label: "Server", detail: "Runs in the cloud" },
-  { id: "companion", label: "Local Companion", detail: "Runs privately on this computer" },
+const FACEBOOK_API_URL = process.env.NEXT_PUBLIC_FACEBOOK_API_URL || "/api/scraping/facebook";
+
+const facebookInputModes = [
+  {
+    id: "profile",
+    label: "Profile",
+    symbol: "f",
+    prefix: "@",
+    fieldLabel: "Page or public profile username",
+    placeholder: "Enter username",
+  },
+  {
+    id: "keyword",
+    label: "Keyword / hashtag",
+    symbol: "#",
+    prefix: "#",
+    fieldLabel: "Keyword or hashtag",
+    placeholder: "Enter keyword or hashtag",
+  },
+  {
+    id: "profile_url",
+    label: "Profile URL",
+    symbol: "P",
+    prefix: "",
+    fieldLabel: "Facebook Page or profile URL",
+    placeholder: "https://www.facebook.com/pagename/",
+  },
+  {
+    id: "post_url",
+    label: "Post URL",
+    symbol: "POST",
+    prefix: "",
+    fieldLabel: "Facebook post, Reel, photo, or video URL",
+    placeholder: "https://www.facebook.com/reel/.../",
+  },
 ];
-const INPUTS = [
-  { id: "profile", label: "Profile", symbol: "f", placeholder: "Page or public profile username" },
-  { id: "keyword", label: "Keyword / hashtag", symbol: "#", placeholder: "Enter a Facebook keyword or hashtag" },
-  { id: "profile_url", label: "Profile URL", symbol: "URL", placeholder: "https://www.facebook.com/pagename" },
-  { id: "post_url", label: "Post URL", symbol: "POST", placeholder: "Facebook post, Reel, photo, or video URL" },
-];
-const COLLECTIONS = [
-  { id: "latest", label: "Latest" },
-  { id: "range", label: "Range" },
-  { id: "engagement", label: "Analyze Profile" },
-  { id: "compare", label: "Compare Profiles" },
-];
 
-function localDate(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+function cleanFacebookValue(mode, value) {
+  const text = String(value || "").trim();
+  if (mode === "profile") return text.replace(/^@+/, "").trim();
+  if (mode === "keyword") return text.replace(/^#+/, "").trim();
+  return text;
 }
 
-function defaultRange(type) {
-  const now = new Date();
-  const earlier = new Date(now);
-  earlier.setDate(earlier.getDate() - 6);
-  if (type === "month") return { from: localDate(now).slice(0, 7), to: localDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7) };
-  if (type === "year") return { from: String(now.getFullYear()), to: String(now.getFullYear() - 1) };
-  return { from: localDate(now), to: localDate(earlier) };
+function composeFacebookQuery(mode, value) {
+  const raw = String(value || "").trim();
+  const clean = cleanFacebookValue(mode, raw);
+  if (!clean) return "";
+  return mode === "keyword" && raw.startsWith("#") ? `#${clean}` : clean;
 }
 
-async function responseData(response) {
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || `Facebook scrape request failed (${response.status}).`);
-  return data;
-}
-
-async function apiPost(path, body, signal) {
-  return responseData(await fetch(`${API_URL}${path}`, {
-    method: "POST",
-    cache: "no-store",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  }));
-}
-
-async function apiGet(path, signal) {
-  return responseData(await fetch(`${API_URL}${path}`, { cache: "no-store", signal }));
-}
-
-async function runServerJob(payload, onStatus = () => {}, signal) {
-  const created = await apiPost("/jobs", payload, signal);
-  const jobId = created?.job?.id;
-  if (!jobId) throw new Error("The Facebook background job could not be created.");
-  onStatus("Opening fresh public Facebook pages");
-  let current = await apiPost(`/jobs/${jobId}/run`, {}, signal);
-  const deadline = Date.now() + 16 * 60_000;
-  let failures = 0;
-  while (current?.job?.status !== "complete") {
-    if (current?.job?.status === "failed") throw new Error(current.job.error || "Facebook scrape failed.");
-    if (Date.now() >= deadline) throw new Error("The Facebook scrape took too long. Try a smaller count or range.");
-    onStatus(current?.job?.status === "running" ? "Collecting visible Facebook data" : "Waiting for the background worker");
-    await new Promise(resolve => window.setTimeout(resolve, 2_000));
-    try { current = await apiGet(`/jobs/${jobId}`, signal); failures = 0; }
-    catch (error) { failures += 1; if (failures >= 5) throw error; onStatus("Reconnecting to the Facebook job"); }
+function facebookUrlType(value) {
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(value) ? value : `https://${value}`);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (host !== "facebook.com" && !host.endsWith(".facebook.com") && host !== "fb.watch") return null;
+    const target = `${url.pathname}${url.search}`;
+    if (host === "fb.watch" || /\/(?:posts|videos|reel|watch|photo|story\.php|permalink\.php)(?:\/|\?|$)/i.test(target)
+      || /^\/share\/(?:p|r|v)\//i.test(url.pathname) || url.searchParams.has("story_fbid")
+      || url.searchParams.has("fbid") || url.searchParams.has("v")) return "post";
+    if (/^\/(?:login|checkpoint|recover|help|search)(?:\/|$)/i.test(url.pathname)) return null;
+    return "profile";
+  } catch {
+    return null;
   }
-  return current;
 }
 
-function metric(value, display) {
-  if (value === null || value === undefined) return "N/A";
-  return display || Number(value).toLocaleString("en-US");
-}
-
-function dateLabel(value) {
-  if (!value) return "N/A";
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "N/A";
-}
-
-function csvCell(value) {
-  const text = value === null || value === undefined ? "" : String(value);
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
-function download(name, body, type) {
-  const url = URL.createObjectURL(new Blob([body], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function Thumbnail({ post }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [post.thumbnail_url]);
-  return <div className="facebook-thumb">{post.thumbnail_url && !failed
-    ? <img src={post.thumbnail_url} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed(true)} />
-    : <span>{post.media_type === "video" || post.media_type === "reel" ? "▶" : "f"}</span>}</div>;
-}
-
-function Analysis({ analysis }) {
-  if (!analysis) return null;
-  const cards = [
-    ["Followers", metric(analysis.follower_count, analysis.follower_count_display)],
-    ["Posts analyzed", analysis.analyzed_posts],
-    ["Reels scanned", analysis.analyzed_reels],
-    ["Avg. reactions", metric(analysis.averages?.reactions)],
-    ["Avg. comments", metric(analysis.averages?.comments)],
-    ["Avg. Reel views", metric(analysis.averages?.views)],
-    ["Engagement rate", analysis.engagement_rate === null ? "N/A" : `${analysis.engagement_rate}%`],
-  ];
-  const rankings = [
-    ["Most reacted", analysis.top_reacted],
-    ["Most discussed", analysis.top_discussed],
-    ["Most viewed", analysis.top_viewed],
-  ];
-  return <section className="facebook-analysis">
-    <div className="facebook-stat-grid">{cards.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
-    <div className="facebook-rank-grid">{rankings.map(([label, posts]) => <article key={label}>
-      <h3>{label}</h3>
-      {posts?.length ? posts.slice(0, 3).map((post, index) => <a href={post.post_url} target="_blank" rel="noreferrer" key={post.post_url}>
-        <span>{index + 1}</span><p>{post.content || post.author_name || "Facebook post"}</p><ExternalLink size={14} />
-      </a>) : <p className="facebook-empty-small">No trustworthy public metric.</p>}
-    </article>)}</div>
-    <div className="facebook-patterns">
-      <h3>Content patterns</h3>
-      {["formats", "hashtags", "keywords", "posting_days"].map(key => <div key={key}><span>{key.replace("_", " ")}</span><p>{analysis.patterns?.[key]?.slice(0, 8).map(item => `${item.label} (${item.count})`).join(" · ") || "N/A"}</p></div>)}
-    </div>
-    <div className="facebook-accuracy"><strong>Accuracy</strong>{["followers", "reactions", "comments", "views"].map(key => <span key={key}>{key}: {analysis.accuracy?.[key] || "N/A"}</span>)}</div>
-  </section>;
-}
-
-function Comparison({ comparisons }) {
-  if (!comparisons?.length) return null;
-  return <section className="facebook-comparison">
-    <h2>Profile comparison</h2>
-    <div>{comparisons.map(item => <article key={item.run?.requestedQuery || item.run?.query}>
-      <p>{item.run?.requestedQuery || item.run?.query}</p>
-      <h3>{item.analysis?.profile_name || "Public profile"}</h3>
-      <dl>
-        <div><dt>Followers</dt><dd>{metric(item.analysis?.follower_count, item.analysis?.follower_count_display)}</dd></div>
-        <div><dt>Avg. reactions</dt><dd>{metric(item.analysis?.averages?.reactions)}</dd></div>
-        <div><dt>Avg. comments</dt><dd>{metric(item.analysis?.averages?.comments)}</dd></div>
-        <div><dt>Avg. Reel views</dt><dd>{metric(item.analysis?.averages?.views)}</dd></div>
-        <div><dt>Engagement</dt><dd>{item.analysis?.engagement_rate === null ? "N/A" : `${item.analysis?.engagement_rate}%`}</dd></div>
-      </dl>
-    </article>)}</div>
-  </section>;
-}
-
-export default function FacebookScraperConsole({ publishingIdentityToken = "" }) {
-  const [engine, setEngine] = useState("server");
-  const [companion, setCompanion] = useState({ ready: false, checking: false, message: "" });
-  const [inputMode, setInputMode] = useState("profile");
-  const [profileType, setProfileType] = useState("page");
-  const [query, setQuery] = useState("");
-  const [compareQuery, setCompareQuery] = useState("");
-  const [collection, setCollection] = useState("latest");
-  const [maxResults, setMaxResults] = useState(10);
-  const [rangeType, setRangeType] = useState("date");
-  const initialRange = useMemo(() => defaultRange("date"), []);
-  const [rangeFrom, setRangeFrom] = useState(initialRange.from);
-  const [rangeTo, setRangeTo] = useState(initialRange.to);
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
-  const [comparisons, setComparisons] = useState(null);
-  const controllerRef = useRef(null);
-
-  const profileInput = inputMode === "profile" || inputMode === "profile_url";
-  const postInput = inputMode === "post_url";
-  const input = INPUTS.find(item => item.id === inputMode);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("agenticthat-facebook-scrape-engine");
-    if (saved === "server" || saved === "companion") setEngine(saved);
-  }, []);
-
-  useEffect(() => {
-    if (engine !== "companion") return;
-    let live = true;
-    setCompanion(previous => ({ ...previous, checking: true }));
-    getFacebookCompanionStatus(publishingIdentityToken).then(status => {
-      if (live) setCompanion({ ...status, checking: false });
-    });
-    return () => { live = false; };
-  }, [engine, publishingIdentityToken]);
-
-  function chooseEngine(next) {
-    setEngine(next);
-    window.localStorage.setItem("agenticthat-facebook-scrape-engine", next);
+function detectFacebookInput(value) {
+  const text = String(value || "").trim();
+  if (text.startsWith("#")) return { mode: "keyword", value: cleanFacebookValue("keyword", text) };
+  if (text.startsWith("@")) return { mode: "profile", value: cleanFacebookValue("profile", text) };
+  if (/^(?:https?:\/\/|www\.|facebook\.com\/|fb\.watch\/)/i.test(text)) {
+    return { mode: facebookUrlType(text) === "post" ? "post_url" : "profile_url", value: text };
   }
+  return { mode: "profile", value: text };
+}
 
-  function chooseInput(next) {
-    setInputMode(next);
-    if (!["profile", "profile_url"].includes(next) && ["engagement", "compare"].includes(collection)) setCollection("latest");
-    if (next === "post_url") setCollection("latest");
-    setResult(null); setComparisons(null); setError("");
+function publicFacebookUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "https://www.facebook.com/";
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://www.facebook.com${raw.startsWith("/") ? raw : `/${raw}`}`);
+    if (url.hostname.toLowerCase() !== "fb.watch") url.hostname = "www.facebook.com";
+    url.protocol = "https:";
+    return url.toString();
+  } catch {
+    return "https://www.facebook.com/";
   }
+}
 
-  function chooseRangeType(next) {
-    setRangeType(next);
-    const values = defaultRange(next);
-    setRangeFrom(values.from); setRangeTo(values.to);
-  }
-
-  function payloadFor(target, mode = collection) {
-    return {
-      mode: inputMode,
-      profile_type: profileType,
-      query: target.trim(),
-      max_results: postInput ? 1 : Number(maxResults),
-      collection_mode: mode,
-      timezone_offset_minutes: new Date().getTimezoneOffset(),
-      ...(mode === "range" ? { range_type: rangeType, range_from: rangeFrom, range_to: rangeTo } : {}),
-    };
-  }
-
-  async function selectedJob(payload, signal) {
-    return engine === "companion"
-      ? runFacebookCompanionJob(payload, setProgress, signal, publishingIdentityToken)
-      : runServerJob(payload, setProgress, signal);
-  }
-
-  async function start() {
-    if (!query.trim()) { setError("Enter a Facebook target first."); return; }
-    if (collection === "compare" && !compareQuery.trim()) { setError("Enter the second Facebook profile."); return; }
-    if (engine === "companion" && !companion.ready) { setError(companion.message || "Local Companion is unavailable."); return; }
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    setRunning(true); setError(""); setResult(null); setComparisons(null); setProgress("Preparing a fresh Facebook scrape");
+function facebookHandle(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^(?:https?:\/\/|www\.|facebook\.com\/)/i.test(raw)) {
     try {
-      if (collection === "compare") {
-        const items = await Promise.all([
-          selectedJob(payloadFor(query, "engagement"), controller.signal),
-          selectedJob(payloadFor(compareQuery, "engagement"), controller.signal),
-        ]);
-        setComparisons(items);
-      } else {
-        setResult(await selectedJob(payloadFor(query), controller.signal));
+      const url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (!/(^|\.)facebook\.com$/i.test(url.hostname)) return "";
+      if (url.pathname.toLowerCase() === "/profile.php") {
+        const id = url.searchParams.get("id");
+        return id ? `profile.php?id=${id}` : "";
       }
-    } catch (cause) {
-      setError(cause?.name === "AbortError" ? "Facebook scraping was cancelled." : cause instanceof Error ? cause.message : "Facebook scraping failed.");
-    } finally {
-      controllerRef.current = null;
-      setRunning(false); setProgress("");
+      const path = url.pathname.replace(/^\/+|\/+$/g, "");
+      return path && !/\s/.test(path) ? path : "";
+    } catch {
+      return "";
     }
   }
+  const handle = raw.replace(/^@+/, "").replace(/^\/+|\/+$/g, "");
+  return /^[A-Za-z0-9._-]+$/.test(handle) ? handle : "";
+}
 
-  function stop() {
-    controllerRef.current?.abort();
-    setProgress("Cancelling Facebook scrape");
+function handleFromUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.pathname.toLowerCase() === "/profile.php") return url.searchParams.get("id") || "";
+    return url.pathname.split("/").filter(Boolean)[0] || "";
+  } catch {
+    return "";
   }
+}
 
-  const posts = result?.results || [];
-  function exportJson() { download(`facebook-${Date.now()}.json`, JSON.stringify({ run: result?.run, results: posts, analysis: result?.analysis }, null, 2), "application/json"); }
-  function exportCsv() {
-    const columns = ["post_id", "post_url", "author_name", "author_url", "content", "media_type", "timestamp", "reactions_count", "comments_count", "top_comments", "views_count", "follower_count", "metric_source"];
-    const rows = [columns.map(csvCell).join(","), ...posts.map(post => columns.map(column => csvCell(column === "top_comments" ? JSON.stringify(post.top_comments || []) : post[column])).join(","))];
-    download(`facebook-${Date.now()}.csv`, rows.join("\n"), "text/csv;charset=utf-8");
+function normalizePost(post = {}) {
+  const username = handleFromUrl(post.author_url) || post.author_name || "";
+  return {
+    ...post,
+    username,
+    display_name: post.author_name || username || null,
+    profile_url: post.author_url || null,
+    caption: post.content || null,
+    likes: post.reactions_count,
+    likes_display: post.reactions_display,
+    likes_exact: post.reactions_exact,
+    likes_hidden: false,
+    comments_hidden: false,
+    views: post.views_count,
+    views_fresh: post.views_count !== null && post.views_count !== undefined,
+    views_source: post.metric_source,
+    views_captured_at: post.captured_at,
+  };
+}
+
+function formatCounts(items = []) {
+  const result = { reels: 0, posts: 0 };
+  for (const item of items) {
+    if (item?.label === "reel") result.reels += Number(item.count) || 0;
+    else result.posts += Number(item?.count) || 0;
   }
+  return result;
+}
 
-  const hasOutput = result || comparisons;
-  return <main className="facebook-scraper-app">
-    <header className="facebook-hero">
-      <div><span className="facebook-kicker">Facebook intelligence</span><h1>Facebook scraper</h1><p>Fresh public Page, profile, post, Reel, video and keyword data—without an API connection.</p></div>
-      {hasOutput && <button type="button" className="facebook-secondary" onClick={() => { setResult(null); setComparisons(null); }}><RotateCcw size={16} /> New scrape</button>}
-    </header>
+function normalizeAnalysis(analysis) {
+  if (!analysis) return null;
+  const username = handleFromUrl(analysis.profile_url) || analysis.profile_name || "";
+  return {
+    ...analysis,
+    username,
+    display_name: analysis.profile_name || username || null,
+    candidate_target: analysis.analyzed_posts,
+    averages: {
+      views: analysis.averages?.views ?? null,
+      likes: analysis.averages?.reactions ?? null,
+      comments: analysis.averages?.comments ?? null,
+    },
+    top_watched: (analysis.top_viewed || []).map(normalizePost),
+    top_liked: (analysis.top_reacted || []).map(normalizePost),
+    top_discussed: (analysis.top_discussed || []).map(normalizePost),
+    patterns: {
+      ...analysis.patterns,
+      formats: formatCounts(analysis.patterns?.formats),
+    },
+    accuracy: {
+      ...analysis.accuracy,
+      likes: analysis.accuracy?.reactions,
+      missing_metrics: "Metrics Facebook did not expose remain N/A",
+    },
+  };
+}
 
-    <section className="facebook-launch-card">
-      <fieldset><legend>Scraping engine</legend><div className="facebook-engine-grid">{ENGINES.map(item => <button type="button" key={item.id} className={engine === item.id ? "selected" : ""} onClick={() => chooseEngine(item.id)}><strong>{item.label}</strong><span>{item.detail}</span></button>)}</div>
-        {engine === "companion" && <p className={`facebook-engine-state ${companion.ready ? "ready" : "unavailable"}`}>{companion.checking ? "Checking Companion…" : companion.message}</p>}
-      </fieldset>
+function normalizeFacebookJob(data = {}) {
+  const results = (data.results || data.run?.results || []).map(normalizePost);
+  const analysis = normalizeAnalysis(data.analysis || data.run?.analysis);
+  return {
+    ...data,
+    results,
+    analysis,
+    run: data.run ? { ...data.run, results, analysis } : data.run,
+  };
+}
 
-      <fieldset><legend>Input type</legend><div className="facebook-input-grid">{INPUTS.map(item => <button type="button" key={item.id} className={inputMode === item.id ? "selected" : ""} onClick={() => chooseInput(item.id)}><span>{item.symbol}</span>{item.label}</button>)}</div></fieldset>
+const facebookPlatformConfig = {
+  name: "Facebook",
+  apiUrl: FACEBOOK_API_URL,
+  inputModes: facebookInputModes,
+  cleanModeValue: cleanFacebookValue,
+  composeScrapeQuery: composeFacebookQuery,
+  detectInputMode: detectFacebookInput,
+  urlType: facebookUrlType,
+  publicUrl: publicFacebookUrl,
+  getCompanionStatus: getFacebookCompanionStatus,
+  runCompanionJob: runFacebookCompanionJob,
+  normalizeJob: normalizeFacebookJob,
+  engineStorageKey: "agenticthat-facebook-scrape-engine",
+  savedQueriesPath: "/runs/queries",
+  savedQueriesKey: "queries",
+  exportPrefix: "facebook",
+  engagementName: "Reactions",
+  showViewsInResults: true,
+  analysisTabs: [
+    { id: "watched", label: "Most Viewed" },
+    { id: "liked", label: "Most Reacted" },
+    { id: "discussed", label: "Most Discussed" },
+    { id: "patterns", label: "Content Patterns" },
+  ],
+  payload: () => ({ profile_type: "page" }),
+  normalizeComparisonInput: facebookHandle,
+  comparisonTarget: (value) => value.startsWith("profile.php?id=") || value.includes("/")
+    ? { mode: "profile_url", query: publicFacebookUrl(value) }
+    : { mode: "profile", query: value },
+  errorMessage: (message) => /temporarily_unavailable|public discovery is temporarily unavailable/i.test(message)
+    ? "Facebook did not expose usable public results in this run. If a Facebook account is connected in Companion, restart the updated Companion and retry locally; otherwise try the exact Page, profile, or post URL."
+    : message,
+  resultNotice: ({ status, count, requested, inputMode, engine }) => {
+    if (status === "partial" && inputMode === "keyword") {
+      return `Facebook returned ${count} of ${requested} requested current keyword results. Facebook limits anonymous hashtag feeds; ${engine === "companion" ? "connect a Facebook account in Companion for deeper local discovery" : "Local Companion with a connected Facebook session can usually collect more"}.`;
+    }
+    if (status === "partial") return "Facebook returned a partial dataset. Items without a trustworthy visible date or metric were not invented or forced into the results.";
+    return "";
+  },
+};
 
-      {profileInput && <div className="facebook-profile-types"><span>Target kind <small>(labels the export)</small></span><button type="button" className={profileType === "page" ? "selected" : ""} onClick={() => setProfileType("page")}>Business / creator Page</button><button type="button" className={profileType === "public_profile" ? "selected" : ""} onClick={() => setProfileType("public_profile")}>Person's public profile</button></div>}
-
-      <div className="facebook-query-grid">
-        <label><span>{input?.label}</span><input type={inputMode.includes("url") ? "url" : "text"} value={query} onChange={event => setQuery(event.target.value)} placeholder={input?.placeholder} onKeyDown={event => event.key === "Enter" && !running && start()} /></label>
-        {collection === "compare" && <label><span>Second profile</span><input type={inputMode === "profile_url" ? "url" : "text"} value={compareQuery} onChange={event => setCompareQuery(event.target.value)} placeholder="Second Page or public profile" /></label>}
-      </div>
-
-      {!postInput && <fieldset><legend>Collection</legend><div className="facebook-collection-grid">{COLLECTIONS.filter(item => !["engagement", "compare"].includes(item.id) || profileInput).map(item => <button type="button" key={item.id} className={collection === item.id ? "selected" : ""} onClick={() => setCollection(item.id)}>{item.label}</button>)}</div></fieldset>}
-
-      {collection === "range" && <div className="facebook-range"><div>{["date", "month", "year"].map(type => <button type="button" className={rangeType === type ? "selected" : ""} key={type} onClick={() => chooseRangeType(type)}>{type}</button>)}</div><label><span>Start</span><input type={rangeType === "year" ? "number" : rangeType} value={rangeFrom} onChange={event => setRangeFrom(event.target.value)} /></label><label><span>End</span><input type={rangeType === "year" ? "number" : rangeType} value={rangeTo} onChange={event => setRangeTo(event.target.value)} /></label></div>}
-
-      {!postInput && <label className="facebook-count"><span>Maximum results</span><input type="number" min="1" max="50" value={maxResults} onChange={event => setMaxResults(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></label>}
-      {error && <p className="facebook-error"><X size={17} />{error}</p>}
-      <div className="facebook-actions">{running
-        ? <button type="button" className="facebook-stop" onClick={stop}><Square size={15} /> Stop scrape</button>
-        : <button type="button" className="facebook-primary" onClick={start}><Search size={18} /> Start Facebook scrape</button>}
-        {running && <span><i />{progress}</span>}
-      </div>
-      <p className="facebook-scope-note">Publicly accessible data only. Login walls, CAPTCHA, private profiles and private groups are never bypassed.</p>
-    </section>
-
-    {result && <section className="facebook-results">
-      <div className="facebook-result-head"><div><span className={`facebook-status status-${result.discoveryStatus || "ok"}`}>{String(result.discoveryStatus || "ok").replaceAll("_", " ")}</span><h2>{posts.length} public {posts.length === 1 ? "post" : "posts"}</h2><p>{result.run?.requestedQuery || query} · {engine === "companion" ? "Local Companion" : "Server"} · fresh run</p></div><div><button type="button" onClick={exportCsv}><Download size={15} /> CSV</button><button type="button" onClick={exportJson}><Download size={15} /> JSON</button></div></div>
-      <Analysis analysis={result.analysis} />
-      {posts.length ? <div className="facebook-table-wrap"><table><thead><tr><th>Post</th><th>Author</th><th>Published</th><th>Reactions</th><th>Comments</th><th>Views</th><th>Source</th></tr></thead><tbody>{posts.map((post, index) => <tr key={post.post_id || post.post_url}><td><div className="facebook-post-cell"><Thumbnail post={post} /><div><a href={post.post_url} target="_blank" rel="noreferrer">Post {index + 1}<ExternalLink size={13} /></a><p>{post.content || `${post.media_type || "Facebook"} post`}</p></div></div></td><td>{post.author_name || "N/A"}</td><td>{dateLabel(post.timestamp)}</td><td>{metric(post.reactions_count, post.reactions_display)}</td><td><strong>{metric(post.comments_count, post.comments_display)}</strong>{post.top_comments?.slice(0, 2).map(comment => <p key={`${comment.author_name}-${comment.text}`}>{comment.author_name}: {comment.text}</p>)}</td><td>{metric(post.views_count, post.views_display)}</td><td>{post.metric_source === "visible_reels_grid" ? "All tab + matched Reels grid" : post.metric_source === "current_page_payload" ? "Current All tab + response" : "Visible All tab"}</td></tr>)}</tbody></table></div>
-      : <div className="facebook-no-results"><h3>No public posts were available</h3><p>Facebook returned <strong>{String(result.discoveryStatus || "temporarily_unavailable").replaceAll("_", " ")}</strong>. Try a Page URL or Local Companion if the target is public.</p></div>}
-    </section>}
-    <Comparison comparisons={comparisons} />
-  </main>;
+export default function FacebookScraperConsole({ publishingIdentityToken = "" }) {
+  return <InstagramScraperConsole publishingIdentityToken={publishingIdentityToken} platformConfig={facebookPlatformConfig} />;
 }

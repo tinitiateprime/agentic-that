@@ -2,7 +2,7 @@ const api = window.publishingCompanion;
 const byId = id => document.getElementById(id);
 const views = {
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
-  scraping: { panel: byId("scraping-panel"), title: "Instagram scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
+  scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
@@ -330,7 +330,7 @@ const scrapingStageOrder = ["queued", "opening_browser", "scraping", "preparing_
 
 function scrapingModeLabel(value) {
   const labels = { latest: "Latest posts", range: "Date range", engagement: "Profile analysis" };
-  return labels[value] || "Instagram scrape";
+  return labels[value] || "Social scrape";
 }
 
 function durationLabel(startValue, endValue = Date.now()) {
@@ -357,11 +357,11 @@ function createScrapeJobItem(job) {
 
   const mark = document.createElement("span");
   mark.className = "scrape-job-mark";
-  mark.textContent = job.status === "complete" ? "OK" : job.status === "failed" ? "!" : job.status === "cancelled" ? "X" : "IG";
+  mark.textContent = job.status === "complete" ? "OK" : job.status === "failed" ? "!" : job.status === "cancelled" ? "X" : job.platform === "Facebook" ? "FB" : "IG";
 
   const content = document.createElement("div");
   const title = document.createElement("strong");
-  title.textContent = job.query || "Instagram request";
+  title.textContent = `${job.platform || "Social"}: ${job.query || "request"}`;
   const detail = document.createElement("small");
   detail.textContent = job.error?.message || `${scrapingModeLabel(job.collectionMode)} - ${scrapeJobStateLabel(job)}`;
   content.append(title, detail);
@@ -381,16 +381,18 @@ function renderScraping() {
     : null;
   const stageCard = byId("scrape-stage-card");
   const stage = active?.progress?.stage || "idle";
+  const activePlatform = active?.platform || "Instagram and Facebook";
   stageCard.dataset.status = active ? "working" : "idle";
   stageCard.dataset.stage = stage;
 
   byId("scrape-live-label").textContent = active ? "LIVE ON THIS COMPUTER" : "LOCAL ENGINE READY";
   byId("scrape-title").textContent = active
-    ? `Scraping ${active.query || "Instagram"}`
-    : "Ready for private Instagram scraping";
+    ? `${activePlatform} scraping: ${active.query || "public target"}`
+    : "Ready for private Instagram and Facebook scraping";
   byId("scrape-detail").textContent = active
-    ? active.progress?.message || "Collecting current public Instagram data."
+    ? active.progress?.message || `Collecting current public ${activePlatform} data.`
     : "Start a Local Companion scrape from AgenticThat. The hidden browser runs separately from publishing and its progress will appear here.";
+  byId("scrape-platform-mark").textContent = active ? (activePlatform === "Facebook" ? "FB" : "IG") : "IG+FB";
   byId("scrape-elapsed").textContent = active
     ? durationLabel(active.startedAt || active.createdAt)
     : currentScraping.recentJobs?.[0]

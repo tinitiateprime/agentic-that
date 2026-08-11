@@ -11,6 +11,14 @@ $packagedMain = Join-Path $packagedAppRoot "main.js"
 if ((Get-Content -LiteralPath $packagedMain -Raw) -match "interaction-lock") {
   throw "The packaged Companion still references the obsolete publishing overlay."
 }
+$packagedMainSource = Get-Content -LiteralPath $packagedMain -Raw
+if ($packagedMainSource -notmatch "subscribeFacebookCompanionActivity") {
+  throw "The packaged Companion is missing Facebook scraping activity integration."
+}
+$packagedControlSource = Get-Content -LiteralPath (Join-Path $packagedAppRoot "control.html") -Raw
+if ($packagedControlSource -notmatch "Instagram and Facebook") {
+  throw "The packaged Companion control screen is missing the shared Facebook scraping UI."
+}
 if (Get-ChildItem -LiteralPath $packagedAppRoot -Filter "interaction-lock*" -ErrorAction SilentlyContinue) {
   throw "The packaged Companion still contains the obsolete publishing overlay."
 }
@@ -67,6 +75,8 @@ try {
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
+  if (-not $health.capabilities.instagramScraping.available) { throw "Instagram Companion scraping is unavailable." }
+  if (-not $health.capabilities.facebookScraping.available) { throw "Facebook Companion scraping is unavailable." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
   }

@@ -5,7 +5,7 @@ export type FacebookCompanionBrowserSession = {
 };
 
 export type FacebookCompanionDesktopHost = {
-  openBrowser(request: { jobId: string }): Promise<FacebookCompanionBrowserSession>;
+  openBrowser(request: { jobId: string; ownerKey?: string }): Promise<FacebookCompanionBrowserSession>;
   closeBrowser(sessionId: string): Promise<void> | void;
   stopBrowsers(reason: string): Promise<void> | void;
 };

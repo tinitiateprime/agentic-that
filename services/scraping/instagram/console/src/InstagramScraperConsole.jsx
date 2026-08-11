@@ -197,14 +197,14 @@ const engagementExportColumns = [
   "views_captured_at"
 ];
 
-async function apiGet(path) {
-  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+async function apiGet(path, serviceUrl = API_URL) {
+  const response = await fetch(`${serviceUrl}${path}`, { cache: "no-store" });
   if (!response.ok) return {};
   return response.json();
 }
 
-async function apiGetRequired(path) {
-  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+async function apiGetRequired(path, serviceUrl = API_URL) {
+  const response = await fetch(`${serviceUrl}${path}`, { cache: "no-store" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.detail || data.message || `Request failed (${response.status})`);
@@ -212,8 +212,8 @@ async function apiGetRequired(path) {
   return data;
 }
 
-async function apiPost(path, body) {
-  const response = await fetch(`${API_URL}${path}`, {
+async function apiPost(path, body, serviceUrl = API_URL) {
+  const response = await fetch(`${serviceUrl}${path}`, {
     cache: "no-store",
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -226,13 +226,13 @@ async function apiPost(path, body) {
   return data;
 }
 
-async function runInstagramJob(payload, onStatus = () => {}) {
-  const created = await apiPost("/jobs", payload);
+async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_URL) {
+  const created = await apiPost("/jobs", payload, serviceUrl);
   const jobId = created?.job?.id;
   if (!jobId) throw new Error("The background scrape could not be created.");
 
   onStatus("Scraping public pages");
-  let data = await apiPost(`/jobs/${jobId}/run`, {});
+  let data = await apiPost(`/jobs/${jobId}/run`, {}, serviceUrl);
   const deadline = Date.now() + 16 * 60_000;
   let pollingFailures = 0;
   while (data?.job?.status !== "complete") {
@@ -245,7 +245,7 @@ async function runInstagramJob(payload, onStatus = () => {}) {
     onStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
     try {
-      data = await apiGetRequired(`/jobs/${jobId}`);
+      data = await apiGetRequired(`/jobs/${jobId}`, serviceUrl);
       pollingFailures = 0;
     } catch (pollError) {
       pollingFailures += 1;
@@ -256,7 +256,27 @@ async function runInstagramJob(payload, onStatus = () => {}) {
   return data;
 }
 
-function InstagramScraperConsole({ publishingIdentityToken = "" }) {
+function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig = {} }) {
+  const platformName = platformConfig.name || "Instagram";
+  const platformLower = platformName.toLowerCase();
+  const serviceUrl = platformConfig.apiUrl || API_URL;
+  const availableInputModes = platformConfig.inputModes || inputModes;
+  const cleanInputValue = platformConfig.cleanModeValue || cleanModeValue;
+  const composeQuery = platformConfig.composeScrapeQuery || composeScrapeQuery;
+  const detectMode = platformConfig.detectInputMode || detectInputMode;
+  const selectedUrlTypeFor = platformConfig.urlType || instagramUrlType;
+  const publicPostUrl = platformConfig.publicUrl || publicInstagramUrl;
+  const companionStatusCheck = platformConfig.getCompanionStatus || getInstagramCompanionStatus;
+  const companionJobRunner = platformConfig.runCompanionJob || runInstagramCompanionJob;
+  const normalizeJob = platformConfig.normalizeJob || ((value) => value);
+  const engineStorageKey = platformConfig.engineStorageKey || "agenticthat-instagram-scrape-engine";
+  const savedQueriesPath = platformConfig.savedQueriesPath || "/runs/keywords";
+  const savedQueriesKey = platformConfig.savedQueriesKey || "keywords";
+  const exportPrefix = platformConfig.exportPrefix || platformLower;
+  const engagementName = platformConfig.engagementName || "Likes";
+  const engagementNameLower = engagementName.toLowerCase();
+  const analysisTabs = platformConfig.analysisTabs || ANALYSIS_TABS;
+  const showViewsInResults = Boolean(platformConfig.showViewsInResults);
   const [scrapeEngine, setScrapeEngine] = useState("server");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
@@ -278,9 +298,11 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
   const [lastCollectionMode, setLastCollectionMode] = useState("latest");
   const [lastInputMode, setLastInputMode] = useState(null);
   const [lastScrapeEngine, setLastScrapeEngine] = useState("server");
+  const [lastDiscoveryStatus, setLastDiscoveryStatus] = useState("ok");
+  const [lastDiagnostics, setLastDiagnostics] = useState(null);
   const [cancelActiveScrape, setCancelActiveScrape] = useState(null);
   const [workingStatus, setWorkingStatus] = useState("Preparing scrape");
-  const activeInputMode = inputModes.find((item) => item.id === inputMode);
+  const activeInputMode = availableInputModes.find((item) => item.id === inputMode);
 
   useEffect(() => {
     const htmlBackground = document.documentElement.style.background;
@@ -299,7 +321,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
   }, []);
 
   useEffect(() => {
-    const savedEngine = window.localStorage.getItem("agenticthat-instagram-scrape-engine");
+    const savedEngine = window.localStorage.getItem(engineStorageKey);
     if (savedEngine === "server" || savedEngine === "companion") setScrapeEngine(savedEngine);
   }, []);
 
@@ -307,21 +329,21 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
     if (scrapeEngine !== "companion") return;
     let active = true;
     setCompanionStatus({ checking: true, ready: false, message: "Checking Companion…" });
-    getInstagramCompanionStatus(publishingIdentityToken).then(status => {
+    companionStatusCheck(publishingIdentityToken).then(status => {
       if (active) setCompanionStatus({ checking: false, ...status });
     });
     return () => { active = false; };
-  }, [publishingIdentityToken, scrapeEngine]);
+  }, [companionStatusCheck, publishingIdentityToken, scrapeEngine]);
 
   useEffect(() => {
-    apiGet("/runs/keywords")
-      .then((data) => setKeywords(data.keywords || []))
+    apiGet(savedQueriesPath, serviceUrl)
+      .then((data) => setKeywords(data[savedQueriesKey] || []))
       .catch(() => {});
-  }, []);
+  }, [savedQueriesKey, savedQueriesPath, serviceUrl]);
 
   const selectInputMode = (mode) => {
     setInputMode(mode);
-    setInputValue((value) => cleanModeValue(mode, value));
+    setInputValue((value) => cleanInputValue(mode, value));
     if (isPostInput(mode) || (!isProfileInput(mode) && ["engagement", "compare"].includes(collectionMode))) {
       setCollectionMode("latest");
     }
@@ -330,23 +352,23 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
 
   const selectScrapeEngine = (engine) => {
     setScrapeEngine(engine);
-    window.localStorage.setItem("agenticthat-instagram-scrape-engine", engine);
+    window.localStorage.setItem(engineStorageKey, engine);
     setError(null);
   };
 
   const runSelectedInstagramJob = async (payload, onStatus) => {
-    if (scrapeEngine !== "companion") return runInstagramJob(payload, onStatus);
+    if (scrapeEngine !== "companion") return normalizeJob(await runInstagramJob(payload, onStatus, serviceUrl));
     const controller = new AbortController();
     setCancelActiveScrape(() => () => controller.abort());
     try {
-      return await runInstagramCompanionJob(payload, onStatus, controller.signal, publishingIdentityToken);
+      return normalizeJob(await companionJobRunner(payload, onStatus, controller.signal, publishingIdentityToken));
     } finally {
       setCancelActiveScrape(null);
     }
   };
 
   const selectSavedQuery = (value) => {
-    const detected = detectInputMode(value);
+    const detected = detectMode(value);
     setInputMode(detected.mode);
     setInputValue(detected.value);
     if (isPostInput(detected.mode) || (!isProfileInput(detected.mode) && ["engagement", "compare"].includes(collectionMode))) {
@@ -376,20 +398,20 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
       return;
     }
 
-    const cleanQuery = composeScrapeQuery(inputMode, inputValue);
+    const cleanQuery = composeQuery(inputMode, inputValue);
     if (!cleanQuery) {
       setError(inputMode === "profile_url" || inputMode === "post_url"
-        ? "Paste the selected Instagram URL type."
+        ? `Paste the selected ${platformName} URL type.`
         : "Enter text for the selected input type.");
       return;
     }
-    const selectedUrlType = instagramUrlType(cleanQuery);
+    const selectedUrlType = selectedUrlTypeFor(cleanQuery);
     if (inputMode === "profile_url" && selectedUrlType !== "profile") {
-      setError("Enter an Instagram profile URL, not a post or reel URL.");
+      setError(`Enter a ${platformName} profile URL, not a post or reel URL.`);
       return;
     }
     if (inputMode === "post_url" && selectedUrlType !== "post") {
-      setError("Enter an Instagram post or reel URL.");
+      setError(`Enter a ${platformName} post or reel URL.`);
       return;
     }
     const effectiveCollectionMode = isPostInput(inputMode) ? "latest" : collectionMode;
@@ -401,6 +423,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
     setError(null);
     setResults([]);
     setAnalysis(null);
+    setLastDiscoveryStatus("ok");
+    setLastDiagnostics(null);
     setAnalysisTab("watched");
     setLastQuery(cleanQuery);
     setLastWorkflowLabel(
@@ -431,15 +455,19 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
         } : {}),
         timezone_offset_minutes: new Date().getTimezoneOffset(),
         auto_expand_days: false,
-        max_auto_expand_days: 1
+        max_auto_expand_days: 1,
+        ...(platformConfig.payload ? platformConfig.payload({ inputMode, cleanQuery, effectiveCollectionMode }) : {})
       };
       const data = await runSelectedInstagramJob(payload, setWorkingStatus);
       setResults(data?.results || []);
       setAnalysis(data?.analysis || data?.run?.analysis || null);
+      setLastDiscoveryStatus(data?.discoveryStatus || data?.discovery_status || data?.run?.discoveryStatus || "ok");
+      setLastDiagnostics(data?.diagnostics || data?.run?.diagnostics || null);
       setLastQuery(data?.run?.query || cleanQuery);
       setPage("results");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Scrape failed");
+      const message = err instanceof Error ? err.message : "Scrape failed";
+      setError(platformConfig.errorMessage ? platformConfig.errorMessage(message) : message);
       setPage("start");
     }
   };
@@ -511,11 +539,11 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
 
   const exportJson = () => {
     const data = analysis ? { analysis, results } : results;
-    download(JSON.stringify(data, null, 2), "instagram-results.json", "application/json");
+    download(JSON.stringify(data, null, 2), `${exportPrefix}-results.json`, "application/json");
   };
 
   const exportCsv = () => {
-    const exportColumns = lastCollectionMode === "engagement" ? engagementExportColumns : baseExportColumns;
+    const exportColumns = lastCollectionMode === "engagement" || showViewsInResults ? engagementExportColumns : baseExportColumns;
     const analysisRows = analysisTab === "liked"
       ? analysis?.top_liked
       : analysisTab === "discussed"
@@ -537,20 +565,20 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
         key === "rank" ? index + 1 : escapeCell(item[key])
       )).join(","))
     ];
-    download(rows.join("\n"), "instagram-results.csv", "text/csv");
+    download(rows.join("\n"), `${exportPrefix}-results.csv`, "text/csv");
   };
 
   const renderRankingTable = (posts, primaryMetric) => {
     const primaryLabels = {
       views: "Views",
-      likes: "Likes",
+      likes: engagementName,
       comments_count: "Comments"
     };
     return posts.length === 0 ? (
       <div className="analysis-empty">
         {primaryMetric === "views"
-          ? "Instagram did not expose current public view counts for this run."
-          : `Instagram did not expose public ${primaryLabels[primaryMetric].toLowerCase()} for the analyzed posts.`}
+          ? `${platformName} did not expose current public view counts for this run.`
+          : `${platformName} did not expose public ${primaryLabels[primaryMetric].toLowerCase()} for the analyzed posts.`}
       </div>
     ) : (
       <div className="analysis-table-wrap">
@@ -562,7 +590,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
               <th>Profile</th>
               <th className="is-primary-metric">{primaryLabels[primaryMetric]}</th>
               {primaryMetric !== "views" && <th>Views</th>}
-              {primaryMetric !== "likes" && <th>Likes</th>}
+              {primaryMetric !== "likes" && <th>{engagementName}</th>}
               {primaryMetric !== "comments_count" && <th>Comments</th>}
               <th>Top comments</th>
               <th>Posted</th>
@@ -585,7 +613,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                 <td>
                   {post.username ? (
                     <a
-                      href={publicInstagramUrl(post.profile_url || `/${post.username}/`)}
+                      href={publicPostUrl(post.profile_url || `/${post.username}/`)}
                       target="_blank"
                       rel="external noopener noreferrer"
                       referrerPolicy="no-referrer"
@@ -615,7 +643,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                 <td>{formatDate(post.timestamp)}</td>
                 <td>
                   <a
-                    href={publicInstagramUrl(post.post_url)}
+                    href={publicPostUrl(post.post_url)}
                     target="_blank"
                     rel="external noopener noreferrer"
                     referrerPolicy="no-referrer"
@@ -656,7 +684,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
               : "Fetching latest posts and reels"}
         </h1>
         <p className="work-copy">
-          Opening public Instagram pages, closing popups, and collecting visible data for {lastQuery}.
+          Opening public {platformName} pages, closing popups, and collecting visible data for {lastQuery}.
         </p>
         {lastScrapeEngine === "companion" && cancelActiveScrape && (
           <button type="button" className="cancel-scrape-button" onClick={cancelActiveScrape}>Cancel local scrape</button>
@@ -666,6 +694,14 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
   }
 
   if (page === "results") {
+    const resultNotice = platformConfig.resultNotice?.({
+      status: lastDiscoveryStatus,
+      diagnostics: lastDiagnostics,
+      count: results.length,
+      requested: maxResults,
+      inputMode: lastInputMode,
+      engine: lastScrapeEngine,
+    });
     return (
       <main className="instagram-scraper-app results-page">
         <header className="workspace-header">
@@ -689,15 +725,17 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
           </div>
         </header>
 
+        {resultNotice && <div className="availability-box">{resultNotice}</div>}
+
         {lastCollectionMode === "engagement" && analysis ? (
           <section className="analysis-dashboard">
             <div className="analysis-overview">
               <div className="profile-identity">
                 <span>Profile report</span>
-                <h2>{analysis.display_name || analysis.username || "Instagram profile"}</h2>
+                <h2>{analysis.display_name || analysis.username || `${platformName} profile`}</h2>
                 {analysis.username && (
                   <a
-                    href={publicInstagramUrl(analysis.profile_url || `/${analysis.username}/`)}
+                    href={publicPostUrl(analysis.profile_url || `/${analysis.username}/`)}
                     target="_blank"
                     rel="external noopener noreferrer"
                     referrerPolicy="no-referrer"
@@ -718,7 +756,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                 <strong>{formatNumber(analysis.follower_count)}</strong>
                 <small>
                   {analysis.follower_count_display
-                    ? `Instagram displays ${analysis.follower_count_display}`
+                    ? `${platformName} displays ${analysis.follower_count_display}`
                     : "Current public profile count"}
                 </small>
               </article>
@@ -733,7 +771,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                 <small>From visible Reels values</small>
               </article>
               <article className="metric-card">
-                <span>Average likes</span>
+                <span>Average {engagementNameLower}</span>
                 <strong>{formatNumber(analysis.averages?.likes)}</strong>
                 <small>From visible grid values</small>
               </article>
@@ -755,7 +793,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
             </div>
 
             <nav className="analysis-tabs" aria-label="Profile analysis views">
-              {ANALYSIS_TABS.map((tab) => (
+              {analysisTabs.map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
@@ -801,8 +839,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
 
             <footer className="accuracy-strip">
               <strong>Data quality</strong>
-              <span>{analysis.accuracy?.source || "Public Instagram pages"}</span>
-              <span>{analysis.accuracy?.followers || "Instagram's visible follower value"}</span>
+              <span>{analysis.accuracy?.source || `Public ${platformName} pages`}</span>
+              <span>{analysis.accuracy?.followers || `${platformName}'s visible follower value`}</span>
               <span>{analysis.accuracy?.views || "Public Reels grid values"}</span>
               <span>{analysis.accuracy?.missing_metrics || "Missing metrics shown as N/A"}</span>
               <span>Captured {formatDate(analysis.captured_at)}</span>
@@ -810,7 +848,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
           </section>
         ) : results.length === 0 ? (
           <div className="empty-panel">
-            Public Instagram did not return usable data for this input. Check that the selected profile, post, or reel is public.
+            Public {platformName} did not return usable data for this input. Check that the selected profile, post, or reel is public.
           </div>
         ) : (
           <section className="data-panel">
@@ -823,7 +861,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                     <th>Author</th>
                     <th>Post URL</th>
                     <th>Comments</th>
-                    <th>Likes</th>
+                    <th>{engagementName}</th>
+                    {showViewsInResults && <th>Views</th>}
                     <th>Followers</th>
                     <th>Top comments</th>
                     <th>Posted on</th>
@@ -844,7 +883,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                           <strong>{post.display_name || post.username || "Unknown"}</strong>
                           {post.username && (
                             <a
-                              href={publicInstagramUrl(post.profile_url || `/${post.username}/`)}
+                              href={publicPostUrl(post.profile_url || `/${post.username}/`)}
                               target="_blank"
                               rel="external noopener noreferrer"
                               referrerPolicy="no-referrer"
@@ -856,7 +895,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                       </td>
                       <td>
                         <a
-                          href={publicInstagramUrl(post.post_url)}
+                          href={publicPostUrl(post.post_url)}
                           target="_blank"
                           rel="external noopener noreferrer"
                           referrerPolicy="no-referrer"
@@ -866,6 +905,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
                       </td>
                       <td>{formatPostMetric(post, "comments_count")}</td>
                       <td>{formatPostMetric(post, "likes")}</td>
+                      {showViewsInResults && <td>{formatViewMetric(post)}</td>}
                       <td>{formatNumber(post.follower_count)}</td>
                       <td>
                         <div className="comment-list">
@@ -892,8 +932,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
   return (
     <main className={`instagram-scraper-app start-page ${collectionMode === "compare" ? "compare-mode" : ""}`}>
       <section className="intro-panel">
-        <p className="eyebrow">Instagram intelligence</p>
-        <h1>Instagram scraper</h1>
+        <p className="eyebrow">{platformName} intelligence</p>
+        <h1>{platformName} scraper</h1>
         <p>Public post and reel data.</p>
       </section>
 
@@ -924,7 +964,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
           <fieldset className="mode-picker">
             <legend>Choose input type</legend>
             <div className="mode-options">
-              {inputModes.map((item) => (
+              {availableInputModes.map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -984,7 +1024,14 @@ function InstagramScraperConsole({ publishingIdentityToken = "" }) {
         )}
 
         {collectionMode === "compare" && isProfileInput(inputMode) && (
-          <ProfileComparisonWorkspace seedProfile={inputValue} runJob={runSelectedInstagramJob} />
+          <ProfileComparisonWorkspace
+            seedProfile={inputValue}
+            runJob={runSelectedInstagramJob}
+            platformName={platformName}
+            normalizeInput={platformConfig.normalizeComparisonInput}
+            comparisonTarget={platformConfig.comparisonTarget}
+            engagementName={engagementName}
+          />
         )}
 
         {!isPostInput(inputMode) && collectionMode === "range" && (

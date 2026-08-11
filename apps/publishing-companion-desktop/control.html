@@ -28,8 +28,8 @@
             <b id="activity-badge" hidden>0</b>
           </button>
           <button class="nav-item" data-view="scraping" type="button">
-            <span class="nav-icon">IG</span>
-            <span><strong>Instagram scraping</strong><small>Private local activity</small></span>
+            <span class="nav-icon">S</span>
+            <span><strong>Social scraping</strong><small>Instagram and Facebook</small></span>
             <b id="scraping-badge" hidden>0</b>
           </button>
           <button class="nav-item" data-view="settings" type="button">
@@ -107,7 +107,7 @@
           <div class="scraping-layout">
             <section class="scrape-stage-card" id="scrape-stage-card" data-status="idle">
               <div class="scrape-visual" aria-hidden="true">
-                <div class="scrape-radar"><i></i><i></i><i></i><span>IG</span></div>
+                <div class="scrape-radar"><i></i><i></i><i></i><span id="scrape-platform-mark">IG+FB</span></div>
                 <div class="scrape-signal"><i></i><i></i><i></i></div>
               </div>
               <div class="scrape-stage-content">
@@ -115,7 +115,7 @@
                   <span class="scrape-live-label" id="scrape-live-label">LOCAL ENGINE READY</span>
                   <time id="scrape-elapsed">Waiting for a request</time>
                 </div>
-                <h2 id="scrape-title">Ready for private Instagram scraping</h2>
+                <h2 id="scrape-title">Ready for private Instagram and Facebook scraping</h2>
                 <p id="scrape-detail">Start a Local Companion scrape from AgenticThat. The hidden browser runs separately from publishing and its progress will appear here.</p>
                 <div class="scrape-meta" id="scrape-meta" hidden>
                   <span id="scrape-mode">Latest</span>
@@ -130,7 +130,7 @@
                   <div data-stage="preparing_results"><i></i><span><strong>Preparing</strong><small>Checking results</small></span></div>
                 </div>
                 <div class="scrape-stage-actions">
-                  <div class="scrape-isolation-note"><i></i><span><strong>Publishing remains independent</strong><small>Scraping uses separate hidden, temporary browser sessions.</small></span></div>
+                  <div class="scrape-isolation-note"><i></i><span><strong>Publishing remains independent</strong><small>Facebook can securely reuse this workspace's connected local session; other scraping sessions remain isolated.</small></span></div>
                   <button class="danger" id="stop-scraping" type="button" hidden>Stop scraping</button>
                 </div>
               </div>

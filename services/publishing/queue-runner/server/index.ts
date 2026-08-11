@@ -21,8 +21,10 @@ import {
   cancelAllFacebookCompanionJobs,
   cancelFacebookCompanionJob,
   createFacebookCompanionJob,
+  facebookCompanionActivityState,
   facebookCompanionQueueHealth,
   getFacebookCompanionJob,
+  subscribeFacebookCompanionActivity,
 } from "../../../scraping/facebook/src/companion-jobs.js";
 import {
   createUserProfileSchema,
@@ -114,7 +116,7 @@ export {
   instagramCompanionActivityState,
   subscribeInstagramCompanionActivity,
 };
-export { cancelAllFacebookCompanionJobs };
+export { cancelAllFacebookCompanionJobs, facebookCompanionActivityState, subscribeFacebookCompanionActivity };
 
 export const publishingApp = express();
 const app = publishingApp;

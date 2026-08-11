@@ -461,6 +461,18 @@
   font-weight: 750;
 }
 
+.instagram-scraper-app .availability-box {
+  margin-bottom: 18px;
+  border: 1px solid #f2cf72;
+  border-radius: 12px;
+  background: #fff9e8;
+  color: #694d00;
+  padding: 13px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .instagram-scraper-app.work-page {
   min-height: 100vh;
   display: grid;

@@ -104,6 +104,23 @@ test("keeps hidden metrics unknown and removes unrelated URLs", () => {
   assert.deepEqual(result.verified_findings[0].evidence_urls, ["https://www.instagram.com/reel/OTHER1/"]);
 });
 
+test("keeps Facebook post evidence for the shared comparison advisor", () => {
+  const facebookUrl = "https://www.facebook.com/example/posts/pfbid012345";
+  const facebookReport = {
+    ...report,
+    profiles: report.profiles.map((profile, index) => ({
+      ...profile,
+      selected_posts: profile.selected_posts.map((post) => ({
+        ...post,
+        post_url: index === 0 ? facebookUrl : "https://www.facebook.com/reel/123456789/"
+      }))
+    }))
+  };
+  const sanitized = sanitizeComparisonReport(facebookReport);
+  assert.equal(sanitized.profiles[0].selected_posts[0].post_url, facebookUrl);
+  assert.equal(sanitized.profiles[1].selected_posts[0].post_url, "https://www.facebook.com/reel/123456789/");
+});
+
 test("prompt treats scraped text as evidence rather than instructions", () => {
   const prompt = buildGrowthAdvisorPrompt({ operation: "plan", report });
   assert.match(prompt, /Never invent metrics/);

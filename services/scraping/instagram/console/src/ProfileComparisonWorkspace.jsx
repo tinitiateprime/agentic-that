@@ -128,7 +128,7 @@ function Metric({ icon: Icon, label, value }) {
   );
 }
 
-function ProfilePost({ post, selected, onToggle }) {
+function ProfilePost({ post, selected, onToggle, engagementName = "Likes" }) {
   return (
     <article className={`compare-post ${selected ? "is-selected" : ""}`}>
       <ComparisonThumbnail post={post} />
@@ -150,7 +150,7 @@ function ProfilePost({ post, selected, onToggle }) {
         </div>
         <div className="compare-post-metrics">
           <Metric icon={Eye} label="Views" value={metricLabel(post, "views")} />
-          <Metric icon={Heart} label="Likes" value={metricLabel(post, "likes")} />
+          <Metric icon={Heart} label={engagementName} value={metricLabel(post, "likes")} />
           <Metric icon={MessageCircle} label="Comments" value={metricLabel(post, "comments_count")} />
         </div>
         <a href={post.post_url} target="_blank" rel="external noopener noreferrer" referrerPolicy="no-referrer">
@@ -161,7 +161,14 @@ function ProfilePost({ post, selected, onToggle }) {
   );
 }
 
-export default function ProfileComparisonWorkspace({ seedProfile = "", runJob }) {
+export default function ProfileComparisonWorkspace({
+  seedProfile = "",
+  runJob,
+  platformName = "Instagram",
+  normalizeInput = normalizeProfileInput,
+  comparisonTarget = (value) => ({ mode: "profile", query: `@${value}` }),
+  engagementName = "Likes",
+}) {
   const [profiles, setProfiles] = useState(() => [
     emptyProfile("profile-1", seedProfile),
     emptyProfile("profile-2")
@@ -232,17 +239,19 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
   };
 
   const collectOneProfile = async (profile, index, total) => {
-    const username = normalizeProfileInput(profile.value);
+    const username = normalizeInput(profile.value);
+    const target = comparisonTarget(username);
     updateProfile(profile.id, {
       username,
       status: "working",
-      statusText: `Fetching current Instagram data (${index + 1} of ${total})`,
+      statusText: `Fetching current ${platformName} data (${index + 1} of ${total})`,
       error: ""
     });
     try {
       const data = await runJob({
-        mode: "profile",
-        keyword: `@${username}`,
+        mode: target.mode,
+        keyword: target.query,
+        query: target.query,
         max_results: postCount,
         collection_mode: selectionMode === "views" ? "engagement" : "latest",
         timezone_offset_minutes: new Date().getTimezoneOffset(),
@@ -255,10 +264,10 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
         throw new Error(selectionMode === "views" && (data?.results?.length || data?.run?.results?.length)
           ? "Current public Reel view counts were unavailable. Choose Recent or retry later."
           : discoveryStatus === "login_required"
-          ? "Instagram requires sign in before this public profile can be read."
+          ? `${platformName} requires sign in before this public profile can be read.`
           : discoveryStatus === "not_found"
-            ? "Instagram could not find this public profile."
-            : "Instagram public discovery is temporarily unavailable for this profile. Retry in a minute.");
+            ? `${platformName} could not find this public profile.`
+            : `${platformName} public discovery is temporarily unavailable for this profile. Retry in a minute.`);
       }
       updateProfile(profile.id, {
         username,
@@ -286,9 +295,9 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
   };
 
   const collectProfiles = async () => {
-    const normalized = profiles.map((profile) => normalizeProfileInput(profile.value));
+    const normalized = profiles.map((profile) => normalizeInput(profile.value));
     if (normalized.some((username) => !username)) {
-      setError("Enter a valid Instagram username or profile URL for every profile.");
+      setError(`Enter a valid ${platformName} username or profile URL for every profile.`);
       return;
     }
     if (new Set(normalized).size !== normalized.length) {
@@ -532,7 +541,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
   if (stage === "report" && report) {
     const leaderRows = [
       ["Average views", report.benchmark.leaders.views],
-      ["Average likes", report.benchmark.leaders.likes],
+      [`Average ${engagementName.toLowerCase()}`, report.benchmark.leaders.likes],
       ["Average comments", report.benchmark.leaders.comments_count]
     ];
     return (
@@ -594,7 +603,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
                 </header>
                 <div className="benchmark-averages">
                   <span>Views <strong>{formatAverage(profile.averages.views)}</strong></span>
-                  <span>Likes <strong>{formatAverage(profile.averages.likes)}</strong></span>
+                  <span>{engagementName} <strong>{formatAverage(profile.averages.likes)}</strong></span>
                   <span>Comments <strong>{formatAverage(profile.averages.comments_count)}</strong></span>
                 </div>
                 {profile.selected_posts.map((post) => (
@@ -604,7 +613,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
                       <strong>{post.format}</strong>
                       <div className="evidence-metrics">
                         <span>{post.views.display || formatAverage(post.views.value)} views</span>
-                        <span>{post.likes.display || formatAverage(post.likes.value)} likes</span>
+                        <span>{post.likes.display || formatAverage(post.likes.value)} {engagementName.toLowerCase()}</span>
                         <span>{post.comments.display || formatAverage(post.comments.value)} comments</span>
                       </div>
                       {post.hashtags.length > 0 && <p>{post.hashtags.join(" ")}</p>}
@@ -846,14 +855,14 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
               <section className="compare-profile-column" key={profile.id}>
                 <header>
                   <div>
-                    <strong>@{profile.username || normalizeProfileInput(profile.value) || "profile"}</strong>
+                    <strong>@{profile.username || normalizeInput(profile.value) || "profile"}</strong>
                     <span>{profile.role === "own" ? "My business" : "Competitor"}</span>
                   </div>
                   <span>{profile.selectedKeys.length}/{MAX_SELECTED_POSTS} selected</span>
                 </header>
                 {profile.status === "complete" && profile.dataSource === "recent_cache" ? (
                   <div className="compare-profile-cache-note">
-                    Instagram was temporarily unavailable. Showing the most recent successful data
+                    {platformName} was temporarily unavailable. Showing the most recent successful data
                     {profile.sourceCreatedAt ? ` from ${new Date(profile.sourceCreatedAt).toLocaleString()}` : ""}.
                   </div>
                 ) : null}
@@ -868,7 +877,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
                   <div className="compare-post-list">
                     {posts.map((post) => {
                       const selected = profile.selectedKeys.includes(canonicalPostKey(post.post_url));
-                      return <ProfilePost key={canonicalPostKey(post.post_url)} post={post} selected={selected} onToggle={() => togglePost(profile.id, post)} />;
+                      return <ProfilePost key={canonicalPostKey(post.post_url)} post={post} selected={selected} onToggle={() => togglePost(profile.id, post)} engagementName={engagementName} />;
                     })}
                   </div>
                 )}
@@ -905,7 +914,7 @@ export default function ProfileComparisonWorkspace({ seedProfile = "", runJob })
             <div className="prefixed-input">
               <span className="input-prefix" aria-hidden="true">@</span>
               <input
-                aria-label={`Instagram profile ${index + 1}`}
+                aria-label={`${platformName} profile ${index + 1}`}
                 placeholder="username or profile URL"
                 value={profile.value}
                 onChange={(event) => updateProfile(profile.id, { value: event.target.value })}

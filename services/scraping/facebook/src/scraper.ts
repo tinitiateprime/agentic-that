@@ -35,7 +35,7 @@ export type FacebookScrapeInput = {
   timezoneOffsetMinutes?: number;
 };
 
-export type FacebookMetricSource = "current_page_payload" | "visible_page" | "visible_reels_grid";
+export type FacebookMetricSource = "current_page_payload" | "visible_page" | "visible_reels_grid" | "visible_embed";
 
 export type FacebookComment = {
   author_name: string;
@@ -164,6 +164,7 @@ type NormalizedFacebookQuery = {
   startUrl: string;
   profileType: FacebookProfileType;
   targetProfileUrl?: string;
+  fallbackStartUrl?: string;
 };
 
 type RawCandidate = Partial<FacebookPost> & {
@@ -250,15 +251,19 @@ export function normalizeFacebookQuery(input: FacebookScrapeInput): NormalizedFa
   const profileType = input.profileType === "public_profile" ? "public_profile" : "page";
 
   if (requestedMode === "keyword") {
+    const hashtag = query.startsWith("#");
     const keyword = query.replace(/^#+/, "").trim();
     if (!keyword) throw new Error("Enter a Facebook keyword.");
     const tag = keyword.replace(/[^\p{L}\p{N}_]/gu, "").toLowerCase();
     if (!tag) throw new Error("Enter a Facebook keyword or hashtag.");
     return {
       mode: "keyword",
-      label: `#${tag}`,
+      label: hashtag ? `#${tag}` : keyword,
       profileType,
-      startUrl: `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`,
+      startUrl: hashtag
+        ? `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`
+        : `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(keyword)}`,
+      fallbackStartUrl: hashtag ? undefined : `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`,
     };
   }
 
@@ -437,8 +442,8 @@ export function parseFacebookReelViewLabel(value: unknown) {
   return { count, display, exact: !/[KMB]$/i.test(display) };
 }
 
-function postIdentity(post: Pick<FacebookPost, "post_id" | "post_url">) {
-  return post.post_id ? `id:${post.post_id}` : `url:${post.post_url}`;
+export function facebookPostIdentity(post: Pick<FacebookPost, "post_id" | "post_url">) {
+  return `url:${post.post_url}`;
 }
 
 function thumbnailIdentity(value: string | null) {
@@ -453,7 +458,7 @@ function thumbnailIdentity(value: string | null) {
 }
 
 function mergePostIntoMap(target: Map<string, FacebookPost>, post: FacebookPost) {
-  const identity = postIdentity(post);
+  const identity = facebookPostIdentity(post);
   const existing = target.get(identity);
   target.set(identity, existing ? mergePosts(existing, post) : post);
 }
@@ -529,12 +534,22 @@ function mergePosts(current: FacebookPost, incoming: FacebookPost) {
   const views = mergeMetric(current.views_count, current.views_display, current.views_exact, incoming.views_count, incoming.views_display, incoming.views_exact);
   const followers = mergeMetric(current.follower_count, current.follower_count_display, current.follower_count_exact, incoming.follower_count, incoming.follower_count_display, incoming.follower_count_exact);
   const engagementValues = [reactions.value, comments.value].filter((item): item is number => item !== null);
+  const sourceQuality = (source: FacebookMetricSource | null) => source === "visible_embed"
+    ? 4
+    : source === "visible_page"
+      ? 3
+      : source === "current_page_payload"
+        ? 2
+        : 1;
+  const content = incoming.content && (!current.content || sourceQuality(incoming.metric_source) > sourceQuality(current.metric_source))
+    ? incoming.content
+    : current.content;
   return {
     ...current,
     post_id: current.post_id || incoming.post_id,
     author_name: current.author_name || incoming.author_name,
     author_url: current.author_url || incoming.author_url,
-    content: (incoming.content?.length || 0) > (current.content?.length || 0) ? incoming.content : current.content,
+    content,
     media_type: current.media_type === "text" && incoming.media_type !== "text" ? incoming.media_type : current.media_type,
     thumbnail_url: current.thumbnail_url || incoming.thumbnail_url,
     timestamp: current.timestamp || incoming.timestamp,
@@ -767,23 +782,34 @@ export async function extractFacebookDomCandidates(page: Page): Promise<RawCandi
       const headings = [...article.querySelectorAll("h1,h2,h3,h4,strong")];
       const authorAnchor = headings.flatMap(heading => [...heading.querySelectorAll("a[href]")])[0]
         || anchors.find(anchor => !postPattern.test(anchor.getAttribute("href") || "") && clean(anchor.textContent).length > 1);
-      const preferred = [...article.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],div[dir="auto"]')]
+      const messageNodes = [...article.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"]')]
         .filter(visible)
         .map(node => clean(node.innerText))
         .filter(value => value.length > 1 && value.length < 20_000);
+      const fallbackNodes = [...article.querySelectorAll('div[dir="auto"]')]
+        .filter(visible)
+        .filter(node => !node.closest('[aria-label^="Comment by " i],[aria-label*=" comment by " i]'))
+        .map(node => clean(node.innerText))
+        .filter(value => value.length > 1 && value.length < 20_000);
+      const preferred = messageNodes.length ? messageNodes : fallbackNodes;
       const content = [...new Set(preferred)].sort((left, right) => right.length - left.length)[0] || null;
       const timeNode = article.querySelector("time[datetime],abbr[data-utime],[data-utime]");
+      const timeAnchor = anchors.find(anchor => {
+        if (!postPattern.test(anchor.getAttribute("href") || "")) return false;
+        const label = clean([anchor.getAttribute("aria-label"), anchor.getAttribute("title"), anchor.textContent].filter(Boolean).join(" "));
+        return /^(?:just now|now|yesterday|\d+\s*(?:s|m|h|d|w)|(?:mon|tue|wed|thu|fri|sat|sun)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))/i.test(label);
+      });
       const timestamp = timeNode?.getAttribute("datetime")
         || timeNode?.getAttribute("data-utime")
-        || postAnchor.getAttribute("aria-label")
-        || postAnchor.getAttribute("title")
-        || clean(postAnchor.textContent)
+        || timeAnchor?.getAttribute("aria-label")
+        || timeAnchor?.getAttribute("title")
+        || clean(timeAnchor?.textContent)
         || null;
       const images = [...article.querySelectorAll("img[src]")].filter(visible).map(image => ({
         src: image.currentSrc || image.src,
         score: Math.max(image.naturalWidth * image.naturalHeight, image.width * image.height),
         alt: clean(image.alt),
-      })).filter(image => image.src && !/emoji|staticxx|rsrc\.php/i.test(image.src));
+      })).filter(image => image.src && !image.src.startsWith("data:") && !/emoji|staticxx|rsrc\.php/i.test(image.src) && image.score >= 2_500);
       images.sort((left, right) => right.score - left.score);
       const hasVideo = Boolean(article.querySelector("video"));
       const postUrl = absolute(postAnchor.getAttribute("href") || "");
@@ -872,6 +898,89 @@ export async function extractFacebookReelsGridCandidates(page: Page): Promise<Ra
     });
   }
   return candidates;
+}
+
+function facebookEmbedUrls(postUrl: string) {
+  const href = encodeURIComponent(postUrl);
+  const videoFirst = /\/(?:reel|videos|watch)(?:\/|\?|$)/i.test(postUrl);
+  const video = `${FACEBOOK_ORIGIN}/plugins/video.php?show_text=true&width=500&href=${href}`;
+  const post = `${FACEBOOK_ORIGIN}/plugins/post.php?show_text=true&width=500&href=${href}`;
+  return videoFirst ? [video, post] : [post, video];
+}
+
+export async function extractFacebookEmbedCandidate(page: Page, postUrl: string): Promise<RawCandidate | null> {
+  return page.evaluate<RawCandidate | null>(String.raw`((originalUrl) => {
+    const clean = (value) => (value || "").replace(/\s+/g, " ").trim();
+    const visible = (element) => {
+      const style = window.getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
+    };
+    const absolute = (href) => {
+      try { return new URL(href, location.href).toString(); } catch { return ""; }
+    };
+    const compactCount = (value) => {
+      const match = clean(value).match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s*([KMB])?$/i);
+      if (!match) return null;
+      const numeric = Number(match[1].replace(/,/g, ""));
+      const suffix = (match[2] || "").toUpperCase();
+      const multiplier = suffix === "K" ? 1000 : suffix === "M" ? 1000000 : suffix === "B" ? 1000000000 : 1;
+      return Number.isFinite(numeric) ? Math.round(numeric * multiplier) : null;
+    };
+    const metric = (title) => {
+      const node = [...document.querySelectorAll("[title]")].filter(visible)
+        .find(element => clean(element.getAttribute("title")).toLowerCase() === title.toLowerCase());
+      const display = clean(node?.textContent);
+      return { count: compactCount(display), display: display || null, exact: Boolean(display && !/[KMB]$/i.test(display)) };
+    };
+    const anchors = [...document.querySelectorAll("a[href]")].filter(visible);
+    const authorAnchor = anchors.find(anchor => {
+      const href = absolute(anchor.getAttribute("href") || "");
+      const label = clean(anchor.getAttribute("title") || anchor.textContent);
+      return label.length > 1
+        && /facebook\.com/i.test(href)
+        && !/\/plugins\/|\/sharer\/|\/help\/|\/developers\//i.test(href)
+        && !/\/(?:posts|videos|reel|watch|photo)(?:\/|\?|$)|story_fbid=|permalink\.php/i.test(href);
+    });
+    const contentNodes = [...document.querySelectorAll('[data-testid="post_message"],.userContent')]
+      .filter(visible)
+      .map(node => clean(node.innerText))
+      .filter(value => value.length > 0 && value.length < 20000);
+    const images = [...document.querySelectorAll("img[src]")].filter(visible).map(image => ({
+      src: image.currentSrc || image.src,
+      score: Math.max(image.naturalWidth * image.naturalHeight, image.width * image.height),
+    })).filter(image => image.src && !image.src.startsWith("data:") && !/emoji|staticxx|rsrc\.php/i.test(image.src) && image.score >= 2500);
+    images.sort((left, right) => right.score - left.score);
+    const reactions = metric("Like");
+    const comments = metric("Comment");
+    const hasVideo = Boolean(document.querySelector("video"));
+    if (!authorAnchor && !contentNodes.length && reactions.count === null && comments.count === null && !images.length && !hasVideo) return null;
+    return {
+      post_url: originalUrl,
+      author_name: clean(authorAnchor?.getAttribute("title") || authorAnchor?.textContent) || null,
+      author_url: authorAnchor ? absolute(authorAnchor.getAttribute("href") || "") : null,
+      content: contentNodes.sort((left, right) => right.length - left.length)[0] || null,
+      media_type: /\/reel\//i.test(originalUrl) ? "reel" : hasVideo ? "video" : images.length ? "image" : "text",
+      thumbnail_url: images[0]?.src || null,
+      reactions_count: reactions.count,
+      reactions_display: reactions.display,
+      reactions_exact: reactions.exact,
+      comments_count: comments.count,
+      comments_display: comments.display,
+      comments_exact: comments.exact,
+      _source: "visible_embed",
+    };
+  })(${JSON.stringify(postUrl)})`);
+}
+
+async function loadFacebookEmbedCandidate(page: Page, postUrl: string) {
+  for (const embedUrl of facebookEmbedUrls(postUrl)) {
+    await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => undefined);
+    await page.waitForTimeout(1_200);
+    const candidate = await extractFacebookEmbedCandidate(page, postUrl).catch(() => null);
+    if (candidate) return candidate;
+  }
+  return null;
 }
 
 function directObject(value: unknown) {
@@ -1243,7 +1352,7 @@ async function scrapeAttempt(
     const initialAccess = classifyFacebookAccess(await accessSnapshot(page));
     diagnostics.final_url = page.url();
     diagnostics.page_title = await page.title().catch(() => "");
-    if (initialAccess === "login_required" || initialAccess === "not_found") {
+    if (normalized.mode !== "post" && (initialAccess === "login_required" || initialAccess === "not_found")) {
       return { query: normalized.label, results: [], discoveryStatus: initialAccess, diagnostics };
     }
 
@@ -1299,15 +1408,37 @@ async function scrapeAttempt(
     await collector.settle();
     page.off("response", collector.listener);
 
+    if (normalized.mode === "post" && candidateMap.size === 0) {
+      const directUrl = canonicalPostUrl(normalized.startUrl);
+      const embedded = directUrl ? await loadFacebookEmbedCandidate(page, directUrl) : null;
+      if (embedded) {
+        diagnostics.dom_candidates += 1;
+        const post = candidateFromRaw(embedded, normalized.profileType, capturedAt);
+        if (post) mergePostIntoMap(candidateMap, post);
+      }
+    }
+
     const allBodyText = await page.locator("body").innerText().catch(() => "");
     const profile = visibleProfileInfo(allBodyText);
     const titleName = diagnostics.page_title.replace(/\s*\|\s*Facebook.*$/i, "").trim();
     if (titleName && !/^Facebook$/i.test(titleName)) profile.profileName = titleName;
+    if (normalized.mode === "post") {
+      const embeddedPost = candidateMap.values().next().value as FacebookPost | undefined;
+      if (embeddedPost?.author_name) profile.profileName = embeddedPost.author_name;
+    }
 
     const reelsMap = new Map<string, FacebookPost>();
-    if (normalized.mode === "profile") {
-      await openFacebookProfileTab(page, normalized.targetProfileUrl || normalized.startUrl, "reels");
-      const reelsTarget = input.collectionMode === "latest"
+    const directPost = normalized.mode === "post"
+      ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
+      : null;
+    const reelsProfileUrl = normalized.mode === "profile"
+      ? normalized.targetProfileUrl || normalized.startUrl
+      : directPost?.author_url || null;
+    if (reelsProfileUrl) {
+      await openFacebookProfileTab(page, reelsProfileUrl, "reels");
+      const reelsTarget = normalized.mode === "post"
+        ? 100
+        : input.collectionMode === "latest"
         ? Math.min(profileLimit, Math.max(100, maxResults * 10))
         : profileLimit;
       const reelsRounds = Math.max(30, Math.min(100, Math.ceil(reelsTarget / 5) + 15));
@@ -1321,7 +1452,7 @@ async function scrapeAttempt(
           const reel = candidateFromRaw(raw, normalized.profileType, capturedAt);
           if (!reel) { diagnostics.rejected.missing_url += 1; continue; }
           mergePostIntoMap(reelsMap, reel);
-          const identity = postIdentity(reel);
+          const identity = facebookPostIdentity(reel);
           let matchingKey = candidateMap.has(identity) ? identity : null;
           if (!matchingKey) {
             const reelThumbnail = thumbnailIdentity(reel.thumbnail_url);
@@ -1338,7 +1469,10 @@ async function scrapeAttempt(
         }
         diagnostics.scroll_rounds += 1;
         staleReelsRounds = reelsMap.size === before ? staleReelsRounds + 1 : 0;
-        if (reelsMap.size >= reelsTarget || staleReelsRounds >= 6) break;
+        const directMatched = directPost
+          ? candidateMap.get(facebookPostIdentity(directPost))?.views_count !== null
+          : false;
+        if (directMatched || reelsMap.size >= reelsTarget || staleReelsRounds >= 6) break;
         await scrollFacebookProfile(page);
       }
       diagnostics.final_url = page.url();
@@ -1358,6 +1492,10 @@ async function scrapeAttempt(
         continue;
       }
       const time = timestampMs(post);
+      if (normalized.mode !== "post" && time === null) {
+        diagnostics.rejected.missing_timestamp += 1;
+        continue;
+      }
       if (range.active && time === null) { diagnostics.rejected.missing_timestamp += 1; continue; }
       if (range.active && time !== null && (time < range.start || time > range.end)) {
         diagnostics.rejected.out_of_range += 1;
@@ -1386,7 +1524,7 @@ async function scrapeAttempt(
     const commentLimit = Number.isFinite(configuredCommentLimit)
       ? Math.max(1, Math.min(25, Math.trunc(configuredCommentLimit)))
       : 12;
-    const commentTargets = [...new Map(requestedCommentTargets.map(post => [postIdentity(post), post])).values()].slice(0, commentLimit);
+    const commentTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
     const enriched = new Map<string, FacebookPost>();
     if (commentTargets.length) {
       const commentPage = await session.context.newPage().catch(() => null);
@@ -1406,14 +1544,14 @@ async function scrapeAttempt(
               comments_exact: details.commentsCount !== null ? details.commentsExact : post.comments_exact,
               top_comments: details.comments,
             });
-            enriched.set(postIdentity(post), updated);
+            enriched.set(facebookPostIdentity(post), updated);
           }
         } finally {
           await commentPage.close().catch(() => undefined);
         }
       }
     }
-    const enrichedPost = (post: FacebookPost) => enriched.get(postIdentity(post)) || post;
+    const enrichedPost = (post: FacebookPost) => enriched.get(facebookPostIdentity(post)) || post;
     const analysisPosts = accepted.map(enrichedPost);
     const analyzedReels = [...reelsMap.values()].map(enrichedPost);
     const results = preliminaryResults.map(enrichedPost).map(post => ({
@@ -1425,7 +1563,9 @@ async function scrapeAttempt(
     diagnostics.accepted_results = results.length;
     const finalAccess = classifyFacebookAccess(await accessSnapshot(page));
     const discoveryStatus: FacebookDiscoveryStatus = results.length
-      ? (range.active && diagnostics.rejected.missing_timestamp ? "partial" : "ok")
+      ? (normalized.mode !== "post" && diagnostics.rejected.missing_timestamp > 0) || (normalized.mode === "keyword" && results.length < maxResults)
+        ? "partial"
+        : "ok"
       : analyzedReels.length
         ? "partial"
       : finalAccess === "login_required" || finalAccess === "not_found"
@@ -1451,8 +1591,12 @@ export async function runFacebookScrapeWithSessionFactory(
   }
   let last: FacebookScrapeResult | null = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    last = await scrapeAttempt(input, normalized, sessionFactory, attempt);
-    if (last.results.length || last.analysis?.top_viewed.length || last.discoveryStatus === "not_found") return last;
+    const attemptQuery = attempt === 2 && normalized.fallbackStartUrl
+      ? { ...normalized, startUrl: normalized.fallbackStartUrl, fallbackStartUrl: undefined }
+      : normalized;
+    last = await scrapeAttempt(input, attemptQuery, sessionFactory, attempt);
+    if (last.results.length || last.analysis?.top_viewed.length) return last;
+    if (last.discoveryStatus === "not_found" && !(attempt === 1 && normalized.fallbackStartUrl)) return last;
   }
   return last!;
 }

@@ -182,7 +182,9 @@ const cleanNumber = (value: unknown) => {
 
 const cleanUrl = (value: unknown) => {
   const url = cleanText(value, 500);
-  if (!/^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\/[A-Za-z0-9_-]+\/?/i.test(url)) return "";
+  const instagramPost = /^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\/[A-Za-z0-9_-]+\/?/i.test(url);
+  const facebookPost = /^https:\/\/(?:www\.)?facebook\.com\/(?:[^/?#]+\/(?:posts|videos)\/[^/?#]+|reel\/[^/?#]+|(?:photo|watch)\/?\?[^#]+|(?:story|permalink)\.php\?[^#]+)/i.test(url);
+  if (!instagramPost && !facebookPost) return "";
   return url;
 };
 

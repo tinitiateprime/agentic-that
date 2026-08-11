@@ -7,6 +7,7 @@ import {
   facebookProfileTabUrl,
   facebookUrlType,
   facebookPayloadCandidates,
+  facebookPostIdentity,
   facebookVisibleTimestamp,
   normalizeFacebookQuery,
   parseFacebookCommentsText,
@@ -57,8 +58,13 @@ test("normalizes Facebook Page, public profile, keyword, and post inputs", () =>
   assert.equal(profile.profileType, "public_profile");
 
   const keyword = normalizeFacebookQuery({ query: "launch news", inputMode: "keyword" });
-  assert.equal(keyword.startUrl, "https://www.facebook.com/hashtag/launchnews");
-  assert.equal(keyword.label, "#launchnews");
+  assert.equal(keyword.startUrl, "https://www.facebook.com/search/posts/?q=launch%20news");
+  assert.equal(keyword.fallbackStartUrl, "https://www.facebook.com/hashtag/launchnews");
+  assert.equal(keyword.label, "launch news");
+
+  const hashtag = normalizeFacebookQuery({ query: "#launch", inputMode: "keyword" });
+  assert.equal(hashtag.startUrl, "https://www.facebook.com/hashtag/launch");
+  assert.equal(hashtag.fallbackStartUrl, undefined);
 
   const direct = normalizeFacebookQuery({ query: "https://facebook.com/example/posts/42?__cft__=tracking", inputMode: "post_url" });
   assert.equal(direct.mode, "post");
@@ -72,6 +78,13 @@ test("recognizes supported Facebook URL families", () => {
   assert.equal(facebookUrlType("https://facebook.com/share/r/example"), "post");
   assert.equal(facebookUrlType("https://fb.watch/example"), "post");
   assert.equal(facebookUrlType("https://example.com/example/posts/1"), null);
+});
+
+test("uses the canonical URL as identity when Facebook emits conflicting internal IDs", () => {
+  assert.equal(
+    facebookPostIdentity(post({ post_id: "first" })),
+    facebookPostIdentity(post({ post_id: "second" })),
+  );
 });
 
 test("builds explicit All and Reels profile tab URLs", () => {

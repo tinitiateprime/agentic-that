@@ -32,13 +32,14 @@ class CompanionFactory implements FacebookBrowserSessionFactory {
     private readonly jobId: string,
     private readonly signal: AbortSignal,
     private readonly onBrowserReady?: () => void,
+    private readonly ownerKey?: string,
   ) {}
 
   async create(): Promise<FacebookBrowserSession> {
     if (this.signal.aborted) throw new FacebookCompanionCancelledError();
     const host = facebookCompanionDesktopHost();
     if (!host) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
-    const managed = await host.openBrowser({ jobId: this.jobId });
+    const managed = await host.openBrowser({ jobId: this.jobId, ownerKey: this.ownerKey });
     let connection: Browser | null = null;
     let session: FacebookBrowserSession | null = null;
     let closed = false;
@@ -79,8 +80,9 @@ export async function runFacebookCompanionScrape(
   input: FacebookScrapeInput,
   signal: AbortSignal,
   onBrowserReady?: () => void,
+  ownerKey?: string,
 ) {
-  const factory = new CompanionFactory(jobId, signal, onBrowserReady);
+  const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey);
   try {
     return await runFacebookScrapeWithSessionFactory(input, factory);
   } catch (error) {

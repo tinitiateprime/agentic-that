@@ -7,6 +7,7 @@ import {
   getFacebookCompanionJob,
   prepareFacebookCompanionInput,
   setFacebookCompanionScrapeExecutorForTests,
+  subscribeFacebookCompanionActivity,
 } from "./companion-jobs.ts";
 
 const previousEnvironment = process.env.NODE_ENV;
@@ -70,4 +71,42 @@ test("Companion jobs are owner-scoped and return only the current live result", 
   assert.equal(current.dataSource, "live");
   assert.equal(getFacebookCompanionJob("other:user", created.job.id), null);
   assert.equal(facebookCompanionQueueHealth().concurrency, 1);
+});
+
+test("Companion activity exposes Facebook queue, progress, and recent completion", async () => {
+  const snapshots: Array<Parameters<Parameters<typeof subscribeFacebookCompanionActivity>[0]>[0]> = [];
+  const unsubscribe = subscribeFacebookCompanionActivity(state => snapshots.push(state));
+  setFacebookCompanionScrapeExecutorForTests(async (_jobId, input, _signal, onReady) => {
+    onReady?.();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return {
+      query: input.query,
+      results: [],
+      discoveryStatus: "not_found" as const,
+      diagnostics: {
+        attempts: 1,
+        scroll_rounds: 1,
+        dom_candidates: 0,
+        payload_candidates: 0,
+        reels_grid_candidates: 0,
+        unique_candidates: 0,
+        accepted_results: 0,
+        comments_opened: 0,
+        comments_scraped: 0,
+        rejected: { missing_url: 0, unexpected_post: 0, owner_mismatch: 0, missing_timestamp: 0, out_of_range: 0 },
+        final_url: "https://facebook.com/missing",
+        page_title: "Facebook",
+      },
+    };
+  });
+  const created = createFacebookCompanionJob("workspace:activity-user", { mode: "profile", query: "activity-target" });
+  const deadline = Date.now() + 1_000;
+  while (getFacebookCompanionJob("workspace:activity-user", created.job.id)?.job.status !== "complete" && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  unsubscribe();
+  assert.ok(snapshots.some(state => state.activeJob?.query === "activity-target"));
+  assert.ok(snapshots.some(state => state.activeJob?.progress.stage === "scraping"));
+  assert.ok(snapshots.at(-1)?.recentJobs.some(job => job.query === "activity-target" && job.status === "complete"));
 });
