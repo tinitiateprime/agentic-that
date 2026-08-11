@@ -10,6 +10,7 @@ import {
   facebookPayloadCandidates,
   facebookNavigationHeaders,
   facebookPostIdentity,
+  facebookPostTimestampsFromHtml,
   facebookVisibleTimestamp,
   normalizeFacebookQuery,
   parseFacebookCommentsText,
@@ -139,6 +140,12 @@ test("parses only visible Reels-grid view labels and records compact precision",
   assert.deepEqual(parseFacebookReelViewLabel("31M"), { count: 31_000_000, display: "31M", exact: false });
   assert.deepEqual(parseFacebookReelViewLabel("987 views"), { count: 987, display: "987", exact: true });
   assert.equal(parseFacebookReelViewLabel("Beautiful Reel"), null);
+});
+
+test("maps exact public Reel publish times to their matching Reel IDs", () => {
+  const html = String.raw`{\"post_context\":{\"publish_time\":1786419294,\"story_fbid\":[\"1072164168798057\"]}}`;
+  const timestamps = facebookPostTimestampsFromHtml(html);
+  assert.equal(timestamps.get("1072164168798057"), "2026-08-11T03:34:54.000Z");
 });
 
 test("does not use payload view fields because views come from the Reels grid", () => {

@@ -914,6 +914,28 @@ export async function extractFacebookReelsGridCandidates(page: Page): Promise<Ra
   return candidates;
 }
 
+export function facebookPostTimestampsFromHtml(value: string) {
+  const normalized = String(value || "").replace(/\\"/g, '"').replace(/&quot;/gi, '"');
+  const timestamps = new Map<string, string>();
+  const capturedAt = Date.now();
+  const patterns = [
+    /"publish_time"\s*:\s*(\d{9,13})[\s\S]{0,500}?"story_fbid"\s*:\s*\[\s*"(\d+)"/g,
+    /"story_fbid"\s*:\s*\[\s*"(\d+)"[\s\S]{0,500}?"publish_time"\s*:\s*(\d{9,13})/g,
+  ];
+  for (const [index, pattern] of patterns.entries()) {
+    for (const match of normalized.matchAll(pattern)) {
+      const postId = index === 0 ? match[2] : match[1];
+      let timestamp = Number(index === 0 ? match[1] : match[2]);
+      if (!postId || !Number.isFinite(timestamp)) continue;
+      if (timestamp >= 1_000_000_000_000) timestamp /= 1_000;
+      const milliseconds = timestamp * 1_000;
+      if (milliseconds < Date.UTC(2004, 0, 1) || milliseconds > capturedAt + 366 * 86_400_000) continue;
+      if (!timestamps.has(postId)) timestamps.set(postId, new Date(milliseconds).toISOString());
+    }
+  }
+  return timestamps;
+}
+
 export function facebookPageTimelinePluginUrl(value: string) {
   const profileUrl = facebookProfileTabUrl(value, "all");
   if (!profileUrl) return null;
@@ -1120,7 +1142,11 @@ async function loadFacebookEmbedCandidate(page: Page, postUrl: string) {
     await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => undefined);
     await page.waitForTimeout(1_200);
     const candidate = await extractFacebookEmbedCandidate(page, postUrl).catch(() => null);
-    if (candidate) return candidate;
+    if (candidate) {
+      const postId = postIdFromUrl(postUrl);
+      const timestamps = facebookPostTimestampsFromHtml(await page.content().catch(() => ""));
+      return { ...candidate, timestamp: postId ? timestamps.get(postId) || candidate.timestamp : candidate.timestamp };
+    }
   }
   return null;
 }
@@ -1650,7 +1676,6 @@ async function scrapeAttempt(
     }
 
     const reelsMap = new Map<string, FacebookPost>();
-    const orderedLatestReelFallback = new Set<string>();
     const directPost = normalized.mode === "post"
       ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
       : null;
@@ -1670,8 +1695,11 @@ async function scrapeAttempt(
       for (let round = 0; round < reelsRounds && Date.now() < reelsDeadline; round += 1) {
         const before = reelsMap.size;
         const rawGrid = await extractFacebookReelsGridCandidates(page);
+        const gridTimestamps = facebookPostTimestampsFromHtml(await page.content().catch(() => ""));
         diagnostics.reels_grid_candidates += rawGrid.length;
         for (const raw of rawGrid) {
+          const gridPostId = postIdFromUrl(text(raw.post_url));
+          if (!raw.timestamp && gridPostId) raw.timestamp = gridTimestamps.get(gridPostId) || null;
           const reel = candidateFromRaw(raw, normalized.profileType, capturedAt);
           if (!reel) { diagnostics.rejected.missing_url += 1; continue; }
           mergePostIntoMap(reelsMap, reel);
@@ -1702,24 +1730,18 @@ async function scrapeAttempt(
     }
 
     if (normalized.mode === "profile"
-      && input.collectionMode === "latest"
-      && diagnostics.timeline_plugin_candidates === 0) {
-      const datedPosts = [...candidateMap.values()].filter(post => timestampMs(post) !== null).length;
-      const needed = Math.max(0, maxResults - datedPosts);
+      && (input.collectionMode === "latest" || input.collectionMode === "range")) {
       const targetProfileUrl = normalized.targetProfileUrl || normalized.startUrl;
-      for (const reel of [...reelsMap.values()].slice(0, needed * 2)) {
-        if (orderedLatestReelFallback.size >= needed) break;
+      for (const reel of reelsMap.values()) {
+        if (timestampMs(reel) === null) continue;
         const identity = facebookPostIdentity(reel);
-        if (candidateMap.has(identity)) continue;
-        const embeddedRaw = await loadFacebookEmbedCandidate(page, reel.post_url).catch(() => null);
-        const embedded = embeddedRaw ? candidateFromRaw(embeddedRaw, normalized.profileType, capturedAt) : null;
         const ownedReel = {
           ...reel,
-          author_name: embedded?.author_name || profile.profileName || reel.author_name,
-          author_url: embedded?.author_url || targetProfileUrl,
+          author_name: reel.author_name || profile.profileName,
+          author_url: reel.author_url || targetProfileUrl,
         };
-        candidateMap.set(identity, embedded ? mergePosts(ownedReel, embedded) : ownedReel);
-        orderedLatestReelFallback.add(identity);
+        const existing = candidateMap.get(identity);
+        candidateMap.set(identity, existing ? mergePosts(ownedReel, existing) : ownedReel);
       }
     }
 
@@ -1737,7 +1759,7 @@ async function scrapeAttempt(
         continue;
       }
       const time = timestampMs(post);
-      if (normalized.mode !== "post" && time === null && !orderedLatestReelFallback.has(facebookPostIdentity(post))) {
+      if (normalized.mode !== "post" && time === null) {
         diagnostics.rejected.missing_timestamp += 1;
         continue;
       }
@@ -1765,6 +1787,24 @@ async function scrapeAttempt(
           ...preliminaryAnalysis.top_viewed,
         ]
       : preliminaryResults;
+    const enriched = new Map<string, FacebookPost>();
+    const detailsTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()]
+      .filter(post => post.reactions_count === null || post.comments_count === null || !post.content)
+      .slice(0, 12);
+    if (detailsTargets.length) {
+      const detailsPage = await session.context.newPage().catch(() => null);
+      if (detailsPage) {
+        try {
+          for (const post of detailsTargets) {
+            const raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(() => null);
+            const details = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
+            if (details) enriched.set(facebookPostIdentity(post), mergePosts(post, details));
+          }
+        } finally {
+          await detailsPage.close().catch(() => undefined);
+        }
+      }
+    }
     const configuredCommentLimit = Number(process.env.FACEBOOK_COMMENT_ENRICHMENT_LIMIT);
     const commentLimit = Number.isFinite(configuredCommentLimit)
       ? Math.max(1, Math.min(25, Math.trunc(configuredCommentLimit)))
@@ -1772,7 +1812,6 @@ async function scrapeAttempt(
     const commentTargets = input.skipComments
       ? []
       : [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
-    const enriched = new Map<string, FacebookPost>();
     if (commentTargets.length) {
       const commentPage = await session.context.newPage().catch(() => null);
       if (commentPage) {
@@ -1784,8 +1823,9 @@ async function scrapeAttempt(
             if (!details) continue;
             if (details.opened) diagnostics.comments_opened += 1;
             diagnostics.comments_scraped += details.comments.length;
-            const updated = mergePosts(post, {
-              ...post,
+            const base = enriched.get(facebookPostIdentity(post)) || post;
+            const updated = mergePosts(base, {
+              ...base,
               comments_count: details.commentsCount ?? post.comments_count,
               comments_display: details.commentsDisplay ?? post.comments_display,
               comments_exact: details.commentsCount !== null ? details.commentsExact : post.comments_exact,
