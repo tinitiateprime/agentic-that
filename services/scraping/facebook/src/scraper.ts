@@ -1798,7 +1798,7 @@ async function scrapeAttempt(
           for (const post of detailsTargets) {
             const raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(() => null);
             const details = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
-            if (details) enriched.set(facebookPostIdentity(post), mergePosts(post, details));
+            if (details) enriched.set(facebookPostIdentity(post), mergePosts(details, post));
           }
         } finally {
           await detailsPage.close().catch(() => undefined);
