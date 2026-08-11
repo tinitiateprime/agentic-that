@@ -1650,6 +1650,7 @@ async function scrapeAttempt(
     }
 
     const reelsMap = new Map<string, FacebookPost>();
+    const orderedLatestReelFallback = new Set<string>();
     const directPost = normalized.mode === "post"
       ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
       : null;
@@ -1700,6 +1701,28 @@ async function scrapeAttempt(
       diagnostics.final_url = page.url();
     }
 
+    if (normalized.mode === "profile"
+      && input.collectionMode === "latest"
+      && diagnostics.timeline_plugin_candidates === 0) {
+      const datedPosts = [...candidateMap.values()].filter(post => timestampMs(post) !== null).length;
+      const needed = Math.max(0, maxResults - datedPosts);
+      const targetProfileUrl = normalized.targetProfileUrl || normalized.startUrl;
+      for (const reel of [...reelsMap.values()].slice(0, needed * 2)) {
+        if (orderedLatestReelFallback.size >= needed) break;
+        const identity = facebookPostIdentity(reel);
+        if (candidateMap.has(identity)) continue;
+        const embeddedRaw = await loadFacebookEmbedCandidate(page, reel.post_url).catch(() => null);
+        const embedded = embeddedRaw ? candidateFromRaw(embeddedRaw, normalized.profileType, capturedAt) : null;
+        const ownedReel = {
+          ...reel,
+          author_name: embedded?.author_name || profile.profileName || reel.author_name,
+          author_url: embedded?.author_url || targetProfileUrl,
+        };
+        candidateMap.set(identity, embedded ? mergePosts(ownedReel, embedded) : ownedReel);
+        orderedLatestReelFallback.add(identity);
+      }
+    }
+
     diagnostics.unique_candidates = new Set([...candidateMap.keys(), ...reelsMap.keys()]).size;
     const range = scrapeRange(input);
     const accepted: FacebookPost[] = [];
@@ -1714,7 +1737,7 @@ async function scrapeAttempt(
         continue;
       }
       const time = timestampMs(post);
-      if (normalized.mode !== "post" && time === null) {
+      if (normalized.mode !== "post" && time === null && !orderedLatestReelFallback.has(facebookPostIdentity(post))) {
         diagnostics.rejected.missing_timestamp += 1;
         continue;
       }
@@ -1787,7 +1810,8 @@ async function scrapeAttempt(
     diagnostics.accepted_results = results.length;
     const finalAccess = classifyFacebookAccess(await accessSnapshot(page));
     const discoveryStatus: FacebookDiscoveryStatus = results.length
-      ? (normalized.mode !== "post" && results.length < maxResults && diagnostics.rejected.missing_timestamp > 0)
+      ? results.some(post => timestampMs(post) === null)
+          || (normalized.mode !== "post" && results.length < maxResults && diagnostics.rejected.missing_timestamp > 0)
           || (normalized.mode === "keyword" && results.length < maxResults)
         ? "partial"
         : "ok"
