@@ -1021,9 +1021,25 @@ export async function extractFacebookPageTimelineCandidates(
 async function loadFacebookPageTimelineCandidates(page: Page, profileUrl: string) {
   const pluginUrl = facebookPageTimelinePluginUrl(profileUrl);
   if (!pluginUrl) return [];
-  await page.goto(pluginUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  await page.waitForTimeout(2_500);
-  return extractFacebookPageTimelineCandidates(page, profileUrl);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await page.goto(pluginUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await dismissFacebookPrompts(page);
+    await page.locator('._5pcr,[data-ft*="fbfeed_location"] .userContentWrapper').first()
+      .waitFor({ state: "attached", timeout: attempt === 1 ? 8_000 : 12_000 })
+      .catch(() => undefined);
+    const candidates = await extractFacebookPageTimelineCandidates(page, profileUrl);
+    if (candidates.length) return candidates;
+    if (attempt === 1) await page.waitForTimeout(800);
+  }
+  const state = await page.evaluate(String.raw`(() => ({
+    url: location.href,
+    title: document.title,
+    bodyLength: document.body?.innerText?.length || 0,
+    loginInputs: document.querySelectorAll('input[name="email"],input[name="pass"],input[type="password"]').length,
+    unavailable: /(?:content|page) (?:isn't|is not) available|temporarily unavailable/i.test(document.body?.innerText || ""),
+  }))()`).catch(() => null);
+  console.warn("Facebook public Page timeline exposed no posts", JSON.stringify(state));
+  return [];
 }
 
 function facebookEmbedUrls(postUrl: string) {
