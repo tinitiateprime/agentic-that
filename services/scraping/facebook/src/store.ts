@@ -25,6 +25,7 @@ export type FacebookJobInput = {
   rangeFrom?: string;
   rangeTo?: string;
   timezoneOffsetMinutes: number;
+  skipComments?: boolean;
 };
 
 export type FacebookRun = {

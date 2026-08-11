@@ -257,6 +257,7 @@ export default function ProfileComparisonWorkspace({
         query: target.query,
         max_results: postCount,
         collection_mode: selectionMode === "views" ? "engagement" : "latest",
+        comparison_mode: true,
         timezone_offset_minutes: new Date().getTimezoneOffset(),
         auto_expand_days: false,
         max_auto_expand_days: 1

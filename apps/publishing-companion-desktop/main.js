@@ -596,21 +596,6 @@ function browserPartition(accountId) {
   return `persist:agenticthat-publishing-${digest}`;
 }
 
-function facebookScrapingAccount(ownerKey) {
-  const separator = String(ownerKey || "").lastIndexOf(":");
-  const workspaceId = separator > 0 ? String(ownerKey).slice(0, separator) : "";
-  if (!workspaceId) return null;
-  try {
-    const storePath = process.env.PUBLISH_QUEUE_DATA_PATH;
-    const store = storePath && fs.existsSync(storePath) ? JSON.parse(fs.readFileSync(storePath, "utf8")) : null;
-    const accounts = Array.isArray(store?.accounts) ? store.accounts : [];
-    return accounts.find(account => account?.workspaceId === workspaceId && account?.platform === "facebook" && account?.enabled !== false) || null;
-  } catch (error) {
-    console.warn("Could not select a connected Facebook session for scraping:", error instanceof Error ? error.message : error);
-    return null;
-  }
-}
-
 async function desktopDebugEndpoint(timeoutMs = 10000) {
   const endpointIsReady = async endpoint => {
     try {
@@ -750,18 +735,8 @@ async function openFacebookScrapingBrowser(request) {
   const debugEndpoint = await desktopDebugEndpoint();
   const id = randomUUID();
   const targetUrl = `about:blank#agenticthat-facebook-scrape-${id}`;
-  const requestedAccount = request?.preferConnectedSession
-    ? facebookScrapingAccount(request?.ownerKey)
-    : null;
-  let connectedAccount = null;
-  if (requestedAccount) {
-    const accountSession = session.fromPartition(browserPartition(requestedAccount.id));
-    const cookies = await accountSession.cookies.get({ url: "https://www.facebook.com/" }).catch(() => []);
-    if (cookies.some(cookie => cookie.name === "c_user")) connectedAccount = requestedAccount;
-    else console.warn(`Facebook scrape ${String(request?.jobId || "")}: connected session is signed out; using a clean public session.`);
-  }
-  const partition = connectedAccount ? browserPartition(connectedAccount.id) : `agenticthat-facebook-scrape-${id}`;
-  const sessionMode = connectedAccount ? "connected" : "anonymous";
+  const partition = `agenticthat-facebook-scrape-${id}`;
+  const sessionMode = "anonymous";
   console.log(`Facebook scrape ${String(request?.jobId || "")}: opening ${sessionMode} browser session.`);
   const workerWindow = new BrowserWindow({
     x: -10_000,
@@ -803,7 +778,7 @@ async function openFacebookScrapingBrowser(request) {
     jobId: String(request?.jobId || ""),
     window: workerWindow,
     isolatedSession,
-    persistentSession: Boolean(connectedAccount),
+    persistentSession: false,
   });
   try {
     await workerWindow.loadURL(targetUrl);

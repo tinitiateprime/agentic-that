@@ -24,11 +24,8 @@ launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 optional and used only for the system-browser login fallback.
 
-Version 1.6.1 provides the shared Instagram and Facebook Local Companion engines. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, while the embedded account session remains an automatic fallback when the local browser cannot launch.
-Instagram and anonymous Facebook scraping use hidden temporary browser partitions.
-When the current workspace has an enabled Facebook account, Facebook scraping
-can read that account's persistent local browser session without exposing it to
-another workspace. See
+Version 1.6.2 provides the shared Instagram and Facebook Local Companion engines. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, with a fresh anonymous embedded browser as the browser-launch fallback.
+Instagram and Facebook scraping use hidden temporary browser partitions and never reuse connected publishing/login sessions. See
 [`docs/instagram-companion-engine.md`](../../docs/instagram-companion-engine.md)
 for its API, isolation, queue, and failure behavior.
 

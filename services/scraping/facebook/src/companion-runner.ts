@@ -29,32 +29,24 @@ async function waitForPage(browser: Browser, targetUrl: string) {
 class CompanionFactory implements FacebookBrowserSessionFactory {
   private readonly active = new Set<FacebookBrowserSession>();
   private readyReported = false;
-  private sessionCount = 0;
 
   constructor(
     private readonly jobId: string,
     private readonly signal: AbortSignal,
     private readonly onBrowserReady?: () => void,
     private readonly ownerKey?: string,
-    private readonly inputMode: FacebookScrapeInput["inputMode"] = "profile",
   ) {}
 
   async create(): Promise<FacebookBrowserSession> {
     if (this.signal.aborted) throw new FacebookCompanionCancelledError();
     const host = facebookCompanionDesktopHost();
     if (!host) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
-    this.sessionCount += 1;
-    // Public profiles and direct posts are more reliable in a fresh browser because a
-    // stale/checkpointed publishing login can render a different Facebook document.
-    // Search is the inverse: try the connected account first because Facebook often
-    // gates keyword results, then fall back to a clean public session on retry.
-    const preferConnectedSession = this.inputMode === "keyword"
-      ? this.sessionCount === 1
-      : this.sessionCount > 1;
     const managed = await host.openBrowser({
       jobId: this.jobId,
       ownerKey: this.ownerKey,
-      preferConnectedSession,
+      // Scraping never reuses a publishing/login session. Both Companion attempts
+      // are temporary anonymous public-browser sessions.
+      preferConnectedSession: false,
     });
     let connection: Browser | null = null;
     let session: FacebookBrowserSession | null = null;
@@ -113,7 +105,7 @@ export async function runFacebookCompanionScrape(
     return await runFacebookScrape(input, { signal, onBrowserReady });
   } catch (error) {
     if (signal.aborted) throw new FacebookCompanionCancelledError();
-    const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey, input.inputMode);
+    const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey);
     try {
       return await runFacebookScrapeWithSessionFactory(input, factory);
     } catch (fallbackError) {

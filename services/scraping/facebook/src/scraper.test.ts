@@ -4,6 +4,7 @@ import { handleFacebookRequest, prepareFacebookScrapeInput } from "./api.ts";
 import {
   buildFacebookProfileAnalysis,
   classifyFacebookAccess,
+  facebookPageTimelinePluginUrl,
   facebookProfileTabUrl,
   facebookUrlType,
   facebookPayloadCandidates,
@@ -59,8 +60,8 @@ test("normalizes Facebook Page, public profile, keyword, and post inputs", () =>
   assert.equal(profile.profileType, "public_profile");
 
   const keyword = normalizeFacebookQuery({ query: "launch news", inputMode: "keyword" });
-  assert.equal(keyword.startUrl, "https://www.facebook.com/search/posts/?q=launch%20news");
-  assert.equal(keyword.fallbackStartUrl, "https://www.facebook.com/hashtag/launchnews");
+  assert.equal(keyword.startUrl, "https://www.facebook.com/hashtag/launchnews");
+  assert.equal(keyword.fallbackStartUrl, "https://www.facebook.com/search/posts/?q=launch%20news");
   assert.equal(keyword.label, "launch news");
 
   const hashtag = normalizeFacebookQuery({ query: "#launch", inputMode: "keyword" });
@@ -86,6 +87,8 @@ test("recognizes supported Facebook URL families", () => {
   assert.equal(facebookUrlType("https://facebook.com/reel/1"), "post");
   assert.equal(facebookUrlType("https://facebook.com/share/r/example"), "post");
   assert.equal(facebookUrlType("https://fb.watch/example"), "post");
+  assert.equal(facebookUrlType("https://facebook.com/groups/405375007916372"), null);
+  assert.equal(facebookUrlType("https://facebook.com/events/123"), null);
   assert.equal(facebookUrlType("https://example.com/example/posts/1"), null);
 });
 
@@ -106,6 +109,16 @@ test("builds explicit All and Reels profile tab URLs", () => {
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/reels/", "all"), "https://www.facebook.com/AgenticThat/");
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/", "reels"), "https://www.facebook.com/AgenticThat/reels/");
   assert.equal(facebookProfileTabUrl("https://facebook.com/profile.php?id=123", "reels"), "https://www.facebook.com/profile.php?id=123&sk=reels");
+});
+
+test("builds an anonymous official Page timeline URL without losing numeric profile IDs", () => {
+  const named = new URL(facebookPageTimelinePluginUrl("https://facebook.com/RBRRealtors")!);
+  assert.equal(named.pathname, "/plugins/page.php");
+  assert.equal(named.searchParams.get("href"), "https://www.facebook.com/RBRRealtors");
+  assert.equal(named.searchParams.get("tabs"), "timeline");
+
+  const numeric = new URL(facebookPageTimelinePluginUrl("https://facebook.com/profile.php?id=61581379487938")!);
+  assert.equal(numeric.searchParams.get("href"), "https://www.facebook.com/profile.php?id=61581379487938");
 });
 
 test("normalizes relative visible timestamps against the current run", () => {
@@ -180,6 +193,7 @@ test("server and Companion input contracts bound counts and ranges identically",
   assert.equal(input.maxResults, 50);
   assert.equal(input.profileType, "public_profile");
   assert.equal(input.timezoneOffsetMinutes, 840);
+  assert.equal(prepareFacebookScrapeInput({ mode: "profile", query: "example", comparison_mode: true }).skipComments, true);
   assert.throws(() => prepareFacebookScrapeInput({ mode: "keyword", query: "news", collection_mode: "engagement" }), /Profile analysis/);
 });
 

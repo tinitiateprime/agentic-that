@@ -33,6 +33,7 @@ test("Companion validation preserves the Facebook scraper contract", () => {
   assert.equal(input.inputMode, "profile");
   assert.equal(input.profileType, "public_profile");
   assert.equal(input.maxResults, 50);
+  assert.equal(prepareFacebookCompanionInput({ mode: "profile", query: "example", comparison_mode: true }).skipComments, true);
   assert.throws(() => prepareFacebookCompanionInput({ mode: "keyword", query: "launch", collection_mode: "engagement" }), /Profile analysis/);
 });
 

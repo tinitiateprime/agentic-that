@@ -58,12 +58,18 @@ export function prepareFacebookScrapeInput(value: Record<string, unknown>): Face
     rangeFrom,
     rangeTo,
     timezoneOffsetMinutes: Math.max(-840, Math.min(840, Number(value.timezone_offset_minutes ?? value.timezoneOffsetMinutes) || 0)),
+    skipComments: value.comparison_mode === true || value.skip_comments === true,
   };
 }
 
 function friendlyError(error: unknown) {
   const original = error instanceof Error ? error.message : "Facebook scrape failed.";
-  if (/browser|chromium|playwright|newContext|Target page/i.test(original)) return "Facebook public browser scraping could not start. Try again in a minute.";
+  if (/browserType\.launch|executable.*(?:missing|exist)|failed to launch|chromium.*executable|playwright.*install/i.test(original)) {
+    return "Facebook public browser could not launch. The service retried automatically; try again in a minute.";
+  }
+  if (/Target page, context or browser has been closed|browser.*(?:closed|disconnected)|newContext/i.test(original)) {
+    return "Facebook ended the anonymous browser session while the public page was loading. The service retried automatically; try Local Companion if it repeats.";
+  }
   if (/429|rate.?limit|temporarily unavailable/i.test(original)) return "Facebook temporarily refused public discovery. Wait briefly, then try again.";
   if (/fetch failed|network|timeout|aborted|ERR_/i.test(original)) return "Facebook public pages could not be loaded reliably. Try again in a minute.";
   return original.length > 280 ? `${original.slice(0, 277)}...` : original;
@@ -81,6 +87,7 @@ async function executeScrape(input: FacebookJobInput, store: FacebookRunStore) {
     rangeFrom: input.rangeFrom,
     rangeTo: input.rangeTo,
     timezoneOffsetMinutes: input.timezoneOffsetMinutes,
+    skipComments: input.skipComments,
   });
   return store.saveRun({
     requestedQuery: input.requestedQuery,
@@ -129,6 +136,7 @@ export async function executeFacebookJob(jobId: string) {
     const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
     return complete ? jobResponse(complete, store) : null;
   } catch (error) {
+    console.error("Facebook server scrape failed", error instanceof Error ? `${error.name}: ${error.message}` : String(error));
     const failed = await store.updateJob(jobId, { status: "failed", error: friendlyError(error) });
     return failed ? jobResponse(failed, store) : null;
   }

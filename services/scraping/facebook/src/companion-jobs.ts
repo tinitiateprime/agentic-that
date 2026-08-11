@@ -122,6 +122,7 @@ export function prepareFacebookCompanionInput(body: Record<string, unknown>): Fa
     rangeFrom,
     rangeTo,
     timezoneOffsetMinutes: Math.max(-840, Math.min(840, Number(body.timezone_offset_minutes ?? body.timezoneOffsetMinutes) || 0)),
+    skipComments: body.comparison_mode === true || body.skip_comments === true,
   };
 }
 
@@ -135,7 +136,7 @@ function failure(error: unknown, job: Job): Failure {
   if (job.timedOut) return { code: "timeout", message: "The local Facebook scrape took too long. Try a smaller count or range.", retryable: true };
   if (error instanceof FacebookCompanionCancelledError || job.controller?.signal.aborted) return { code: "cancelled", message: "Facebook scraping was cancelled.", retryable: true };
   if (/Companion.*unavailable|hidden Companion Facebook browser|debugging endpoint/i.test(original)) return { code: "companion_unavailable", message: "Local Companion Facebook scraping is unavailable. Open or restart Companion.", retryable: true };
-  if (/login_required|log in|login required/i.test(original)) return { code: "facebook_login_required", message: "Facebook is requiring a login for this public target.", retryable: false };
+  if (/login_required|log in|login required/i.test(original)) return { code: "public_access_limited", message: "Facebook did not expose this target to an anonymous public browser. No login session was used.", retryable: false };
   if (/not_found|not found|isn't available/i.test(original)) return { code: "not_found", message: "This Facebook Page, profile, or post was not found.", retryable: false };
   if (/network|timeout|fetch failed|ERR_/i.test(original)) return { code: "network_error", message: "The local network could not load Facebook reliably. Try again.", retryable: true };
   return { code: "scrape_failed", message: original.slice(0, 280), retryable: true };
@@ -147,7 +148,7 @@ function emptyResultError(job: Job, result: Awaited<ReturnType<typeof runFaceboo
     ? diagnostics.page_title
     : job.requestedQuery;
   if (result.discoveryStatus === "login_required") {
-    return new Error("Facebook requires a signed-in session for this target. Reconnect the Facebook account in Companion, then retry.");
+    return new Error("Facebook did not expose this target to a public browser. No login session was used.");
   }
   return new Error(
     `Facebook loaded ${target || "the requested profile"}, but no trustworthy current posts matched after ${diagnostics.scroll_rounds} page scans. `
@@ -215,6 +216,10 @@ async function executeJob(job: Job) {
     );
     job.progress = { stage: "complete", message: `Collected ${resultCount} public Facebook posts` };
   } catch (error) {
+    console.warn("Facebook Companion job failed", JSON.stringify({
+      query: job.requestedQuery,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    }));
     job.error = failure(error, job);
     job.status = job.error.code === "cancelled" ? "cancelled" : "failed";
   } finally {

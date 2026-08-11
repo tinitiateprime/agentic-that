@@ -64,7 +64,7 @@ function facebookUrlType(value) {
     if (host === "fb.watch" || /\/(?:posts|videos|reel|watch|photo|story\.php|permalink\.php)(?:\/|\?|$)/i.test(target)
       || /^\/share\/(?:p|r|v)\//i.test(url.pathname) || url.searchParams.has("story_fbid")
       || url.searchParams.has("fbid") || url.searchParams.has("v")) return "post";
-    if (/^\/(?:login|checkpoint|recover|help|search)(?:\/|$)/i.test(url.pathname)) return null;
+    if (/^\/(?:login|checkpoint|recover|help|search|groups|events|marketplace|gaming|watch|hashtag|plugins|share)(?:\/|$)/i.test(url.pathname)) return null;
     return "profile";
   } catch {
     return null;
@@ -111,7 +111,10 @@ function facebookHandle(value) {
         return id ? `profile.php?id=${id}` : "";
       }
       const path = url.pathname.replace(/^\/+|\/+$/g, "");
-      return path && !/\s/.test(path) ? path : "";
+      return path && !/\s/.test(path)
+        && !/^(?:groups|events|marketplace|gaming|watch|hashtag|plugins|share)(?:\/|$)/i.test(path)
+        ? path
+        : "";
     } catch {
       return "";
     }
@@ -234,7 +237,7 @@ const facebookPlatformConfig = {
     : message,
   resultNotice: ({ status, count, requested, inputMode, engine }) => {
     if (status === "partial" && inputMode === "keyword") {
-      return `Facebook returned ${count} of ${requested} requested current keyword results. Facebook limits anonymous hashtag feeds; ${engine === "companion" ? "connect a Facebook account in Companion for deeper local discovery" : "Local Companion with a connected Facebook session can usually collect more"}.`;
+      return `Facebook returned ${count} of ${requested} requested current keyword results. Facebook limits its anonymous public hashtag feed; no login session or private data was used.`;
     }
     if (status === "partial") return "Facebook returned a partial dataset. Items without a trustworthy visible date or metric were not invented or forced into the results.";
     return "";

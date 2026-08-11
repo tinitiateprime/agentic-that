@@ -33,6 +33,7 @@ export type FacebookScrapeInput = {
   rangeFrom?: string;
   rangeTo?: string;
   timezoneOffsetMinutes?: number;
+  skipComments?: boolean;
 };
 
 export type FacebookMetricSource = "current_page_payload" | "visible_page" | "visible_reels_grid" | "visible_embed";
@@ -117,6 +118,7 @@ export type FacebookScrapeDiagnostics = {
   scroll_rounds: number;
   dom_candidates: number;
   payload_candidates: number;
+  timeline_plugin_candidates?: number;
   reels_grid_candidates: number;
   unique_candidates: number;
   accepted_results: number;
@@ -185,6 +187,7 @@ type RangeWindow = {
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FACEBOOK_ORIGIN = "https://www.facebook.com";
 const POST_PATH_PATTERN = /\/(?:posts|videos|reel|watch|photo|story\.php|permalink\.php)(?:\/|\?|$)/i;
+const UNSUPPORTED_PROFILE_PATH_PATTERN = /^\/(?:groups|events|marketplace|gaming|watch|hashtag|plugins|share)(?:\/|$)/i;
 const TRACKING_PARAMS = new Set(["__cft__", "__tn__", "mibextid", "ref", "refid", "rdid", "share_url"]);
 
 export function facebookNavigationHeaders() {
@@ -238,7 +241,8 @@ export function facebookUrlType(value: string) {
   if (POST_PATH_PATTERN.test(combined) || /^\/share\/(?:p|r|v)\//i.test(url.pathname) || url.searchParams.has("story_fbid") || url.searchParams.has("fbid") || url.searchParams.has("v")) {
     return "post" as const;
   }
-  if (/^\/(?:login|checkpoint|recover|help|search)(?:\/|$)/i.test(url.pathname)) return null;
+  if (/^\/(?:login|checkpoint|recover|help|search)(?:\/|$)/i.test(url.pathname)
+    || UNSUPPORTED_PROFILE_PATH_PATTERN.test(url.pathname)) return null;
   return "profile" as const;
 }
 
@@ -267,10 +271,11 @@ export function normalizeFacebookQuery(input: FacebookScrapeInput): NormalizedFa
       mode: "keyword",
       label: hashtag ? `#${tag}` : keyword,
       profileType,
-      startUrl: hashtag
-        ? `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`
-        : `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(keyword)}`,
-      fallbackStartUrl: hashtag ? undefined : `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`,
+      // Logged-out Facebook Search can close a serverless Chromium target before
+      // it renders. The public hashtag surface is the stable anonymous source,
+      // so use it first and retain general Search only as a best-effort fallback.
+      startUrl: `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`,
+      fallbackStartUrl: hashtag ? undefined : `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(keyword)}`,
     };
   }
 
@@ -629,6 +634,8 @@ function targetProfileKey(value: string | undefined) {
   try {
     const url = new URL(value);
     if (url.pathname.toLowerCase() === "/profile.php") return `id:${url.searchParams.get("id") || ""}`;
+    const numericProfile = url.pathname.match(/^\/people\/[^/]+\/(\d+)(?:\/|$)/i);
+    if (numericProfile) return `id:${numericProfile[1]}`;
     return url.pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.toLowerCase() || null;
   } catch {
     return null;
@@ -907,6 +914,118 @@ export async function extractFacebookReelsGridCandidates(page: Page): Promise<Ra
   return candidates;
 }
 
+export function facebookPageTimelinePluginUrl(value: string) {
+  const profileUrl = facebookProfileTabUrl(value, "all");
+  if (!profileUrl) return null;
+  const params = new URLSearchParams({
+    href: profileUrl,
+    tabs: "timeline",
+    width: "500",
+    height: "1000",
+    small_header: "false",
+    adapt_container_width: "true",
+    hide_cover: "false",
+    show_facepile: "false",
+  });
+  return `${FACEBOOK_ORIGIN}/plugins/page.php?${params.toString()}`;
+}
+
+export async function extractFacebookPageTimelineCandidates(
+  page: Page,
+  targetProfileUrl: string,
+): Promise<RawCandidate[]> {
+  return page.evaluate<RawCandidate[]>(String.raw`((profileUrl) => {
+    const clean = (value) => (value || "").replace(/\s+/g, " ").trim();
+    const compactCount = (value) => {
+      const display = clean(value);
+      const match = display.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s*([KMB])?$/i);
+      if (!match) return null;
+      const numeric = Number(match[1].replace(/,/g, ""));
+      const suffix = (match[2] || "").toUpperCase();
+      const multiplier = suffix === "K" ? 1000 : suffix === "M" ? 1000000 : suffix === "B" ? 1000000000 : 1;
+      return Number.isFinite(numeric) ? Math.round(numeric * multiplier) : null;
+    };
+    const absolute = (href) => {
+      try { return new URL(href, location.href).toString(); } catch { return ""; }
+    };
+    const postPattern = /\/(?:posts|videos|reel)(?:\/|\?)|story_fbid=|permalink\.php|photo\/?\?|watch\/?\?v=/i;
+    const pageText = document.body?.innerText || "";
+    const followerDisplay = pageText.match(/([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)\s+followers?\b/i)?.[1] || null;
+    const followerCount = compactCount(followerDisplay);
+    return [...document.querySelectorAll('._5pcr,[data-ft*="fbfeed_location"] .userContentWrapper')]
+      .slice(0, 25)
+      .map(wrapper => {
+        const anchors = [...wrapper.querySelectorAll("a[href]")];
+        const postAnchor = anchors.find(anchor => {
+          const href = anchor.getAttribute("href") || "";
+          return postPattern.test(href) && !/[?&](?:comment_id|reply_comment_id)=/i.test(href);
+        });
+        if (!postAnchor) return null;
+        const postUrl = absolute(postAnchor.getAttribute("href") || "");
+        const authorAnchor = anchors.find(anchor => {
+          const href = absolute(anchor.getAttribute("href") || "");
+          const label = clean(anchor.textContent || anchor.getAttribute("title"));
+          return label.length > 1
+            && /facebook\.com/i.test(href)
+            && !postPattern.test(href)
+            && !/\/(?:help|stories|hashtag|sharer|plugins)\//i.test(href);
+        });
+        const messageNode = wrapper.querySelector('[data-testid="post_message"],.userContent');
+        const content = clean(messageNode?.textContent) || null;
+        const timeNode = wrapper.querySelector("abbr[data-utime],[data-utime],time[datetime]");
+        const timestamp = timeNode?.getAttribute("data-utime")
+          || timeNode?.getAttribute("datetime")
+          || clean(timeNode?.textContent)
+          || null;
+        const reactionDisplay = clean(wrapper.querySelector(".embeddedLikeButton")?.textContent) || null;
+        const commentAnchor = anchors.find(anchor => {
+          const href = anchor.getAttribute("href") || "";
+          return postPattern.test(href)
+            && !/\/sharer\//i.test(href)
+            && compactCount(anchor.textContent) !== null;
+        });
+        const commentsDisplay = clean(commentAnchor?.textContent) || null;
+        const images = [...wrapper.querySelectorAll("img[src]")].map(image => ({
+          src: image.currentSrc || image.src,
+          score: Math.max(image.naturalWidth * image.naturalHeight, image.width * image.height),
+        })).filter(image => image.src && !image.src.startsWith("data:") && !/emoji|staticxx|rsrc\.php/i.test(image.src) && image.score >= 2_500)
+          .sort((left, right) => right.score - left.score);
+        const hasVideo = Boolean(wrapper.querySelector("video,iframe[src*='/plugins/video.php']"));
+        return {
+          post_url: postUrl,
+          author_name: clean(authorAnchor?.textContent) || null,
+          // Use the requested profile URL as the owner identity. The plugin can
+          // rewrite numeric profile.php URLs to a username, but both represent
+          // the same public Page and should not be rejected as an owner mismatch.
+          author_url: profileUrl,
+          content,
+          media_type: /\/reel\//i.test(postUrl) ? "reel" : hasVideo ? "video" : images.length ? "image" : "text",
+          thumbnail_url: images[0]?.src || null,
+          timestamp,
+          reactions_count: compactCount(reactionDisplay),
+          reactions_display: reactionDisplay,
+          reactions_exact: Boolean(reactionDisplay && !/[KMB]$/i.test(reactionDisplay)),
+          comments_count: compactCount(commentsDisplay),
+          comments_display: commentsDisplay,
+          comments_exact: Boolean(commentsDisplay && !/[KMB]$/i.test(commentsDisplay)),
+          follower_count: followerCount,
+          follower_count_display: followerDisplay,
+          follower_count_exact: Boolean(followerDisplay && !/[KMB]$/i.test(followerDisplay)),
+          _source: "visible_page",
+        };
+      })
+      .filter(Boolean);
+  })(${JSON.stringify(targetProfileUrl)})`);
+}
+
+async function loadFacebookPageTimelineCandidates(page: Page, profileUrl: string) {
+  const pluginUrl = facebookPageTimelinePluginUrl(profileUrl);
+  if (!pluginUrl) return [];
+  await page.goto(pluginUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.waitForTimeout(2_500);
+  return extractFacebookPageTimelineCandidates(page, profileUrl);
+}
+
 function facebookEmbedUrls(postUrl: string) {
   const href = encodeURIComponent(postUrl);
   const videoFirst = /\/(?:reel|videos|watch)(?:\/|\?|$)/i.test(postUrl);
@@ -1111,7 +1230,7 @@ function localChromiumExecutablePath() {
   return null;
 }
 
-async function launchBrowser() {
+async function launchBrowserOnce() {
   const localExecutable = localChromiumExecutablePath();
   if (localExecutable) {
     return chromium.launch({
@@ -1126,6 +1245,24 @@ async function launchBrowser() {
     executablePath: await chromiumPack.executablePath(),
     headless: true,
   });
+}
+
+async function launchBrowser() {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await launchBrowserOnce();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 600));
+    }
+  }
+  throw lastError;
+}
+
+function recoverableBrowserRuntimeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /browser.*(?:closed|disconnected)|Target page, context or browser has been closed|newContext|ECONNRESET|ERR_CONNECTION|navigation.*timeout/i.test(message);
 }
 
 async function createPage(browser: Browser): Promise<FacebookBrowserSession> {
@@ -1331,8 +1468,25 @@ async function openFacebookProfileTab(page: Page, profileUrl: string, tab: "all"
 }
 
 async function scrollFacebookProfile(page: Page) {
-  await page.mouse.wheel(0, 2600).catch(() => undefined);
-  await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight * 2.2, 2_000))).catch(() => undefined);
+  const moved = await page.evaluate<boolean>(String.raw`(() => {
+    const candidates = [document.scrollingElement, ...document.querySelectorAll("*")]
+      .filter(Boolean)
+      .filter(element => {
+        if (element.scrollHeight <= element.clientHeight + 80) return false;
+        if (element === document.scrollingElement) return true;
+        return /auto|scroll/i.test(getComputedStyle(element).overflowY);
+      })
+      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight));
+    const target = candidates[0];
+    if (!target) return false;
+    const before = target.scrollTop;
+    target.scrollBy({ top: Math.max(900, Math.round(target.clientHeight * 1.35)), behavior: "instant" });
+    return target.scrollTop > before;
+  })()`).catch(() => false);
+  if (!moved) {
+    await page.mouse.wheel(0, 1_600).catch(() => undefined);
+    await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight * 1.25, 900))).catch(() => undefined);
+  }
   await page.waitForTimeout(800);
 }
 
@@ -1353,6 +1507,7 @@ async function scrapeAttempt(
     scroll_rounds: 0,
     dom_candidates: 0,
     payload_candidates: 0,
+    timeline_plugin_candidates: 0,
     reels_grid_candidates: 0,
     unique_candidates: 0,
     accepted_results: 0,
@@ -1454,6 +1609,30 @@ async function scrapeAttempt(
       if (embeddedPost?.author_name) profile.profileName = embeddedPost.author_name;
     }
 
+    if (normalized.mode === "profile") {
+      const targetProfileUrl = normalized.targetProfileUrl || normalized.startUrl;
+      const timelineCandidates = await loadFacebookPageTimelineCandidates(page, targetProfileUrl).catch(() => []);
+      diagnostics.timeline_plugin_candidates = timelineCandidates.length;
+      diagnostics.dom_candidates += timelineCandidates.length;
+      for (const raw of timelineCandidates) {
+        const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
+        if (!post) { diagnostics.rejected.missing_url += 1; continue; }
+        const identity = facebookPostIdentity(post);
+        const existing = candidateMap.get(identity);
+        // The official public timeline carries an exact data-utime and stable
+        // permalink. Keep it as the authoritative base when the normal All page
+        // emitted a relative or otherwise ambiguous timestamp for the same post.
+        candidateMap.set(identity, existing ? mergePosts(post, existing) : post);
+      }
+      const exactProfile = timelineCandidates.find(candidate => candidate.follower_count !== null && candidate.follower_count !== undefined);
+      if (exactProfile) {
+        profile.followerCount = finiteNumber(exactProfile.follower_count);
+        profile.followerDisplay = text(exactProfile.follower_count_display) || profile.followerDisplay;
+      }
+      const timelineName = timelineCandidates.find(candidate => text(candidate.author_name))?.author_name;
+      if (timelineName) profile.profileName = timelineName;
+    }
+
     const reelsMap = new Map<string, FacebookPost>();
     const directPost = normalized.mode === "post"
       ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
@@ -1551,7 +1730,9 @@ async function scrapeAttempt(
     const commentLimit = Number.isFinite(configuredCommentLimit)
       ? Math.max(1, Math.min(25, Math.trunc(configuredCommentLimit)))
       : 12;
-    const commentTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
+    const commentTargets = input.skipComments
+      ? []
+      : [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
     const enriched = new Map<string, FacebookPost>();
     if (commentTargets.length) {
       const commentPage = await session.context.newPage().catch(() => null);
@@ -1590,7 +1771,8 @@ async function scrapeAttempt(
     diagnostics.accepted_results = results.length;
     const finalAccess = classifyFacebookAccess(await accessSnapshot(page));
     const discoveryStatus: FacebookDiscoveryStatus = results.length
-      ? (normalized.mode !== "post" && diagnostics.rejected.missing_timestamp > 0) || (normalized.mode === "keyword" && results.length < maxResults)
+      ? (normalized.mode !== "post" && results.length < maxResults && diagnostics.rejected.missing_timestamp > 0)
+          || (normalized.mode === "keyword" && results.length < maxResults)
         ? "partial"
         : "ok"
       : analyzedReels.length
@@ -1617,32 +1799,48 @@ export async function runFacebookScrapeWithSessionFactory(
     throw new Error("Profile analysis is available only for a Facebook Page or public profile.");
   }
   let last: FacebookScrapeResult | null = null;
+  let lastError: unknown;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const attemptQuery = attempt === 2 && normalized.fallbackStartUrl
       ? { ...normalized, startUrl: normalized.fallbackStartUrl, fallbackStartUrl: undefined }
       : normalized;
-    last = await scrapeAttempt(input, attemptQuery, sessionFactory, attempt);
+    try {
+      last = await scrapeAttempt(input, attemptQuery, sessionFactory, attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1 && normalized.fallbackStartUrl) continue;
+      throw error;
+    }
     if (last.results.length || last.analysis?.top_viewed.length) return last;
     if (last.discoveryStatus === "not_found" && !(attempt === 1 && normalized.fallbackStartUrl)) return last;
   }
-  return last!;
+  if (last) return last;
+  throw lastError;
 }
 
 export async function runFacebookScrape(
   input: FacebookScrapeInput,
   runtime: { signal?: AbortSignal; onBrowserReady?: () => void } = {},
 ) {
-  const browser = await launchBrowser();
-  const closeOnAbort = () => { void browser.close().catch(() => undefined); };
-  runtime.signal?.addEventListener("abort", closeOnAbort, { once: true });
-  try {
-    if (runtime.signal?.aborted) throw new Error("Facebook scraping was cancelled.");
-    runtime.onBrowserReady?.();
-    return await runFacebookScrapeWithSessionFactory(input, browserSessionFactory(browser));
-  } finally {
-    runtime.signal?.removeEventListener("abort", closeOnAbort);
-    await browser.close();
+  let lastError: unknown;
+  for (let runtimeAttempt = 1; runtimeAttempt <= 2; runtimeAttempt += 1) {
+    const browser = await launchBrowser();
+    const closeOnAbort = () => { void browser.close().catch(() => undefined); };
+    runtime.signal?.addEventListener("abort", closeOnAbort, { once: true });
+    try {
+      if (runtime.signal?.aborted) throw new Error("Facebook scraping was cancelled.");
+      runtime.onBrowserReady?.();
+      return await runFacebookScrapeWithSessionFactory(input, browserSessionFactory(browser));
+    } catch (error) {
+      lastError = error;
+      if (runtime.signal?.aborted || runtimeAttempt >= 2 || !recoverableBrowserRuntimeError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 600));
+    } finally {
+      runtime.signal?.removeEventListener("abort", closeOnAbort);
+      await browser.close().catch(() => undefined);
+    }
   }
+  throw lastError;
 }
 
 export async function getFacebookScraperInfo() {
