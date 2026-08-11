@@ -32,6 +32,13 @@ const activityListeners = new Set<FacebookCompanionActivityListener>();
 let activityNotificationQueued = false;
 
 function activityJob(job: Job, queuePosition: number | null = null) {
+  const analysisResultCount = job.result?.analysis
+    ? Math.max(
+        job.result.analysis.top_viewed.length,
+        job.result.analysis.top_reacted.length,
+        job.result.analysis.top_discussed.length,
+      )
+    : 0;
   return {
     id: job.id,
     query: job.requestedQuery,
@@ -44,7 +51,7 @@ function activityJob(job: Job, queuePosition: number | null = null) {
     updatedAt: job.updatedAt,
     startedAt: job.startedAt || null,
     completedAt: job.completedAt || null,
-    resultCount: job.result?.results.length ?? null,
+    resultCount: job.result ? Math.max(job.result.results.length, analysisResultCount) : null,
     discoveryStatus: job.result?.discoveryStatus || null,
     error: job.error ? { ...job.error } : null,
   };
@@ -134,6 +141,20 @@ function failure(error: unknown, job: Job): Failure {
   return { code: "scrape_failed", message: original.slice(0, 280), retryable: true };
 }
 
+function emptyResultError(job: Job, result: Awaited<ReturnType<typeof runFacebookCompanionScrape>>) {
+  const diagnostics = result.diagnostics;
+  const target = diagnostics.page_title && !/^Facebook$/i.test(diagnostics.page_title)
+    ? diagnostics.page_title
+    : job.requestedQuery;
+  if (result.discoveryStatus === "login_required") {
+    return new Error("Facebook requires a signed-in session for this target. Reconnect the Facebook account in Companion, then retry.");
+  }
+  return new Error(
+    `Facebook loaded ${target || "the requested profile"}, but no trustworthy current posts matched after ${diagnostics.scroll_rounds} page scans. `
+    + "The Companion retried in isolated local browser sessions. Use the exact profile URL and retry.",
+  );
+}
+
 function publicJob(job: Job) {
   return { id: job.id, engine: "companion", status: job.status, progress: job.progress, createdAt: job.createdAt, updatedAt: job.updatedAt, startedAt: job.startedAt, completedAt: job.completedAt, error: job.error };
 }
@@ -169,12 +190,30 @@ async function executeJob(job: Job) {
       touch(job);
     }, job.ownerKey);
     if (controller.signal.aborted) throw new FacebookCompanionCancelledError();
-    if (!result.results.length && result.discoveryStatus !== "not_found") throw new Error(result.discoveryStatus);
+    job.result = result;
+    const hasAnalysisResults = Boolean(
+      result.analysis?.top_viewed.length
+      || result.analysis?.top_reacted.length
+      || result.analysis?.top_discussed.length,
+    );
+    if (!result.results.length && !hasAnalysisResults && result.discoveryStatus !== "not_found") {
+      console.warn("Facebook Companion scrape produced no usable results", JSON.stringify({
+        query: job.requestedQuery,
+        status: result.discoveryStatus,
+        diagnostics: result.diagnostics,
+      }));
+      throw emptyResultError(job, result);
+    }
     job.progress = { stage: "preparing_results", message: "Preparing fresh Facebook results" };
     touch(job);
-    job.result = result;
     job.status = "complete";
-    job.progress = { stage: "complete", message: `Collected ${result.results.length} public Facebook posts` };
+    const resultCount = Math.max(
+      result.results.length,
+      result.analysis?.top_viewed.length || 0,
+      result.analysis?.top_reacted.length || 0,
+      result.analysis?.top_discussed.length || 0,
+    );
+    job.progress = { stage: "complete", message: `Collected ${resultCount} public Facebook posts` };
   } catch (error) {
     job.error = failure(error, job);
     job.status = job.error.code === "cancelled" ? "cancelled" : "failed";

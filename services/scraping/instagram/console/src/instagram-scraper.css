@@ -1058,6 +1058,13 @@
   margin-top: 18px;
 }
 
+.instagram-scraper-app .comparison-input-hint {
+  margin: 10px 0 0 38px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .instagram-scraper-app .comparison-profile-row {
   display: grid;
   grid-template-columns: 28px minmax(220px, 1fr) auto 44px;

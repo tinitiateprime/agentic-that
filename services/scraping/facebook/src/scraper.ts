@@ -112,6 +112,8 @@ export type FacebookProfileAnalysis = {
 
 export type FacebookScrapeDiagnostics = {
   attempts: number;
+  browser_session?: "anonymous" | "connected" | "local_chrome";
+  page_visibility?: string;
   scroll_rounds: number;
   dom_candidates: number;
   payload_candidates: number;
@@ -143,6 +145,7 @@ export type FacebookBrowserSession = {
   context: BrowserContext;
   page: Page;
   userAgent: string;
+  sessionMode?: "anonymous" | "connected" | "local_chrome";
   close(): Promise<void>;
 };
 
@@ -184,6 +187,10 @@ const FACEBOOK_ORIGIN = "https://www.facebook.com";
 const POST_PATH_PATTERN = /\/(?:posts|videos|reel|watch|photo|story\.php|permalink\.php)(?:\/|\?|$)/i;
 const TRACKING_PARAMS = new Set(["__cft__", "__tn__", "mibextid", "ref", "refid", "rdid", "share_url"]);
 
+export function facebookNavigationHeaders() {
+  return { "Accept-Language": "en-US,en;q=0.9" };
+}
+
 export const facebookServiceInfo = {
   serviceRoot,
   dataDir: path.join(serviceRoot, "data"),
@@ -214,7 +221,7 @@ function absoluteFacebookUrl(value: string) {
     if (url.hostname.toLowerCase() !== "fb.watch") url.hostname = "www.facebook.com";
     url.hash = "";
     for (const key of [...url.searchParams.keys()]) {
-      if (TRACKING_PARAMS.has(key) || key.startsWith("utm_")) url.searchParams.delete(key);
+      if (TRACKING_PARAMS.has(key) || key.startsWith("__cft__") || key.startsWith("utm_")) url.searchParams.delete(key);
     }
     return url.toString();
   } catch {
@@ -1097,18 +1104,26 @@ function localChromeCandidates() {
   return ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
 }
 
-async function chromiumExecutablePath(chromiumPack: typeof import("@sparticuz/chromium").default) {
+function localChromiumExecutablePath() {
   const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH;
   if (configured && existsSync(configured)) return configured;
   for (const candidate of localChromeCandidates()) if (existsSync(candidate)) return candidate;
-  return chromiumPack.executablePath();
+  return null;
 }
 
 async function launchBrowser() {
+  const localExecutable = localChromiumExecutablePath();
+  if (localExecutable) {
+    return chromium.launch({
+      args: ["--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"],
+      executablePath: localExecutable,
+      headless: true,
+    });
+  }
   const chromiumPack = (await import("@sparticuz/chromium")).default;
   return chromium.launch({
     args: [...chromiumPack.args, "--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"],
-    executablePath: await chromiumExecutablePath(chromiumPack),
+    executablePath: await chromiumPack.executablePath(),
     headless: true,
   });
 }
@@ -1117,7 +1132,10 @@ async function createPage(browser: Browser): Promise<FacebookBrowserSession> {
   const options: BrowserContextOptions = {
     locale: "en-US",
     viewport: { width: 1280, height: 900 },
-    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache", Pragma: "no-cache" },
+    // A fresh isolated context already prevents session/cache reuse. Facebook
+    // serves an unhydrated empty profile document when Cache-Control/Pragma are
+    // forced on the top-level navigation, so only negotiate the UI language.
+    extraHTTPHeaders: facebookNavigationHeaders(),
   };
   const context = await browser.newContext(options);
   const page = await context.newPage();
@@ -1125,6 +1143,7 @@ async function createPage(browser: Browser): Promise<FacebookBrowserSession> {
     context,
     page,
     userAgent: await page.evaluate(() => navigator.userAgent),
+    sessionMode: "local_chrome",
     close: () => context.close().catch(() => undefined),
   };
 }
@@ -1330,6 +1349,7 @@ async function scrapeAttempt(
   page.on("response", collector.listener);
   const diagnostics: FacebookScrapeDiagnostics = {
     attempts: attempt,
+    browser_session: session.sessionMode,
     scroll_rounds: 0,
     dom_candidates: 0,
     payload_candidates: 0,
@@ -1350,6 +1370,7 @@ async function scrapeAttempt(
       await openFacebookProfileTab(page, normalized.targetProfileUrl || normalized.startUrl, "all");
     }
     const initialAccess = classifyFacebookAccess(await accessSnapshot(page));
+    diagnostics.page_visibility = await page.evaluate(() => document.visibilityState).catch(() => "unknown");
     diagnostics.final_url = page.url();
     diagnostics.page_title = await page.title().catch(() => "");
     if (normalized.mode !== "post" && (initialAccess === "login_required" || initialAccess === "not_found")) {
@@ -1363,7 +1384,7 @@ async function scrapeAttempt(
       : 300;
     const discoveryTarget = normalized.mode === "profile"
       ? input.collectionMode === "latest"
-        ? Math.min(profileLimit, Math.max(60, maxResults * 6))
+        ? Math.min(profileLimit, Math.max(30, maxResults * 5))
         : profileLimit
       : Math.min(100, Math.max(20, maxResults * 3));
     const candidateMap = new Map<string, FacebookPost>();
@@ -1371,8 +1392,14 @@ async function scrapeAttempt(
     const configuredTimeout = Number(process.env.FACEBOOK_DISCOVERY_TIMEOUT_MS);
     const timeoutMs = Number.isFinite(configuredTimeout)
       ? Math.max(30_000, Math.min(300_000, configuredTimeout))
-      : normalized.mode === "profile" && input.collectionMode === "engagement" ? 180_000 : 120_000;
-    const allDeadline = Date.now() + timeoutMs;
+      : normalized.mode === "profile" && input.collectionMode === "engagement" ? 180_000 : 75_000;
+    const discoveryDeadline = Date.now() + timeoutMs;
+    const allPhaseBudget = normalized.mode === "profile"
+      ? input.collectionMode === "engagement"
+        ? Math.min(60_000, Math.round(timeoutMs * .4))
+        : Math.min(30_000, Math.round(timeoutMs * .45))
+      : timeoutMs;
+    const allDeadline = Math.min(discoveryDeadline, Date.now() + allPhaseBudget);
     const maxRounds = normalized.mode === "post"
       ? 4
       : normalized.mode === "profile"
@@ -1439,10 +1466,10 @@ async function scrapeAttempt(
       const reelsTarget = normalized.mode === "post"
         ? 100
         : input.collectionMode === "latest"
-        ? Math.min(profileLimit, Math.max(100, maxResults * 10))
+        ? Math.min(profileLimit, Math.max(40, maxResults * 6))
         : profileLimit;
       const reelsRounds = Math.max(30, Math.min(100, Math.ceil(reelsTarget / 5) + 15));
-      const reelsDeadline = Date.now() + timeoutMs;
+      const reelsDeadline = discoveryDeadline;
       let staleReelsRounds = 0;
       for (let round = 0; round < reelsRounds && Date.now() < reelsDeadline; round += 1) {
         const before = reelsMap.size;
@@ -1601,11 +1628,19 @@ export async function runFacebookScrapeWithSessionFactory(
   return last!;
 }
 
-export async function runFacebookScrape(input: FacebookScrapeInput) {
+export async function runFacebookScrape(
+  input: FacebookScrapeInput,
+  runtime: { signal?: AbortSignal; onBrowserReady?: () => void } = {},
+) {
   const browser = await launchBrowser();
+  const closeOnAbort = () => { void browser.close().catch(() => undefined); };
+  runtime.signal?.addEventListener("abort", closeOnAbort, { once: true });
   try {
+    if (runtime.signal?.aborted) throw new Error("Facebook scraping was cancelled.");
+    runtime.onBrowserReady?.();
     return await runFacebookScrapeWithSessionFactory(input, browserSessionFactory(browser));
   } finally {
+    runtime.signal?.removeEventListener("abort", closeOnAbort);
     await browser.close();
   }
 }

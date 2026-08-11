@@ -2,10 +2,15 @@ export type FacebookCompanionBrowserSession = {
   id: string;
   debugEndpoint: string;
   targetUrl: string;
+  sessionMode: "anonymous" | "connected";
 };
 
 export type FacebookCompanionDesktopHost = {
-  openBrowser(request: { jobId: string; ownerKey?: string }): Promise<FacebookCompanionBrowserSession>;
+  openBrowser(request: {
+    jobId: string;
+    ownerKey?: string;
+    preferConnectedSession?: boolean;
+  }): Promise<FacebookCompanionBrowserSession>;
   closeBrowser(sessionId: string): Promise<void> | void;
   stopBrowsers(reason: string): Promise<void> | void;
 };

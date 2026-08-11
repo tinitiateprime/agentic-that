@@ -1,6 +1,8 @@
 import { chromium, type Browser } from "playwright-core";
 import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
 import {
+  facebookNavigationHeaders,
+  runFacebookScrape,
   runFacebookScrapeWithSessionFactory,
   type FacebookBrowserSession,
   type FacebookBrowserSessionFactory,
@@ -27,19 +29,33 @@ async function waitForPage(browser: Browser, targetUrl: string) {
 class CompanionFactory implements FacebookBrowserSessionFactory {
   private readonly active = new Set<FacebookBrowserSession>();
   private readyReported = false;
+  private sessionCount = 0;
 
   constructor(
     private readonly jobId: string,
     private readonly signal: AbortSignal,
     private readonly onBrowserReady?: () => void,
     private readonly ownerKey?: string,
+    private readonly inputMode: FacebookScrapeInput["inputMode"] = "profile",
   ) {}
 
   async create(): Promise<FacebookBrowserSession> {
     if (this.signal.aborted) throw new FacebookCompanionCancelledError();
     const host = facebookCompanionDesktopHost();
     if (!host) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
-    const managed = await host.openBrowser({ jobId: this.jobId, ownerKey: this.ownerKey });
+    this.sessionCount += 1;
+    // Public profiles and direct posts are more reliable in a fresh browser because a
+    // stale/checkpointed publishing login can render a different Facebook document.
+    // Search is the inverse: try the connected account first because Facebook often
+    // gates keyword results, then fall back to a clean public session on retry.
+    const preferConnectedSession = this.inputMode === "keyword"
+      ? this.sessionCount === 1
+      : this.sessionCount > 1;
+    const managed = await host.openBrowser({
+      jobId: this.jobId,
+      ownerKey: this.ownerKey,
+      preferConnectedSession,
+    });
     let connection: Browser | null = null;
     let session: FacebookBrowserSession | null = null;
     let closed = false;
@@ -56,9 +72,15 @@ class CompanionFactory implements FacebookBrowserSessionFactory {
       connection = await chromium.connectOverCDP(managed.debugEndpoint);
       const page = await waitForPage(connection, managed.targetUrl);
       const context = page.context();
-      await context.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache", Pragma: "no-cache" });
+      await context.setExtraHTTPHeaders(facebookNavigationHeaders());
       await page.setViewportSize({ width: 1280, height: 900 }).catch(() => undefined);
-      session = { context, page, userAgent: await page.evaluate(() => navigator.userAgent), close };
+      session = {
+        context,
+        page,
+        userAgent: await page.evaluate(() => navigator.userAgent),
+        sessionMode: managed.sessionMode,
+        close,
+      };
       this.active.add(session);
       if (!this.readyReported) { this.readyReported = true; this.onBrowserReady?.(); }
       this.signal.addEventListener("abort", onAbort, { once: true });
@@ -82,13 +104,23 @@ export async function runFacebookCompanionScrape(
   onBrowserReady?: () => void,
   ownerKey?: string,
 ) {
-  const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey);
   try {
-    return await runFacebookScrapeWithSessionFactory(input, factory);
+    // Facebook currently withholds the hydrated feed from Electron's embedded
+    // browser, while the same local request completes normally in installed
+    // Chrome/Edge. Use that local browser first; it remains headless, isolated,
+    // and on this computer. The embedded session remains a fallback for machines
+    // where a supported local browser cannot be launched.
+    return await runFacebookScrape(input, { signal, onBrowserReady });
   } catch (error) {
     if (signal.aborted) throw new FacebookCompanionCancelledError();
-    throw error;
-  } finally {
-    await factory.closeAll();
+    const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey, input.inputMode);
+    try {
+      return await runFacebookScrapeWithSessionFactory(input, factory);
+    } catch (fallbackError) {
+      if (signal.aborted) throw new FacebookCompanionCancelledError();
+      throw fallbackError instanceof Error ? fallbackError : error;
+    } finally {
+      await factory.closeAll();
+    }
   }
 }

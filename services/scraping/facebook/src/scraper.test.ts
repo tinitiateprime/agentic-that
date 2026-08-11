@@ -7,6 +7,7 @@ import {
   facebookProfileTabUrl,
   facebookUrlType,
   facebookPayloadCandidates,
+  facebookNavigationHeaders,
   facebookPostIdentity,
   facebookVisibleTimestamp,
   normalizeFacebookQuery,
@@ -69,6 +70,14 @@ test("normalizes Facebook Page, public profile, keyword, and post inputs", () =>
   const direct = normalizeFacebookQuery({ query: "https://facebook.com/example/posts/42?__cft__=tracking", inputMode: "post_url" });
   assert.equal(direct.mode, "post");
   assert.doesNotMatch(direct.startUrl, /__cft__/);
+
+  const linkedProfile = normalizeFacebookQuery({
+    query: "https://www.facebook.com/peaktylerr?__cft__[0]=tracking&__tn__=-]C%2CP-R",
+    inputMode: "profile_url",
+    profileType: "public_profile",
+  });
+  assert.equal(linkedProfile.startUrl, "https://www.facebook.com/peaktylerr");
+  assert.equal(linkedProfile.targetProfileUrl, "https://www.facebook.com/peaktylerr");
 });
 
 test("recognizes supported Facebook URL families", () => {
@@ -78,6 +87,12 @@ test("recognizes supported Facebook URL families", () => {
   assert.equal(facebookUrlType("https://facebook.com/share/r/example"), "post");
   assert.equal(facebookUrlType("https://fb.watch/example"), "post");
   assert.equal(facebookUrlType("https://example.com/example/posts/1"), null);
+});
+
+test("does not force cache-bypass headers that make Facebook return an empty profile document", () => {
+  assert.deepEqual(facebookNavigationHeaders(), { "Accept-Language": "en-US,en;q=0.9" });
+  assert.equal("Cache-Control" in facebookNavigationHeaders(), false);
+  assert.equal("Pragma" in facebookNavigationHeaders(), false);
 });
 
 test("uses the canonical URL as identity when Facebook emits conflicting internal IDs", () => {

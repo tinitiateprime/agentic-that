@@ -493,7 +493,10 @@ function chromiumUserAgent(webContents) {
   return webContents
     .getUserAgent()
     .replace(/\sElectron\/[^\s]+/i, "")
-    .replace(/\sAgenticThat Publishing Companion\/[^\s]+/i, "");
+    // Packaged Electron removes spaces from productName in its UA token.
+    // Facebook returns an empty, non-hydrated document when that custom token
+    // remains, so cover both development and packaged spellings.
+    .replace(/\sAgenticThat\s*Publishing\s*Companion\/[^\s]+/i, "");
 }
 
 function createDashboardView() {
@@ -747,12 +750,26 @@ async function openFacebookScrapingBrowser(request) {
   const debugEndpoint = await desktopDebugEndpoint();
   const id = randomUUID();
   const targetUrl = `about:blank#agenticthat-facebook-scrape-${id}`;
-  const connectedAccount = facebookScrapingAccount(request?.ownerKey);
+  const requestedAccount = request?.preferConnectedSession
+    ? facebookScrapingAccount(request?.ownerKey)
+    : null;
+  let connectedAccount = null;
+  if (requestedAccount) {
+    const accountSession = session.fromPartition(browserPartition(requestedAccount.id));
+    const cookies = await accountSession.cookies.get({ url: "https://www.facebook.com/" }).catch(() => []);
+    if (cookies.some(cookie => cookie.name === "c_user")) connectedAccount = requestedAccount;
+    else console.warn(`Facebook scrape ${String(request?.jobId || "")}: connected session is signed out; using a clean public session.`);
+  }
   const partition = connectedAccount ? browserPartition(connectedAccount.id) : `agenticthat-facebook-scrape-${id}`;
+  const sessionMode = connectedAccount ? "connected" : "anonymous";
+  console.log(`Facebook scrape ${String(request?.jobId || "")}: opening ${sessionMode} browser session.`);
   const workerWindow = new BrowserWindow({
+    x: -10_000,
+    y: -10_000,
     width: 1280,
     height: 900,
     show: false,
+    opacity: 0,
     skipTaskbar: true,
     focusable: false,
     backgroundColor: "#ffffff",
@@ -790,7 +807,11 @@ async function openFacebookScrapingBrowser(request) {
   });
   try {
     await workerWindow.loadURL(targetUrl);
-    return { id, debugEndpoint, targetUrl };
+    // Facebook defers its feed and Reels grid while an Electron document is in
+    // the hidden visibility state. Keep the isolated worker compositor-visible
+    // but fully transparent, unfocusable, off-screen, and absent from the taskbar.
+    workerWindow.showInactive();
+    return { id, debugEndpoint, targetUrl, sessionMode };
   } catch (error) {
     await closeFacebookScrapingBrowser(id);
     throw error;

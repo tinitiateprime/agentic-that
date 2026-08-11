@@ -1031,6 +1031,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
             normalizeInput={platformConfig.normalizeComparisonInput}
             comparisonTarget={platformConfig.comparisonTarget}
             engagementName={engagementName}
+            comparisonInputHint={platformConfig.comparisonInputHint}
+            profileNotFoundMessage={platformConfig.profileNotFoundMessage}
           />
         )}
 

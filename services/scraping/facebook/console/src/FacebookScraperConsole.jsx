@@ -88,6 +88,11 @@ function publicFacebookUrl(value) {
     const url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://www.facebook.com${raw.startsWith("/") ? raw : `/${raw}`}`);
     if (url.hostname.toLowerCase() !== "fb.watch") url.hostname = "www.facebook.com";
     url.protocol = "https:";
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (["__tn__", "mibextid", "ref", "refid", "rdid", "share_url"].includes(key)
+        || key.startsWith("__cft__") || key.startsWith("utm_")) url.searchParams.delete(key);
+    }
     return url.toString();
   } catch {
     return "https://www.facebook.com/";
@@ -222,8 +227,10 @@ const facebookPlatformConfig = {
   comparisonTarget: (value) => value.startsWith("profile.php?id=") || value.includes("/")
     ? { mode: "profile_url", query: publicFacebookUrl(value) }
     : { mode: "profile", query: value },
+  comparisonInputHint: "Use each profile's exact Facebook username or paste its full profile URL. A display name such as “Tyler Evans” is not a unique Facebook address; this profile's username is peaktylerr.",
+  profileNotFoundMessage: "Facebook could not find that profile address. Paste the exact Facebook profile URL or username—not only the display name.",
   errorMessage: (message) => /temporarily_unavailable|public discovery is temporarily unavailable/i.test(message)
-    ? "Facebook did not expose usable public results in this run. If a Facebook account is connected in Companion, restart the updated Companion and retry locally; otherwise try the exact Page, profile, or post URL."
+    ? "Facebook did not expose usable public results in this run. Restart the updated Companion, paste the exact Page, profile, or post URL, and retry locally."
     : message,
   resultNotice: ({ status, count, requested, inputMode, engine }) => {
     if (status === "partial" && inputMode === "keyword") {

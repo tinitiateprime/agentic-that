@@ -40,6 +40,7 @@ const emptyProfile = (id, value = "") => ({
   id,
   value,
   username: "",
+  displayName: "",
   role: "competitor",
   posts: [],
   selectedKeys: [],
@@ -168,6 +169,8 @@ export default function ProfileComparisonWorkspace({
   normalizeInput = normalizeProfileInput,
   comparisonTarget = (value) => ({ mode: "profile", query: `@${value}` }),
   engagementName = "Likes",
+  comparisonInputHint = "",
+  profileNotFoundMessage = "",
 }) {
   const [profiles, setProfiles] = useState(() => [
     emptyProfile("profile-1", seedProfile),
@@ -266,14 +269,19 @@ export default function ProfileComparisonWorkspace({
           : discoveryStatus === "login_required"
           ? `${platformName} requires sign in before this public profile can be read.`
           : discoveryStatus === "not_found"
-            ? `${platformName} could not find this public profile.`
+            ? profileNotFoundMessage || `${platformName} could not find this public profile.`
             : `${platformName} public discovery is temporarily unavailable for this profile. Retry in a minute.`);
       }
+      const analysis = data?.analysis || data?.run?.analysis || null;
+      const identityPost = posts.find((post) => post?.username || post?.display_name) || posts[0];
+      const resolvedUsername = analysis?.username || identityPost?.username || username;
+      const displayName = analysis?.display_name || identityPost?.display_name || resolvedUsername;
       updateProfile(profile.id, {
-        username,
+        username: resolvedUsername,
+        displayName,
         posts,
         selectedKeys: [],
-        analysis: data?.analysis || data?.run?.analysis || null,
+        analysis,
         dataSource: data?.dataSource || data?.run?.dataSource || "live",
         sourceCreatedAt: data?.sourceCreatedAt || data?.run?.sourceCreatedAt || "",
         status: "complete",
@@ -309,6 +317,7 @@ export default function ProfileComparisonWorkspace({
     setProfiles((current) => current.map((profile, index) => ({
       ...profile,
       username: normalized[index],
+      displayName: "",
       posts: [],
       selectedKeys: [],
       analysis: null,
@@ -383,6 +392,7 @@ export default function ProfileComparisonWorkspace({
       posts: [],
       selectedKeys: [],
       analysis: null,
+      displayName: "",
       dataSource: "live",
       sourceCreatedAt: "",
       status: "idle",
@@ -855,8 +865,11 @@ export default function ProfileComparisonWorkspace({
               <section className="compare-profile-column" key={profile.id}>
                 <header>
                   <div>
-                    <strong>@{profile.username || normalizeInput(profile.value) || "profile"}</strong>
-                    <span>{profile.role === "own" ? "My business" : "Competitor"}</span>
+                    <strong>{profile.displayName || `@${profile.username || normalizeInput(profile.value) || "profile"}`}</strong>
+                    <span>
+                      {profile.displayName && profile.username ? `@${profile.username} · ` : ""}
+                      {profile.role === "own" ? "My business" : "Competitor"}
+                    </span>
                   </div>
                   <span>{profile.selectedKeys.length}/{MAX_SELECTED_POSTS} selected</span>
                 </header>
@@ -937,6 +950,8 @@ export default function ProfileComparisonWorkspace({
           </div>
         ))}
       </div>
+
+      {comparisonInputHint ? <p className="comparison-input-hint">{comparisonInputHint}</p> : null}
 
       <div className="comparison-controls">
         <fieldset>
