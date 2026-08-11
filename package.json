@@ -10,6 +10,7 @@
     "services:telegram": "npm --prefix services/messaging/telegram run server",
     "services:telegram:install": "npm --prefix services/messaging/telegram install",
     "services:instagram": "tsx services/scraping/instagram/src/server.ts",
+    "services:facebook": "tsx services/scraping/facebook/src/server.ts",
     "services:publishing": "tsx services/publishing/queue-runner/server/index.ts",
     "publishing:companion": "node scripts/run-publishing-companion.mjs",
     "publishing:companion:hidden": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-publishing-companion-hidden.ps1",
@@ -27,6 +28,7 @@
     "publishing:uninstall-startup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-publishing-startup.ps1",
     "test:publishing": "node --import tsx --test services/publishing/queue-runner/server/content-preflight.test.ts services/publishing/queue-runner/server/external-browser-layout.test.ts services/publishing/queue-runner/server/publishing-api.test.ts services/publishing/queue-runner/server/risk-classifier.test.ts services/publishing/queue-runner/server/safety-governor.test.ts services/publishing/queue-runner/server/session-storage.test.ts && npm run publishing:extension:validate && node scripts/build-publishing-companion-runtime.mjs",
     "test:instagram": "node --import tsx --test services/scraping/instagram/src/scraper.test.ts services/scraping/instagram/src/companion-jobs.test.ts services/scraping/instagram/src/growth-advisor.test.ts services/scraping/instagram/src/growth-advisor-jobs.test.ts services/scraping/instagram/console/src/profileComparison.test.js",
+    "test:facebook": "node --import tsx --test services/scraping/facebook/src/scraper.test.ts services/scraping/facebook/src/companion-jobs.test.ts",
     "publishing:css": "node services/publishing/queue-runner/scripts/scope-css.mjs",
     "services:install": "npm run services:telegram:install",
     "telegram:console:build": "node scripts/build-telegram-console.mjs",
@@ -35,6 +37,7 @@
     "dev:whatsapp": "npm run dev",
     "dev:messaging": "npm run dev",
     "dev:instagram": "npm run dev",
+    "dev:facebook": "npm run dev",
     "build": "npm run publishing:css && node scripts/copy-telegram-console.mjs && node scripts/build-next.mjs",
     "seed": "node scripts/seed.js",
     "preview": "next start -H 127.0.0.1 -p 4173"

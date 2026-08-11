@@ -59,6 +59,7 @@ if (ownsSingleInstanceLock) {
 const APP_VERSION = app.getVersion();
 const managedBrowsers = new Map();
 const instagramScrapingBrowsers = new Map();
+const facebookScrapingBrowsers = new Map();
 
 let mainWindow = null;
 let dashboardView = null;
@@ -676,6 +677,88 @@ async function stopInstagramScrapingBrowsers() {
   await Promise.all([...instagramScrapingBrowsers.keys()].map(closeInstagramScrapingBrowser));
 }
 
+function isAllowedFacebookNavigation(value) {
+  if (value.startsWith("about:blank")) return true;
+  try {
+    const target = new URL(value);
+    const hostname = target.hostname.toLowerCase();
+    return target.protocol === "https:"
+      && (hostname === "facebook.com" || hostname.endsWith(".facebook.com") || hostname === "fb.com" || hostname === "fb.watch");
+  } catch {
+    return false;
+  }
+}
+
+async function openFacebookScrapingBrowser(request) {
+  const debugEndpoint = await desktopDebugEndpoint();
+  const id = randomUUID();
+  const targetUrl = `about:blank#agenticthat-facebook-scrape-${id}`;
+  const partition = `agenticthat-facebook-scrape-${id}`;
+  const workerWindow = new BrowserWindow({
+    width: 1280,
+    height: 900,
+    show: false,
+    skipTaskbar: true,
+    focusable: false,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      partition,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  workerWindow.removeMenu();
+  const isolatedSession = workerWindow.webContents.session;
+  const userAgent = chromiumUserAgent(workerWindow.webContents);
+  workerWindow.webContents.setUserAgent(userAgent);
+  isolatedSession.setUserAgent(userAgent, "en-US,en;q=0.9");
+  isolatedSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  workerWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedFacebookNavigation(url)) void workerWindow.webContents.loadURL(url);
+    return { action: "deny" };
+  });
+  const protectNavigation = (event, url) => {
+    if (!isAllowedFacebookNavigation(url)) event.preventDefault();
+  };
+  workerWindow.webContents.on("will-navigate", protectNavigation);
+  workerWindow.webContents.on("will-redirect", protectNavigation);
+  workerWindow.on("closed", () => facebookScrapingBrowsers.delete(id));
+  facebookScrapingBrowsers.set(id, {
+    id,
+    jobId: String(request?.jobId || ""),
+    window: workerWindow,
+    isolatedSession,
+  });
+  try {
+    await workerWindow.loadURL(targetUrl);
+    return { id, debugEndpoint, targetUrl };
+  } catch (error) {
+    await closeFacebookScrapingBrowser(id);
+    throw error;
+  }
+}
+
+async function closeFacebookScrapingBrowser(sessionId) {
+  const entry = facebookScrapingBrowsers.get(sessionId);
+  if (!entry) return;
+  facebookScrapingBrowsers.delete(sessionId);
+  if (!entry.window.isDestroyed()) {
+    entry.window.webContents.stop();
+    entry.window.destroy();
+  }
+  await Promise.allSettled([
+    entry.isolatedSession.clearStorageData(),
+    entry.isolatedSession.clearCache(),
+  ]);
+}
+
+async function stopFacebookScrapingBrowsers() {
+  await Promise.all([...facebookScrapingBrowsers.keys()].map(closeFacebookScrapingBrowser));
+}
+
 async function clearAccountBrowserData(accountId) {
   const accountSession = session.fromPartition(browserPartition(accountId));
   await accountSession.clearStorageData();
@@ -860,6 +943,11 @@ function installPublishingDesktopHost() {
     closeBrowser: closeInstagramScrapingBrowser,
     stopBrowsers: stopInstagramScrapingBrowsers,
   };
+  globalThis.__AGENTICTHAT_FACEBOOK_COMPANION_DESKTOP_HOST__ = {
+    openBrowser: openFacebookScrapingBrowser,
+    closeBrowser: closeFacebookScrapingBrowser,
+    stopBrowsers: stopFacebookScrapingBrowsers,
+  };
 }
 
 async function emergencyStop() {
@@ -869,8 +957,12 @@ async function emergencyStop() {
   const scrapingStopped = await publishingRuntime?.cancelAllInstagramCompanionJobs?.(
     "Instagram scraping was stopped with the Companion emergency stop."
   );
+  const facebookScrapingStopped = await publishingRuntime?.cancelAllFacebookCompanionJobs?.(
+    "Facebook scraping was stopped with the Companion emergency stop."
+  );
   await publishingRuntime?.stopAllExternalBrowserWindows?.(reason);
   await stopInstagramScrapingBrowsers();
+  await stopFacebookScrapingBrowsers();
   await Promise.all(activeSessions.map(session => closeManagedBrowser(session.id, {
     state: "stopped",
     detail: session.request.purpose === "login"
@@ -878,13 +970,15 @@ async function emergencyStop() {
       : "Publishing was stopped with the Companion emergency stop.",
   })));
   notifyWorkspaceState();
-  return Boolean(stopped || scrapingStopped || activeSessions.length);
+  return Boolean(stopped || scrapingStopped || facebookScrapingStopped || activeSessions.length);
 }
 
 async function stopScraping() {
-  return Boolean(await publishingRuntime?.cancelAllInstagramCompanionJobs?.(
-    "Instagram scraping was stopped from Companion."
-  ));
+  const [instagramStopped, facebookStopped] = await Promise.all([
+    publishingRuntime?.cancelAllInstagramCompanionJobs?.("Instagram scraping was stopped from Companion."),
+    publishingRuntime?.cancelAllFacebookCompanionJobs?.("Facebook scraping was stopped from Companion."),
+  ]);
+  return Boolean(instagramStopped || facebookStopped);
 }
 
 function createWindow() {
@@ -1125,9 +1219,12 @@ if (started || !ownsSingleInstanceLock) {
     unsubscribeScrapingActivity?.();
     unsubscribeScrapingActivity = null;
     void publishingRuntime?.cancelAllInstagramCompanionJobs?.("Companion is shutting down.");
+    void publishingRuntime?.cancelAllFacebookCompanionJobs?.("Companion is shutting down.");
     void stopInstagramScrapingBrowsers();
+    void stopFacebookScrapingBrowsers();
     publishingServer?.close();
     globalThis.__AGENTICTHAT_PUBLISHING_DESKTOP_HOST__ = undefined;
     globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = undefined;
+    globalThis.__AGENTICTHAT_FACEBOOK_COMPANION_DESKTOP_HOST__ = undefined;
   });
 }

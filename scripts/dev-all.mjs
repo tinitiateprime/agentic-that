@@ -60,6 +60,10 @@ const instagramPort = await findPort(
   positivePort(process.env.INSTAGRAM_SERVICE_PORT, 8791, "INSTAGRAM_SERVICE_PORT"),
   "Instagram"
 );
+const facebookPort = await findPort(
+  positivePort(process.env.FACEBOOK_SERVICE_PORT, 8793, "FACEBOOK_SERVICE_PORT"),
+  "Facebook"
+);
 const publishQueuePort = await findPort(
   positivePort(process.env.PUBLISH_QUEUE_SERVICE_PORT, 8792, "PUBLISH_QUEUE_SERVICE_PORT"),
   "Publish Queue"
@@ -68,6 +72,7 @@ const publishQueuePort = await findPort(
 const siteUrl = `http://${host}:${sitePort}`;
 const telegramUrl = `${siteUrl}/console`;
 const instagramUrl = `${siteUrl}/scraper/instagram`;
+const facebookUrl = `${siteUrl}/scraper/facebook`;
 const publishQueueUrl = `${siteUrl}/publishing`;
 const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
 
@@ -75,6 +80,7 @@ console.log("\nAgenticThat development workspace");
 console.log(`  Website + WhatsApp  ${siteUrl}`);
 console.log(`  Telegram           ${telegramUrl}`);
 console.log(`  Instagram          ${instagramUrl}`);
+console.log(`  Facebook           ${facebookUrl}`);
 console.log(`  Publish Queue      ${publishQueueUrl}`);
 console.log("  Press Ctrl+C once to stop every service.\n");
 
@@ -93,6 +99,8 @@ const services = [
       TELEGRAM_SERVICE_PORT: String(telegramPort),
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
       NEXT_PUBLIC_INSTAGRAM_API_URL: `http://${host}:${instagramPort}/api/scraping/instagram`,
+      FACEBOOK_SERVICE_PORT: String(facebookPort),
+      NEXT_PUBLIC_FACEBOOK_API_URL: `http://${host}:${facebookPort}/api/scraping/facebook`,
       PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
       PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
@@ -133,6 +141,17 @@ const services = [
       ...commonEnv,
       PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
       PUBLISH_QUEUE_WEB_ORIGIN: siteUrl,
+    },
+  },
+  {
+    name: "facebook",
+    color: "\u001b[34m",
+    command: process.execPath,
+    args: ["--import", tsxLoader, path.join(projectRoot, "services", "scraping", "facebook", "src", "server.ts")],
+    cwd: projectRoot,
+    env: {
+      ...commonEnv,
+      FACEBOOK_SERVICE_PORT: String(facebookPort),
     },
   },
 ];

@@ -1,0 +1,92 @@
+import { chromium, type Browser } from "playwright-core";
+import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
+import {
+  runFacebookScrapeWithSessionFactory,
+  type FacebookBrowserSession,
+  type FacebookBrowserSessionFactory,
+  type FacebookScrapeInput,
+} from "./scraper.js";
+
+export class FacebookCompanionCancelledError extends Error {
+  constructor(message = "Facebook scraping was cancelled.") {
+    super(message);
+    this.name = "FacebookCompanionCancelledError";
+  }
+}
+
+async function waitForPage(browser: Browser, targetUrl: string) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const page = browser.contexts().flatMap(context => context.pages()).find(candidate => candidate.url() === targetUrl);
+    if (page) return page;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error("The hidden Companion Facebook browser did not become available.");
+}
+
+class CompanionFactory implements FacebookBrowserSessionFactory {
+  private readonly active = new Set<FacebookBrowserSession>();
+  private readyReported = false;
+
+  constructor(
+    private readonly jobId: string,
+    private readonly signal: AbortSignal,
+    private readonly onBrowserReady?: () => void,
+  ) {}
+
+  async create(): Promise<FacebookBrowserSession> {
+    if (this.signal.aborted) throw new FacebookCompanionCancelledError();
+    const host = facebookCompanionDesktopHost();
+    if (!host) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
+    const managed = await host.openBrowser({ jobId: this.jobId });
+    let connection: Browser | null = null;
+    let session: FacebookBrowserSession | null = null;
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      this.signal.removeEventListener("abort", onAbort);
+      if (session) this.active.delete(session);
+      await Promise.resolve(host.closeBrowser(managed.id)).catch(() => undefined);
+      await Promise.race([connection?.close().catch(() => undefined), new Promise(resolve => setTimeout(resolve, 1_000))]);
+    };
+    const onAbort = () => { void close(); };
+    try {
+      connection = await chromium.connectOverCDP(managed.debugEndpoint);
+      const page = await waitForPage(connection, managed.targetUrl);
+      const context = page.context();
+      await context.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache", Pragma: "no-cache" });
+      await page.setViewportSize({ width: 1280, height: 900 }).catch(() => undefined);
+      session = { context, page, userAgent: await page.evaluate(() => navigator.userAgent), close };
+      this.active.add(session);
+      if (!this.readyReported) { this.readyReported = true; this.onBrowserReady?.(); }
+      this.signal.addEventListener("abort", onAbort, { once: true });
+      if (this.signal.aborted) { await close(); throw new FacebookCompanionCancelledError(); }
+      return session;
+    } catch (error) {
+      await close();
+      throw error;
+    }
+  }
+
+  async closeAll() {
+    await Promise.all([...this.active].map(session => session.close()));
+  }
+}
+
+export async function runFacebookCompanionScrape(
+  jobId: string,
+  input: FacebookScrapeInput,
+  signal: AbortSignal,
+  onBrowserReady?: () => void,
+) {
+  const factory = new CompanionFactory(jobId, signal, onBrowserReady);
+  try {
+    return await runFacebookScrapeWithSessionFactory(input, factory);
+  } catch (error) {
+    if (signal.aborted) throw new FacebookCompanionCancelledError();
+    throw error;
+  } finally {
+    await factory.closeAll();
+  }
+}

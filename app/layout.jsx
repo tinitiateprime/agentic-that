@@ -2,6 +2,7 @@ import "../src/styles/globals.css";
 import "../services/messaging/whatsapp/src/styles/whatsapp-globals.css";
 import "../src/platform/platform-home.css";
 import "../services/scraping/instagram/console/src/instagram-scraper.css";
+import "../services/scraping/facebook/console/src/facebook-scraper.css";
 
 export const metadata = {
   title: "AgenticThat",

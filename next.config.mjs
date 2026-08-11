@@ -15,6 +15,11 @@ const nextConfig = {
         source: "/api/scraping/instagram/:path*",
         destination: `http://127.0.0.1:${instagramPort}/api/scraping/instagram/:path*`,
       });
+      const facebookPort = Number(process.env.FACEBOOK_SERVICE_PORT || 8793);
+      rewrites.push({
+        source: "/api/scraping/facebook/:path*",
+        destination: `http://127.0.0.1:${facebookPort}/api/scraping/facebook/:path*`,
+      });
     }
 
     const telegramTarget = process.env.TELEGRAM_API_URL

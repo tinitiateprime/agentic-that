@@ -18,6 +18,13 @@ import {
   subscribeInstagramCompanionActivity,
 } from "../../../scraping/instagram/src/companion-jobs.js";
 import {
+  cancelAllFacebookCompanionJobs,
+  cancelFacebookCompanionJob,
+  createFacebookCompanionJob,
+  facebookCompanionQueueHealth,
+  getFacebookCompanionJob,
+} from "../../../scraping/facebook/src/companion-jobs.js";
+import {
   createUserProfileSchema,
   loginInputSchema,
   platformLabels,
@@ -107,6 +114,7 @@ export {
   instagramCompanionActivityState,
   subscribeInstagramCompanionActivity,
 };
+export { cancelAllFacebookCompanionJobs };
 
 export const publishingApp = express();
 const app = publishingApp;
@@ -303,6 +311,7 @@ function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile
 
 type RequestWithUser = express.Request & { user?: UserProfile };
 type RequestWithInstagramOwner = express.Request & { instagramOwnerKey?: string };
+type RequestWithFacebookOwner = express.Request & { facebookOwnerKey?: string };
 
 const tokenPayloadSchema = z.object({
   sub: z.string(),
@@ -313,6 +322,12 @@ const instagramScrapingTokenPayloadSchema = z.object({
   sub: z.string().min(1),
   workspaceId: z.string().min(1),
   scope: z.literal("instagram:scraping"),
+  exp: z.number().int().positive(),
+});
+const facebookScrapingTokenPayloadSchema = z.object({
+  sub: z.string().min(1),
+  workspaceId: z.string().min(1),
+  scope: z.literal("facebook:scraping"),
   exp: z.number().int().positive(),
 });
 
@@ -831,6 +846,7 @@ app.get("/api/health", async (_req, res) => {
       capabilities: {
         publishing: true,
         instagramScraping: instagramCompanionQueueHealth(),
+        facebookScraping: facebookCompanionQueueHealth(),
       },
       platforms,
     });
@@ -882,6 +898,17 @@ function signInstagramScrapingToken(identity: ReturnType<typeof platformIdentity
   return `${payload}.${signPart(payload)}`;
 }
 
+function signFacebookScrapingToken(identity: ReturnType<typeof platformIdentity>) {
+  const lifetimeSeconds = Math.max(300, Math.min(4 * 60 * 60, Number(process.env.FACEBOOK_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60));
+  const payload = encodeBase64Url(JSON.stringify({
+    sub: identity.platformUserId,
+    workspaceId: identity.workspaceId,
+    scope: "facebook:scraping",
+    exp: Math.floor(Date.now() / 1000) + lifetimeSeconds,
+  }));
+  return `${payload}.${signPart(payload)}`;
+}
+
 async function authenticateInstagramScraping(
   req: express.Request,
   res: express.Response,
@@ -918,6 +945,42 @@ async function authenticateInstagramScraping(
 function instagramCompanionOwner(req: RequestWithInstagramOwner) {
   if (!req.instagramOwnerKey) throw new Error("Local Companion scraping authentication is missing.");
   return req.instagramOwnerKey;
+}
+
+async function authenticateFacebookScraping(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  try {
+    const header = req.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+    if (!token) {
+      res.status(401).json({ message: "Sign in to AgenticThat to use Local Companion Facebook scraping." });
+      return;
+    }
+    const user = await userFromAuthToken(token);
+    if (user) {
+      (req as RequestWithFacebookOwner).facebookOwnerKey = `${user.workspaceId}:${user.id}`;
+      next();
+      return;
+    }
+    const rawPayload = verifiedTokenPayload(token);
+    const payload = rawPayload ? facebookScrapingTokenPayloadSchema.safeParse(rawPayload) : null;
+    if (!payload?.success || payload.data.exp <= Math.floor(Date.now() / 1000)) {
+      res.status(401).json({ message: "Local Companion Facebook scraping session expired. Refresh the page and try again." });
+      return;
+    }
+    (req as RequestWithFacebookOwner).facebookOwnerKey = `${payload.data.workspaceId}:${payload.data.sub}`;
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function facebookCompanionOwner(req: RequestWithFacebookOwner) {
+  if (!req.facebookOwnerKey) throw new Error("Local Companion Facebook scraping authentication is missing.");
+  return req.facebookOwnerKey;
 }
 
 app.post("/api/auth/platform/status", async (req, res, next) => {
@@ -966,6 +1029,19 @@ app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
   }
 });
 
+app.post("/api/auth/platform/facebook-scraping", (req, res, next) => {
+  try {
+    const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
+    const identity = platformIdentity(token);
+    res.json({
+      token: signFacebookScrapingToken(identity),
+      expiresInSeconds: Math.max(300, Math.min(4 * 60 * 60, Number(process.env.FACEBOOK_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60)),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/scraping/instagram/jobs", authenticateInstagramScraping, (req: RequestWithInstagramOwner, res, next) => {
   try {
     res.status(202).json(createInstagramCompanionJob(instagramCompanionOwner(req), req.body || {}));
@@ -998,6 +1074,40 @@ app.delete("/api/scraping/instagram/jobs/:id", authenticateInstagramScraping, as
     );
     if (!response) {
       res.status(404).json({ message: "Local Instagram scrape job not found." });
+      return;
+    }
+    res.json(response);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/scraping/facebook/jobs", authenticateFacebookScraping, (req: RequestWithFacebookOwner, res, next) => {
+  try {
+    res.status(202).json(createFacebookCompanionJob(facebookCompanionOwner(req), req.body || {}));
+  } catch (error) {
+    if (error instanceof Error && /Companion Facebook scraping is unavailable/i.test(error.message)) {
+      res.status(503).json({ message: error.message, code: "companion_unavailable" });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/scraping/facebook/jobs/:id", authenticateFacebookScraping, (req: RequestWithFacebookOwner, res) => {
+  const response = getFacebookCompanionJob(facebookCompanionOwner(req), pathParam(req.params.id, "id"));
+  if (!response) {
+    res.status(404).json({ message: "Local Facebook scrape job not found." });
+    return;
+  }
+  res.json(response);
+});
+
+app.delete("/api/scraping/facebook/jobs/:id", authenticateFacebookScraping, async (req: RequestWithFacebookOwner, res, next) => {
+  try {
+    const response = await cancelFacebookCompanionJob(facebookCompanionOwner(req), pathParam(req.params.id, "id"));
+    if (!response) {
+      res.status(404).json({ message: "Local Facebook scrape job not found." });
       return;
     }
     res.json(response);
