@@ -35,9 +35,10 @@ const services = [
   },
   {
     name: "Auto Scrape Intelligence",
-    description: "Deploy intelligent agents to scrape Instagram profiles, reels, hashtags, comments and post signals into clean JSON/CSV files.",
+    description: "Scrape public Instagram and Facebook profiles, Pages, reels, posts, comments, views and engagement signals into clean JSON/CSV files.",
     meta: "Data pipeline",
     featured: true,
+    destination: "/apps",
   },
   {
     name: "Publish Queue Runner",
@@ -59,7 +60,7 @@ const automationPlatforms = [
 
 const scraperPlatforms = [
   { name: "Instagram", logo: InstagramLogo, action: "Console", enabled: true },
-  { name: "Facebook", logo: FacebookLogo },
+  { name: "Facebook", logo: FacebookLogo, action: "Console", enabled: true },
   { name: "X", logo: XLogo },
   { name: "Google", logo: GoogleLogo },
   { name: "Google Maps", logo: GoogleMapsLogo },
@@ -105,7 +106,7 @@ const automationSlides = [
     kicker: "Scraping Service",
     title: "Social and Search Scrapers",
     description:
-      "Run Instagram scraping now, with placeholders ready for public pages, search results, maps listings, and professional profiles.",
+      "Run Instagram and Facebook scraping now, with placeholders ready for search results, maps listings, and professional profiles.",
     platforms: scraperPlatforms,
   },
   {
@@ -135,7 +136,7 @@ const keepVideoSilent = (event) => {
   event.currentTarget.volume = 0;
 };
 
-function ScrapeIntelligenceCard({ service }) {
+function ScrapeIntelligenceCard({ service, onOpen }) {
   return (
     <article className="service-card scrape-intelligence-card">
       <div className="scrape-card-head">
@@ -148,11 +149,12 @@ function ScrapeIntelligenceCard({ service }) {
 
           <div className="brand-icon-row" aria-label="Supported platforms">
             <img className="brand-icon" src={InstagramLogo} alt="Instagram" />
-            <img className="brand-icon" src={LinkedInLogo} alt="LinkedIn" />
             <img className="brand-icon" src={FacebookLogo} alt="Facebook" />
-            <img className="brand-icon" src={GoogleMapsLogo} alt="Google Maps" />
-            <img className="brand-icon" src={GoogleLogo} alt="Google" />
           </div>
+
+          <button className="scrape-card-open" type="button" onClick={onOpen}>
+            Open scraping apps
+          </button>
         </div>
 
         <video
@@ -310,20 +312,27 @@ function MosaicSlide({ slide, onOpen }) {
           </span>
         </button>
 
-        {rest.map((platform, position) => (
-          <article
-            key={platform.name}
-            className={`slide-card flex flex-col items-center justify-center gap-2 p-3 text-center ${
-              position === rest.length - 1 ? "col-span-2 md:col-span-2" : ""
-            }`}
-          >
+        {rest.map((platform, position) => {
+          const className = `slide-card flex flex-col items-center justify-center gap-2 p-3 text-center ${
+            position === rest.length - 1 ? "col-span-2 md:col-span-2" : ""
+          }`;
+          const content = <>
             <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-black/50">
               <img className="h-6 w-6 object-contain" src={platform.logo} alt={platform.name} />
             </span>
             <strong className="text-[12.5px] font-bold text-neutral-200">{platform.name}</strong>
-            <span className="platform-status text-[10px]">Coming soon</span>
-          </article>
-        ))}
+            <span className={`${platform.enabled ? "platform-action" : "platform-status"} text-[10px]`}>
+              {platform.action || "Coming soon"}
+            </span>
+          </>;
+          return platform.enabled ? (
+            <button key={platform.name} type="button" className={className} onClick={() => onOpen?.(platform)}>
+              {content}
+            </button>
+          ) : (
+            <article key={platform.name} className={className}>{content}</article>
+          );
+        })}
       </div>
     </div>
   );
@@ -644,6 +653,19 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
     openProtectedService(serviceEndpoints.instagramScraper.consoleUrl);
   };
 
+  const openFacebookScraper = () => {
+    openProtectedService(serviceEndpoints.facebookScraper.consoleUrl);
+  };
+
+  const openScraperDashboard = (platform) => {
+    if (platform?.name === "Facebook") {
+      openFacebookScraper();
+      return;
+    }
+
+    openInstagramScraper();
+  };
+
   const openPublishQueue = () => {
     openProtectedService(serviceEndpoints.publishQueue.consoleUrl);
   };
@@ -789,7 +811,11 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
           <div className="service-grid">
             {services.map((service) => (
               service.featured ? (
-                <ScrapeIntelligenceCard service={service} key={service.name} />
+                <ScrapeIntelligenceCard
+                  service={service}
+                  key={service.name}
+                  onOpen={() => openProtectedService(service.destination)}
+                />
               ) : (
                 <StandardServiceCard
                   key={service.name}
@@ -804,7 +830,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             slides={automationSlides}
             handlers={{
               messaging: openMessagingDashboard,
-              scraping: openInstagramScraper,
+              scraping: openScraperDashboard,
               publishing: openPublishQueue,
               engagement: null,
             }}

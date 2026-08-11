@@ -284,7 +284,7 @@ export default function FacebookScraperConsole({ publishingIdentityToken = "" })
 
       <fieldset><legend>Input type</legend><div className="facebook-input-grid">{INPUTS.map(item => <button type="button" key={item.id} className={inputMode === item.id ? "selected" : ""} onClick={() => chooseInput(item.id)}><span>{item.symbol}</span>{item.label}</button>)}</div></fieldset>
 
-      {profileInput && <div className="facebook-profile-types"><span>Profile type</span><button type="button" className={profileType === "page" ? "selected" : ""} onClick={() => setProfileType("page")}>Facebook Page</button><button type="button" className={profileType === "public_profile" ? "selected" : ""} onClick={() => setProfileType("public_profile")}>Public profile</button></div>}
+      {profileInput && <div className="facebook-profile-types"><span>Target kind <small>(labels the export)</small></span><button type="button" className={profileType === "page" ? "selected" : ""} onClick={() => setProfileType("page")}>Business / creator Page</button><button type="button" className={profileType === "public_profile" ? "selected" : ""} onClick={() => setProfileType("public_profile")}>Person's public profile</button></div>}
 
       <div className="facebook-query-grid">
         <label><span>{input?.label}</span><input type={inputMode.includes("url") ? "url" : "text"} value={query} onChange={event => setQuery(event.target.value)} placeholder={input?.placeholder} onKeyDown={event => event.key === "Enter" && !running && start()} /></label>

@@ -19,6 +19,10 @@ export const serviceEndpoints = {
     name: "Instagram Scraper",
     consoleUrl: "/scraper/instagram",
   },
+  facebookScraper: {
+    name: "Facebook Scraper",
+    consoleUrl: "/scraper/facebook",
+  },
   publishQueue: {
     name: "Publish Queue Runner",
     consoleUrl: "/publishing",

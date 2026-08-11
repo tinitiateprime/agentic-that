@@ -88,8 +88,8 @@ export const CAPABILITIES: Capability[] = [
     status: "Active",
     description:
       "Point an agent at profiles, hashtags, reels or comment threads. It paginates, de-duplicates and normalises every field before it lands.",
-    badges: ["Instagram", "JSON", "CSV Export"],
-    href: "/scraper",
+    badges: ["Instagram", "Facebook", "JSON / CSV"],
+    href: "/apps",
   },
   {
     icon: MessagesSquare,
@@ -216,7 +216,7 @@ export const FOOTER_COLUMNS: FooterColumn[] = [
   {
     heading: "Product",
     links: [
-      { label: "Auto-Scrape", href: "/scraper" },
+      { label: "Auto-Scrape", href: "/apps" },
       { label: "Publish Queue", href: "/publishing" },
       { label: "Messaging Hub", href: "/whatsapp" },
       { label: "Engagement Agent", href: "#capabilities" },
