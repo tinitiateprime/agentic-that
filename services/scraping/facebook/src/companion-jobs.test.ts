@@ -12,7 +12,7 @@ import {
 const previousEnvironment = process.env.NODE_ENV;
 
 before(() => {
-  process.env.NODE_ENV = "test";
+  (process.env as Record<string, string | undefined>).NODE_ENV = "test";
   globalThis.__AGENTICTHAT_FACEBOOK_COMPANION_DESKTOP_HOST__ = {
     async openBrowser() { return { id: "unused", debugEndpoint: "http://127.0.0.1:1", targetUrl: "about:blank" }; },
     closeBrowser() {},
@@ -24,7 +24,7 @@ after(async () => {
   await cancelAllFacebookCompanionJobs();
   setFacebookCompanionScrapeExecutorForTests(null);
   globalThis.__AGENTICTHAT_FACEBOOK_COMPANION_DESKTOP_HOST__ = undefined;
-  process.env.NODE_ENV = previousEnvironment;
+  (process.env as Record<string, string | undefined>).NODE_ENV = previousEnvironment;
 });
 
 test("Companion validation preserves the Facebook scraper contract", () => {

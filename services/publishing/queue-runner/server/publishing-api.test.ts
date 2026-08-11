@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 test("publishing API supports login, media and text posts, queue scheduling, and failure details", async (context) => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agenticthat-publishing-api-"));
   const uploadDir = path.join(temporaryRoot, "uploads");
-  process.env.NODE_ENV = "test";
+  (process.env as Record<string, string | undefined>).NODE_ENV = "test";
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(temporaryRoot, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDir;
   process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET = "test-auth-secret-that-is-longer-than-thirty-two-characters";

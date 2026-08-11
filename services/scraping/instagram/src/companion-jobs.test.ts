@@ -11,7 +11,7 @@ import {
   subscribeInstagramCompanionActivity,
 } from "./companion-jobs.js";
 
-process.env.NODE_ENV = "test";
+(process.env as Record<string, string | undefined>).NODE_ENV = "test";
 
 function installFakeHost() {
   globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {
