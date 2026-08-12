@@ -960,8 +960,7 @@ function normalizedFacebookHtml(value: string) {
     .replace(/\\\//g, "/");
 }
 
-export function facebookPostTimestampsFromHtml(value: string) {
-  const normalized = normalizedFacebookHtml(value);
+function facebookPostTimestampsFromNormalizedHtml(normalized: string) {
   const timestamps = new Map<string, string>();
   const capturedAt = Date.now();
   const patterns = [
@@ -982,17 +981,27 @@ export function facebookPostTimestampsFromHtml(value: string) {
   return timestamps;
 }
 
-export function facebookPostDetailsFromHtml(value: string, postId: string | null | undefined) {
-  const normalized = normalizedFacebookHtml(value);
+export function facebookPostTimestampsFromHtml(value: string) {
+  return facebookPostTimestampsFromNormalizedHtml(normalizedFacebookHtml(value));
+}
+
+function facebookPostDetailsFromNormalizedHtml(
+  normalized: string,
+  postId: string | null | undefined,
+  timestamps = facebookPostTimestampsFromNormalizedHtml(normalized),
+) {
   const id = text(postId);
-  const timestamp = id ? facebookPostTimestampsFromHtml(normalized).get(id) || null : null;
+  const timestamp = id ? timestamps.get(id) || null : null;
   let reactionsCount: number | null = null;
   let commentsCount: number | null = null;
   if (/^\d+$/.test(id)) {
     const identity = new RegExp('"(?:top_level_post_id|video_id)"\\s*:\\s*"' + id + '"', "g");
     for (const match of normalized.matchAll(identity)) {
       const matchIndex = match.index ?? 0;
-      const nearby = normalized.slice(Math.max(0, matchIndex - 4_000), matchIndex + 1_000);
+      // Facebook places the feedback object before the Reel identity in each
+      // serialized story. Never look past the identity: the following bytes can
+      // already belong to the next Reel and would cross-associate its metrics.
+      const nearby = normalized.slice(Math.max(0, matchIndex - 4_000), matchIndex);
       const reactionMatches = [...nearby.matchAll(/"(?:unified_reactors|likers)"\s*:\s*\{\s*"count"\s*:\s*(\d+)/g)];
       const commentMatches = [...nearby.matchAll(/"total_comment_count"\s*:\s*(\d+)/g)];
       const reaction = finiteNumber(reactionMatches.at(-1)?.[1]);
@@ -1003,6 +1012,24 @@ export function facebookPostDetailsFromHtml(value: string, postId: string | null
     }
   }
   return { timestamp, reactionsCount, commentsCount };
+}
+
+export function facebookPostDetailsFromHtml(value: string, postId: string | null | undefined) {
+  const normalized = normalizedFacebookHtml(value);
+  return facebookPostDetailsFromNormalizedHtml(normalized, postId);
+}
+
+export function facebookPostDetailsMapFromHtml(
+  value: string,
+  postIds: Array<string | null | undefined>,
+) {
+  const normalized = normalizedFacebookHtml(value);
+  const timestamps = facebookPostTimestampsFromNormalizedHtml(normalized);
+  const details = new Map<string, ReturnType<typeof facebookPostDetailsFromNormalizedHtml>>();
+  for (const postId of new Set(postIds.map(text).filter(id => /^\d+$/.test(id)))) {
+    details.set(postId, facebookPostDetailsFromNormalizedHtml(normalized, postId, timestamps));
+  }
+  return details;
 }
 
 export function facebookPageTimelinePluginUrl(value: string) {
@@ -1688,7 +1715,11 @@ async function scrapeAttempt(
           recordStageFailure("reels", error);
           return [];
         });
-        const gridTimestamps = facebookPostTimestampsFromHtml(await page.content().catch(() => ""));
+        const gridHtml = await page.content().catch(() => "");
+        const gridDetails = facebookPostDetailsMapFromHtml(
+          gridHtml,
+          rawGrid.map(raw => postIdFromUrl(text(raw.post_url))),
+        );
         diagnostics.reels_grid_candidates += rawGrid.length;
         await collector.settle();
         const rawPayloads = collector.candidates.splice(0);
@@ -1700,7 +1731,18 @@ async function scrapeAttempt(
         }
         for (const raw of rawGrid) {
           const gridPostId = postIdFromUrl(text(raw.post_url));
-          if (!raw.timestamp && gridPostId) raw.timestamp = gridTimestamps.get(gridPostId) || null;
+          const details = gridPostId ? gridDetails.get(gridPostId) : null;
+          if (!raw.timestamp && details?.timestamp) raw.timestamp = details.timestamp;
+          if (details?.reactionsCount !== null && details?.reactionsCount !== undefined) {
+            raw.reactions_count = details.reactionsCount;
+            raw.reactions_display = String(details.reactionsCount);
+            raw.reactions_exact = true;
+          }
+          if (details?.commentsCount !== null && details?.commentsCount !== undefined) {
+            raw.comments_count = details.commentsCount;
+            raw.comments_display = String(details.commentsCount);
+            raw.comments_exact = true;
+          }
           const visibleReel = candidateFromRaw(raw, normalized.profileType, capturedAt);
           if (!visibleReel) { diagnostics.rejected.missing_url += 1; continue; }
           const identity = facebookPostIdentity(visibleReel);
@@ -1792,19 +1834,23 @@ async function scrapeAttempt(
       normalized.mode,
       maxResults,
     );
-    const preliminaryAnalysis = input.collectionMode === "engagement" && normalized.mode === "profile"
-      ? buildFacebookProfileAnalysis(analysisBasePosts, normalized.profileType, normalized.targetProfileUrl || null, profile.profileName, profile.followerCount, profile.followerDisplay, capturedAt, discoveredReels)
-      : undefined;
-    const requestedCommentTargets = input.collectionMode === "engagement" && preliminaryAnalysis
+    // Most Reacted and Most Discussed are global rankings across the scanned
+    // Reels set. Enrich every Reel whose exact public feedback metrics were not
+    // present in the grid payload before building those rankings. The current
+    // Most Viewed winners are included as well so their dates/content remain
+    // complete even when their grid metrics were already exact.
+    const requestedDetailTargets = input.collectionMode === "engagement" && normalized.mode === "profile"
       ? [
+          ...analysisBasePosts.filter(post => (
+            !post.reactions_exact
+            || !post.comments_exact
+            || post.timestamp === null
+          )),
           ...preliminaryResults,
-          ...preliminaryAnalysis.top_reacted,
-          ...preliminaryAnalysis.top_discussed,
-          ...preliminaryAnalysis.top_viewed,
         ]
       : preliminaryResults;
     const enriched = new Map<string, FacebookPost>();
-    const detailsTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()];
+    const detailsTargets = [...new Map(requestedDetailTargets.map(post => [facebookPostIdentity(post), post])).values()];
     if (detailsTargets.length) {
       diagnostics.discovery_path!.push("details");
       const detailPages = (await Promise.all(Array.from({ length: Math.min(2, detailsTargets.length) }, async () => {

@@ -222,8 +222,13 @@ const facebookPlatformConfig = {
   showViewsInResults: true,
   showTopComments: false,
   missingDateLabel: "Date unavailable",
+  viewsMetricNote: "Collected directly from the Reels grid",
+  engagementMetricNote: "Exact values verified for each public Reel",
+  commentsMetricNote: "Exact counts verified for each public Reel",
   analysisTabs: [
     { id: "watched", label: "Most Viewed" },
+    { id: "liked", label: "Most Reacted" },
+    { id: "discussed", label: "Most Discussed" },
     { id: "patterns", label: "Content Patterns" },
   ],
   payload: () => ({ profile_type: "page" }),

@@ -279,6 +279,9 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const showViewsInResults = Boolean(platformConfig.showViewsInResults);
   const showTopComments = platformConfig.showTopComments !== false;
   const missingDateLabel = platformConfig.missingDateLabel || "Unknown";
+  const viewsMetricNote = platformConfig.viewsMetricNote || "From visible Reels values";
+  const engagementMetricNote = platformConfig.engagementMetricNote || "From visible grid values";
+  const commentsMetricNote = platformConfig.commentsMetricNote || "From visible grid values";
   const [scrapeEngine, setScrapeEngine] = useState("server");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
@@ -775,17 +778,17 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
               <article className="metric-card">
                 <span>Average views</span>
                 <strong>{formatNumber(analysis.averages?.views)}</strong>
-                <small>From visible Reels values</small>
+                <small>{viewsMetricNote}</small>
               </article>
               <article className="metric-card">
                 <span>Average {engagementNameLower}</span>
                 <strong>{formatNumber(analysis.averages?.likes)}</strong>
-                <small>From visible grid values</small>
+                <small>{engagementMetricNote}</small>
               </article>
               <article className="metric-card">
                 <span>Average comments</span>
                 <strong>{formatNumber(analysis.averages?.comments)}</strong>
-                <small>From visible grid values</small>
+                <small>{commentsMetricNote}</small>
               </article>
               <article className="metric-card">
                 <span>Estimated engagement rate</span>

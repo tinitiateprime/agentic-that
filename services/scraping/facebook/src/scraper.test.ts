@@ -12,6 +12,7 @@ import {
   facebookNavigationHeaders,
   facebookPostIdentity,
   facebookPostDetailsFromHtml,
+  facebookPostDetailsMapFromHtml,
   facebookPostTimestampsFromHtml,
   facebookVisibleTimestamp,
   normalizeFacebookQuery,
@@ -183,6 +184,24 @@ test("extracts a Reel's exact date, reactions, and comments from its public page
     timestamp: "2026-07-30T03:46:06.000Z",
     reactionsCount: 1544,
     commentsCount: 33,
+  });
+});
+
+test("correlates exact metrics for every Reel in one public grid payload", () => {
+  const html = [
+    '{"unified_reactors":{"count":1544},"feedback":{"total_comment_count":33},"post_context":{"publish_time":1785383166,"story_fbid":["848442524868794"]},"tracking":"{\\"top_level_post_id\\":\\"848442524868794\\"}"}',
+    '{"likers":{"count":6794},"feedback":{"total_comment_count":174},"post_context":{"publish_time":1741870652,"story_fbid":["1851328741938963"]},"tracking":"{\\"video_id\\":\\"1851328741938963\\"}"}',
+  ].join("|");
+  const details = facebookPostDetailsMapFromHtml(html, ["848442524868794", "1851328741938963"]);
+  assert.deepEqual(details.get("848442524868794"), {
+    timestamp: "2026-07-30T03:46:06.000Z",
+    reactionsCount: 1544,
+    commentsCount: 33,
+  });
+  assert.deepEqual(details.get("1851328741938963"), {
+    timestamp: "2025-03-13T12:57:32.000Z",
+    reactionsCount: 6794,
+    commentsCount: 174,
   });
 });
 
