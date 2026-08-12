@@ -133,6 +133,8 @@ export type FacebookScrapeDiagnostics = {
   };
   final_url: string;
   page_title: string;
+  discovery_path?: string[];
+  stage_failures?: Partial<Record<"all" | "timeline" | "reels" | "details" | "comments", string>>;
 };
 
 export type FacebookScrapeResult = {
@@ -184,10 +186,33 @@ type RangeWindow = {
   direction: "ascending" | "descending";
 };
 
+export type FacebookDiscoveryPlan = {
+  initialTab: "all" | "reels" | null;
+  collectAll: boolean;
+  collectTimelinePlugin: boolean;
+  collectReels: boolean;
+  reelsArePrimary: boolean;
+};
+
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FACEBOOK_ORIGIN = "https://www.facebook.com";
 const POST_PATH_PATTERN = /\/(?:posts|videos|reel|watch|photo|story\.php|permalink\.php)(?:\/|\?|$)/i;
 const UNSUPPORTED_PROFILE_PATH_PATTERN = /^\/(?:groups|events|marketplace|gaming|watch|hashtag|plugins|share)(?:\/|$)/i;
+
+export function facebookDiscoveryPlan(
+  input: Pick<FacebookScrapeInput, "collectionMode">,
+  mode: NormalizedFacebookQuery["mode"],
+): FacebookDiscoveryPlan {
+  const collectionMode = input.collectionMode || "latest";
+  const reelsArePrimary = mode === "profile" && collectionMode === "engagement";
+  return {
+    initialTab: mode === "profile" ? (reelsArePrimary ? "reels" : "all") : null,
+    collectAll: !reelsArePrimary,
+    collectTimelinePlugin: mode === "profile" && !reelsArePrimary,
+    collectReels: mode === "profile" || mode === "post",
+    reelsArePrimary,
+  };
+}
 const TRACKING_PARAMS = new Set(["__cft__", "__tn__", "mibextid", "ref", "refid", "rdid", "share_url"]);
 
 export function facebookNavigationHeaders() {
@@ -654,6 +679,18 @@ function rankMetric(posts: FacebookPost[], key: keyof FacebookPost, limit = 5) {
     .slice()
     .sort((left, right) => Number(right[key]) - Number(left[key]))
     .slice(0, limit);
+}
+
+export function selectFacebookPrimaryResults(
+  posts: FacebookPost[],
+  reels: FacebookPost[],
+  collectionMode: FacebookCollectionMode,
+  mode: "profile" | "keyword" | "post",
+  limit: number,
+) {
+  return collectionMode === "engagement" && mode === "profile"
+    ? rankMetric(reels, "views_count", limit)
+    : posts.slice(0, limit);
 }
 
 function average(values: Array<number | null>) {
@@ -1384,11 +1421,44 @@ export function parseFacebookCommentsText(value: string, capturedAt = new Date()
 }
 
 async function scrapeFacebookPostComments(page: Page, postUrl: string, capturedAt: string) {
-  await page.goto(postUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const alreadyOnPost = canonicalPostUrl(page.url()) === canonicalPostUrl(postUrl);
+  if (!alreadyOnPost) await page.goto(postUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(900);
   await dismissFacebookPrompts(page, false);
+  const qrLoginDialog = page.locator('[role="dialog"]:visible').filter({ hasText: /scan the qr code|codes match to log in/i }).last();
+  if (await qrLoginDialog.isVisible().catch(() => false)) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(300);
+  }
   const preClickBodyText = await page.locator("body").innerText().catch(() => "");
+  await page.locator('[role="button"][aria-label*="comment" i]:visible').first()
+    .waitFor({ state: "visible", timeout: 3_500 }).catch(() => undefined);
   let count = { count: null as number | null, display: null as string | null };
+  const adjacentCommentDisplay = await page.locator('[role="button"][aria-label*="comment" i]:visible')
+    .evaluateAll<string | null>((controls) => {
+      const compact = /^([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)$/i;
+      for (const control of controls) {
+        if (!/^comment$/i.test(control.getAttribute("aria-label") || "")) continue;
+        let parent: HTMLElement | null = control.parentElement;
+        for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
+          const value = (parent.innerText || "").replace(/\s+/g, " ").trim();
+          const match = value.match(compact);
+          if (match) return match[1].replace(/\s+/g, "");
+        }
+      }
+      return null;
+    }).catch(() => null);
+  if (adjacentCommentDisplay) {
+    count = { count: parseFacebookCount(adjacentCommentDisplay), display: adjacentCommentDisplay };
+  }
+  if (process.env.FACEBOOK_SCRAPER_DEBUG === "1") {
+    console.log("Facebook comment surface", JSON.stringify({
+      url: page.url(),
+      commentControls: await page.locator('[role="button"][aria-label*="comment" i]:visible').count().catch(() => 0),
+      adjacentCommentDisplay,
+      body: (await page.locator("body").innerText().catch(() => "")).slice(-1_000),
+    }));
+  }
   let opened = false;
   const visibleCommentControls = page.locator('[role="button"]:visible').filter({ hasText: /comments?/i });
   await visibleCommentControls.first().waitFor({ state: "visible", timeout: 2_500 }).catch(() => undefined);
@@ -1491,22 +1561,24 @@ async function scrapeFacebookPostComments(page: Page, postUrl: string, capturedA
   };
 }
 
+async function navigateFacebookPage(page: Page, targetUrl: string, timeout = 45_000, pressEscape = true) {
+  let navigationError: unknown;
+  try {
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout });
+  } catch (error) {
+    navigationError = error;
+  }
+  await page.waitForTimeout(700).catch(() => undefined);
+  await dismissFacebookPrompts(page, pressEscape).catch(() => undefined);
+  const snapshot = await accessSnapshot(page).catch(() => null);
+  if (navigationError && (!snapshot || classifyFacebookAccess(snapshot) === "unknown")) throw navigationError;
+  return snapshot;
+}
+
 async function openFacebookProfileTab(page: Page, profileUrl: string, tab: "all" | "reels") {
   const targetUrl = facebookProfileTabUrl(profileUrl, tab);
   if (!targetUrl) throw new Error(`Could not build the Facebook ${tab} tab URL.`);
-  const link = page.getByRole("link", { name: new RegExp(`^${tab}$`, "i") }).first();
-  const clicked = await link.isVisible().catch(() => false)
-    ? await link.click({ timeout: 2_500 }).then(() => true).catch(() => false)
-    : false;
-  if (clicked) {
-    await page.waitForTimeout(700);
-    const current = page.url();
-    const onExpectedTab = tab === "reels" ? /\/reels\/?(?:[?#]|$)|[?&]sk=reels\b/i.test(current) : !/\/reels\/?(?:[?#]|$)|[?&]sk=reels\b/i.test(current);
-    if (onExpectedTab) return;
-  }
-  await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  await page.waitForTimeout(700);
-  await dismissFacebookPrompts(page);
+  return navigateFacebookPage(page, targetUrl);
 }
 
 async function scrollFacebookProfile(page: Page) {
@@ -1543,6 +1615,13 @@ async function scrapeAttempt(
   const capturedAt = new Date().toISOString();
   const collector = responseCollector();
   page.on("response", collector.listener);
+  const plan = facebookDiscoveryPlan(input, normalized.mode);
+  const profileUrl = normalized.mode === "profile"
+    ? normalized.targetProfileUrl || normalized.startUrl
+    : null;
+  const initialUrl = plan.initialTab && profileUrl
+    ? facebookProfileTabUrl(profileUrl, plan.initialTab) || normalized.startUrl
+    : normalized.startUrl;
   const diagnostics: FacebookScrapeDiagnostics = {
     attempts: attempt,
     browser_session: session.sessionMode,
@@ -1556,21 +1635,33 @@ async function scrapeAttempt(
     comments_opened: 0,
     comments_scraped: 0,
     rejected: { missing_url: 0, unexpected_post: 0, owner_mismatch: 0, missing_timestamp: 0, out_of_range: 0 },
-    final_url: normalized.startUrl,
+    final_url: initialUrl,
     page_title: "",
+    discovery_path: [],
+    stage_failures: {},
+  };
+  const recordStageFailure = (stage: keyof NonNullable<FacebookScrapeDiagnostics["stage_failures"]>, error: unknown) => {
+    diagnostics.stage_failures![stage] = (error instanceof Error ? error.message : String(error)).slice(0, 240);
   };
   try {
-    await page.goto(normalized.startUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-    await page.waitForTimeout(1_000);
-    await dismissFacebookPrompts(page, normalized.mode !== "post");
-    if (normalized.mode === "profile") {
-      await openFacebookProfileTab(page, normalized.targetProfileUrl || normalized.startUrl, "all");
+    const initialStage = plan.initialTab || "all";
+    diagnostics.discovery_path!.push(initialStage);
+    let initialSnapshot: FacebookAccessSnapshot | null = null;
+    try {
+      initialSnapshot = await navigateFacebookPage(page, initialUrl, 45_000, normalized.mode !== "post");
+    } catch (error) {
+      recordStageFailure(initialStage === "reels" ? "reels" : "all", error);
+      initialSnapshot = await accessSnapshot(page).catch(() => null);
     }
-    const initialAccess = classifyFacebookAccess(await accessSnapshot(page));
+    const initialAccess = initialSnapshot ? classifyFacebookAccess(initialSnapshot) : "unknown";
     diagnostics.page_visibility = await page.evaluate(() => document.visibilityState).catch(() => "unknown");
     diagnostics.final_url = page.url();
     diagnostics.page_title = await page.title().catch(() => "");
-    if (normalized.mode !== "post" && (initialAccess === "login_required" || initialAccess === "not_found")) {
+    if (normalized.mode !== "post" && initialAccess === "not_found") {
+      return { query: normalized.label, results: [], discoveryStatus: initialAccess, diagnostics };
+    }
+    if (normalized.mode !== "post" && initialAccess === "login_required"
+      && (normalized.mode !== "profile" || plan.reelsArePrimary)) {
       return { query: normalized.label, results: [], discoveryStatus: initialAccess, diagnostics };
     }
 
@@ -1603,38 +1694,46 @@ async function scrapeAttempt(
         ? Math.max(30, Math.min(90, Math.ceil(discoveryTarget / 5) + 15))
         : 30;
 
-    for (let round = 0; round < maxRounds && Date.now() < allDeadline; round += 1) {
-      const before = candidateMap.size;
-      const rawDom = await extractFacebookDomCandidates(page);
-      diagnostics.dom_candidates += rawDom.length;
-      for (const raw of rawDom) {
-        const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
-        if (!post) { diagnostics.rejected.missing_url += 1; continue; }
-        mergePostIntoMap(candidateMap, post);
+    if (plan.collectAll && initialAccess !== "login_required") {
+      for (let round = 0; round < maxRounds && Date.now() < allDeadline; round += 1) {
+        const before = candidateMap.size;
+        const rawDom = await extractFacebookDomCandidates(page).catch(error => {
+          recordStageFailure("all", error);
+          return [];
+        });
+        diagnostics.dom_candidates += rawDom.length;
+        for (const raw of rawDom) {
+          const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
+          if (!post) { diagnostics.rejected.missing_url += 1; continue; }
+          mergePostIntoMap(candidateMap, post);
+        }
+        await collector.settle();
+        const rawPayloads = collector.candidates.splice(0);
+        diagnostics.payload_candidates += rawPayloads.length;
+        for (const raw of rawPayloads) {
+          const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
+          if (!post) { diagnostics.rejected.missing_url += 1; continue; }
+          mergePostIntoMap(candidateMap, post);
+        }
+        diagnostics.scroll_rounds += 1;
+        stableRounds = candidateMap.size === before ? stableRounds + 1 : 0;
+        const directReady = normalized.mode === "post"
+          && candidateMap.size > 0
+          && ([...candidateMap.values()].some(post => post.reactions_count !== null || post.comments_count !== null) || round === maxRounds - 1);
+        if (normalized.mode === "post" ? directReady : candidateMap.size >= discoveryTarget || stableRounds >= 6) break;
+        if (normalized.mode === "post") await page.waitForTimeout(900);
+        else await scrollFacebookProfile(page);
       }
       await collector.settle();
-      const rawPayloads = collector.candidates.splice(0);
-      diagnostics.payload_candidates += rawPayloads.length;
-      for (const raw of rawPayloads) {
-        const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
-        if (!post) { diagnostics.rejected.missing_url += 1; continue; }
-        mergePostIntoMap(candidateMap, post);
-      }
-      diagnostics.scroll_rounds += 1;
-      stableRounds = candidateMap.size === before ? stableRounds + 1 : 0;
-      const directReady = normalized.mode === "post"
-        && candidateMap.size > 0
-        && ([...candidateMap.values()].some(post => post.reactions_count !== null || post.comments_count !== null) || round === maxRounds - 1);
-      if (normalized.mode === "post" ? directReady : candidateMap.size >= discoveryTarget || stableRounds >= 6) break;
-      if (normalized.mode === "post") await page.waitForTimeout(900);
-      else await scrollFacebookProfile(page);
     }
-    await collector.settle();
-    page.off("response", collector.listener);
 
     if (normalized.mode === "post" && candidateMap.size === 0) {
       const directUrl = canonicalPostUrl(normalized.startUrl);
-      const embedded = directUrl ? await loadFacebookEmbedCandidate(page, directUrl) : null;
+      const embedPage = directUrl ? await session.context.newPage().catch(() => null) : null;
+      const embedded = directUrl && embedPage
+        ? await loadFacebookEmbedCandidate(embedPage, directUrl).catch(() => null)
+        : null;
+      if (embedPage) await embedPage.close().catch(() => undefined);
       if (embedded) {
         diagnostics.dom_candidates += 1;
         const post = candidateFromRaw(embedded, normalized.profileType, capturedAt);
@@ -1651,9 +1750,13 @@ async function scrapeAttempt(
       if (embeddedPost?.author_name) profile.profileName = embeddedPost.author_name;
     }
 
-    if (normalized.mode === "profile") {
+    if (plan.collectTimelinePlugin && profileUrl) {
+      diagnostics.discovery_path!.push("timeline");
       const targetProfileUrl = normalized.targetProfileUrl || normalized.startUrl;
-      const timelineCandidates = await loadFacebookPageTimelineCandidates(page, targetProfileUrl).catch(() => []);
+      const timelineCandidates = await loadFacebookPageTimelineCandidates(page, targetProfileUrl).catch(error => {
+        recordStageFailure("timeline", error);
+        return [];
+      });
       diagnostics.timeline_plugin_candidates = timelineCandidates.length;
       diagnostics.dom_candidates += timelineCandidates.length;
       for (const raw of timelineCandidates) {
@@ -1676,14 +1779,21 @@ async function scrapeAttempt(
     }
 
     const reelsMap = new Map<string, FacebookPost>();
+    const reelPayloadMap = new Map<string, FacebookPost>();
     const directPost = normalized.mode === "post"
       ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
       : null;
     const reelsProfileUrl = normalized.mode === "profile"
       ? normalized.targetProfileUrl || normalized.startUrl
       : directPost?.author_url || null;
-    if (reelsProfileUrl) {
-      await openFacebookProfileTab(page, reelsProfileUrl, "reels");
+    if (reelsProfileUrl && plan.collectReels) {
+      if (!diagnostics.discovery_path!.includes("reels")) diagnostics.discovery_path!.push("reels");
+      const alreadyOnReels = plan.initialTab === "reels" && !plan.collectTimelinePlugin;
+      if (!alreadyOnReels) {
+        await openFacebookProfileTab(page, reelsProfileUrl, "reels").catch(error => {
+          recordStageFailure("reels", error);
+        });
+      }
       const reelsTarget = normalized.mode === "post"
         ? 100
         : input.collectionMode === "latest"
@@ -1694,16 +1804,34 @@ async function scrapeAttempt(
       let staleReelsRounds = 0;
       for (let round = 0; round < reelsRounds && Date.now() < reelsDeadline; round += 1) {
         const before = reelsMap.size;
-        const rawGrid = await extractFacebookReelsGridCandidates(page);
+        const rawGrid = await extractFacebookReelsGridCandidates(page).catch(error => {
+          recordStageFailure("reels", error);
+          return [];
+        });
         const gridTimestamps = facebookPostTimestampsFromHtml(await page.content().catch(() => ""));
         diagnostics.reels_grid_candidates += rawGrid.length;
+        await collector.settle();
+        const rawPayloads = collector.candidates.splice(0);
+        diagnostics.payload_candidates += rawPayloads.length;
+        for (const raw of rawPayloads) {
+          const payloadPost = candidateFromRaw(raw, normalized.profileType, capturedAt);
+          if (!payloadPost) continue;
+          mergePostIntoMap(reelPayloadMap, payloadPost);
+        }
         for (const raw of rawGrid) {
           const gridPostId = postIdFromUrl(text(raw.post_url));
           if (!raw.timestamp && gridPostId) raw.timestamp = gridTimestamps.get(gridPostId) || null;
-          const reel = candidateFromRaw(raw, normalized.profileType, capturedAt);
-          if (!reel) { diagnostics.rejected.missing_url += 1; continue; }
+          const visibleReel = candidateFromRaw(raw, normalized.profileType, capturedAt);
+          if (!visibleReel) { diagnostics.rejected.missing_url += 1; continue; }
+          const identity = facebookPostIdentity(visibleReel);
+          const payloadPost = reelPayloadMap.get(identity)
+            || [...reelPayloadMap.values()].find(post => Boolean(visibleReel.post_id && post.post_id === visibleReel.post_id));
+          const reel = {
+            ...(payloadPost ? mergePosts(payloadPost, visibleReel) : visibleReel),
+            author_name: payloadPost?.author_name || visibleReel.author_name || profile.profileName,
+            author_url: payloadPost?.author_url || visibleReel.author_url || profileUrl,
+          };
           mergePostIntoMap(reelsMap, reel);
-          const identity = facebookPostIdentity(reel);
           let matchingKey = candidateMap.has(identity) ? identity : null;
           if (!matchingKey) {
             const reelThumbnail = thumbnailIdentity(reel.thumbnail_url);
@@ -1726,7 +1854,7 @@ async function scrapeAttempt(
         if (directMatched || reelsMap.size >= reelsTarget || staleReelsRounds >= 6) break;
         await scrollFacebookProfile(page);
       }
-      diagnostics.final_url = page.url();
+      diagnostics.final_url = page.url() || diagnostics.final_url;
     }
 
     if (normalized.mode === "profile"
@@ -1775,9 +1903,17 @@ async function scrapeAttempt(
       return range.direction === "ascending" ? -difference : difference;
     });
 
-    const preliminaryResults = accepted.slice(0, maxResults);
+    const discoveredReels = [...reelsMap.values()];
+    const analysisBasePosts = plan.reelsArePrimary ? discoveredReels : accepted;
+    const preliminaryResults = selectFacebookPrimaryResults(
+      accepted,
+      discoveredReels,
+      input.collectionMode || "latest",
+      normalized.mode,
+      maxResults,
+    );
     const preliminaryAnalysis = input.collectionMode === "engagement" && normalized.mode === "profile"
-      ? buildFacebookProfileAnalysis(accepted, normalized.profileType, normalized.targetProfileUrl || null, profile.profileName, profile.followerCount, profile.followerDisplay, capturedAt, [...reelsMap.values()])
+      ? buildFacebookProfileAnalysis(analysisBasePosts, normalized.profileType, normalized.targetProfileUrl || null, profile.profileName, profile.followerCount, profile.followerDisplay, capturedAt, discoveredReels)
       : undefined;
     const requestedCommentTargets = input.collectionMode === "engagement" && preliminaryAnalysis
       ? [
@@ -1792,17 +1928,23 @@ async function scrapeAttempt(
       .filter(post => post.reactions_count === null || post.comments_count === null || !post.content)
       .slice(0, 12);
     if (detailsTargets.length) {
+      diagnostics.discovery_path!.push("details");
       const detailsPage = await session.context.newPage().catch(() => null);
       if (detailsPage) {
         try {
           for (const post of detailsTargets) {
-            const raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(() => null);
+            const raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(error => {
+              recordStageFailure("details", error);
+              return null;
+            });
             const details = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
             if (details) enriched.set(facebookPostIdentity(post), mergePosts(details, post));
           }
         } finally {
           await detailsPage.close().catch(() => undefined);
         }
+      } else {
+        recordStageFailure("details", new Error("Could not open the optional Facebook details page."));
       }
     }
     const configuredCommentLimit = Number(process.env.FACEBOOK_COMMENT_ENRICHMENT_LIMIT);
@@ -1813,34 +1955,51 @@ async function scrapeAttempt(
       ? []
       : [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
     if (commentTargets.length) {
-      const commentPage = await session.context.newPage().catch(() => null);
+      diagnostics.discovery_path!.push("comments");
+      const reuseDiscoveryPage = normalized.mode === "post";
+      const commentPage = reuseDiscoveryPage ? page : await session.context.newPage().catch(() => null);
       if (commentPage) {
         const commentsDeadline = Date.now() + Math.max(30_000, Math.min(120_000, commentLimit * 8_000));
         try {
           for (const post of commentTargets) {
             if (Date.now() >= commentsDeadline) break;
-            const details = await scrapeFacebookPostComments(commentPage, post.post_url, capturedAt).catch(() => null);
+            const details = await scrapeFacebookPostComments(commentPage, post.post_url, capturedAt).catch(error => {
+              recordStageFailure("comments", error);
+              return null;
+            });
             if (!details) continue;
             if (details.opened) diagnostics.comments_opened += 1;
             diagnostics.comments_scraped += details.comments.length;
             const base = enriched.get(facebookPostIdentity(post)) || post;
-            const updated = mergePosts(base, {
+            const merged = mergePosts(base, {
               ...base,
               comments_count: details.commentsCount ?? post.comments_count,
               comments_display: details.commentsDisplay ?? post.comments_display,
               comments_exact: details.commentsCount !== null ? details.commentsExact : post.comments_exact,
               top_comments: details.comments,
             });
+            const updated = details.commentsCount === null
+              ? merged
+              : {
+                  ...merged,
+                  // The direct post surface is fresher than the public embed.
+                  // Keep this current visible count even when both are exact.
+                  comments_count: details.commentsCount,
+                  comments_display: details.commentsDisplay,
+                  comments_exact: details.commentsExact,
+                };
             enriched.set(facebookPostIdentity(post), updated);
           }
         } finally {
-          await commentPage.close().catch(() => undefined);
+          if (!reuseDiscoveryPage) await commentPage.close().catch(() => undefined);
         }
+      } else {
+        recordStageFailure("comments", new Error("Could not open the optional Facebook comments page."));
       }
     }
     const enrichedPost = (post: FacebookPost) => enriched.get(facebookPostIdentity(post)) || post;
-    const analysisPosts = accepted.map(enrichedPost);
-    const analyzedReels = [...reelsMap.values()].map(enrichedPost);
+    const analysisPosts = analysisBasePosts.map(enrichedPost);
+    const analyzedReels = discoveredReels.map(enrichedPost);
     const results = preliminaryResults.map(enrichedPost).map(post => ({
       ...post,
       follower_count: post.follower_count ?? profile.followerCount,
@@ -1848,11 +2007,12 @@ async function scrapeAttempt(
       follower_count_exact: post.follower_count_exact || false,
     }));
     diagnostics.accepted_results = results.length;
-    const finalAccess = classifyFacebookAccess(await accessSnapshot(page));
+    const finalSnapshot = await accessSnapshot(page).catch(() => null);
+    const finalAccess = finalSnapshot ? classifyFacebookAccess(finalSnapshot) : "unknown";
     const discoveryStatus: FacebookDiscoveryStatus = results.length
-      ? results.some(post => timestampMs(post) === null)
+      ? (!plan.reelsArePrimary && (results.some(post => timestampMs(post) === null)
           || (normalized.mode !== "post" && results.length < maxResults && diagnostics.rejected.missing_timestamp > 0)
-          || (normalized.mode === "keyword" && results.length < maxResults)
+          || (normalized.mode === "keyword" && results.length < maxResults)))
         ? "partial"
         : "ok"
       : analyzedReels.length

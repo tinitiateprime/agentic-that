@@ -4,6 +4,7 @@ import { handleFacebookRequest, prepareFacebookScrapeInput } from "./api.ts";
 import {
   buildFacebookProfileAnalysis,
   classifyFacebookAccess,
+  facebookDiscoveryPlan,
   facebookPageTimelinePluginUrl,
   facebookProfileTabUrl,
   facebookUrlType,
@@ -16,6 +17,7 @@ import {
   parseFacebookCommentsText,
   parseFacebookCount,
   parseFacebookReelViewLabel,
+  selectFacebookPrimaryResults,
   type FacebookPost,
 } from "./scraper.ts";
 
@@ -110,6 +112,33 @@ test("builds explicit All and Reels profile tab URLs", () => {
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/reels/", "all"), "https://www.facebook.com/AgenticThat/");
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/", "reels"), "https://www.facebook.com/AgenticThat/reels/");
   assert.equal(facebookProfileTabUrl("https://facebook.com/profile.php?id=123", "reels"), "https://www.facebook.com/profile.php?id=123&sk=reels");
+});
+
+test("uses a Reels-only discovery path for Most Viewed profiles", () => {
+  assert.deepEqual(facebookDiscoveryPlan({ collectionMode: "engagement" }, "profile"), {
+    initialTab: "reels",
+    collectAll: false,
+    collectTimelinePlugin: false,
+    collectReels: true,
+    reelsArePrimary: true,
+  });
+  assert.deepEqual(facebookDiscoveryPlan({ collectionMode: "latest" }, "profile"), {
+    initialTab: "all",
+    collectAll: true,
+    collectTimelinePlugin: true,
+    collectReels: true,
+    reelsArePrimary: false,
+  });
+});
+
+test("returns visible Reel rankings even without timeline posts or timestamps", () => {
+  const reels = [
+    post({ post_id: "low", post_url: "https://facebook.com/reel/low", timestamp: null, views_count: 2_000, views_display: "2K", metric_source: "visible_reels_grid" }),
+    post({ post_id: "high", post_url: "https://facebook.com/reel/high", timestamp: null, views_count: 35_000, views_display: "35K", metric_source: "visible_reels_grid" }),
+    post({ post_id: "missing", post_url: "https://facebook.com/reel/missing", timestamp: null, views_count: null, views_display: null, metric_source: "visible_reels_grid" }),
+  ];
+  const results = selectFacebookPrimaryResults([], reels, "engagement", "profile", 2);
+  assert.deepEqual(results.map(item => item.views_count), [35_000, 2_000]);
 });
 
 test("builds an anonymous official Page timeline URL without losing numeric profile IDs", () => {
