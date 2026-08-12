@@ -277,6 +277,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const engagementNameLower = engagementName.toLowerCase();
   const analysisTabs = platformConfig.analysisTabs || ANALYSIS_TABS;
   const showViewsInResults = Boolean(platformConfig.showViewsInResults);
+  const showTopComments = platformConfig.showTopComments !== false;
+  const missingDateLabel = platformConfig.missingDateLabel || "Unknown";
   const [scrapeEngine, setScrapeEngine] = useState("server");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
@@ -478,13 +480,15 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   };
 
   const formatDate = (value) => {
-    if (!value) return "N/A";
-    return new Date(value).toLocaleString();
+    if (!value) return missingDateLabel;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : missingDateLabel;
   };
 
   const relativeDate = (value) => {
-    if (!value) return "Unknown";
+    if (!value) return missingDateLabel;
     const postDate = new Date(value);
+    if (!Number.isFinite(postDate.getTime())) return missingDateLabel;
     const now = new Date();
     const oneDay = 24 * 60 * 60 * 1000;
     const age = Math.floor((now.setHours(0, 0, 0, 0) - postDate.setHours(0, 0, 0, 0)) / oneDay);
@@ -543,7 +547,10 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   };
 
   const exportCsv = () => {
-    const exportColumns = lastCollectionMode === "engagement" || showViewsInResults ? engagementExportColumns : baseExportColumns;
+    const configuredExportColumns = lastCollectionMode === "engagement" || showViewsInResults ? engagementExportColumns : baseExportColumns;
+    const exportColumns = showTopComments
+      ? configuredExportColumns
+      : configuredExportColumns.filter((column) => column !== "top_comments");
     const analysisRows = analysisTab === "liked"
       ? analysis?.top_liked
       : analysisTab === "discussed"
@@ -592,7 +599,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
               {primaryMetric !== "views" && <th>Views</th>}
               {primaryMetric !== "likes" && <th>{engagementName}</th>}
               {primaryMetric !== "comments_count" && <th>Comments</th>}
-              <th>Top comments</th>
+              {showTopComments && <th>Top comments</th>}
               <th>Posted</th>
               <th>Post</th>
             </tr>
@@ -630,7 +637,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                 {primaryMetric !== "views" && <td>{formatViewMetric(post)}</td>}
                 {primaryMetric !== "likes" && <td>{formatPostMetric(post, "likes")}</td>}
                 {primaryMetric !== "comments_count" && <td>{formatPostMetric(post, "comments_count")}</td>}
-                <td>
+                {showTopComments && <td>
                   <div className="comment-list ranking-comments">
                     {(post.top_comments || []).slice(0, 3).map((comment, commentIndex) => (
                       <p key={`${post.post_url}-${comment.username}-${commentIndex}`}>
@@ -639,7 +646,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                     ))}
                     {(!post.top_comments || post.top_comments.length === 0) && <span>Not publicly available</span>}
                   </div>
-                </td>
+                </td>}
                 <td>{formatDate(post.timestamp)}</td>
                 <td>
                   <a
@@ -864,7 +871,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                     <th>{engagementName}</th>
                     {showViewsInResults && <th>Views</th>}
                     <th>Followers</th>
-                    <th>Top comments</th>
+                    {showTopComments && <th>Top comments</th>}
                     <th>Posted on</th>
                   </tr>
                 </thead>
@@ -907,7 +914,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                       <td>{formatPostMetric(post, "likes")}</td>
                       {showViewsInResults && <td>{formatViewMetric(post)}</td>}
                       <td>{formatNumber(post.follower_count)}</td>
-                      <td>
+                      {showTopComments && <td>
                         <div className="comment-list">
                           {(post.top_comments || []).slice(0, 5).map((comment, commentIndex) => (
                             <p key={`${comment.username}-${commentIndex}`}>
@@ -916,7 +923,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                           ))}
                           {(!post.top_comments || post.top_comments.length === 0) && <span>N/A</span>}
                         </div>
-                      </td>
+                      </td>}
                       <td>{formatDate(post.timestamp)}</td>
                     </tr>
                   ))}

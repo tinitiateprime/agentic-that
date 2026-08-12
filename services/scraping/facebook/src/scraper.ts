@@ -951,8 +951,17 @@ export async function extractFacebookReelsGridCandidates(page: Page): Promise<Ra
   return candidates;
 }
 
+function normalizedFacebookHtml(value: string) {
+  return String(value || "")
+    .replace(/&quot;/gi, '"')
+    // Reels data can be JSON nested inside another JSON string. Collapse every
+    // escaping layer so one parser works on direct pages and serialized DOM.
+    .replace(/\\+"/g, '"')
+    .replace(/\\\//g, "/");
+}
+
 export function facebookPostTimestampsFromHtml(value: string) {
-  const normalized = String(value || "").replace(/\\"/g, '"').replace(/&quot;/gi, '"');
+  const normalized = normalizedFacebookHtml(value);
   const timestamps = new Map<string, string>();
   const capturedAt = Date.now();
   const patterns = [
@@ -971,6 +980,29 @@ export function facebookPostTimestampsFromHtml(value: string) {
     }
   }
   return timestamps;
+}
+
+export function facebookPostDetailsFromHtml(value: string, postId: string | null | undefined) {
+  const normalized = normalizedFacebookHtml(value);
+  const id = text(postId);
+  const timestamp = id ? facebookPostTimestampsFromHtml(normalized).get(id) || null : null;
+  let reactionsCount: number | null = null;
+  let commentsCount: number | null = null;
+  if (/^\d+$/.test(id)) {
+    const identity = new RegExp('"(?:top_level_post_id|video_id)"\\s*:\\s*"' + id + '"', "g");
+    for (const match of normalized.matchAll(identity)) {
+      const matchIndex = match.index ?? 0;
+      const nearby = normalized.slice(Math.max(0, matchIndex - 4_000), matchIndex + 1_000);
+      const reactionMatches = [...nearby.matchAll(/"(?:unified_reactors|likers)"\s*:\s*\{\s*"count"\s*:\s*(\d+)/g)];
+      const commentMatches = [...nearby.matchAll(/"total_comment_count"\s*:\s*(\d+)/g)];
+      const reaction = finiteNumber(reactionMatches.at(-1)?.[1]);
+      const comments = finiteNumber(commentMatches.at(-1)?.[1]);
+      if (reaction !== null) reactionsCount = reaction;
+      if (comments !== null) commentsCount = comments;
+      if (timestamp && reactionsCount !== null && commentsCount !== null) break;
+    }
+  }
+  return { timestamp, reactionsCount, commentsCount };
 }
 
 export function facebookPageTimelinePluginUrl(value: string) {
@@ -1188,6 +1220,39 @@ async function loadFacebookEmbedCandidate(page: Page, postUrl: string) {
   return null;
 }
 
+async function loadFacebookDirectPostCandidate(page: Page, postUrl: string): Promise<RawCandidate | null> {
+  const postId = postIdFromUrl(postUrl);
+  const response = await page.goto(postUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if (!response || response.status() >= 400) return null;
+  const [html, title, description, image] = await Promise.all([
+    response.text().catch(() => page.content().catch(() => "")),
+    page.locator('meta[property="og:title"],meta[name="twitter:title"]').first().getAttribute("content").catch(() => null),
+    page.locator('meta[property="og:description"],meta[name="description"],meta[name="twitter:description"]').first().getAttribute("content").catch(() => null),
+    page.locator('meta[property="og:image"],meta[name="twitter:image"]').first().getAttribute("content").catch(() => null),
+  ]);
+  const details = facebookPostDetailsFromHtml(html, postId);
+  const authorName = text(title).split("|").at(-1)?.trim() || null;
+  if (!details.timestamp && details.reactionsCount === null && details.commentsCount === null
+    && !text(description) && !text(image)) return null;
+  return {
+    post_id: postId,
+    post_url: postUrl,
+    author_name: authorName,
+    content: text(description) || null,
+    media_type: /\/reel\//i.test(postUrl) ? "reel" : "video",
+    thumbnail_url: text(image) || null,
+    timestamp: details.timestamp,
+    reactions_count: details.reactionsCount,
+    reactions_display: formatMetric(details.reactionsCount),
+    reactions_exact: details.reactionsCount !== null,
+    comments_count: details.commentsCount,
+    comments_display: formatMetric(details.commentsCount),
+    comments_exact: details.commentsCount !== null,
+    top_comments: [],
+    _source: "visible_page",
+  };
+}
+
 function directObject(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
 }
@@ -1374,192 +1439,7 @@ function visibleProfileInfo(bodyText: string) {
   return { followerCount: followers.count, followerDisplay: followers.display, profileName: title };
 }
 
-export function parseFacebookCommentsText(value: string, capturedAt = new Date().toISOString()) {
-  const allLines = value.split(/\r?\n/).map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const sortIndex = allLines.findIndex(line => /^(?:most relevant|newest|all comments)$/i.test(line));
-  const lines = sortIndex >= 0 ? allLines.slice(sortIndex + 1) : allLines;
-  const timePattern = "(?:just now|now|yesterday|\\d+\\s*(?:s|m|h|d|w|sec(?:ond)?s?|min(?:ute)?s?|hours?|days?|weeks?)(?:\\s+ago)?)";
-  const combinedTime = new RegExp(`^(.{2,100}?)\\s*[·•]\\s*(${timePattern})(?:\\s*[·•].*)?$`, "i");
-  const timeOnly = new RegExp(`^${timePattern}$`, "i");
-  const metadata = /^(?:like|reply|follow|edited|see translation|view (?:more|previous|all|replies)|hide|report|author|top fan|write a comment|more)$/i;
-  const comments: FacebookComment[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index < lines.length && comments.length < 10; index += 1) {
-    let author = "";
-    let timeValue = "";
-    const combined = lines[index].match(combinedTime);
-    if (combined) {
-      author = combined[1].trim();
-      timeValue = combined[2].trim();
-    } else if (index + 1 < lines.length && timeOnly.test(lines[index + 1])) {
-      author = lines[index];
-      timeValue = lines[index + 1];
-      index += 1;
-    } else {
-      continue;
-    }
-    if (!author || author.length > 100 || metadata.test(author)) continue;
-    let commentText = "";
-    for (let cursor = index + 1; cursor < Math.min(lines.length, index + 5); cursor += 1) {
-      if (combinedTime.test(lines[cursor]) || (cursor + 1 < lines.length && timeOnly.test(lines[cursor + 1]))) break;
-      if (metadata.test(lines[cursor]) || timeOnly.test(lines[cursor])) continue;
-      commentText = lines[cursor];
-      break;
-    }
-    if (!commentText || commentText === author || commentText.length > 2_000) continue;
-    const identity = `${author.toLowerCase()}\u0000${commentText.toLowerCase()}`;
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    comments.push({
-      author_name: author,
-      text: commentText,
-      timestamp: facebookVisibleTimestamp(timeValue, capturedAt),
-      time: timeValue,
-    });
-  }
-  return comments;
-}
 
-async function scrapeFacebookPostComments(page: Page, postUrl: string, capturedAt: string) {
-  const alreadyOnPost = canonicalPostUrl(page.url()) === canonicalPostUrl(postUrl);
-  if (!alreadyOnPost) await page.goto(postUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await page.waitForTimeout(900);
-  await dismissFacebookPrompts(page, false);
-  const qrLoginDialog = page.locator('[role="dialog"]:visible').filter({ hasText: /scan the qr code|codes match to log in/i }).last();
-  if (await qrLoginDialog.isVisible().catch(() => false)) {
-    await page.keyboard.press("Escape").catch(() => undefined);
-    await page.waitForTimeout(300);
-  }
-  const preClickBodyText = await page.locator("body").innerText().catch(() => "");
-  await page.locator('[role="button"][aria-label*="comment" i]:visible').first()
-    .waitFor({ state: "visible", timeout: 3_500 }).catch(() => undefined);
-  let count = { count: null as number | null, display: null as string | null };
-  const adjacentCommentDisplay = await page.locator('[role="button"][aria-label*="comment" i]:visible')
-    .evaluateAll<string | null>((controls) => {
-      const compact = /^([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)$/i;
-      for (const control of controls) {
-        if (!/^comment$/i.test(control.getAttribute("aria-label") || "")) continue;
-        let parent: HTMLElement | null = control.parentElement;
-        for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
-          const value = (parent.innerText || "").replace(/\s+/g, " ").trim();
-          const match = value.match(compact);
-          if (match) return match[1].replace(/\s+/g, "");
-        }
-      }
-      return null;
-    }).catch(() => null);
-  if (adjacentCommentDisplay) {
-    count = { count: parseFacebookCount(adjacentCommentDisplay), display: adjacentCommentDisplay };
-  }
-  if (process.env.FACEBOOK_SCRAPER_DEBUG === "1") {
-    console.log("Facebook comment surface", JSON.stringify({
-      url: page.url(),
-      commentControls: await page.locator('[role="button"][aria-label*="comment" i]:visible').count().catch(() => 0),
-      adjacentCommentDisplay,
-      body: (await page.locator("body").innerText().catch(() => "")).slice(-1_000),
-    }));
-  }
-  let opened = false;
-  const visibleCommentControls = page.locator('[role="button"]:visible').filter({ hasText: /comments?/i });
-  await visibleCommentControls.first().waitFor({ state: "visible", timeout: 2_500 }).catch(() => undefined);
-  const visibleCommentControlCount = Math.min(await visibleCommentControls.count().catch(() => 0), 12);
-  for (let index = 0; index < visibleCommentControlCount; index += 1) {
-    const label = await visibleCommentControls.nth(index).innerText().catch(() => "");
-    const parsed = metricFromText(label, ["comments?"]);
-    if (parsed.count !== null) { count = parsed; break; }
-  }
-  const triggers = [
-    page.locator('[role="button"]:visible').filter({ hasText: /^\s*[0-9][0-9,.]*\s*[KMB]?\s+comments?\s*$/i }),
-    page.locator('[role="button"]:visible').filter({ hasText: /^\s*Comment\s*$/i }),
-    page.locator('[role="button"][aria-label*="comment" i]:visible'),
-    page.locator('button[aria-label*="comment" i]:visible'),
-    page.getByRole("button", { name: /^(?:leave a )?comment|[0-9][0-9,.]*\s*[KMB]?\s+comments?$/i }),
-  ];
-  for (const locator of triggers) {
-    const total = Math.min(await locator.count().catch(() => 0), 8);
-    for (let index = 0; index < total; index += 1) {
-      const trigger = locator.nth(index);
-      const label = `${await trigger.getAttribute("aria-label").catch(() => "") || ""} ${await trigger.innerText().catch(() => "") || ""}`.trim();
-      if (/reply|write a comment/i.test(label)) continue;
-      const parsed = metricFromText(label, ["comments?"]);
-      if (parsed.count !== null) count = parsed;
-      if (await trigger.isVisible().catch(() => false)) {
-        opened = await trigger.click({ timeout: 2_000 }).then(() => true).catch(() => false);
-        if (opened) break;
-      }
-    }
-    if (opened) break;
-  }
-  if (opened) await page.waitForTimeout(650);
-  const scrolled = await page.evaluate(String.raw`(() => {
-    const visible = (element) => {
-      const style = getComputedStyle(element);
-      const bounds = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
-    };
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(visible);
-    const scope = dialogs.at(-1) || document.body;
-    const scrollables = [scope, ...scope.querySelectorAll("*")]
-      .filter(element => visible(element) && element.scrollHeight > element.clientHeight + 80)
-      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight));
-    const target = scrollables[0];
-    if (!target) return false;
-    target.scrollBy({ top: Math.max(260, Math.round(target.clientHeight * .4)), behavior: "instant" });
-    return true;
-  })()`).catch(() => false);
-  if (scrolled) await page.waitForTimeout(650);
-  const expanders = page.getByText(/^(?:view (?:more|previous) comments|more comments)$/i);
-  const expanderCount = Math.min(await expanders.count().catch(() => 0), 2);
-  for (let index = 0; index < expanderCount; index += 1) {
-    const expander = expanders.nth(index);
-    if (await expander.isVisible().catch(() => false)) {
-      await expander.click({ timeout: 1_500 }).catch(() => undefined);
-      await page.waitForTimeout(350);
-    }
-  }
-  const snapshot = await page.evaluate<{ text: string; comments: Array<{ author_name: string; text: string; time: string | null }> }>(String.raw`(() => {
-    const clean = (value) => (value || "").replace(/\s+/g, " ").trim();
-    const visible = (element) => {
-      const style = getComputedStyle(element);
-      const bounds = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
-    };
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(visible);
-    const scope = dialogs.at(-1) || document.body;
-    const selectors = '[aria-label^="Comment by " i],[aria-label*=" comment by " i],[role="article"]';
-    const nodes = [...scope.querySelectorAll(selectors)].filter(visible).slice(0, 80);
-    const metadata = /^(?:like|reply|follow|edited|see translation|view (?:more|previous|all|replies)|hide|report|author|top fan|write a comment|more)$/i;
-    const timePattern = /^(?:just now|now|yesterday|\d+\s*(?:s|m|h|d|w|sec(?:ond)?s?|min(?:ute)?s?|hours?|days?|weeks?)(?:\s+ago)?)$/i;
-    const comments = [];
-    for (const node of nodes) {
-      const lines = (node.innerText || "").split(/\n+/).map(clean).filter(Boolean);
-      if (!lines.some(line => /^reply$/i.test(line))) continue;
-      const aria = node.getAttribute("aria-label") || "";
-      const ariaAuthor = aria.match(/comment by\s+(.+?)(?:[,.]|$)/i)?.[1] || "";
-      const authorNode = [...node.querySelectorAll("strong,a[href]")].filter(visible)
-        .find(element => clean(element.textContent).length > 1 && clean(element.textContent).length <= 100);
-      const author = clean(ariaAuthor || authorNode?.textContent || lines[0]);
-      const time = lines.find(line => timePattern.test(line)) || null;
-      const text = lines.find(line => line !== author && line !== time && !metadata.test(line) && line.length <= 2000) || "";
-      if (author && text) comments.push({ author_name: author, text, time });
-      if (comments.length >= 10) break;
-    }
-    return { text: scope.innerText || "", comments };
-  })()`).catch(() => ({ text: "", comments: [] }));
-  const structured = snapshot.comments.map(comment => ({
-    ...comment,
-    timestamp: comment.time ? facebookVisibleTimestamp(comment.time, capturedAt) : null,
-  }));
-  const visibleComments = structured.length ? structured : parseFacebookCommentsText(snapshot.text, capturedAt);
-  const comments = visibleComments.length ? visibleComments : parseFacebookCommentsText(preClickBodyText, capturedAt);
-  return {
-    comments,
-    opened,
-    commentsCount: count.count,
-    commentsDisplay: count.display,
-    commentsExact: count.count !== null && !/[KMB]/i.test(count.display || ""),
-  };
-}
 
 async function navigateFacebookPage(page: Page, targetUrl: string, timeout = 45_000, pressEscape = true) {
   let navigationError: unknown;
@@ -1924,77 +1804,46 @@ async function scrapeAttempt(
         ]
       : preliminaryResults;
     const enriched = new Map<string, FacebookPost>();
-    const detailsTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()]
-      .filter(post => post.reactions_count === null || post.comments_count === null || !post.content)
-      .slice(0, 12);
+    const detailsTargets = [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()];
     if (detailsTargets.length) {
       diagnostics.discovery_path!.push("details");
-      const detailsPage = await session.context.newPage().catch(() => null);
-      if (detailsPage) {
+      const detailPages = (await Promise.all(Array.from({ length: Math.min(2, detailsTargets.length) }, async () => {
+        const detailPage = await session.context.newPage().catch(() => null);
+        if (detailPage) {
+          await detailPage.route("**/*", route => {
+            const resourceType = route.request().resourceType();
+            return ["image", "media", "font"].includes(resourceType) ? route.abort() : route.continue();
+          }).catch(() => undefined);
+        }
+        return detailPage;
+      }))).filter((detailPage): detailPage is Page => Boolean(detailPage));
+      if (detailPages.length) {
+        let cursor = 0;
         try {
-          for (const post of detailsTargets) {
-            const raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(error => {
-              recordStageFailure("details", error);
-              return null;
-            });
-            const details = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
-            if (details) enriched.set(facebookPostIdentity(post), mergePosts(details, post));
-          }
+          await Promise.all(detailPages.map(async detailsPage => {
+            while (cursor < detailsTargets.length) {
+              const post = detailsTargets[cursor++];
+              let raw = await loadFacebookDirectPostCandidate(detailsPage, post.post_url).catch(error => {
+                recordStageFailure("details", error);
+                return null;
+              });
+              let details = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
+              if (!details || details.timestamp === null || details.reactions_count === null || details.comments_count === null || !details.content) {
+                raw = await loadFacebookEmbedCandidate(detailsPage, post.post_url).catch(error => {
+                  recordStageFailure("details", error);
+                  return null;
+                });
+                const embedded = raw ? candidateFromRaw(raw, post.profile_type || normalized.profileType, capturedAt) : null;
+                if (embedded) details = details ? mergePosts(details, embedded) : embedded;
+              }
+              if (details) enriched.set(facebookPostIdentity(post), mergePosts(details, post));
+            }
+          }));
         } finally {
-          await detailsPage.close().catch(() => undefined);
+          await Promise.all(detailPages.map(detailsPage => detailsPage.close().catch(() => undefined)));
         }
       } else {
         recordStageFailure("details", new Error("Could not open the optional Facebook details page."));
-      }
-    }
-    const configuredCommentLimit = Number(process.env.FACEBOOK_COMMENT_ENRICHMENT_LIMIT);
-    const commentLimit = Number.isFinite(configuredCommentLimit)
-      ? Math.max(1, Math.min(25, Math.trunc(configuredCommentLimit)))
-      : 12;
-    const commentTargets = input.skipComments
-      ? []
-      : [...new Map(requestedCommentTargets.map(post => [facebookPostIdentity(post), post])).values()].slice(0, commentLimit);
-    if (commentTargets.length) {
-      diagnostics.discovery_path!.push("comments");
-      const reuseDiscoveryPage = normalized.mode === "post";
-      const commentPage = reuseDiscoveryPage ? page : await session.context.newPage().catch(() => null);
-      if (commentPage) {
-        const commentsDeadline = Date.now() + Math.max(30_000, Math.min(120_000, commentLimit * 8_000));
-        try {
-          for (const post of commentTargets) {
-            if (Date.now() >= commentsDeadline) break;
-            const details = await scrapeFacebookPostComments(commentPage, post.post_url, capturedAt).catch(error => {
-              recordStageFailure("comments", error);
-              return null;
-            });
-            if (!details) continue;
-            if (details.opened) diagnostics.comments_opened += 1;
-            diagnostics.comments_scraped += details.comments.length;
-            const base = enriched.get(facebookPostIdentity(post)) || post;
-            const merged = mergePosts(base, {
-              ...base,
-              comments_count: details.commentsCount ?? post.comments_count,
-              comments_display: details.commentsDisplay ?? post.comments_display,
-              comments_exact: details.commentsCount !== null ? details.commentsExact : post.comments_exact,
-              top_comments: details.comments,
-            });
-            const updated = details.commentsCount === null
-              ? merged
-              : {
-                  ...merged,
-                  // The direct post surface is fresher than the public embed.
-                  // Keep this current visible count even when both are exact.
-                  comments_count: details.commentsCount,
-                  comments_display: details.commentsDisplay,
-                  comments_exact: details.commentsExact,
-                };
-            enriched.set(facebookPostIdentity(post), updated);
-          }
-        } finally {
-          if (!reuseDiscoveryPage) await commentPage.close().catch(() => undefined);
-        }
-      } else {
-        recordStageFailure("comments", new Error("Could not open the optional Facebook comments page."));
       }
     }
     const enrichedPost = (post: FacebookPost) => enriched.get(facebookPostIdentity(post)) || post;

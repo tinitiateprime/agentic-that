@@ -11,10 +11,10 @@ import {
   facebookPayloadCandidates,
   facebookNavigationHeaders,
   facebookPostIdentity,
+  facebookPostDetailsFromHtml,
   facebookPostTimestampsFromHtml,
   facebookVisibleTimestamp,
   normalizeFacebookQuery,
-  parseFacebookCommentsText,
   parseFacebookCount,
   parseFacebookReelViewLabel,
   selectFacebookPrimaryResults,
@@ -177,6 +177,15 @@ test("maps exact public Reel publish times to their matching Reel IDs", () => {
   assert.equal(timestamps.get("1072164168798057"), "2026-08-11T03:34:54.000Z");
 });
 
+test("extracts a Reel's exact date, reactions, and comments from its public page payload", () => {
+  const html = '{"post_context":{"publish_time":1785383166,"story_fbid":["848442524868794"]},"unified_reactors":{"count":1544},"feedback":{"total_comment_count":33},"tracking":"{\\"top_level_post_id\\":\\"848442524868794\\"}"}';
+  assert.deepEqual(facebookPostDetailsFromHtml(html, "848442524868794"), {
+    timestamp: "2026-07-30T03:46:06.000Z",
+    reactionsCount: 1544,
+    commentsCount: 33,
+  });
+});
+
 test("does not use payload view fields because views come from the Reels grid", () => {
   const ambiguous = facebookPayloadCandidates({
     permalink_url: "https://facebook.com/example/posts/1",
@@ -194,14 +203,6 @@ test("does not use payload view fields because views come from the Reels grid", 
   assert.equal(video[0]?.views_count, undefined);
 });
 
-test("extracts visible Facebook comment samples after the comment sort control", () => {
-  const comments = parseFacebookCommentsText(`Swiss View's post\nSwitzerland\nMost relevant\nJamil Afghan · 12h\nI love you swiss 🌹❤️\nLike\nReply\nJawhar Parvin\n16h\nGorgeous ❤️❤️\nLike\nReply`, "2026-08-11T12:00:00.000Z");
-  assert.deepEqual(comments.map(comment => [comment.author_name, comment.text]), [
-    ["Jamil Afghan", "I love you swiss 🌹❤️"],
-    ["Jawhar Parvin", "Gorgeous ❤️❤️"],
-  ]);
-  assert.equal(comments[0]?.timestamp, "2026-08-11T00:00:00.000Z");
-});
 
 test("classifies public content before incidental login controls", () => {
   assert.equal(classifyFacebookAccess({ url: "https://facebook.com/example", articleCount: 1, postLinkCount: 0, visibleLoginInputCount: 2, bodyText: "Log in" }), "public_content");
