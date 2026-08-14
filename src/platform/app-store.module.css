@@ -31,7 +31,7 @@
 
 .storeTitle h1 {
   margin: 0;
-  background: linear-gradient(115deg, #ffffff 32%, #fef9c3 58%, #facc15 82%, #f59e0b 100%);
+  background: linear-gradient(115deg, #111827 24%, #283242 57%, #a77105 82%, #d39209 100%);
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -144,13 +144,13 @@
 }
 
 .categoryShortcuts > a svg {
-  color: color-mix(in srgb, var(--category-accent) 70%, #ffffff);
+  color: color-mix(in srgb, var(--category-accent) 72%, #111827);
 }
 
 .categoryShortcuts > a:hover {
   border-color: color-mix(in srgb, var(--category-accent) 55%, transparent);
   background: color-mix(in srgb, var(--category-accent) 14%, transparent);
-  color: #ffffff;
+  color: #111827;
   box-shadow: 0 0 22px color-mix(in srgb, var(--category-accent) 22%, transparent);
   transform: translateY(-1px);
 }
@@ -188,7 +188,7 @@
   border-radius: 10px;
   background: color-mix(in srgb, var(--category-accent) 15%, transparent);
   box-shadow: 0 0 18px color-mix(in srgb, var(--category-accent) 16%, transparent);
-  color: color-mix(in srgb, var(--category-accent) 65%, #ffffff);
+  color: color-mix(in srgb, var(--category-accent) 72%, #111827);
 }
 
 .categoryHeading > h2 {
@@ -221,14 +221,14 @@
   border: 1px solid var(--ai-border);
   border-radius: 16px;
   background: var(--ai-surface);
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 5px 18px rgba(15, 23, 42, 0.055);
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
 .serviceCard:hover {
   border-color: color-mix(in srgb, var(--service-accent) 55%, var(--ai-border));
   background: var(--ai-surface-strong);
-  box-shadow: 0 13px 34px rgba(0, 0, 0, 0.42), 0 0 30px color-mix(in srgb, var(--service-accent) 16%, transparent);
+  box-shadow: 0 13px 34px rgba(15, 23, 42, 0.1), 0 0 24px color-mix(in srgb, var(--service-accent) 11%, transparent);
 }
 
 .serviceCard:focus-visible {
@@ -311,7 +311,7 @@
   padding: 6px 8px;
   border: 1px solid var(--ai-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: #f5f7f9;
   color: var(--ai-text-muted);
   font-size: 10.5px;
   font-weight: 680;
@@ -330,7 +330,7 @@
 .status_ready {
   border-color: rgba(45, 212, 168, 0.35);
   background: rgba(45, 212, 168, 0.1);
-  color: #5fe8c2;
+  color: #08755c;
 }
 
 .status_connected i,
@@ -342,7 +342,7 @@
 .status_continue {
   border-color: rgba(250, 190, 80, 0.35);
   background: rgba(250, 190, 80, 0.1);
-  color: #ffd58a;
+  color: #8a5900;
 }
 
 .status_continue i {
@@ -350,9 +350,9 @@
 }
 
 .status_coming-soon {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.05);
-  color: #b8bdcc;
+  border-color: rgba(15, 23, 42, 0.12);
+  background: #f5f7f9;
+  color: #687384;
 }
 
 .status_coming-soon i {
@@ -415,7 +415,7 @@
   border: 1px solid color-mix(in srgb, var(--service-accent) 35%, var(--ai-border));
   border-radius: 6px;
   background: color-mix(in srgb, var(--service-accent) 10%, transparent);
-  color: color-mix(in srgb, var(--service-accent) 62%, #ffffff);
+  color: color-mix(in srgb, var(--service-accent) 72%, #111827);
 }
 
 .capability > small {
@@ -434,7 +434,7 @@
   border: 1px solid color-mix(in srgb, var(--service-accent) 55%, var(--ai-border));
   border-radius: 8px;
   background: transparent;
-  color: color-mix(in srgb, var(--service-accent) 62%, #ffffff);
+  color: color-mix(in srgb, var(--service-accent) 72%, #111827);
   font-size: 10px;
   font-weight: 760;
   white-space: nowrap;
