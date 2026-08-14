@@ -5799,13 +5799,13 @@ html:has(body > .site-shell) body {
 
 @media (min-width: 961px) {
   .scraping-workspace {
-    clip-path: inset(0 86% 0 0 round 13px);
+    clip-path: inset(0 91% 0 0 round 13px);
     transition: clip-path 680ms cubic-bezier(0.16, 0.82, 0.22, 1);
     will-change: clip-path;
   }
 
   .scraping-workspace.has-post {
-    clip-path: inset(0 33% 0 0 round 13px);
+    clip-path: inset(0 35% 0 0 round 13px);
   }
 
   .scraping-workspace.has-output {
@@ -5817,36 +5817,40 @@ html:has(body > .site-shell) body {
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-columns: 14% 53% 33%;
+  grid-template-columns: 9% 56% 35%;
 }
 
 .scraping-sources {
-  padding: 14px 10px;
+  padding: 14px 7px;
   border-right: 1px solid rgba(134, 150, 160, 0.16);
 }
 
 .scraping-sources > p {
-  margin: 0 8px 10px;
-  font-size: 9px;
+  margin: 0 0 12px;
+  font-size: 8px;
+  text-align: center;
 }
 
-.scraping-source-list { gap: 6px; }
+.scraping-source-list {
+  justify-items: center;
+  gap: 8px;
+}
 
 .scraping-source {
-  grid-template-columns: 32px minmax(0, 1fr) 6px;
-  gap: 9px;
-  min-height: 57px;
-  padding: 7px 8px;
-  border-radius: 9px;
+  width: 52px;
+  height: 52px;
+  min-height: 52px;
+  grid-template-columns: 1fr;
+  place-items: center;
+  gap: 0;
+  padding: 7px;
+  border-radius: 12px;
   opacity: 1;
+  background: transparent;
 }
 
 .scraping-source.is-planned { opacity: 1; }
-.scraping-source img { width: 32px; height: 32px; }
-.scraping-source strong { font-size: 10.5px; }
-.scraping-source small { color: #84939e; font-size: 8.5px; }
-.scraping-source.is-selected small { color: #67dcb0; }
-.scraping-source > i { width: 6px; height: 6px; }
+.scraping-source img { width: 38px; height: 38px; }
 
 .scraping-instagram-post {
   min-width: 0;
@@ -6042,7 +6046,7 @@ html:has(body > .site-shell) body {
 }
 
 @media (max-width: 1240px) {
-  .scraping-workspace-body { grid-template-columns: 14% 53% 33%; }
+  .scraping-workspace-body { grid-template-columns: 9% 56% 35%; }
 }
 
 @media (max-width: 960px) {
@@ -6212,7 +6216,7 @@ html:has(body > .site-shell) body {
 
 /* Spreadsheet-style CSV preview. */
 .scraping-workspace-body {
-  grid-template-columns: 14% 53% 33%;
+  grid-template-columns: 9% 56% 35%;
 }
 
 .scraping-instagram-post {
@@ -6313,7 +6317,7 @@ html:has(body > .site-shell) body {
 .scraping-csv-row-number { opacity: 0.35; transition: opacity 240ms ease; }
 
 @media (max-width: 1240px) {
-  .scraping-workspace-body { grid-template-columns: 14% 53% 33%; }
+  .scraping-workspace-body { grid-template-columns: 9% 56% 35%; }
 }
 
 @media (max-width: 960px) {

@@ -879,10 +879,13 @@ function ScrapingIntelligenceShowcase() {
             <p>Sources</p>
             <div className="scraping-source-list">
               {scrapingShowcaseSources.map((source, index) => (
-                <div className={`scraping-source${index === 0 && (demo.sourcePressed || demo.postVisible) ? " is-selected" : ""}${index === 0 && demo.sourcePressed ? " is-pressed" : ""} is-enabled`} key={source.name}>
+                <div
+                  className={`scraping-source${index === 0 && (demo.sourcePressed || demo.postVisible) ? " is-selected" : ""}${index === 0 && demo.sourcePressed ? " is-pressed" : ""} is-enabled`}
+                  aria-label={`${source.name} source ready`}
+                  title={source.name}
+                  key={source.name}
+                >
                   <img src={source.logo} alt="" />
-                  <span><strong>{source.name}</strong><small>{source.status}</small></span>
-                  <i />
                 </div>
               ))}
             </div>
