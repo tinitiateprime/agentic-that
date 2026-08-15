@@ -258,6 +258,45 @@ const systemOutputs = [
   { label: "Monitored action", detail: "Like · comment · repost", tone: "coral", Icon: ShieldCheck },
 ];
 
+// Animated sections stay hidden until they reach the middle of the screen, so the
+// static end-state is never on screen before its demo runs. Order is: reach centre
+// -> fade the whole panel in -> start the sequence once the fade has landed.
+const SECTION_FADE_MS = 620;
+
+// A band across the viewport's vertical centre. It must keep some height:
+// -50%/-50% collapses the root to a zero-area line. Height-agnostic on purpose —
+// a ratio threshold is unreachable at breakpoints where a section outgrows the band.
+function observeSectionCentre(node, onEnter) {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        onEnter();
+      }
+    },
+    { rootMargin: "-45% 0px -45% 0px", threshold: 0 }
+  );
+
+  observer.observe(node);
+  return observer;
+}
+
+// For sections that only need the fade (no scripted sequence of their own).
+function useSectionReveal() {
+  const ref = useRef(null);
+  const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+
+    const observer = observeSectionCentre(node, () => setRevealed(true));
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, revealed];
+}
+
 function SystemEndpoint({ item, side }) {
   const { Icon } = item;
   return (
@@ -269,10 +308,246 @@ function SystemEndpoint({ item, side }) {
   );
 }
 
+function DustWord() {
+  const wordRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const word = wordRef.current;
+    const canvas = canvasRef.current;
+    if (!word || !canvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+
+    const context = canvas.getContext("2d");
+    if (!context) return undefined;
+
+    const duration = 5200;
+    let particles = [];
+    let animationFrame = 0;
+    const startedAt = performance.now();
+
+    const seeded = (x, y, salt = 0) => {
+      const value = Math.sin((x + 1) * 12.9898 + (y + 1) * 78.233 + salt * 37.719) * 43758.5453;
+      return value - Math.floor(value);
+    };
+
+    const rebuildParticles = () => {
+      const bounds = word.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      const travel = Math.max(54, bounds.width * 0.2);
+      const topPadding = 34;
+      const cssWidth = Math.ceil(bounds.width + travel);
+      const cssHeight = Math.ceil(bounds.height + 68);
+
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+      canvas.style.top = `${-topPadding}px`;
+      canvas.width = Math.ceil(cssWidth * pixelRatio);
+      canvas.height = Math.ceil(cssHeight * pixelRatio);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+
+      const sampleCanvas = document.createElement("canvas");
+      sampleCanvas.width = Math.ceil(bounds.width);
+      sampleCanvas.height = Math.ceil(bounds.height);
+      const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+      if (!sampleContext) return;
+
+      const styles = window.getComputedStyle(word);
+      sampleContext.font = `${styles.fontStyle} ${styles.fontWeight} ${styles.fontSize} ${styles.fontFamily}`;
+      sampleContext.textBaseline = "alphabetic";
+      sampleContext.fillStyle = "#ffffff";
+
+      const metrics = sampleContext.measureText("That");
+      const glyphHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+      const glyphTop = Math.max(0, (bounds.height - glyphHeight) / 2);
+      const baseline = glyphTop + metrics.actualBoundingBoxAscent;
+      sampleContext.fillText("That", 0, baseline);
+
+      const pixels = sampleContext.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+      const nextParticles = [];
+      const step = bounds.width > 260 ? 3 : 2;
+      // Only the trailing edge sheds dust, so the word itself never breaks up.
+      const edgeStart = sampleCanvas.width * 0.72;
+      const edgeSpan = Math.max(1, sampleCanvas.width - edgeStart);
+
+      for (let y = 0; y < sampleCanvas.height; y += step) {
+        for (let x = Math.floor(edgeStart); x < sampleCanvas.width; x += step) {
+          const alpha = pixels[(y * sampleCanvas.width + x) * 4 + 3];
+          if (alpha < 72) continue;
+
+          const seed = seeded(x, y);
+          const secondarySeed = seeded(x, y, 3);
+          const edgeDepth = (x - edgeStart) / edgeSpan;
+
+          nextParticles.push({
+            x,
+            y: y + topPadding,
+            phase: seed,
+            distance: travel * (0.3 + secondarySeed * 0.7) * (0.4 + edgeDepth * 0.6),
+            lift: 4 + secondarySeed * 26,
+            wave: (seed - 0.5) * 12,
+            size: 0.7 + secondarySeed * 1.1,
+            peak: 0.26 + edgeDepth * 0.6,
+            color: `rgb(255, ${Math.round(224 + edgeDepth * 24)}, ${Math.round(104 + seed * 82)})`,
+          });
+        }
+      }
+
+      particles = nextParticles.slice(0, 1100);
+    };
+
+    const draw = (timestamp) => {
+      const elapsed = (timestamp - startedAt) / duration;
+      const width = Number.parseFloat(canvas.style.width) || 0;
+      const height = Number.parseFloat(canvas.style.height) || 0;
+      context.clearRect(0, 0, width, height);
+      context.globalCompositeOperation = "lighter";
+
+      for (const particle of particles) {
+        // Each grain runs its own offset loop so the shimmer is continuous
+        // instead of every grain leaving the word at the same moment.
+        const life = (elapsed + particle.phase) % 1;
+        const eased = 1 - Math.pow(1 - life, 2.2);
+        const x = particle.x + particle.distance * eased;
+        const y = particle.y - particle.lift * eased + Math.sin(life * Math.PI) * particle.wave;
+        const opacity = Math.sin(life * Math.PI) * particle.peak;
+        const size = particle.size * (1 - life * 0.3);
+
+        context.globalAlpha = opacity;
+        context.fillStyle = particle.color;
+        context.fillRect(x, y, size, size);
+      }
+
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      animationFrame = window.requestAnimationFrame(draw);
+    };
+
+    const resizeObserver = new ResizeObserver(rebuildParticles);
+    resizeObserver.observe(word);
+    rebuildParticles();
+    document.fonts?.ready.then(rebuildParticles);
+    animationFrame = window.requestAnimationFrame(draw);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
+
+  return (
+    <span className="hero-title-that">
+      <span ref={wordRef} className="hero-title-that-word">That</span>
+      <canvas ref={canvasRef} className="hero-title-dust-canvas" aria-hidden="true" />
+    </span>
+  );
+}
+
+// Motion layer for the still hero plate. It lives inside .cinematic-backdrop so it
+// inherits that element's box and breathing transform, and its viewBox matches the
+// artwork's pixel dimensions — so these coordinates stay locked to the orb at every
+// viewport, the same way background-size: cover crops the image itself.
+const heroSparkPath =
+  "M0,-11 Q1.6,-1.6 11,0 Q1.6,1.6 0,11 Q-1.6,1.6 -11,0 Q-1.6,-1.6 0,-11 Z";
+
+const heroSparks = [
+  { x: 1163, y: 302, scale: 1.1, delay: "0s" },
+  { x: 995, y: 414, scale: 0.85, delay: "1.4s" },
+  { x: 1256, y: 542, scale: 1.25, delay: "2.6s" },
+  { x: 1064, y: 718, scale: 0.9, delay: "0.7s" },
+  { x: 1332, y: 416, scale: 1, delay: "3.4s" },
+  { x: 1180, y: 646, scale: 0.8, delay: "4.1s" },
+];
+
+function HeroPlatePulse() {
+  return (
+    <svg
+      className="hero-plate-fx"
+      viewBox="0 0 1672 941"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+    >
+      <defs>
+        <radialGradient id="hero-plate-core">
+          <stop offset="0%" stopColor="#ffe9a8" stopOpacity="0.46" />
+          <stop offset="38%" stopColor="#f5c445" stopOpacity="0.19" />
+          <stop offset="100%" stopColor="#f5c445" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="hero-plate-sheen-grad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#fff6d8" stopOpacity="0" />
+          <stop offset="48%" stopColor="#fff6d8" stopOpacity="0.42" />
+          <stop offset="100%" stopColor="#fff6d8" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="hero-plate-flow-grad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#8ec9ff" stopOpacity="0" />
+          <stop offset="42%" stopColor="#cfe8ff" stopOpacity="0.24" />
+          <stop offset="62%" stopColor="#ffe6a8" stopOpacity="0.26" />
+          <stop offset="100%" stopColor="#ffd36a" stopOpacity="0" />
+        </linearGradient>
+        <clipPath id="hero-plate-orb-clip">
+          <circle cx="1130" cy="518" r="248" />
+        </clipPath>
+        <linearGradient id="hero-plate-band-fade" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#000000" />
+          <stop offset="48%" stopColor="#ffffff" />
+          <stop offset="100%" stopColor="#000000" />
+        </linearGradient>
+        <mask id="hero-plate-band">
+          <rect x="0" y="286" width="1672" height="545" fill="url(#hero-plate-band-fade)" />
+        </mask>
+      </defs>
+
+      <circle className="hero-plate-core" cx="1122" cy="518" r="205" fill="url(#hero-plate-core)" />
+
+      {/* Light travelling along the data streams. */}
+      <g mask="url(#hero-plate-band)">
+        <rect
+          className="hero-plate-flow"
+          x="-760"
+          y="286"
+          width="760"
+          height="545"
+          fill="url(#hero-plate-flow-grad)"
+        />
+      </g>
+
+      {/* Specular catch sweeping across the glass ribbons. */}
+      <g clipPath="url(#hero-plate-orb-clip)">
+        <rect
+          className="hero-plate-sheen"
+          x="700"
+          y="180"
+          width="230"
+          height="700"
+          fill="url(#hero-plate-sheen-grad)"
+        />
+      </g>
+
+      {heroSparks.map((spark) => (
+        <g key={`${spark.x}-${spark.y}`} transform={`translate(${spark.x} ${spark.y}) scale(${spark.scale})`}>
+          <path
+            className="hero-plate-spark"
+            d={heroSparkPath}
+            fill="#fff7d6"
+            style={{ animationDelay: spark.delay }}
+          />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function CinematicSystemVisual() {
   return (
-    <div className="cinematic-system" id="system-visual" aria-hidden="true">
-      <div className="cinematic-backdrop" />
+    <div
+      className="cinematic-system cinematic-system-with-video cinematic-system-plate"
+      id="system-visual"
+      aria-hidden="true"
+    >
+      <div className="cinematic-backdrop">
+        <HeroPlatePulse />
+      </div>
       <div className="cinematic-vignette" />
 
       <svg className="cinematic-flow-overlay" viewBox="0 0 1600 900" preserveAspectRatio="none">
@@ -561,6 +836,7 @@ function TelegramPreview({ typedText, isTyping, isSending, isSent, isSelected, i
 
 function MessagingAutomationShowcase() {
   const sectionRef = useRef(null);
+  const [revealed, setRevealed] = useState(false);
   const demoHasRun = useRef(false);
   const [demo, setDemo] = useState({
     activeChannel: "idle",
@@ -714,14 +990,10 @@ function MessagingAutomationShowcase() {
       }, 360);
     };
 
-    observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.35)) {
-        observer.disconnect();
-        runDemo();
-      }
-    }, { threshold: [0.35] });
-
-    observer.observe(section);
+    observer = observeSectionCentre(section, () => {
+      setRevealed(true);
+      schedule(runDemo, SECTION_FADE_MS);
+    });
 
     return () => {
       disposed = true;
@@ -732,7 +1004,7 @@ function MessagingAutomationShowcase() {
   }, []);
 
   return (
-    <section ref={sectionRef} className="messaging-showcase" id="messaging" aria-labelledby="messaging-showcase-title">
+    <section ref={sectionRef} className={`messaging-showcase reveal-section${revealed ? " is-revealed" : ""}`} id="messaging" aria-labelledby="messaging-showcase-title">
       <div className="messaging-showcase-content">
         <div className="messaging-showcase-copy">
           <p className="messaging-showcase-kicker"><i />Messaging automation</p>
@@ -786,6 +1058,7 @@ function MessagingAutomationShowcase() {
 
 function ScrapingIntelligenceShowcase() {
   const sectionRef = useRef(null);
+  const [revealed, setRevealed] = useState(false);
   const hasRun = useRef(false);
   const [demo, setDemo] = useState({
     phase: "idle",
@@ -835,14 +1108,10 @@ function ScrapingIntelligenceShowcase() {
       schedule(() => setDemo((current) => ({ ...current, phase: "complete" })), 7300);
     };
 
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.32)) {
-        observer.disconnect();
-        runDemo();
-      }
-    }, { threshold: [0.32] });
-
-    observer.observe(section);
+    const observer = observeSectionCentre(section, () => {
+      setRevealed(true);
+      schedule(runDemo, SECTION_FADE_MS);
+    });
     return () => {
       observer.disconnect();
       timers.forEach((timer) => window.clearTimeout(timer));
@@ -850,7 +1119,7 @@ function ScrapingIntelligenceShowcase() {
   }, []);
 
   return (
-    <section ref={sectionRef} className={`scraping-showcase is-${demo.phase}`} id="scraping" aria-labelledby="scraping-showcase-title">
+    <section ref={sectionRef} className={`scraping-showcase is-${demo.phase} reveal-section${revealed ? " is-revealed" : ""}`} id="scraping" aria-labelledby="scraping-showcase-title">
       <div className="scraping-showcase-copy">
         <p className="scraping-showcase-kicker"><i />Scraping intelligence</p>
         <div className="scraping-title-row">
@@ -977,11 +1246,12 @@ function ScrapingIntelligenceShowcase() {
 }
 
 function ExecutionModelSection() {
+  const [sectionRef, revealed] = useSectionReveal();
   const cloudRoute = "M126 82 H166 M244 82 H388 M462 82 H520 C575 82 558 170 628 170";
   const localRoute = "M126 272 H166 M244 272 H388 M462 272 H520 C575 272 558 190 628 190";
 
   return (
-    <section className="execution-model" id="execution-model" aria-labelledby="execution-model-title">
+    <section ref={sectionRef} className={`execution-model reveal-section${revealed ? " is-revealed" : ""}`} id="execution-model" aria-labelledby="execution-model-title">
       <div className="execution-model-copy">
         <p className="execution-model-kicker"><i />Run it your way</p>
         <h2 id="execution-model-title">
@@ -1055,6 +1325,7 @@ function ExecutionModelSection() {
 
 function PublishingAutomationShowcase() {
   const sectionRef = useRef(null);
+  const [revealed, setRevealed] = useState(false);
   const hasRun = useRef(false);
   const [demo, setDemo] = useState({
     phase: "idle",
@@ -1113,14 +1384,10 @@ function PublishingAutomationShowcase() {
       schedule(() => setDemo((current) => ({ ...current, phase: "complete" })), 9600);
     };
 
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.32)) {
-        observer.disconnect();
-        runDemo();
-      }
-    }, { threshold: [0.32] });
-
-    observer.observe(section);
+    const observer = observeSectionCentre(section, () => {
+      setRevealed(true);
+      schedule(runDemo, SECTION_FADE_MS);
+    });
     return () => {
       observer.disconnect();
       timers.forEach((timer) => window.clearTimeout(timer));
@@ -1143,7 +1410,7 @@ function PublishingAutomationShowcase() {
   ];
 
   return (
-    <section ref={sectionRef} className={`publishing-showcase is-${demo.phase}`} id="publishing" aria-labelledby="publishing-showcase-title">
+    <section ref={sectionRef} className={`publishing-showcase is-${demo.phase} reveal-section${revealed ? " is-revealed" : ""}`} id="publishing" aria-labelledby="publishing-showcase-title">
       <header className="publishing-showcase-header">
         <p className="publishing-showcase-kicker"><i />Publishing automation</p>
         <div className="publishing-title-row">
@@ -1285,6 +1552,7 @@ function PublishingAutomationShowcase() {
 
 function PostEngagementShowcase() {
   const sectionRef = useRef(null);
+  const [revealed, setRevealed] = useState(false);
   const hasRun = useRef(false);
   const [demo, setDemo] = useState({
     phase: "idle",
@@ -1352,14 +1620,10 @@ function PostEngagementShowcase() {
       schedule(() => setDemo((current) => ({ ...current, phase: "complete", completedActions: 4 })), commentFinishedAt + 2050);
     };
 
-    observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.3)) {
-        observer.disconnect();
-        runDemo();
-      }
-    }, { threshold: [0.3] });
-
-    observer.observe(section);
+    observer = observeSectionCentre(section, () => {
+      setRevealed(true);
+      schedule(runDemo, SECTION_FADE_MS);
+    });
     return () => {
       disposed = true;
       observer?.disconnect();
@@ -1374,7 +1638,7 @@ function PostEngagementShowcase() {
   const commentText = ENGAGEMENT_SHOWCASE_COMMENT.slice(0, demo.commentLength);
 
   return (
-    <section ref={sectionRef} className={`engagement-showcase is-${demo.phase}`} id="post-engagement" aria-labelledby="engagement-showcase-title">
+    <section ref={sectionRef} className={`engagement-showcase is-${demo.phase} reveal-section${revealed ? " is-revealed" : ""}`} id="post-engagement" aria-labelledby="engagement-showcase-title">
       <header className="engagement-showcase-copy">
         <p className="engagement-showcase-kicker"><i />Post engagement agent</p>
         <div className="engagement-title-row">
@@ -1901,6 +2165,144 @@ function AutomationCarousel({ slides, handlers }) {
   );
 }
 
+const capabilityCards = [
+  {
+    id: "messaging",
+    slot: "messaging",
+    Icon: MessageCircle,
+    title: "Messaging",
+    detail: "Telegram + WhatsApp",
+    chip: "Shared inbox",
+    logos: [
+      { src: TelegramLogo, alt: "Telegram" },
+      { src: WhatsAppLogo, alt: "WhatsApp" },
+    ],
+  },
+  {
+    id: "publishing",
+    slot: "publishing",
+    Icon: Send,
+    title: "Publishing",
+    detail: "Five social channels",
+    chip: "Scheduled queue",
+    logos: [
+      { src: FacebookLogo, alt: "Facebook" },
+      { src: InstagramLogo, alt: "Instagram" },
+      { src: XLogo, alt: "X" },
+      { src: YouTubeLogo, alt: "YouTube" },
+      { src: LinkedInLogo, alt: "LinkedIn" },
+    ],
+  },
+  {
+    id: "scraping",
+    slot: "scraping",
+    Icon: Compass,
+    title: "Scraping",
+    detail: "Instagram + Facebook",
+    chip: "JSON / CSV",
+    logos: [
+      { src: InstagramLogo, alt: "Instagram" },
+      { src: FacebookLogo, alt: "Facebook" },
+    ],
+  },
+  {
+    id: "engagement",
+    slot: "engagement",
+    Icon: Heart,
+    title: "Engagement",
+    detail: "Monitored sessions",
+    chip: "Coming soon",
+    chipMuted: true,
+    logos: [],
+  },
+];
+
+const capabilityTools = [
+  { label: "Content Manager", Icon: FileText },
+  { label: "Config Manager", Icon: Activity },
+  { label: "Run history", Icon: CircleDashed },
+];
+
+// Connector geometry lives in a fixed viewBox stretched over the grid, so the
+// curves keep meeting the hub no matter how wide the section gets.
+// x=361 / x=639 are the inner edges of the side columns, y=99 / y=321 the row
+// centres, and each curve ends inside the hub so the disc hides the join.
+const capabilityLinks = [
+  { id: "messaging", d: "M361 99 C430 99 448 140 470 175", dot: [361, 99] },
+  { id: "publishing", d: "M639 99 C570 99 552 140 530 175", dot: [639, 99] },
+  { id: "scraping", d: "M361 321 C430 321 448 280 470 245", dot: [361, 321] },
+  { id: "engagement", d: "M639 321 C570 321 552 280 530 245", dot: [639, 321] },
+];
+
+function CapabilityMap() {
+  const [sectionRef, revealed] = useSectionReveal();
+
+  return (
+    <section
+      ref={sectionRef}
+      className={`capability-map reveal-section${revealed ? " is-revealed" : ""}`}
+      aria-labelledby="capability-map-title"
+    >
+      <header className="capability-map-header">
+        <p className="capability-map-eyebrow">One connected platform</p>
+        <h2 id="capability-map-title">Four capabilities. One operating layer.</h2>
+        <p className="capability-map-lede">
+          Choose the workflow you need. AgenticThat keeps context, accounts and outcomes connected.
+        </p>
+      </header>
+
+      <div className="capability-map-grid">
+        <svg
+          className="capability-map-links"
+          viewBox="0 0 1000 420"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {capabilityLinks.map((link) => (
+            <g key={link.id} className={`capability-link capability-link-${link.id}`}>
+              <path className="capability-link-track" d={link.d} fill="none" />
+              <path className="capability-link-pulse" d={link.d} fill="none" pathLength="100" />
+              <circle className="capability-link-dot" cx={link.dot[0]} cy={link.dot[1]} r="5" />
+            </g>
+          ))}
+        </svg>
+
+        {capabilityCards.map(({ id, slot, Icon, title, detail, chip, chipMuted, logos }) => (
+          <article key={id} className={`capability-card capability-card-${slot}`}>
+            <p className="capability-card-title">
+              <span className="capability-card-icon" aria-hidden="true"><Icon /></span>
+              {title}
+            </p>
+            <p className="capability-card-detail">{detail}</p>
+            <span className={`capability-card-chip${chipMuted ? " is-muted" : ""}`}>{chip}</span>
+            {logos.length > 0 && (
+              <div className="capability-card-logos">
+                {logos.map((logo) => (
+                  <img key={logo.alt} src={logo.src} alt={logo.alt} loading="lazy" />
+                ))}
+              </div>
+            )}
+          </article>
+        ))}
+
+        <div className="capability-hub">
+          <span className="capability-hub-mark" aria-hidden="true">AT</span>
+          <strong>AgenticThat</strong>
+        </div>
+      </div>
+
+      <footer className="capability-map-tools">
+        {capabilityTools.map(({ label, Icon }) => (
+          <span key={label} className="capability-tool">
+            <Icon aria-hidden="true" />
+            {label}
+          </span>
+        ))}
+      </footer>
+    </section>
+  );
+}
+
 function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPath = "" }) {
   const [user, setUser] = useState(initialUser);
   const [authOpen, setAuthOpen] = useState(Boolean(initialAuthMode));
@@ -2083,10 +2485,25 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
       <section className="hero" aria-labelledby="hero-title">
         <CinematicSystemVisual />
 
+        <div className="hero-fx" aria-hidden="true">
+          <div className="hero-aurora" />
+          <div className="hero-grid-floor" />
+          <div className="hero-scan-beam" />
+          <div className="hero-dust-field">
+            {Array.from({ length: 18 }, (_, index) => (
+              <span key={index} />
+            ))}
+          </div>
+        </div>
+
         <div className="hero-copy">
-          <p className="hero-eyebrow">AI agents for social operations</p>
+          <p className="hero-eyebrow">
+            <span className="hero-eyebrow-dot" />
+            AI agents for social operations
+          </p>
           <h1 id="hero-title">
-            <span>Agentic</span><span className="hero-title-that">That<i className="hero-title-particle-burst" /></span>
+            <span>Agentic</span>
+            <DustWord />
           </h1>
 
           <p className="hero-tagline">The social web, operated as one system.</p>
@@ -2107,6 +2524,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
       </section>
 
       <div className="below-hero-shell">
+        <CapabilityMap />
         <MessagingAutomationShowcase />
         <ScrapingIntelligenceShowcase />
         <ExecutionModelSection />
