@@ -4,11 +4,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { animate, stagger } from "animejs";
 import {
   Activity,
+  ArrowRight,
   CalendarClock,
   Bookmark,
   CheckCheck,
   CircleDashed,
-  Cloud,
   Compass,
   Copy,
   Database,
@@ -17,6 +17,7 @@ import {
   FileText,
   Heart,
   Image,
+  Instagram,
   Link2,
   LockKeyhole,
   Menu,
@@ -834,6 +835,33 @@ function TelegramPreview({ typedText, isTyping, isSending, isSent, isSelected, i
   );
 }
 
+function ServicePlanFooter({ tone, trustText, href, ctaLabel, platforms, availability }) {
+  return (
+    <div className={`service-plan-footer is-${tone}`}>
+      <div className="service-trust-note">
+        <span className="service-trust-icon" aria-hidden="true"><ShieldCheck /></span>
+        <span>
+          <small>Why trust it</small>
+          <strong>{trustText}</strong>
+        </span>
+      </div>
+
+      <div className="service-next-step">
+        <a href={href}>
+          {ctaLabel}
+          <ArrowRight aria-hidden="true" />
+        </a>
+        <span className="service-plan-availability" aria-label={`${platforms.map((platform) => platform.name).join(", ")}. ${availability}`}>
+          <span className="service-plan-logos" aria-hidden="true">
+            {platforms.map((platform) => <img src={platform.logo} alt="" key={platform.name} />)}
+          </span>
+          {availability}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function MessagingAutomationShowcase() {
   const sectionRef = useRef(null);
   const [revealed, setRevealed] = useState(false);
@@ -1031,6 +1059,15 @@ function MessagingAutomationShowcase() {
               <li key={feature}><span><MessageCircle /></span>{feature}</li>
             ))}
           </ul>
+
+          <ServicePlanFooter
+            tone="messaging"
+            trustText="Actions stay visible and tied to your connected workspace."
+            href="/apps#category-messaging"
+            ctaLabel="Explore messaging apps"
+            platforms={[automationPlatforms[1], automationPlatforms[0]]}
+            availability="Two channels available"
+          />
         </div>
       </div>
 
@@ -1137,6 +1174,15 @@ function ScrapingIntelligenceShowcase() {
             <li key={feature}><span><Search /></span>{feature}</li>
           ))}
         </ul>
+
+        <ServicePlanFooter
+          tone="scraping"
+          trustText="Only public signals are collected, with every source field kept reviewable."
+          href="/apps#category-scraping"
+          ctaLabel="Explore scraping apps"
+          platforms={scrapingShowcaseSources.slice(0, 2)}
+          availability="2 apps live"
+        />
       </div>
 
       <div
@@ -1245,10 +1291,8 @@ function ScrapingIntelligenceShowcase() {
   );
 }
 
-function ExecutionModelSection() {
+function LegacyExecutionModelSection() {
   const [sectionRef, revealed] = useSectionReveal();
-  const cloudRoute = "M126 82 H166 M244 82 H388 M462 82 H520 C575 82 558 170 628 170";
-  const localRoute = "M126 272 H166 M244 272 H388 M462 272 H520 C575 272 558 190 628 190";
 
   return (
     <section ref={sectionRef} className={`execution-model reveal-section${revealed ? " is-revealed" : ""}`} id="execution-model" aria-labelledby="execution-model-title">
@@ -1267,58 +1311,152 @@ function ExecutionModelSection() {
         </div>
       </div>
 
-      <figure className="execution-map" aria-label="Server and Local Companion workflows converge into the AgenticThat workspace">
-        <svg className="execution-map-routes" viewBox="0 0 760 360" preserveAspectRatio="none" aria-hidden="true">
+      <figure className="execution-map execution-reference-flow" aria-label="Server and Local Companion workflows converge into the AgenticThat workspace">
+        <svg className="execution-map-routes" viewBox="0 0 760 300" preserveAspectRatio="none" aria-hidden="true">
           <defs>
-            <linearGradient id="execution-cloud-line" x1="0" x2="1">
-              <stop stopColor="#5aa8ff" stopOpacity="0.35" />
-              <stop offset="0.74" stopColor="#69b7ff" stopOpacity="0.82" />
-              <stop offset="1" stopColor="#5adbb1" stopOpacity="0.72" />
+            <linearGradient id="execution-server-line" x1="0" x2="1">
+              <stop stopColor="#5aa8ff" stopOpacity="0.45" />
+              <stop offset="1" stopColor="#69b7ff" stopOpacity="0.9" />
             </linearGradient>
-            <linearGradient id="execution-local-line" x1="0" x2="1">
-              <stop stopColor="#36d6a0" stopOpacity="0.35" />
-              <stop offset="0.74" stopColor="#4be2b2" stopOpacity="0.86" />
-              <stop offset="1" stopColor="#5adbb1" stopOpacity="0.72" />
+            <linearGradient id="execution-companion-line" x1="0" x2="1">
+              <stop stopColor="#36d6a0" stopOpacity="0.45" />
+              <stop offset="1" stopColor="#56ddb1" stopOpacity="0.9" />
             </linearGradient>
-            <filter id="execution-dot-glow" x="-200%" y="-200%" width="500%" height="500%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
+            <filter id="execution-reference-glow" x="-200%" y="-200%" width="500%" height="500%">
+              <feGaussianBlur stdDeviation="2.5" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
           </defs>
-          <path className="execution-route is-cloud" d={cloudRoute} />
-          <path className="execution-route is-local" d={localRoute} />
-          <path className="execution-route is-merge" d="M628 170 C642 170 642 180 656 180 M628 190 C642 190 642 180 656 180" />
-          <circle className="execution-traveller is-cloud" r="3.8" filter="url(#execution-dot-glow)">
-            <animateMotion dur="4.1s" repeatCount="indefinite" path="M126 82 H520 C575 82 558 170 656 180" />
+          <path className="execution-reference-route is-server is-entry" d="M24 66 H164" />
+          <path className="execution-reference-route is-server is-transfer" d="M230 66 H345" />
+          <path className="execution-reference-route is-server is-converge" d="M491 66 H548 C590 66 574 150 628 150" />
+          <path className="execution-reference-route is-local is-entry" d="M24 226 H164" />
+          <path className="execution-reference-route is-local is-transfer" d="M230 226 H345" />
+          <path className="execution-reference-route is-local is-converge" d="M491 226 H548 C590 226 574 170 628 170" />
+          <circle className="execution-reference-origin is-server" cx="24" cy="66" r="4" />
+          <circle className="execution-reference-origin is-local" cx="24" cy="226" r="4" />
+          <circle className="execution-reference-packet is-server" r="3.5" filter="url(#execution-reference-glow)">
+            <animateMotion dur="4.3s" repeatCount="indefinite" path="M24 66 H548 C590 66 574 150 628 150" />
           </circle>
-          <circle className="execution-traveller is-local" r="3.8" filter="url(#execution-dot-glow)">
-            <animateMotion dur="4.1s" begin="-2.05s" repeatCount="indefinite" path="M126 272 H520 C575 272 558 190 656 180" />
+          <circle className="execution-reference-packet is-local" r="3.5" filter="url(#execution-reference-glow)">
+            <animateMotion dur="4.3s" begin="-2.15s" repeatCount="indefinite" path="M24 226 H548 C590 226 574 170 628 170" />
           </circle>
         </svg>
 
-        <div className="execution-lane-label is-server"><i /><strong>Server</strong><small>Managed execution</small></div>
-        <div className="execution-lane-label is-local"><i /><strong>Local Companion</strong><small>On your machine</small></div>
+        <div className="execution-lane-label is-server"><strong>Server</strong></div>
+        <div className="execution-lane-label is-local"><strong>Local Companion</strong></div>
 
         <div className="execution-map-node is-cloud-runner">
-          <span><Cloud /></span><strong>Cloud runner</strong><small>Supported workflows</small>
+          <span><Play /></span><strong>Cloud runner</strong><small>Managed execution</small>
         </div>
         <div className="execution-map-node is-output">
-          <span><Database /></span><strong>Structured output</strong><small>Ready for your workflow</small>
+          <span><Database /></span><strong>Structured output</strong><small>JSON · CSV · API</small>
         </div>
         <div className="execution-map-node is-browser">
-          <span><Monitor /></span><strong>Browser session</strong><small>Runs on your machine</small>
+          <span><Monitor /></span><strong>Browser on your machine</strong><small>Signed-in account context</small>
         </div>
         <div className="execution-map-node is-secure">
-          <span><ShieldCheck /></span><strong>Secure execution</strong><small>Account context stays local</small>
+          <span><ShieldCheck /></span><strong>Secure execution</strong><small>Credentials stay local</small>
         </div>
 
         <div className="execution-workspace-core">
           <span>AT</span>
           <strong>AgenticThat</strong>
           <small>workspace</small>
+          <i><b />Connected</i>
         </div>
         <figcaption>Cloud and local workflows connect continuously to one AgenticThat workspace.</figcaption>
       </figure>
+    </section>
+  );
+}
+
+function ExecutionModelSection() {
+  const [sectionRef, revealed] = useSectionReveal();
+
+  return (
+    <section
+      ref={sectionRef}
+      className={`execution-model execution-model-exact reveal-section${revealed ? " is-revealed" : ""}`}
+      id="execution-model"
+      aria-labelledby="execution-model-title"
+    >
+      <div className="execution-model-copy">
+        <p className="execution-model-kicker"><i />Run it your way</p>
+        <h2 id="execution-model-title">
+          Cloud speed when possible.
+          <span>Local control when needed.</span>
+        </h2>
+        <p className="execution-model-intro">
+          Use server-based workflows for supported tasks, or run through the Local Companion when browser access and account context must stay on your machine.
+        </p>
+        <div className="execution-security-note">
+          <LockKeyhole aria-hidden="true" />
+          <p>Social passwords remain on the machine running the companion.</p>
+        </div>
+      </div>
+
+      <div className="execution-exact-scroll">
+        <figure className="execution-exact-diagram" aria-label="Server and Local Companion workflows converge into the AgenticThat workspace">
+          <svg className="execution-exact-routes" viewBox="0 0 820 300" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <marker id="execution-blue-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <path d="M0 0 L6 3 L0 6 Z" fill="#78aef4" />
+              </marker>
+              <marker id="execution-green-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <path d="M0 0 L6 3 L0 6 Z" fill="#68c59e" />
+              </marker>
+            </defs>
+            <path className="execution-exact-line is-server" d="M14 72 H125" pathLength="1" />
+            <path className="execution-exact-dotted is-server" d="M255 72 H325" markerEnd="url(#execution-blue-arrow)" />
+            <path className="execution-exact-line is-server" d="M535 72 H560 C610 72 575 150 625 150" pathLength="1" />
+            <path className="execution-exact-line is-local" d="M14 220 H122" pathLength="1" />
+            <path className="execution-exact-dotted is-local" d="M257 220 H325" markerEnd="url(#execution-green-arrow)" />
+            <path className="execution-exact-line is-local" d="M535 220 H560 C610 220 575 150 625 150" pathLength="1" />
+            <path className="execution-exact-line is-join" d="M625 150 H650" pathLength="1" />
+            <circle className="execution-exact-origin is-server" cx="14" cy="72" r="6" />
+            <circle className="execution-exact-origin is-local" cx="14" cy="220" r="6" />
+            <circle className="execution-exact-junction" cx="625" cy="150" r="6" />
+            <circle className="execution-exact-packet is-server" r="4">
+              <animateMotion dur="3.9s" begin="1.1s" repeatCount="indefinite" path="M14 72 H560 C610 72 575 150 650 150" />
+            </circle>
+            <circle className="execution-exact-packet is-local" r="4">
+              <animateMotion dur="3.9s" begin="-0.85s" repeatCount="indefinite" path="M14 220 H560 C610 220 575 150 650 150" />
+            </circle>
+          </svg>
+
+          <strong className="execution-exact-label is-server">Server</strong>
+          <strong className="execution-exact-label is-local">Local<br />Companion</strong>
+
+          <div className="execution-exact-cloud">
+            <span><img src="/execution-cloud-runner.png" alt="" /></span>
+            <strong>Cloud runner</strong>
+          </div>
+
+          <div className="execution-exact-browser">
+            <span className="execution-exact-browser-art"><img src="/execution-local-companion.png" alt="" /></span>
+            <strong>Browser on your machine</strong>
+          </div>
+
+          <div className="execution-exact-card is-output">
+            <span><Database /></span>
+            <strong>Structured output</strong>
+          </div>
+
+          <div className="execution-exact-card is-secure">
+            <span><ShieldCheck /></span>
+            <strong>Secure execution</strong>
+          </div>
+
+          <div className="execution-exact-workspace">
+            <span><Instagram /></span>
+            <strong>AgenticThat</strong>
+            <small>workspace</small>
+          </div>
+
+          <figcaption>Cloud and local workflows connect to one AgenticThat workspace.</figcaption>
+        </figure>
+      </div>
     </section>
   );
 }
@@ -1433,6 +1571,14 @@ function PublishingAutomationShowcase() {
           <li><span><Send /></span>Choose the exact publishing time</li>
           <li><span><Send /></span>Track live delivery across channels</li>
         </ul>
+        <ServicePlanFooter
+          tone="publishing"
+          trustText="Account sessions stay local, while every delivery returns a clear status."
+          href="/apps#category-publishing"
+          ctaLabel="Explore publishing apps"
+          platforms={publishingShowcasePlatforms}
+          availability="5 apps live"
+        />
       </header>
 
       <div className={`publishing-visual-shell${isAtLeast("channels") ? " has-schedule" : ""}${isAtLeast("handoff") ? " has-delivery" : ""}`}>
@@ -1655,6 +1801,14 @@ function PostEngagementShowcase() {
             <li key={label}><span><MousePointerClick /></span>{label}</li>
           ))}
         </ul>
+        <ServicePlanFooter
+          tone="engagement"
+          trustText="Human review, pacing, and safeguards stay part of every planned action."
+          href="/apps#category-engagement"
+          ctaLabel="Explore engagement apps"
+          platforms={engagementShowcaseTargets}
+          availability="5 apps planned"
+        />
       </header>
 
       <div className={`engagement-workspace is-${demo.phase}`}>
@@ -2223,6 +2377,62 @@ const capabilityTools = [
   { label: "Run history", Icon: CircleDashed },
 ];
 
+const teamBenefits = [
+  {
+    number: "01",
+    title: "One operating layer",
+    description: "Messaging, scraping, publishing, and engagement stay connected instead of living in separate tools.",
+    proof: "channels",
+    tone: "#f4c94f",
+  },
+  {
+    number: "02",
+    title: "Context that moves with the work",
+    description: "Requests, connected accounts, operating rules, and outcomes remain part of the same workflow.",
+    proof: "context",
+    tone: "#52d9ad",
+  },
+  {
+    number: "03",
+    title: "Execution that fits the job",
+    description: "Use managed execution for supported work and the Local Companion for account-bound browser sessions.",
+    proof: "execution",
+    tone: "#5aa9ff",
+  },
+  {
+    number: "04",
+    title: "Control you can actually see",
+    description: "Human review, visible sessions, and returned status keep every important action accountable.",
+    proof: "control",
+    tone: "#a985ff",
+  },
+];
+
+const connectedAccounts = [
+  { id: "instagram", name: "Instagram", logo: InstagramLogo, tone: "#f65ba3" },
+  { id: "facebook", name: "Facebook", logo: FacebookLogo, tone: "#5aa9ff" },
+  { id: "linkedin", name: "LinkedIn", logo: LinkedInLogo, tone: "#55a8e8" },
+  { id: "x", name: "X", logo: XLogo, tone: "#d7dee5" },
+  { id: "whatsapp", name: "WhatsApp", logo: WhatsAppLogo, tone: "#51d990" },
+  { id: "telegram", name: "Telegram", logo: TelegramLogo, tone: "#59b9ef" },
+];
+
+const accountConnectionRoutes = [
+  { id: "instagram", d: "M155 70 C238 70 282 112 336 151", begin: "0.15s", duration: "4.1s", tone: "#f65ba3" },
+  { id: "facebook", d: "M605 70 C522 70 478 112 424 151", begin: "-1.45s", duration: "4.35s", tone: "#5aa9ff" },
+  { id: "linkedin", d: "M100 195 C190 195 248 195 313 195", begin: "-2.2s", duration: "4.6s", tone: "#55a8e8" },
+  { id: "x", d: "M660 195 C570 195 512 195 447 195", begin: "-0.65s", duration: "4.5s", tone: "#d7dee5" },
+  { id: "whatsapp", d: "M155 320 C238 320 282 278 336 239", begin: "-3.1s", duration: "4.3s", tone: "#51d990" },
+  { id: "telegram", d: "M605 320 C522 320 478 278 424 239", begin: "-1.9s", duration: "4.15s", tone: "#59b9ef" },
+];
+
+const synchronizedWorkspaceLayers = [
+  { id: "channels", label: "Channels", Icon: Users, tone: "#649dff", dropOrder: 3 },
+  { id: "workflows", label: "Workflows", Icon: Activity, tone: "#8b7cff", dropOrder: 2 },
+  { id: "history", label: "Data & history", Icon: Database, tone: "#54dfb1", dropOrder: 1 },
+  { id: "workspace", label: "Your workspace", Icon: null, tone: "#f3bf42", dropOrder: 0 },
+];
+
 // Connector geometry lives in a fixed viewBox stretched over the grid, so the
 // curves keep meeting the hub no matter how wide the section gets.
 // x=361 / x=639 are the inner edges of the side columns, y=99 / y=321 the row
@@ -2233,6 +2443,218 @@ const capabilityLinks = [
   { id: "scraping", d: "M361 321 C430 321 448 280 470 245", dot: [361, 321] },
   { id: "engagement", d: "M639 321 C570 321 552 280 530 245", dot: [639, 321] },
 ];
+
+function TeamBenefitProof({ type }) {
+  if (type === "channels") {
+    return (
+      <div className="team-benefit-proof is-channels" aria-label="Connected channels">
+        {[
+          [WhatsAppLogo, "WhatsApp"],
+          [TelegramLogo, "Telegram"],
+          [InstagramLogo, "Instagram"],
+          [FacebookLogo, "Facebook"],
+          [XLogo, "X"],
+        ].map(([src, alt]) => <img src={src} alt={alt} key={alt} />)}
+      </div>
+    );
+  }
+
+  if (type === "context") {
+    return (
+      <div className="team-benefit-proof is-context" aria-label="Connected workflow context">
+        <span>Brief</span><i /><span>Account</span><i /><span>Outcome</span>
+      </div>
+    );
+  }
+
+  if (type === "execution") {
+    return (
+      <div className="team-benefit-proof is-execution" aria-label="Server and Local Companion execution">
+        <span className="team-runtime-mark">AT<small>Server</small></span>
+        <i />
+        <span className="team-companion-mark"><img src="/publishing-companion-icon.ico" alt="" /><small>Companion</small></span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="team-benefit-proof is-control" aria-label="Visible controls">
+      <span><CheckCheck aria-hidden="true" />Review</span>
+      <span><Eye aria-hidden="true" />Live session</span>
+      <span><CircleDashed aria-hidden="true" />Run status</span>
+    </div>
+  );
+}
+
+function WhyTeamsChooseSection() {
+  const [sectionRef, revealed] = useSectionReveal();
+
+  return (
+    <section
+      ref={sectionRef}
+      className={`why-teams-choose reveal-section${revealed ? " is-revealed" : ""}`}
+      aria-labelledby="why-teams-title"
+    >
+      <div className="why-teams-copy">
+        <p className="why-teams-eyebrow"><i />Why teams choose AgenticThat</p>
+        <h2 id="why-teams-title">Built for teams that need more than tools.</h2>
+        <p>
+          AgenticThat helps teams move from scattered tasks to coordinated operations—without losing ownership or visibility.
+        </p>
+        <div className="why-teams-outcomes" aria-label="Team outcomes">
+          <span><i />Less switching</span>
+          <span><i />Clear ownership</span>
+          <span><i />Visible execution</span>
+        </div>
+      </div>
+
+      <div className="why-teams-benefits">
+        <div className="why-teams-spine" aria-hidden="true"><i /></div>
+        {teamBenefits.map(({ number, title, description, proof, tone }, index) => (
+          <article
+            className="team-benefit-row"
+            key={title}
+            style={{ "--benefit-index": index, "--benefit-tone": tone }}
+          >
+            <span className="team-benefit-anchor" aria-hidden="true"><i /></span>
+            <div className="team-benefit-card">
+              <div className="team-benefit-heading">
+                <small>{number}</small>
+                <div><h3>{title}</h3><p>{description}</p></div>
+              </div>
+              <TeamBenefitProof type={proof} />
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ConnectedAccountsSection() {
+  const [sectionRef, revealed] = useSectionReveal();
+
+  return (
+    <section
+      ref={sectionRef}
+      className={`connected-accounts reveal-section${revealed ? " is-revealed" : ""}`}
+      aria-labelledby="connected-accounts-title"
+    >
+      <div className="connected-accounts-copy">
+        <p className="connected-accounts-eyebrow"><i />One place for every connection</p>
+        <h2 id="connected-accounts-title">Your accounts.<br />One control layer.</h2>
+        <p>
+          Keep every channel your workflows depend on visible, organized, and ready from one consistent AgenticThat workspace.
+        </p>
+
+        <div className="connected-accounts-summary" aria-label="Connected account overview">
+          <span><strong>6</strong><small>Channels</small></span>
+          <i />
+          <span><strong>1</strong><small>Workspace</small></span>
+          <i />
+          <span><strong>Live</strong><small>Status</small></span>
+        </div>
+
+        <p className="connected-accounts-note"><ShieldCheck aria-hidden="true" />Connection status stays clear across every workflow.</p>
+      </div>
+
+      <div className="connected-account-map" aria-label="Six social channels connected to the AgenticThat control layer">
+        <div className="connected-map-grid" aria-hidden="true" />
+
+        <svg className="connected-control-routes" viewBox="0 0 760 390" aria-hidden="true">
+          <circle className="connected-control-orbit" cx="380" cy="195" r="116" pathLength="1" />
+          {accountConnectionRoutes.map((route) => (
+            <g key={route.id} style={{ "--account-tone": route.tone }}>
+              <path className="connected-route-track" d={route.d} pathLength="1" />
+              <path className="connected-route-signal" d={route.d} pathLength="1" />
+              <circle className="connected-route-packet" r="3.2">
+                <animateMotion
+                  path={route.d}
+                  dur={route.duration}
+                  begin={route.begin}
+                  repeatCount="indefinite"
+                />
+              </circle>
+            </g>
+          ))}
+        </svg>
+
+        {connectedAccounts.map((account, index) => (
+          <article
+            className={`connected-account-node is-${account.id}`}
+            key={account.id}
+            style={{ "--account-tone": account.tone, "--account-index": index }}
+          >
+            <span className="connected-account-logo"><img src={account.logo} alt="" /></span>
+            <span className="connected-account-label">
+              <strong>{account.name}</strong>
+              <small><i />Connected</small>
+            </span>
+          </article>
+        ))}
+
+        <div className="connected-control-hub">
+          <span className="connected-control-mark" aria-hidden="true">AT</span>
+          <strong>AgenticThat</strong>
+          <small><i />Control layer</small>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SynchronizedWorkspaceSection() {
+  const [sectionRef, revealed] = useSectionReveal();
+
+  return (
+    <section
+      ref={sectionRef}
+      className={`synchronized-workspace${revealed ? " is-revealed" : ""}`}
+      aria-labelledby="synchronized-workspace-title"
+    >
+      <div className="synchronized-workspace-copy">
+        <p className="synchronized-workspace-eyebrow"><i />One connected system</p>
+        <h2 id="synchronized-workspace-title">Everything.<br />Always in sync.</h2>
+        <p>
+          Channels, workflows, run data, and history stay aligned across one AgenticThat workspace.
+        </p>
+
+        <div className="synchronized-workspace-proof" aria-label="Synchronized workspace benefits">
+          <span><i />Shared state</span>
+          <span><i />Visible history</span>
+          <span><i />One workspace</span>
+        </div>
+      </div>
+
+      <div className="synchronized-stack" aria-label="Channels, workflows, and data synchronized with your workspace">
+        <div className="synchronized-stack-aura" aria-hidden="true" />
+        <svg className="synchronized-stack-rails" viewBox="0 0 700 370" preserveAspectRatio="none" aria-hidden="true">
+          <path className="synchronized-stack-rail" d="M126 37 C126 125 106 215 106 303" pathLength="1" />
+          <path className="synchronized-stack-rail" d="M574 37 C574 125 594 215 594 303" pathLength="1" />
+          <path className="synchronized-stack-flow is-left" d="M126 37 C126 125 106 215 106 303" pathLength="1" />
+          <path className="synchronized-stack-flow is-right" d="M574 37 C574 125 594 215 594 303" pathLength="1" />
+          {[
+            [126, 37, "is-blue"], [122, 126, "is-violet"], [114, 214, "is-green"], [106, 303, "is-gold"],
+            [574, 37, "is-blue"], [578, 126, "is-violet"], [586, 214, "is-green"], [594, 303, "is-gold"],
+          ].map(([cx, cy, className]) => <circle key={`${cx}-${cy}`} className={`synchronized-rail-node ${className}`} cx={cx} cy={cy} r="3.4" />)}
+        </svg>
+
+        {synchronizedWorkspaceLayers.map(({ id, label, Icon, tone, dropOrder }, index) => (
+          <div
+            className={`synchronized-stack-layer is-${id}`}
+            key={id}
+            style={{ "--sync-tone": tone, "--sync-index": index, "--drop-order": dropOrder }}
+          >
+            <span className={`synchronized-layer-icon${id === "workspace" ? " is-brand" : ""}`} aria-hidden="true">
+              {Icon ? <Icon /> : "AT"}
+            </span>
+            <strong>{label}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 function CapabilityMap() {
   const [sectionRef, revealed] = useSectionReveal();
@@ -2525,11 +2947,14 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 
       <div className="below-hero-shell">
         <CapabilityMap />
+        <WhyTeamsChooseSection />
+        <ConnectedAccountsSection />
         <MessagingAutomationShowcase />
         <ScrapingIntelligenceShowcase />
         <ExecutionModelSection />
         <PublishingAutomationShowcase />
         <PostEngagementShowcase />
+        <SynchronizedWorkspaceSection />
 
         <AutomationCarousel
           slides={automationSlides}
