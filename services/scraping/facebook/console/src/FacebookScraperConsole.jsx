@@ -1,10 +1,12 @@
 "use client";
 
 import React from "react";
+import dynamic from "next/dynamic";
 import InstagramScraperConsole from "../../../instagram/console/src/InstagramScraperConsole";
 import { getFacebookCompanionStatus, runFacebookCompanionJob } from "./companionClient";
 
 const FACEBOOK_API_URL = process.env.NEXT_PUBLIC_FACEBOOK_API_URL || "/api/scraping/facebook";
+const FacebookScraperVideoGuide = dynamic(() => import("./FacebookScraperVideoGuide"), { ssr: false });
 
 const facebookInputModes = [
   {
@@ -204,6 +206,9 @@ function normalizeFacebookJob(data = {}) {
 
 const facebookPlatformConfig = {
   name: "Facebook",
+  userGuideComponent: FacebookScraperVideoGuide,
+  userGuideLabel: "Watch guide",
+  userGuideStorageKey: "agenticthat-facebook-scraper-film-v1",
   apiUrl: FACEBOOK_API_URL,
   inputModes: facebookInputModes,
   cleanModeValue: cleanFacebookValue,

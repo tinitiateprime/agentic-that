@@ -1,14 +1,33 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import ProfileComparisonWorkspace from "./ProfileComparisonWorkspace";
+import React, { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   getInstagramCompanionStatus,
   runInstagramCompanionJob
 } from "./companionClient";
 
+const ProfileComparisonWorkspace = dynamic(() => import("./ProfileComparisonWorkspace"), {
+  loading: () => (
+    <div className="comparison-loading">
+      <div className="loader-ring" />
+      <span>Opening comparison workspace...</span>
+    </div>
+  )
+});
+const InstagramScraperTour = dynamic(() => import("./InstagramScraperTour"), { ssr: false });
+
 const API_URL = process.env.NEXT_PUBLIC_INSTAGRAM_API_URL || "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
+const INSTAGRAM_TOUR_STORAGE_KEY = "agenticthat-instagram-scraper-guide-v1";
+const TOUR_STEP = {
+  welcome: 0,
+  engine: 1,
+  inputType: 2,
+  query: 3,
+  collection: 4,
+  launch: 5
+};
 const RANGE_TYPES = ["date", "month", "year"];
 const COLLECTION_MODES = [
   { id: "latest", label: "Latest" },
@@ -276,6 +295,11 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const engagementName = platformConfig.engagementName || "Likes";
   const engagementNameLower = engagementName.toLowerCase();
   const analysisTabs = platformConfig.analysisTabs || ANALYSIS_TABS;
+  const CustomUserGuide = platformConfig.userGuideComponent || null;
+  const userGuideEnabled = platformConfig.userGuideEnabled ?? platformLower === "instagram";
+  const userGuideAvailable = userGuideEnabled || Boolean(CustomUserGuide);
+  const userGuideLabel = platformConfig.userGuideLabel || "User guide";
+  const userGuideStorageKey = platformConfig.userGuideStorageKey || INSTAGRAM_TOUR_STORAGE_KEY;
   const showViewsInResults = Boolean(platformConfig.showViewsInResults);
   const showTopComments = platformConfig.showTopComments !== false;
   const missingDateLabel = platformConfig.missingDateLabel || "Unknown";
@@ -307,7 +331,97 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const [lastDiagnostics, setLastDiagnostics] = useState(null);
   const [cancelActiveScrape, setCancelActiveScrape] = useState(null);
   const [workingStatus, setWorkingStatus] = useState("Preparing scrape");
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStep, setTourStep] = useState(TOUR_STEP.welcome);
+  const tourTypingTimer = useRef(null);
   const activeInputMode = availableInputModes.find((item) => item.id === inputMode);
+  const guideInputMode = activeInputMode || availableInputModes.find((item) => item.id === "profile") || inputModes[0];
+  const guideQueryText = {
+    profile: {
+      title: "Add an Instagram profile",
+      copy: "Enter the username you want to explore. We’ll type an example so you can see the flow."
+    },
+    keyword: {
+      title: "Add a keyword",
+      copy: "Type the topic or hashtag you want to discover across public Instagram content."
+    },
+    profile_url: {
+      title: "Paste a profile link",
+      copy: "Add a public Instagram profile URL and the scraper will identify the profile for you."
+    },
+    post_url: {
+      title: "Paste a post or Reel",
+      copy: "Add the public Instagram URL and the scraper will collect that specific piece of content."
+    }
+  }[guideInputMode.id] || {
+    title: `Add your ${guideInputMode.label.toLowerCase()}`,
+    copy: `Enter the ${guideInputMode.label.toLowerCase()} you want to explore.`
+  };
+  const userGuideSteps = [
+    {
+      id: "welcome",
+      kicker: "Interactive walkthrough",
+      title: "See the scraper in action",
+      copy: "A quick guided run will show you exactly what to choose, where to type, and how to start.",
+      note: "About 40 seconds. Nothing will scrape until you click Start Scraping.",
+      nextLabel: "Start guide"
+    },
+    {
+      id: "engine",
+      progress: 1,
+      target: '[data-tour="engine"]',
+      kicker: "Choose where it runs",
+      title: "Pick your scraping engine",
+      copy: "Use Server for the simplest setup, or Local Companion to run privately on this computer.",
+      note: `${scrapeEngine === "companion" ? "Local Companion" : "Server"} is currently selected`,
+      pointerLabel: "Choose one",
+      nextLabel: "Next"
+    },
+    {
+      id: "input-type",
+      progress: 2,
+      target: '[data-tour="input-type"]',
+      kicker: "Tell us what to find",
+      title: "Choose an input type",
+      copy: "Search by profile, keyword, profile link, or one specific post or Reel.",
+      pointerLabel: "Try Profile",
+      nextLabel: "Show the input"
+    },
+    {
+      id: "query",
+      progress: 2,
+      target: '[data-tour="query-input"]',
+      kicker: guideInputMode.label,
+      title: guideQueryText.title,
+      copy: guideQueryText.copy,
+      note: inputValue.trim() ? "Your input is ready" : "Type or paste here",
+      pointerLabel: "Input goes here",
+      nextLabel: "Continue"
+    },
+    {
+      id: "collection",
+      progress: 3,
+      target: '[data-tour="collection"]',
+      kicker: "Shape the result",
+      title: "Choose what to collect",
+      copy: "Get the latest content, select a date range, analyze a profile, or compare profiles.",
+      note: `${COLLECTION_MODES.find((item) => item.id === collectionMode)?.label || "Latest"} is selected`,
+      pointerLabel: "Choose a view",
+      nextLabel: "Next"
+    },
+    {
+      id: "launch",
+      progress: 4,
+      target: '[data-tour="launch"]',
+      kicker: "Ready to go",
+      title: "Set the size and start",
+      copy: "Choose how many results you want, then start scraping. The live progress screen takes over from here.",
+      note: "The orange button starts the real scrape",
+      pointerLabel: "Start here",
+      nextLabel: "Finish guide",
+      isLast: true
+    }
+  ];
 
   useEffect(() => {
     const htmlBackground = document.documentElement.style.background;
@@ -331,6 +445,62 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   }, []);
 
   useEffect(() => {
+    if (!userGuideAvailable) return undefined;
+    let openTimer;
+    try {
+      if (window.localStorage.getItem(userGuideStorageKey) !== "completed") {
+        openTimer = window.setTimeout(() => {
+          setTourStep(TOUR_STEP.welcome);
+          setTourOpen(true);
+        }, 450);
+      }
+    } catch {
+      openTimer = window.setTimeout(() => {
+        setTourStep(TOUR_STEP.welcome);
+        setTourOpen(true);
+      }, 450);
+    }
+    return () => window.clearTimeout(openTimer);
+  }, [userGuideAvailable, userGuideStorageKey]);
+
+  useEffect(() => {
+    if (!userGuideEnabled || !tourOpen || tourStep !== TOUR_STEP.query) return undefined;
+    if (!inputMode) {
+      setInputMode("profile");
+      return undefined;
+    }
+    if (inputMode !== "profile" || inputValue.trim()) return undefined;
+
+    const example = "instagram";
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const startTimer = window.setTimeout(() => {
+      const input = document.querySelector('[data-tour="query-input"] input');
+      input?.focus({ preventScroll: true });
+      if (reduceMotion) {
+        setInputValue(example);
+        return;
+      }
+
+      let position = 0;
+      tourTypingTimer.current = window.setInterval(() => {
+        position += 1;
+        setInputValue(example.slice(0, position));
+        if (position >= example.length) {
+          window.clearInterval(tourTypingTimer.current);
+          tourTypingTimer.current = null;
+        }
+      }, 105);
+    }, reduceMotion ? 0 : 520);
+    tourTypingTimer.current = startTimer;
+
+    return () => {
+      window.clearTimeout(startTimer);
+      window.clearInterval(tourTypingTimer.current);
+      tourTypingTimer.current = null;
+    };
+  }, [inputMode, tourOpen, tourStep, userGuideEnabled]);
+
+  useEffect(() => {
     if (scrapeEngine !== "companion") return;
     let active = true;
     setCompanionStatus({ checking: true, ready: false, message: "Checking Companion…" });
@@ -346,6 +516,55 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
       .catch(() => {});
   }, [savedQueriesKey, savedQueriesPath, serviceUrl]);
 
+  const completeUserGuide = () => {
+    window.clearTimeout(tourTypingTimer.current);
+    window.clearInterval(tourTypingTimer.current);
+    tourTypingTimer.current = null;
+    setTourOpen(false);
+    try {
+      window.localStorage.setItem(userGuideStorageKey, "completed");
+    } catch {
+      // The replay button remains available when browser storage is restricted.
+    }
+  };
+
+  const openUserGuide = () => {
+    setTourStep(TOUR_STEP.welcome);
+    setTourOpen(true);
+  };
+
+  const moveTourAfterSelection = (currentStep, nextStep) => {
+    if (!userGuideEnabled || !tourOpen || tourStep !== currentStep) return;
+    window.setTimeout(() => {
+      setTourStep((activeStep) => activeStep === currentStep ? nextStep : activeStep);
+    }, 280);
+  };
+
+  const advanceUserGuide = () => {
+    if (tourStep === TOUR_STEP.launch) {
+      completeUserGuide();
+      return;
+    }
+    if (tourStep === TOUR_STEP.inputType && !inputMode) {
+      setInputMode("profile");
+      setInputValue("");
+      setError(null);
+    }
+    if (tourStep === TOUR_STEP.query && isPostInput(inputMode)) {
+      setTourStep(TOUR_STEP.launch);
+      return;
+    }
+    setTourStep((activeStep) => Math.min(TOUR_STEP.launch, activeStep + 1));
+  };
+
+  const rewindUserGuide = () => {
+    if (tourStep === TOUR_STEP.launch && isPostInput(inputMode)) {
+      setTourStep(TOUR_STEP.query);
+      return;
+    }
+    setTourStep((activeStep) => Math.max(TOUR_STEP.welcome, activeStep - 1));
+  };
+
   const selectInputMode = (mode) => {
     setInputMode(mode);
     setInputValue((value) => cleanInputValue(mode, value));
@@ -353,12 +572,14 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
       setCollectionMode("latest");
     }
     setError(null);
+    moveTourAfterSelection(TOUR_STEP.inputType, TOUR_STEP.query);
   };
 
   const selectScrapeEngine = (engine) => {
     setScrapeEngine(engine);
     window.localStorage.setItem(engineStorageKey, engine);
     setError(null);
+    moveTourAfterSelection(TOUR_STEP.engine, TOUR_STEP.inputType);
   };
 
   const runSelectedInstagramJob = async (payload, onStatus) => {
@@ -386,6 +607,11 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
     if (isPostInput(inputMode) || (["engagement", "compare"].includes(mode) && !isProfileInput(inputMode))) return;
     setCollectionMode(mode);
     setError(null);
+    if (mode === "compare" && tourOpen && tourStep === TOUR_STEP.collection) {
+      completeUserGuide();
+      return;
+    }
+    moveTourAfterSelection(TOUR_STEP.collection, TOUR_STEP.launch);
   };
 
   const selectRangeType = (type) => {
@@ -398,6 +624,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
 
   const startScrape = async () => {
     if (collectionMode === "compare") return;
+    if (tourOpen) completeUserGuide();
     if (!inputMode) {
       setError("Select Profile, Keyword, Profile URL, or Post URL first.");
       return;
@@ -940,15 +1167,25 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   }
 
   return (
-    <main className={`instagram-scraper-app start-page ${collectionMode === "compare" ? "compare-mode" : ""}`}>
+    <main className={`instagram-scraper-app start-page platform-${platformLower} ${collectionMode === "compare" ? "compare-mode" : ""}`}>
       <section className="intro-panel">
         <p className="eyebrow">{platformName} intelligence</p>
         <h1>{platformName} scraper</h1>
         <p>Public post and reel data.</p>
       </section>
 
-      <section className="launch-panel">
-        <fieldset className="engine-picker">
+      <div className="launch-panel-column">
+        {userGuideAvailable && (
+          <div className="launch-guide-row">
+            <button type="button" className="user-guide-button" onClick={openUserGuide}>
+              <span aria-hidden="true">?</span>
+              {userGuideLabel}
+            </button>
+          </div>
+        )}
+
+        <section className="launch-panel">
+        <fieldset className="engine-picker" data-tour="engine">
           <legend>Choose scraping engine</legend>
           <div className="engine-options">
             {SCRAPE_ENGINES.map(item => (
@@ -971,7 +1208,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
         </fieldset>
 
         <div className={`input-builder ${inputMode ? "is-active" : ""} ${collectionMode === "compare" ? "is-compare" : ""}`}>
-          <fieldset className="mode-picker">
+          <fieldset className="mode-picker" data-tour="input-type">
             <legend>Choose input type</legend>
             <div className="mode-options">
               {availableInputModes.map((item) => (
@@ -988,7 +1225,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
             </div>
           </fieldset>
 
-          {collectionMode !== "compare" && <div className={`guided-input ${inputMode ? "is-visible" : ""}`}>
+          {collectionMode !== "compare" && <div className={`guided-input ${inputMode ? "is-visible" : ""}`} data-tour="query-input">
             {activeInputMode && (
               <>
                 <label htmlFor="query">{activeInputMode.fieldLabel}</label>
@@ -1001,7 +1238,12 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
                     type={inputMode === "profile_url" || inputMode === "post_url" ? "url" : "text"}
                     placeholder={activeInputMode.placeholder}
                     value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
+                    onChange={(e) => {
+                      window.clearTimeout(tourTypingTimer.current);
+                      window.clearInterval(tourTypingTimer.current);
+                      tourTypingTimer.current = null;
+                      setInputValue(e.target.value);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") startScrape();
                     }}
@@ -1014,7 +1256,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
         </div>
 
         {!isPostInput(inputMode) && (
-          <fieldset className="workflow-picker">
+          <fieldset className="workflow-picker" data-tour="collection">
             <legend>Choose collection</legend>
             <div className="workflow-options">
               {COLLECTION_MODES
@@ -1047,7 +1289,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
         )}
 
         {!isPostInput(inputMode) && collectionMode === "range" && (
-          <div className="range-builder">
+          <div className="range-builder" data-tour="range">
             <div className="range-heading">
               <span>Range unit</span>
               <div className="range-type-picker" aria-label="Post range type">
@@ -1099,7 +1341,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
           </div>
         )}
 
-        {collectionMode !== "compare" && <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`}>
+        {collectionMode !== "compare" && <div className={`launch-row ${isPostInput(inputMode) ? "is-single-post" : ""}`} data-tour="launch">
           {!isPostInput(inputMode) && (
             <div className="count-field">
               <label htmlFor="count">Results per ranking</label>
@@ -1127,7 +1369,23 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
         )}
 
         {collectionMode !== "compare" && error && <div className="error-box">{error}</div>}
-      </section>
+        </section>
+      </div>
+
+      {userGuideAvailable && tourOpen && (
+        CustomUserGuide ? (
+          <CustomUserGuide open={tourOpen} onClose={completeUserGuide} />
+        ) : (
+          <InstagramScraperTour
+            open={tourOpen}
+            stepIndex={tourStep}
+            steps={userGuideSteps}
+            onBack={rewindUserGuide}
+            onClose={completeUserGuide}
+            onNext={advanceUserGuide}
+          />
+        )
+      )}
     </main>
   );
 }

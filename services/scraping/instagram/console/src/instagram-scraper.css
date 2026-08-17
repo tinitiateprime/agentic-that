@@ -93,6 +93,20 @@
   box-shadow: 0 22px 60px rgba(16, 24, 40, 0.08);
 }
 
+.instagram-scraper-app .launch-panel-column {
+  display: grid;
+  align-self: center;
+  min-width: 0;
+  gap: 12px;
+}
+
+.instagram-scraper-app .launch-guide-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 36px;
+}
+
 .instagram-scraper-app .engine-picker {
   margin: 0 0 18px;
   padding: 0 0 18px;
@@ -1007,6 +1021,24 @@
 
 .instagram-scraper-app .input-builder.is-compare .mode-options {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.instagram-scraper-app .comparison-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 140px;
+  margin-top: 18px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.instagram-scraper-app .comparison-loading .loader-ring {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
 }
 
 .instagram-scraper-app .comparison-workspace {
@@ -2076,5 +2108,451 @@
   .instagram-scraper-app .evidence-placeholder {
     width: 72px;
     height: 92px;
+  }
+}
+
+/* Instagram scraper walkthrough */
+.instagram-scraper-app .user-guide-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px 0 8px;
+  border-color: #cfd7df;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 5px 18px rgba(16, 24, 40, 0.06);
+  transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.instagram-scraper-app .user-guide-button span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #17202a;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.instagram-scraper-app .user-guide-button:hover {
+  border-color: #0f766e;
+  color: #0f766e;
+  box-shadow: 0 8px 24px rgba(15, 118, 110, 0.13);
+  transform: translateY(-1px);
+}
+
+.instagram-scraper-app .user-guide-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.2);
+  outline-offset: 2px;
+}
+
+.instagram-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  color: #17202a;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
+.instagram-tour *,
+.instagram-tour *::before,
+.instagram-tour *::after {
+  box-sizing: border-box;
+}
+
+.instagram-tour-shade {
+  position: fixed;
+  z-index: 10000;
+  background: rgba(7, 13, 24, 0.7);
+  pointer-events: auto;
+  transition: top 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.instagram-tour-shade.shade-top {
+  inset: 0 0 auto;
+}
+
+.instagram-tour-shade.shade-left {
+  left: 0;
+}
+
+.instagram-tour-shade.shade-right {
+  right: 0;
+}
+
+.instagram-tour-shade.shade-bottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.instagram-tour-shade.shade-full {
+  inset: 0;
+  animation: instagramTourShadeIn 240ms ease both;
+}
+
+.instagram-tour-focus {
+  position: fixed;
+  z-index: 10001;
+  border: 1px solid rgba(151, 255, 226, 0.95);
+  border-radius: 14px;
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.22), 0 16px 42px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+  animation: instagramTourFocusIn 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.instagram-scraper-app .instagram-tour-target {
+  transform-origin: center;
+  animation: instagramTourTargetIn 820ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.instagram-tour-pointer {
+  position: fixed;
+  z-index: 10002;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #ffffff;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.38));
+  pointer-events: none;
+  animation: instagramTourPointer 1.55s ease-in-out 250ms infinite;
+}
+
+.instagram-tour-pointer svg {
+  flex: none;
+  fill: #0f766e;
+  transform: rotate(-8deg);
+}
+
+.instagram-tour-pointer span {
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: #17202a;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.instagram-tour-card {
+  position: fixed;
+  z-index: 10003;
+  width: min(370px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 28px 80px rgba(2, 8, 23, 0.34), 0 2px 8px rgba(2, 8, 23, 0.12);
+  pointer-events: auto;
+  overflow: hidden;
+  animation: instagramTourCardIn 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.instagram-tour-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, #0f766e, #34d399 55%, #f97316);
+}
+
+.instagram-tour-card.is-welcome {
+  width: min(430px, calc(100vw - 32px));
+  padding: 30px;
+  text-align: center;
+}
+
+.instagram-tour-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #667085;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.instagram-tour-close:hover {
+  background: #f2f4f7;
+  color: #17202a;
+}
+
+.instagram-tour-close:focus-visible,
+.instagram-tour-actions button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.22);
+  outline-offset: 2px;
+}
+
+.instagram-tour-welcome-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 18px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #0f766e, #0b5f59);
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 118, 110, 0.25);
+}
+
+.instagram-tour-welcome-icon svg {
+  margin-left: 2px;
+}
+
+.instagram-tour-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 38px 20px 0;
+}
+
+.instagram-tour-progress > span {
+  flex: none;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.instagram-tour-progress > div {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(4, minmax(16px, 1fr));
+  gap: 5px;
+}
+
+.instagram-tour-progress i {
+  height: 3px;
+  border-radius: 999px;
+  background: #e4e7ec;
+}
+
+.instagram-tour-progress i.is-complete {
+  background: #0f766e;
+}
+
+.instagram-tour-kicker {
+  margin: 0 38px 7px 0;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.instagram-tour-card.is-welcome .instagram-tour-kicker {
+  margin-right: 0;
+}
+
+.instagram-tour-card h2 {
+  margin: 0;
+  color: #101828;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.instagram-tour-card.is-welcome h2 {
+  font-size: 27px;
+}
+
+.instagram-tour-copy {
+  margin: 10px 0 0;
+  color: #5b6675;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.instagram-tour-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 15px;
+  padding: 10px 11px;
+  border: 1px solid #d1fae5;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.instagram-tour-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.instagram-tour-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.instagram-tour-card.is-welcome .instagram-tour-actions {
+  justify-content: center;
+}
+
+.instagram-tour-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.instagram-tour-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #344054;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.instagram-tour-actions button:hover {
+  border-color: #98a2b3;
+  background: #f9fafb;
+  transform: translateY(-1px);
+}
+
+.instagram-tour-actions .instagram-tour-skip {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #667085;
+}
+
+.instagram-tour-actions .instagram-tour-skip:hover {
+  border-color: transparent;
+  background: transparent;
+  color: #344054;
+}
+
+.instagram-tour-actions .instagram-tour-next {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 7px 18px rgba(15, 118, 110, 0.2);
+}
+
+.instagram-tour-actions .instagram-tour-next:hover {
+  border-color: #0b5f59;
+  background: #0b5f59;
+}
+
+@keyframes instagramTourShadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes instagramTourCardIn {
+  from { opacity: 0; transform: translateY(9px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes instagramTourFocusIn {
+  0% { opacity: 0; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0), 0 12px 34px rgba(0, 0, 0, 0.18); }
+  35% { opacity: 1; box-shadow: 0 0 0 7px rgba(52, 211, 153, 0.25), 0 16px 42px rgba(0, 0, 0, 0.24); }
+  68% { box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16), 0 16px 42px rgba(0, 0, 0, 0.24); }
+  84% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.2), 0 16px 42px rgba(0, 0, 0, 0.24); }
+  100% { opacity: 1; box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.22), 0 16px 42px rgba(0, 0, 0, 0.24); }
+}
+
+@keyframes instagramTourTargetIn {
+  0% { scale: 1; }
+  36% { scale: 1.035; }
+  68% { scale: 1.018; }
+  84% { scale: 1.027; }
+  100% { scale: 1.02; }
+}
+
+@keyframes instagramTourPointer {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-5px, -3px); }
+}
+
+@media (max-width: 719px) {
+  .instagram-tour-card {
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+
+  .instagram-tour-pointer span {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .instagram-tour-card,
+  .instagram-tour-card.is-welcome {
+    padding: 22px;
+  }
+
+  .instagram-tour-card h2 {
+    font-size: 20px;
+  }
+
+  .instagram-tour-card.is-welcome h2 {
+    font-size: 24px;
+  }
+
+  .instagram-tour-actions {
+    align-items: flex-end;
+  }
+
+  .instagram-tour-actions > div {
+    justify-content: flex-end;
+  }
+
+  .instagram-tour-actions .instagram-tour-back {
+    width: 38px;
+    padding: 0;
+    font-size: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instagram-scraper-app .instagram-tour-target,
+  .instagram-tour-card,
+  .instagram-tour-focus,
+  .instagram-tour-pointer,
+  .instagram-tour-shade {
+    animation: none;
+    transition: none;
+  }
+
+  .instagram-scraper-app .instagram-tour-target {
+    scale: 1.01;
   }
 }
