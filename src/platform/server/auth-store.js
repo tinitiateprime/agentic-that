@@ -9,6 +9,7 @@ export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_FREE_TRIAL_DAYS = 7;
+const PLATFORM_SCHEMA_MIGRATION_KEY = "platform-rbac-schema-v2";
 const useNetlifyBlobs = (
   process.env.DATA_STORE === "netlify-blobs" ||
   process.env.NETLIFY === "true" ||
@@ -262,6 +263,24 @@ async function importBlobAccounts(sql) {
 async function migratePlatformDatabase(sql) {
   if (process.env.NODE_ENV === "production" && configuredGlobalAdminEmails().size === 0) {
     throw new Error("PLATFORM_SUPER_ADMIN_EMAILS is required in production.");
+  }
+  const [registry] = await sql`
+    SELECT to_regclass('public.platform_auth_migrations') AS relation`;
+  if (registry?.relation) {
+    const [applied] = await sql`
+      SELECT key FROM platform_auth_migrations
+       WHERE key = ${PLATFORM_SCHEMA_MIGRATION_KEY}
+       LIMIT 1`;
+    if (applied) {
+      const superAdminEmails = [...configuredGlobalAdminEmails()];
+      if (superAdminEmails.length) {
+        await sql`
+          UPDATE platform_users
+             SET is_global_admin = true, status = 'active', billing_status = 'exempt'
+           WHERE LOWER(email) = ANY(${superAdminEmails})`;
+      }
+      return;
+    }
   }
   await sql`
     CREATE TABLE IF NOT EXISTS platform_users (
@@ -596,6 +615,10 @@ async function migratePlatformDatabase(sql) {
          SET is_global_admin = true, status = 'active', billing_status = 'exempt'
        WHERE LOWER(email) = ANY(${superAdminEmails})`;
   }
+  await sql`
+    INSERT INTO platform_auth_migrations (key)
+    VALUES (${PLATFORM_SCHEMA_MIGRATION_KEY})
+    ON CONFLICT (key) DO NOTHING`;
 }
 
 export async function getPlatformSql() {

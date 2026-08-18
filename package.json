@@ -39,6 +39,7 @@
     "dev:instagram": "npm run dev",
     "dev:facebook": "npm run dev",
     "build": "npm run publishing:css && node scripts/copy-telegram-console.mjs && node scripts/build-next.mjs",
+    "db:migrate:platform": "node --import tsx scripts/migrate-platform-database.mjs",
     "seed": "node scripts/seed.js",
     "rbac:migrate:dry-run": "node scripts/migrate-central-rbac.mjs",
     "rbac:migrate:apply": "node scripts/migrate-central-rbac.mjs --apply",

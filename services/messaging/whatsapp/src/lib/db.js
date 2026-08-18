@@ -58,6 +58,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v1";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -83,10 +84,36 @@ function client() {
 export function ensureReady() {
   return (globalForDb.__tinitiateDbReady ||= (async () => {
     const sql = client();
-    await migrate(sql);
+    await ensureSchema(sql);
     await bootstrapAdmin(sql);
     await migrateLegacyEnvAccount(sql);
   })());
+}
+
+async function ensureSchema(sql) {
+  await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${WHATSAPP_SCHEMA_MIGRATION_KEY}))`;
+    const [registry] = await tx`
+      SELECT to_regclass('public.app_schema_migrations') AS relation`;
+    if (registry?.relation) {
+      const [applied] = await tx`
+        SELECT key FROM app_schema_migrations
+         WHERE key = ${WHATSAPP_SCHEMA_MIGRATION_KEY}
+         LIMIT 1`;
+      if (applied) return;
+    }
+
+    await migrate(tx);
+    await tx`
+      CREATE TABLE IF NOT EXISTS app_schema_migrations (
+        key        TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`;
+    await tx`
+      INSERT INTO app_schema_migrations (key)
+      VALUES (${WHATSAPP_SCHEMA_MIGRATION_KEY})
+      ON CONFLICT (key) DO NOTHING`;
+  });
 }
 
 // Acquire the Supabase client, guaranteeing migrations have run. Use this in
