@@ -82,6 +82,9 @@ function client() {
 
 // Run schema migration + admin bootstrap exactly once, before the first query.
 export function ensureReady() {
+  if (process.env.NETLIFY === "true" && process.env.RUN_DATABASE_MIGRATIONS !== "true") {
+    return Promise.resolve();
+  }
   return (globalForDb.__tinitiateDbReady ||= (async () => {
     const sql = client();
     await ensureSchema(sql);

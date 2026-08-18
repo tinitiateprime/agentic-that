@@ -623,6 +623,9 @@ async function migratePlatformDatabase(sql) {
 
 export async function getPlatformSql() {
   const sql = await getSql();
+  if (process.env.NETLIFY === "true" && process.env.RUN_DATABASE_MIGRATIONS !== "true") {
+    return sql;
+  }
   platformDatabaseReadyPromise ??= migratePlatformDatabase(sql);
   await platformDatabaseReadyPromise;
   return sql;

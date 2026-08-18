@@ -7,6 +7,7 @@ if (!process.env.DATABASE_URL?.trim() && !process.env.SUPABASE_DB_URL?.trim()) {
   throw new Error("DATABASE_URL or SUPABASE_DB_URL is required for the platform migration.");
 }
 
+process.env.RUN_DATABASE_MIGRATIONS = "true";
 const { getPlatformSql } = await import("../src/platform/server/auth-store.js");
 const sql = await getPlatformSql();
 
