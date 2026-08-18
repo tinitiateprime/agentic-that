@@ -1,11 +1,12 @@
 import { createServiceIdentityToken } from "@platform/server/auth-store";
-import { requireAccess } from "@platform/server/access-control";
+import { requireAccess, requireCapability } from "@platform/server/access-control";
 import TelegramConsoleClient from "./TelegramConsoleClient";
 
 export const metadata = { title: "Telegram Console - AgenticThat" };
 
 export default async function TelegramConsolePage() {
-  const principal = await requireAccess("messaging.telegram", "view", "/console");
+  await requireAccess("messaging.telegram", "view", "/console");
+  const principal = await requireCapability("messaging.view", "/console");
   return (
     <>
       <link rel="stylesheet" href="/console/styles.css" />

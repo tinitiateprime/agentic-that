@@ -31,6 +31,7 @@ export type FacebookJobInput = {
 export type FacebookRun = {
   id: string;
   workspaceId: string;
+  createdByUserId?: string;
   requestedQuery: string;
   query: string;
   inputMode: FacebookInputMode;
@@ -52,6 +53,7 @@ export type FacebookRun = {
 export type FacebookJob = {
   id: string;
   workspaceId: string;
+  createdByUserId?: string;
   status: "pending" | "running" | "complete" | "failed";
   input: FacebookJobInput;
   createdAt: string;
@@ -141,9 +143,9 @@ export class FacebookRunStore {
     });
   }
 
-  async createJob(input: FacebookJobInput) {
+  async createJob(input: FacebookJobInput, createdByUserId?: string) {
     const timestamp = new Date().toISOString();
-    const job: FacebookJob = { id: randomUUID(), workspaceId: this.workspaceId, status: "pending", input, createdAt: timestamp, updatedAt: timestamp };
+    const job: FacebookJob = { id: randomUUID(), workspaceId: this.workspaceId, createdByUserId, status: "pending", input, createdAt: timestamp, updatedAt: timestamp };
     if (this.blobs) {
       await getStore("facebook-scraper").setJSON(`jobs/${job.id}`, job);
       return job;

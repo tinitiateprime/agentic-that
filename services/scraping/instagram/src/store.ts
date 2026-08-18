@@ -13,6 +13,7 @@ import {
 export type InstagramRun = {
   id: string;
   workspaceId: string;
+  createdByUserId?: string;
   query: string;
   requestedQuery: string;
   maxResults: number;
@@ -51,6 +52,7 @@ export type InstagramJobInput = {
 export type InstagramJob = {
   id: string;
   workspaceId: string;
+  createdByUserId?: string;
   status: "pending" | "running" | "complete" | "failed";
   input: InstagramJobInput;
   createdAt: string;
@@ -176,11 +178,12 @@ export class InstagramRunStore {
     });
   }
 
-  async createJob(input: InstagramJobInput) {
+  async createJob(input: InstagramJobInput, createdByUserId?: string) {
     const timestamp = new Date().toISOString();
     const job: InstagramJob = {
       id: randomUUID(),
       workspaceId: this.workspaceId,
+      createdByUserId,
       status: "pending",
       input,
       createdAt: timestamp,

@@ -39,7 +39,14 @@ type StoredUser = UserProfile & {
 
 type BlobStore = {
   get: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<unknown>;
-  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean }) => Promise<unknown>;
+  getWithMetadata: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<{
+    data: unknown;
+    etag: string;
+  } | null>;
+  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean; onlyIfMatch?: string }) => Promise<{
+    modified: boolean;
+    etag?: string;
+  }>;
 };
 
 type StoredFileInput = {
@@ -65,6 +72,7 @@ type StoredSubmissionInput = {
   title?: string;
   description: string;
   rightsConfirmed: boolean;
+  selectedAccountIds: string[];
 };
 
 type BootstrapUser = {
@@ -306,6 +314,7 @@ function normalizeStore(value: unknown): Store {
         ...submission,
         workspaceId: submission.workspaceId || legacyWorkspaceId,
         rightsConfirmed: submission.rightsConfirmed ?? true,
+        selectedAccountIds: Array.isArray(submission.selectedAccountIds) ? submission.selectedAccountIds : [],
         destinationUploadIds: Array.isArray(submission.destinationUploadIds) ? submission.destinationUploadIds : [],
       }))
       : [],
@@ -447,6 +456,19 @@ async function readStore(): Promise<Store> {
 async function mutateStore<T>(mutator: (store: Store) => T | Promise<T>) {
   await ensureStoreReady();
   const operation = storeMutationQueue.then(async () => {
+    if (useNetlifyBlobs) {
+      const blobStore = await getBlobStore();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const current = await blobStore.getWithMetadata("store", { type: "json", consistency: "strong" });
+        const store = normalizeStore(current?.data ?? emptyStore());
+        const result = await mutator(store);
+        const written = await blobStore.setJSON("store", store, current
+          ? { onlyIfMatch: current.etag }
+          : { onlyIfNew: true });
+        if (written.modified) return result;
+      }
+      throw new Error("Publishing data changed concurrently. Please retry the request.");
+    }
     const store = await readStoreFile();
     const result = await mutator(store);
     await writeStoreFile(store);
@@ -590,11 +612,18 @@ function assertWorkspaceKey(user: StoredUser, identity: PlatformWorkspaceIdentit
 export async function upsertCentralWorkspaceActor(
   identity: PlatformWorkspaceIdentity,
   accessLevel: "view" | "operate" | "configure",
+  capabilities: string[] = [],
 ) {
   return mutateStore(store => {
     const timestamp = nowIso();
     const index = findPlatformManager(store, identity);
-    const role: UserRole = accessLevel === "view" ? "viewer" : "operations_manager";
+    const role: UserRole = capabilities.includes("publishing.accounts.configure") || capabilities.includes("publishing.execute")
+      ? "operations_manager"
+      : capabilities.includes("publishing.schedule.manage")
+        ? "scheduler"
+        : capabilities.includes("publishing.content.create")
+          ? "post_uploader"
+          : "viewer";
     if (index >= 0) {
       const existing = store.users[index];
       const updated: StoredUser = {
@@ -606,6 +635,7 @@ export async function upsertCentralWorkspaceActor(
         email: identity.email.toLowerCase(),
         role,
         centralAccessLevel: accessLevel,
+        capabilities,
         isActive: true,
         lastLoginAt: timestamp,
         updatedAt: timestamp,
@@ -623,6 +653,7 @@ export async function upsertCentralWorkspaceActor(
       email: identity.email.toLowerCase(),
       role,
       centralAccessLevel: accessLevel,
+      capabilities,
       isActive: true,
       passwordHash: hashPassword(randomBytes(48).toString("base64url")),
       platformPasswordConfigured: false,
@@ -956,6 +987,11 @@ export async function listContentSubmissions(workspaceId?: string) {
   const store = await readStore();
   return store.submissions
     .filter(submission => !workspaceId || submission.workspaceId === workspaceId)
+    .map(submission => ({
+      ...submission,
+      createdByName: store.users.find(user => user.id === submission.createdByUserId)?.fullName,
+      scheduledByName: store.users.find(user => user.id === submission.scheduledByUserId)?.fullName,
+    }))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -964,6 +1000,47 @@ export async function getContentSubmission(submissionId: string, workspaceId?: s
   return store.submissions.find(submission =>
     submission.id === submissionId && (!workspaceId || submission.workspaceId === workspaceId)
   ) ?? null;
+}
+
+export async function claimContentSubmission(submissionId: string, actorUserId: string, workspaceId: string) {
+  return mutateStore(store => {
+    const index = store.submissions.findIndex(item => item.id === submissionId && item.workspaceId === workspaceId);
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    const leaseExpired = existing.status === "scheduling"
+      && (!existing.schedulingLeaseExpiresAt || Date.parse(existing.schedulingLeaseExpiresAt) <= Date.now());
+    if (existing.status !== "awaiting_schedule" && !leaseExpired) return null;
+    if (leaseExpired) {
+      store.uploads = store.uploads.filter(upload => upload.sourceSubmissionId !== existing.id);
+    }
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "scheduling",
+      scheduledByUserId: actorUserId,
+      schedulingLeaseExpiresAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
+}
+
+export async function releaseContentSubmissionClaim(submissionId: string, actorUserId: string, workspaceId: string) {
+  return mutateStore(store => {
+    const index = store.submissions.findIndex(item => item.id === submissionId && item.workspaceId === workspaceId);
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    if (existing.status !== "scheduling" || existing.scheduledByUserId !== actorUserId) return existing;
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "awaiting_schedule",
+      scheduledByUserId: undefined,
+      schedulingLeaseExpiresAt: undefined,
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
 }
 
 export async function createContentSubmission(
@@ -987,6 +1064,7 @@ export async function createContentSubmission(
       rightsConfirmed: input.rightsConfirmed,
       status: "awaiting_schedule",
       createdByUserId: actorUserId,
+      selectedAccountIds: [...new Set(input.selectedAccountIds)],
       destinationUploadIds: [],
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1017,13 +1095,14 @@ export async function completeContentSubmission(
     );
     if (index < 0) return null;
     const existing = store.submissions[index];
-    if (existing.status !== "awaiting_schedule") {
+    if (existing.status !== "scheduling" || existing.scheduledByUserId !== actorUserId) {
       throw new Error("This submission has already been scheduled.");
     }
     const updated: ContentSubmission = {
       ...existing,
       status: "scheduled",
       scheduledByUserId: actorUserId,
+      schedulingLeaseExpiresAt: undefined,
       destinationUploadIds,
       updatedAt: nowIso(),
     };
@@ -1071,6 +1150,7 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
     const account: PlatformAccount = {
       id: "account_" + nanoid(12),
       workspaceId,
+      companionId: input.companionId,
       platform,
       displayName: input.displayName,
       handle: input.handle,
@@ -1111,6 +1191,7 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       credentialConfigured: executionEngine === previousEngine ? existing.credentialConfigured : false,
       enabled: input.enabled ?? existing.enabled,
       executionEngine,
+      companionId: input.companionId ?? existing.companionId,
       safetyMode: input.safetyMode ?? existing.safetyMode ?? "standard",
       twoFactorEnabled: input.twoFactorEnabled ?? existing.twoFactorEnabled ?? false,
       safetyStatus: input.enabled === true
@@ -1121,6 +1202,15 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       updatedAt: nowIso()
     };
     store.accounts[index] = updated;
+    if (!updated.enabled || executionEngine !== previousEngine) {
+      const blockedAt = nowIso();
+      const reason = !updated.enabled
+        ? "Publishing account is disabled. Reconnect or enable it before retrying this destination."
+        : "Publishing account login must be reconnected after the execution engine changed.";
+      store.uploads = store.uploads.map(upload => upload.accountId === accountId && upload.status === "queued"
+        ? { ...upload, status: "failed" as const, failureReason: reason, updatedAt: blockedAt }
+        : upload);
+    }
     return updated;
   });
 }
@@ -1545,10 +1635,21 @@ export async function listUploads(platform?: Platform, accountId?: string, works
       && (!platform || upload.platform === platform)
       && (!accountId || upload.accountId === accountId)
     )
+    .map(upload => ({
+      ...upload,
+      createdByName: store.users.find(user => user.id === upload.createdByUserId)?.fullName,
+      scheduledByName: store.users.find(user => user.id === upload.scheduledByUserId)?.fullName,
+    }))
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 
-export async function createUpload(accountId: string, file: StoredFileInput, actorUserId?: string, workspaceId?: string) {
+export async function createUpload(
+  accountId: string,
+  file: StoredFileInput,
+  actorUserId?: string,
+  workspaceId?: string,
+  attribution: { createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string } = {},
+) {
   const upload = await mutateStore(store => {
     const account = store.accounts.find(item => item.id === accountId && (!workspaceId || item.workspaceId === workspaceId));
     if (!account) throw new Error("Publishing account not found.");
@@ -1608,8 +1709,9 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       updatedAt: timestamp,
       scheduledAt: file.scheduledAt || undefined,
       scheduleId: file.scheduleId,
-      createdByUserId: actorUserId,
-      scheduledByUserId: file.scheduledAt || file.scheduleId ? actorUserId : undefined,
+      createdByUserId: attribution.createdByUserId ?? actorUserId,
+      scheduledByUserId: attribution.scheduledByUserId ?? (file.scheduledAt || file.scheduleId ? actorUserId : undefined),
+      sourceSubmissionId: attribution.sourceSubmissionId,
       lastUpdatedByUserId: actorUserId,
       automation: createAutomation(account.platform, accountId, id, file.url)
     };
@@ -1636,6 +1738,15 @@ export async function updateUploadStatus(
     oldStatus = store.uploads[index].status;
     statusChanged = oldStatus !== status;
     const existing = store.uploads[index];
+    const transitions: Record<UploadStatus, UploadStatus[]> = {
+      queued: ["processing", "failed"],
+      processing: ["posted", "failed", "queued"],
+      failed: ["queued", "processing"],
+      posted: [],
+    };
+    if (statusChanged && !transitions[oldStatus].includes(status)) {
+      throw new Error(`A post cannot move from ${oldStatus} to ${status}.`);
+    }
     if (
       (status === "queued" || status === "processing")
       && (existing.publishActionState === "submitted" || existing.publishActionState === "uncertain")

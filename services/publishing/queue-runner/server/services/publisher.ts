@@ -21,6 +21,9 @@ import {
   type AutomationRunTrigger,
   type PublishingAccount
 } from "../local-storage.js";
+import { ensurePublishingMediaLocal } from "../media-storage.js";
+import { claimPublishingExecution, releasePublishingExecution, type PublishingExecutionLease } from "../execution-lease.js";
+import { publishingCompanionId } from "../companion-identity.js";
 import { loginToFacebook, postToFacebook } from "./publishers/facebook.js";
 import { loginToInstagram, postToInstagram } from "./publishers/instagram.js";
 import { loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
@@ -765,11 +768,49 @@ async function runAutomationOnce(
   console.log(`Starting publisher automation (${trigger})...`);
   const { channels } = await automationInput(undefined, mode, workspaceId);
   const requestedIds = uploadIds?.length ? new Set(uploadIds) : null;
-  const uploads = Object.values(channels).flat().filter(upload => !requestedIds || requestedIds.has(upload.id));
-  if (uploads.length === 0) {
+  const requestedUploads = Object.values(channels).flat().filter(upload => !requestedIds || requestedIds.has(upload.id));
+  const companionId = publishingCompanionId();
+  const accountAssignments = new Map(await Promise.all([...new Set(requestedUploads.map(upload => upload.accountId))]
+    .map(async accountId => [accountId, await getPublishingAccount(accountId)] as const)));
+  const candidateUploads = requestedUploads.filter(upload => {
+    const account = accountAssignments.get(upload.accountId);
+    return account && (!account.companionId || account.companionId === companionId);
+  });
+  if (candidateUploads.length === 0) {
     console.log(requestedIds
       ? "None of the requested posts are ready for publishing."
       : "No due uploads for enabled publishing accounts.");
+    return;
+  }
+
+  const leaseOwnerId = process.env.PUBLISHING_COMPANION_ID?.trim() || `companion-${process.pid}`;
+  const leaseResults = await Promise.all(candidateUploads.map(async upload => ({
+    upload,
+    lease: await claimPublishingExecution(upload.id, upload.workspaceId, leaseOwnerId),
+  })));
+  const claimed = leaseResults.filter((item): item is { upload: PlatformUpload; lease: PublishingExecutionLease } => Boolean(item.lease));
+  if (claimed.length === 0) {
+    console.log("All due publishing jobs are already claimed by another Companion.");
+    return;
+  }
+
+  const executableClaims: typeof claimed = [];
+  for (const item of claimed) {
+    try {
+      if (item.upload.postFormat !== "text" && item.upload.fileName) {
+        await ensurePublishingMediaLocal(item.upload.fileName, item.upload.workspaceId);
+      }
+      executableClaims.push(item);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Publishing media is missing.";
+      await updateUploadStatus(item.upload.id, "failed", `Publishing media is unavailable: ${message}`, startedByUserId, item.upload.workspaceId)
+        .catch(() => undefined);
+      await releasePublishingExecution(item.lease).catch(() => undefined);
+    }
+  }
+  const uploads = executableClaims.map(item => item.upload);
+  if (uploads.length === 0) {
+    console.warn("No claimed publishing jobs had usable media.");
     return;
   }
 
@@ -780,7 +821,10 @@ async function runAutomationOnce(
   try {
     automationRunId = await createAutomationRun(trigger, startedByUserId);
   } catch (error) {
-    await Promise.resolve(desktopHost?.finishPublishingRun()).catch(() => undefined);
+    await Promise.allSettled([
+      Promise.resolve(desktopHost?.finishPublishingRun()),
+      ...executableClaims.map(item => releasePublishingExecution(item.lease)),
+    ]);
     throw error;
   }
   let hadRunFailure = false;
@@ -831,7 +875,10 @@ async function runAutomationOnce(
         hadRunFailure ? runErrorMessage : undefined,
       );
     } finally {
-      await Promise.resolve(desktopHost?.finishPublishingRun()).catch(() => undefined);
+      await Promise.allSettled([
+        Promise.resolve(desktopHost?.finishPublishingRun()),
+        ...executableClaims.map(item => releasePublishingExecution(item.lease)),
+      ]);
     }
   }
 }

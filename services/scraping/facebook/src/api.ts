@@ -1,6 +1,7 @@
 import { getFacebookScraperInfo, runFacebookScrape } from "./scraper.ts";
 import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./store.ts";
 import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 
 const headers = {
   "content-type": "application/json; charset=utf-8",
@@ -11,6 +12,23 @@ const headers = {
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "authorization,content-type,cache-control,pragma",
 };
+const trialScrapeLimiter = new RollingTrialUsageLimiter();
+const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
+
+function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
+  if (identity.billingStatus !== "trialing") return;
+  const result = trialScrapeLimiter.consume(
+    `${identity.workspaceId}:facebook`,
+    TRIAL_SCRAPES_PER_PROFILE_PER_HOUR,
+    60 * 60_000,
+  );
+  if (!result.allowed) {
+    throw new ScrapingServiceAuthError(
+      `Trial limit reached for Facebook scraping. Try again in ${result.retryAfterSeconds} seconds.`,
+      429,
+    );
+  }
+}
 
 class FacebookRequestError extends Error {}
 
@@ -76,7 +94,7 @@ function friendlyError(error: unknown) {
   return original.length > 280 ? `${original.slice(0, 277)}...` : original;
 }
 
-async function executeScrape(input: FacebookJobInput, store: FacebookRunStore) {
+async function executeScrape(input: FacebookJobInput, store: FacebookRunStore, createdByUserId?: string) {
   const scrape = await runFacebookScrape({
     query: input.requestedQuery,
     inputMode: input.inputMode,
@@ -91,6 +109,7 @@ async function executeScrape(input: FacebookJobInput, store: FacebookRunStore) {
     skipComments: input.skipComments,
   });
   return store.saveRun({
+    createdByUserId,
     requestedQuery: input.requestedQuery,
     query: scrape.query,
     inputMode: input.inputMode,
@@ -133,7 +152,7 @@ export async function executeFacebookJob(jobId: string, workspaceId: string) {
   const running = await store.updateJob(jobId, { status: "running", error: undefined });
   if (!running) return null;
   try {
-    const run = await executeScrape(running.input, store);
+    const run = await executeScrape(running.input, store, running.createdByUserId);
     const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
     return complete ? jobResponse(complete, store) : null;
   } catch (error) {
@@ -163,7 +182,9 @@ export async function handleFacebookRequest(request: Request) {
       return run ? json({ run }) : json({ message: "Run not found" }, 404);
     }
     if (request.method === "POST" && route === "jobs") {
-      return json({ job: await store.createJob(prepareFacebookScrapeInput(await body(request))) }, 201);
+      const input = prepareFacebookScrapeInput(await body(request));
+      enforceTrialScrapeLimit(identity);
+      return json({ job: await store.createJob(input, String(identity.sub)) }, 201);
     }
     const runJob = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJob) {
@@ -180,7 +201,9 @@ export async function handleFacebookRequest(request: Request) {
       return json(await jobResponse(job, store));
     }
     if (request.method === "POST" && route === "scrape") {
-      const run = await executeScrape(prepareFacebookScrapeInput(await body(request)), store);
+      const input = prepareFacebookScrapeInput(await body(request));
+      enforceTrialScrapeLimit(identity);
+      const run = await executeScrape(input, store, String(identity.sub));
       return json({ run, results: run.results, analysis: run.analysis, discoveryStatus: run.discoveryStatus, diagnostics: run.diagnostics, dataSource: "live" });
     }
     return json({ message: "Not found" }, 404);

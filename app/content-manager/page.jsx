@@ -1,5 +1,5 @@
 import { createPublishingIdentityToken, createServiceIdentityToken } from "@platform/server/auth-store";
-import { principalHasAccess, requireAccess } from "@platform/server/access-control";
+import { principalHasAccess, principalHasCapability, requireAccess, requireCapability } from "@platform/server/access-control";
 import { serviceEndpoints } from "@platform/service-catalog";
 import ContentManager from "./ContentManager";
 
@@ -25,10 +25,12 @@ export default async function ContentManagerPage({ searchParams }) {
   const requestedResource = requestedService === "publishing"
     ? `publishing.${requestedPublishingPlatform}`
     : `messaging.${requestedMessagingPlatform}`;
-  const user = await requireAccess(requestedResource, "view", "/content-manager");
+  let user = await requireAccess(requestedResource, "view", "/content-manager");
+  user = await requireCapability(requestedService === "publishing" ? "publishing.view" : "messaging.view", "/content-manager");
   const canUsePublishing = ["instagram", "facebook", "x", "youtube", "linkedin"]
-    .some((platform) => principalHasAccess(user, `publishing.${platform}`, "view"));
-  const canUseTelegram = principalHasAccess(user, "messaging.telegram", "view");
+    .some((platform) => principalHasAccess(user, `publishing.${platform}`, "view"))
+    && principalHasCapability(user, "publishing.view");
+  const canUseTelegram = principalHasAccess(user, "messaging.telegram", "view") && principalHasCapability(user, "messaging.view");
 
   return (
     <ContentManager
@@ -38,7 +40,7 @@ export default async function ContentManagerPage({ searchParams }) {
       publishingIdentityToken={canUsePublishing ? await createPublishingIdentityToken(user) : ""}
       telegramIdentityToken={canUseTelegram ? await createServiceIdentityToken(user, "telegram") : ""}
       effectiveAccess={user.access}
-      user={{ name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialEndsAt: user.trialEndsAt }}
+      user={{ name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialStartsAt: user.trialStartsAt, trialEndsAt: user.trialEndsAt, capabilities: user.capabilities }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}
       publishQueueUrl={serviceEndpoints.publishQueue.consoleUrl}
     />

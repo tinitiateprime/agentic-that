@@ -19,9 +19,16 @@ import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, t
 import { RequestRateLimiter } from "./rate-limit.ts";
 import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserStore, type TelegramAccountWithSession } from "./store.ts";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonBody = Record<string, unknown>;
+type AuthenticatedAppUser = AppUser & {
+  workspaceId?: string;
+  billingStatus?: string;
+  trialStartsAt?: string | null;
+  trialEndsAt?: string | null;
+};
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -37,6 +44,10 @@ let config: AppConfig;
 let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
 let limiter: RequestRateLimiter;
+const trialHourlyMessageLimiter = new RollingTrialUsageLimiter();
+const trialDailyMessageLimiter = new RollingTrialUsageLimiter();
+const TRIAL_TELEGRAM_MESSAGES_PER_HOUR = 20;
+const TRIAL_TELEGRAM_MESSAGES_PER_DAY = 100;
 let initialized = false;
 let initializing: Promise<void> | null = null;
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -303,23 +314,39 @@ function ensureTrustedOrigin(request: IncomingMessage) {
   throw new HttpError(403, "This browser origin is not allowed.");
 }
 
-async function requireUser(request: IncomingMessage): Promise<AppUser> {
+async function requireUser(request: IncomingMessage): Promise<AuthenticatedAppUser> {
   const authorization = request.headers.authorization ?? "";
   const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
   if (bearer) {
     const identity = verifyServiceAccessToken(bearer, "telegram");
     if (identity) {
       const grantedLevel = String(identity.grants?.["messaging.telegram"] || "none");
-      if (!identity.workspaceId || !identity.sub || !["view", "operate", "configure"].includes(grantedLevel)) {
+      const capabilities = Array.isArray(identity.capabilities) ? identity.capabilities.map(String) : [];
+      const capabilityLevel = capabilities.includes("messaging.configure")
+        ? "configure"
+        : capabilities.includes("messaging.operate")
+          ? "operate"
+          : capabilities.includes("messaging.view")
+            ? "view"
+            : null;
+      if (!identity.workspaceId || !identity.sub || !capabilityLevel || !["view", "operate", "configure"].includes(grantedLevel)) {
         throw new HttpError(403, "Telegram access is not granted to this user.");
       }
-      const accessLevel = grantedLevel as "view" | "operate" | "configure";
-      return store.findOrCreatePlatformWorkspaceUser(
+      const levels = ["view", "operate", "configure"] as const;
+      const accessLevel = levels[Math.min(levels.indexOf(grantedLevel as typeof levels[number]), levels.indexOf(capabilityLevel))];
+      const platformUser = await store.findOrCreatePlatformWorkspaceUser(
         String(identity.workspaceId),
         String(identity.sub),
         String(identity.name || identity.email || "AgenticThat workspace"),
         accessLevel
       );
+      return {
+        ...platformUser,
+        workspaceId: String(identity.workspaceId),
+        billingStatus: String(identity.billingStatus || ""),
+        trialStartsAt: identity.trialStartsAt ? String(identity.trialStartsAt) : null,
+        trialEndsAt: identity.trialEndsAt ? String(identity.trialEndsAt) : null,
+      };
     }
     const user = await store.findUserByAccessToken(bearer);
     if (user && process.env.RBAC_ENFORCEMENT_MODE === "shadow") return user;
@@ -340,6 +367,23 @@ function requireUserLevel(user: AppUser, required: keyof typeof accessRank) {
   if (!current || accessRank[current] < accessRank[required]) {
     throw new HttpError(403, `This action requires ${required} access to Telegram.`);
   }
+}
+
+function enforceTrialTelegramMessageLimit(user: AuthenticatedAppUser) {
+  if (user.billingStatus !== "trialing") return;
+  const workspaceKey = user.workspaceId || user.id;
+  const hourlyKey = `${workspaceKey}:telegram:hour`;
+  const dailyKey = `${workspaceKey}:telegram:day`;
+  const hourly = trialHourlyMessageLimiter.check(hourlyKey, TRIAL_TELEGRAM_MESSAGES_PER_HOUR, 60 * 60_000);
+  if (!hourly.allowed) {
+    throw new HttpError(429, `Trial Telegram limit reached. Try again in ${hourly.retryAfterSeconds} seconds.`);
+  }
+  const daily = trialDailyMessageLimiter.check(dailyKey, TRIAL_TELEGRAM_MESSAGES_PER_DAY, 24 * 60 * 60_000);
+  if (!daily.allowed) {
+    throw new HttpError(429, `Daily Trial Telegram limit reached. Try again in ${daily.retryAfterSeconds} seconds.`);
+  }
+  trialHourlyMessageLimiter.consume(hourlyKey, TRIAL_TELEGRAM_MESSAGES_PER_HOUR, 60 * 60_000);
+  trialDailyMessageLimiter.consume(dailyKey, TRIAL_TELEGRAM_MESSAGES_PER_DAY, 24 * 60 * 60_000);
 }
 
 function hasProvisioningKey(request: IncomingMessage) {
@@ -862,6 +906,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const body = await readJsonBody(request);
     const account = await store.getAccountWithSession(user.id, requiredString(body, "accountId", 64));
     if (!account) throw new HttpError(404, "Telegram account was not found.");
+    enforceTrialTelegramMessageLimit(user);
     enforceRateLimit(`message:${user.id}:${account.id}`, config.messageRateLimitMax);
     const recipient = requiredString(body, "recipient", 256);
     const text = requiredString(body, "message", 50000);

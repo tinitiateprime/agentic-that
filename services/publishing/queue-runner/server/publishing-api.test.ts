@@ -151,6 +151,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     name: "Instagram Scraping User",
     email: "scraping@example.test",
     grants: { "scraping.instagram": "operate", "scraping.facebook": "none" },
+    capabilities: ["scraping.view", "scraping.run"],
   });
   const scrapingSessionResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
     method: "POST",
@@ -183,6 +184,16 @@ test("publishing API supports login, media and text posts, queue scheduling, and
       name: platformUserId,
       email,
       businessName: workspaceId,
+      capabilities: [
+        "publishing.view",
+        "publishing.content.create",
+        "publishing.content.edit",
+        "publishing.destinations.select",
+        "publishing.submissions.create",
+        "publishing.schedule.manage",
+        "publishing.accounts.configure",
+        "publishing.execute",
+      ],
     });
     const statusResponse = await fetch(`${origin}/api/auth/platform/status`, {
       method: "POST",
@@ -237,6 +248,11 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   });
   assert.equal(workspaceAccountResponse.status, 201);
   const workspaceAccount = await workspaceAccountResponse.json() as { id: string };
+  const disabledWorkspaceAccountResponse = await workspaceApi(workspaceA.token, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Disabled Workspace A Facebook", handle: "@disabled-a", enabled: false }),
+  });
+  assert.equal(disabledWorkspaceAccountResponse.status, 201);
   const workspaceBAccounts = await (await workspaceApi(workspaceB.token, "/api/accounts")).json() as unknown[];
   assert.equal(workspaceBAccounts.length, 0);
   const crossWorkspaceUpdate = await workspaceApi(workspaceB.token, `/api/accounts/${workspaceAccount.id}`, {
@@ -250,13 +266,75 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(workspaceBUsers.length, 1);
   const workspaceASubmissionResponse = await workspaceApi(workspaceA.token, "/api/submissions/text", {
     method: "POST",
-    body: JSON.stringify({ description: "Private Workspace A handoff" }),
+    body: JSON.stringify({ description: "Private Workspace A handoff", selectedAccountIds: [workspaceAccount.id] }),
   });
   assert.equal(workspaceASubmissionResponse.status, 201);
   const workspaceASubmissions = await (await workspaceApi(workspaceA.token, "/api/submissions")).json() as unknown[];
   const workspaceBSubmissions = await (await workspaceApi(workspaceB.token, "/api/submissions")).json() as unknown[];
   assert.equal(workspaceASubmissions.length, 1);
   assert.equal(workspaceBSubmissions.length, 0);
+
+  const centralUploaderToken = signPublishingWorkspaceIdentity({
+    sub: "central-uploader-a",
+    workspaceId: "workspace_a",
+    name: "Central Uploader A",
+    email: "uploader-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: [
+      "publishing.view",
+      "publishing.content.create",
+      "publishing.content.edit",
+      "publishing.destinations.select",
+      "publishing.submissions.create",
+    ],
+  });
+  const uploaderAccountsResponse = await workspaceApi(centralUploaderToken, "/api/accounts");
+  assert.equal(uploaderAccountsResponse.status, 200);
+  const uploaderAccounts = await uploaderAccountsResponse.json() as Array<{ id: string; enabled: boolean }>;
+  assert.deepEqual(uploaderAccounts.map(account => account.id), [workspaceAccount.id]);
+  assert.equal(uploaderAccounts.every(account => account.enabled), true);
+  const noRoleToken = signPublishingWorkspaceIdentity({
+    sub: "central-no-role-a",
+    workspaceId: "workspace_a",
+    name: "No Publishing Role",
+    email: "no-role-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: [],
+  });
+  assert.equal((await workspaceApi(noRoleToken, "/api/accounts")).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Uploader bypass", handle: "@uploader-bypass", enabled: true }),
+  })).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Uploader direct publish bypass", destinations: [{ accountId: workspaceAccount.id }] }),
+  })).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/users")).status, 403);
+  const centralHandoffResponse = await workspaceApi(centralUploaderToken, "/api/submissions/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Central role handoff", selectedAccountIds: [workspaceAccount.id] }),
+  });
+  assert.equal(centralHandoffResponse.status, 201);
+  const centralHandoff = await centralHandoffResponse.json() as { id: string };
+  assert.equal((await workspaceApi(centralUploaderToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
+  })).status, 403);
+
+  const centralSchedulerToken = signPublishingWorkspaceIdentity({
+    sub: "central-scheduler-a",
+    workspaceId: "workspace_a",
+    name: "Central Scheduler A",
+    email: "scheduler-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: ["publishing.view", "publishing.schedule.manage"],
+  });
+  const centralScheduleResponse = await workspaceApi(centralSchedulerToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
+  });
+  assert.equal(centralScheduleResponse.status, 201);
 
   const textPostResponse = await api("/api/posts/unified/text", {
     method: "POST",
@@ -317,6 +395,10 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   });
   assert.equal(firstXPostResponse.status, 201);
   const [firstXPost] = await firstXPostResponse.json() as Array<{ id: string }>;
+  assert.equal((await api(`/api/uploads/${firstXPost.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "processing" }),
+  })).status, 200);
   assert.equal((await api(`/api/uploads/${firstXPost.id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "posted" }),
@@ -482,10 +564,10 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   const uploadsBeforeHandoff = await (await api("/api/uploads")).json() as unknown[];
   const handoffResponse = await roleApi(uploaderLogin.token, "/api/submissions/text", {
     method: "POST",
-    body: JSON.stringify({ description: "Persistent uploader to scheduler handoff" }),
+    body: JSON.stringify({ description: "Persistent uploader to scheduler handoff", selectedAccountIds: [account.id] }),
   });
   assert.equal(handoffResponse.status, 201);
-  const handoff = await handoffResponse.json() as { id: string; status: string; description: string };
+  const handoff = await handoffResponse.json() as { id: string; status: string; description: string; createdByUserId: string };
   assert.equal(handoff.status, "awaiting_schedule");
   assert.equal((await (await api("/api/uploads")).json() as unknown[]).length, uploadsBeforeHandoff.length);
 
@@ -516,13 +598,16 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(scheduleHandoffResponse.status, 201);
   const scheduledHandoff = await scheduleHandoffResponse.json() as {
     submission: { status: string; destinationUploadIds: string[] };
-    uploads: Array<{ caption: string; scheduledAt?: string; scheduledByUserId?: string }>;
+    uploads: Array<{ caption: string; scheduledAt?: string; createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string }>;
   };
   assert.equal(scheduledHandoff.submission.status, "scheduled");
   assert.equal(scheduledHandoff.submission.destinationUploadIds.length, 1);
   assert.equal(scheduledHandoff.uploads[0].caption, handoff.description);
   assert.equal(scheduledHandoff.uploads[0].scheduledAt, handoffScheduledAt);
+  assert.equal(scheduledHandoff.uploads[0].createdByUserId, handoff.createdByUserId);
   assert.ok(scheduledHandoff.uploads[0].scheduledByUserId);
+  assert.notEqual(scheduledHandoff.uploads[0].scheduledByUserId, handoff.createdByUserId);
+  assert.equal(scheduledHandoff.uploads[0].sourceSubmissionId, handoff.id);
   assert.equal((await roleApi(schedulerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),

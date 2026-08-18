@@ -287,7 +287,7 @@ async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_UR
   return data;
 }
 
-function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig = {} }) {
+function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = null, platformConfig = {} }) {
   const platformName = platformConfig.name || "Instagram";
   const platformLower = platformName.toLowerCase();
   const serviceUrl = platformConfig.apiUrl || API_URL;
@@ -318,6 +318,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const viewsMetricNote = platformConfig.viewsMetricNote || "From visible Reels values";
   const engagementMetricNote = platformConfig.engagementMetricNote || "From visible grid values";
   const commentsMetricNote = platformConfig.commentsMetricNote || "From visible grid values";
+  const canRunScraper = capabilities === null || capabilities.includes("scraping.run");
   const [scrapeEngine, setScrapeEngine] = useState("server");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
@@ -332,6 +333,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   const [analysis, setAnalysis] = useState(null);
   const [analysisTab, setAnalysisTab] = useState("watched");
   const [keywords, setKeywords] = useState([]);
+  const [workspaceRuns, setWorkspaceRuns] = useState([]);
   const [page, setPage] = useState("start");
   const [error, setError] = useState(null);
   const [lastQuery, setLastQuery] = useState("");
@@ -530,6 +532,12 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
       .catch(() => {});
   }, [publishingIdentityToken, savedQueriesKey, savedQueriesPath, serviceUrl]);
 
+  useEffect(() => {
+    apiGet("/runs", serviceUrl, publishingIdentityToken)
+      .then((data) => setWorkspaceRuns(Array.isArray(data.runs) ? data.runs : []))
+      .catch(() => setWorkspaceRuns([]));
+  }, [publishingIdentityToken, serviceUrl]);
+
   const completeUserGuide = () => {
     window.clearTimeout(tourTypingTimer.current);
     window.clearInterval(tourTypingTimer.current);
@@ -597,6 +605,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   };
 
   const runSelectedInstagramJob = async (payload, onStatus) => {
+    if (!canRunScraper) throw new Error("Your Scraping Viewer role cannot run a scraper.");
     if (scrapeEngine !== "companion") {
       return normalizeJob(await runInstagramJob(payload, onStatus, serviceUrl, publishingIdentityToken));
     }
@@ -620,6 +629,19 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
     setError(null);
   };
 
+  const openWorkspaceRun = (run) => {
+    setResults(Array.isArray(run.results) ? run.results : []);
+    setAnalysis(run.analysis || null);
+    setLastQuery(run.query || run.requestedQuery || "Saved workspace run");
+    setLastCollectionMode(run.collectionMode || "latest");
+    setLastInputMode(run.inputMode || "profile");
+    setLastScrapeEngine("server");
+    setLastDiscoveryStatus(run.discoveryStatus || "ok");
+    setLastDiagnostics(run.diagnostics || null);
+    setLastWorkflowLabel(run.collectionMode === "engagement" ? "Profile analysis" : run.collectionMode === "range" ? "Saved range" : "Saved workspace run");
+    setPage("results");
+  };
+
   const selectCollectionMode = (mode) => {
     if (isPostInput(inputMode) || (["engagement", "compare"].includes(mode) && !isProfileInput(inputMode))) return;
     setCollectionMode(mode);
@@ -640,6 +662,10 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   };
 
   const startScrape = async () => {
+    if (!canRunScraper) {
+      setError("Your Scraping Viewer role can view results but cannot run a scraper.");
+      return;
+    }
     if (collectionMode === "compare") return;
     if (tourOpen) completeUserGuide();
     if (!inputMode) {
@@ -1192,6 +1218,10 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
       </section>
 
       <div className="launch-panel-column">
+        {workspaceRuns.length > 0 && <section className="workspace-run-history">
+          <div><p className="eyebrow">Shared workspace results</p><h2>Recent scraping runs</h2></div>
+          <div>{workspaceRuns.slice(0, 8).map((run) => <button type="button" key={run.id} onClick={() => openWorkspaceRun(run)}><strong>{run.requestedQuery || run.query}</strong><span>{new Date(run.createdAt).toLocaleString()} · {Array.isArray(run.results) ? run.results.length : 0} results</span></button>)}</div>
+        </section>}
         {userGuideAvailable && (
           <div className="launch-guide-row">
             <button type="button" className="user-guide-button" onClick={openUserGuide}>
@@ -1201,7 +1231,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
           </div>
         )}
 
-        <section className="launch-panel">
+        {canRunScraper ? <section className="launch-panel">
         <fieldset className="engine-picker" data-tour="engine">
           <legend>Choose scraping engine</legend>
           <div className="engine-options">
@@ -1387,7 +1417,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
         )}
 
         {collectionMode !== "compare" && error && <div className="error-box">{error}</div>}
-        </section>
+        </section> : <section className="launch-panel viewer-only-panel"><p className="eyebrow">Scraping Viewer</p><h2>Workspace results are read-only</h2><p>Select a recent run above to inspect or export it. An Operator or Manager can start new scraping jobs.</p></section>}
       </div>
 
       {userGuideAvailable && tourOpen && (

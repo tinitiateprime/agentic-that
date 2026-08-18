@@ -14,7 +14,8 @@ export class ScrapingServiceAuthError extends Error {
 export function requireScrapingServiceAccess(
   request: Request,
   resource: "scraping.instagram" | "scraping.facebook",
-  requiredLevel: "view" | "operate" | "configure"
+  requiredLevel: "view" | "operate" | "configure",
+  requiredCapability = requiredLevel === "view" ? "scraping.view" : requiredLevel === "configure" ? "scraping.configure" : "scraping.run"
 ) {
   const authorization = request.headers.get("authorization") || "";
   const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
@@ -27,8 +28,11 @@ export function requireScrapingServiceAccess(
     throw new ScrapingServiceAuthError("The service token is invalid or expired.", 401);
   }
 
+  if (!identity) throw new ScrapingServiceAuthError("The service token is invalid or expired.", 401);
+
   const granted = String(identity.grants?.[resource] || "none");
-  if ((rank[granted] || 0) < rank[requiredLevel]) {
+  const tokenCapabilities = Array.isArray(identity.capabilities) ? identity.capabilities.map(String) : [];
+  if ((rank[granted] || 0) < rank[requiredLevel] || !tokenCapabilities.includes(requiredCapability)) {
     throw new ScrapingServiceAuthError(`Requires ${requiredLevel} access to ${resource}.`, 403);
   }
   if (!identity.workspaceId) throw new ScrapingServiceAuthError("The token has no workspace.", 403);

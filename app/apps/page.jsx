@@ -22,7 +22,9 @@ export default async function AppsPage() {
         businessName: user.businessName,
         isGlobalAdmin: user.isGlobalAdmin,
         billingStatus: user.billingStatus,
+        trialStartsAt: user.trialStartsAt,
         trialEndsAt: user.trialEndsAt,
+        capabilities: user.capabilities,
       }}
       access={user.access}
     />

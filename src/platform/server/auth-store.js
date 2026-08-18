@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { cookies } from "next/headers";
 import { getSql } from "@whatsapp/lib/db";
-import { SELF_SERVICE_ROLE_CATALOG } from "../access-catalog.js";
+import { OPERATIONAL_ROLE_CATALOG, SELF_SERVICE_ROLE_CATALOG } from "../access-catalog.js";
 
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
@@ -59,6 +59,8 @@ function publicUser(user) {
     trialStartsAt: user.trialStartsAt || null,
     trialEndsAt: user.trialEndsAt || null,
     selectedRoleIds: Array.isArray(user.selectedRoleIds) ? user.selectedRoleIds.map(String) : [],
+    assignedRoleIds: Array.isArray(user.assignedRoleIds) ? user.assignedRoleIds.map(String) : [],
+    isWorkspaceOwner: user.isWorkspaceOwner !== false,
   };
 }
 
@@ -77,7 +79,7 @@ function tokenHash(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-function passwordHash(password) {
+export function hashPlatformPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
   return `${salt}:${hash}`;
@@ -131,7 +133,11 @@ function normalizeStore(value) {
       billingStatus: user.billingStatus || "active",
       trialStartsAt: user.trialStartsAt || null,
       trialEndsAt: user.trialEndsAt || null,
-      selectedRoleIds: normalizedRoleIds(user.selectedRoleIds),
+      selectedRoleIds: user.billingStatus === "trialing"
+        ? ["role_self_full_access"]
+        : normalizedRoleIds(user.selectedRoleIds),
+      assignedRoleIds: normalizedRoleIds(user.assignedRoleIds || ["role_workspace_owner"]),
+      isWorkspaceOwner: user.isWorkspaceOwner !== false,
       publishingWorkspaceKey: user.publishingWorkspaceKey || crypto
         .createHash("sha256")
         .update(`publishing:${user.id}:${user.passwordHash}`)
@@ -171,26 +177,14 @@ function configuredGlobalAdminEmails() {
   );
 }
 
-export async function listSignupRoleOptions() {
-  if (!useDatabaseAuth) {
-    return {
-      trialDays: configuredFreeTrialDays(),
-      roles: SELF_SERVICE_ROLE_CATALOG.map((role) => ({
-        id: role.id,
-        name: role.name,
-        description: role.description,
-      })),
-    };
-  }
-  const sql = await getPlatformSql();
-  const roles = await sql`
-    SELECT id, name, description
-      FROM rbac_roles
-     WHERE is_self_selectable = true
-     ORDER BY is_system DESC, name`;
+export async function listSignupPlanOptions() {
   return {
     trialDays: configuredFreeTrialDays(),
-    roles: roles.map((role) => ({ id: String(role.id), name: role.name, description: role.description })),
+    plans: [
+      { id: "free", status: "coming_soon" },
+      { id: "trial", status: "available" },
+      { id: "premium", status: "coming_soon" },
+    ],
   };
 }
 
@@ -478,6 +472,39 @@ async function migratePlatformDatabase(sql) {
     }
   }
 
+  for (const role of OPERATIONAL_ROLE_CATALOG) {
+    const [seededRole] = await sql`
+      INSERT INTO rbac_roles (id, name, description, is_system, is_self_selectable)
+      VALUES (${role.id}, ${role.name}, ${role.description}, true, false)
+      ON CONFLICT (name) DO UPDATE SET
+        description = EXCLUDED.description,
+        is_system = true,
+        is_self_selectable = false,
+        updated_at = now()
+      RETURNING id`;
+    for (const grant of role.grants) {
+      await sql`
+        INSERT INTO rbac_role_grants (role_id, resource_key, access_level)
+        VALUES (${seededRole.id}, ${grant.resourceKey}, ${grant.accessLevel})
+        ON CONFLICT (role_id, resource_key) DO UPDATE SET access_level = EXCLUDED.access_level`;
+    }
+  }
+
+  // Active trials now include every service. Existing trial workspaces are
+  // upgraded to the same bundle without extending an already-started clock.
+  await sql`
+    INSERT INTO user_role_entitlements
+      (user_id, role_id, source, status, starts_at, expires_at, updated_at)
+    SELECT trial_user.id, 'role_self_full_access', 'trial', 'active',
+           COALESCE(trial_user.trial_starts_at, trial_user.created_at),
+           trial_user.trial_ends_at, now()
+      FROM platform_users trial_user
+     WHERE trial_user.billing_status = 'trialing'
+    ON CONFLICT (user_id, role_id, source) DO UPDATE SET
+      status = 'active',
+      expires_at = EXCLUDED.expires_at,
+      updated_at = now()`;
+
   // Upgrade existing platform accounts without changing their current access.
   const [legacyRbacMigrated] = await sql`
     SELECT key FROM platform_auth_migrations WHERE key = 'legacy-rbac-v1' LIMIT 1`;
@@ -536,6 +563,32 @@ async function migratePlatformDatabase(sql) {
     });
   }
 
+
+  // Every existing workspace needs an explicit owner. This is an idempotent
+  // data backfill using the existing role-assignment table; no schema change is
+  // required and similarly named companies are never merged.
+  await sql`
+    INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
+    SELECT candidate.user_id, 'role_workspace_owner', candidate.user_id
+      FROM (
+        SELECT DISTINCT ON (membership.workspace_id)
+               membership.workspace_id, membership.user_id
+          FROM workspace_memberships membership
+          JOIN platform_users member ON member.id = membership.user_id
+         WHERE membership.status = 'active' AND member.status = 'active'
+           AND NOT EXISTS (
+             SELECT 1
+               FROM workspace_memberships owner_membership
+               JOIN user_role_assignments owner_assignment
+                 ON owner_assignment.user_id = owner_membership.user_id
+                AND owner_assignment.role_id = 'role_workspace_owner'
+              WHERE owner_membership.workspace_id = membership.workspace_id
+                AND owner_membership.status = 'active'
+           )
+         ORDER BY membership.workspace_id, membership.approved_at NULLS LAST, membership.created_at
+      ) candidate
+    ON CONFLICT (user_id, role_id) DO NOTHING`;
+
   const superAdminEmails = [...configuredGlobalAdminEmails()];
   if (superAdminEmails.length) {
     await sql`
@@ -563,6 +616,10 @@ async function createDatabaseSession(sql, userId) {
        ${now.toISOString()},
        ${new Date(now.getTime() + SESSION_TTL_MS).toISOString()})`;
   return token;
+}
+
+export async function createPlatformSessionForUser(sql, userId) {
+  return createDatabaseSession(sql, userId);
 }
 
 async function pruneDatabaseSessions(sql) {
@@ -593,7 +650,7 @@ export class PlatformAuthError extends Error {
   }
 }
 
-export async function registerPlatformUser({ name, businessName, email, password, selectedRoleIds }) {
+export async function registerPlatformUser({ name, businessName, email, password, plan = "trial" }) {
   const normalizedName = String(name || "").trim();
   const normalizedBusiness = String(businessName || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
@@ -611,6 +668,9 @@ export async function registerPlatformUser({ name, businessName, email, password
   if (normalizedPassword.length < 8 || normalizedPassword.length > 128) {
     throw new PlatformAuthError("INVALID_PASSWORD", "Password must contain 8 to 128 characters.");
   }
+  if (plan !== "trial") {
+    throw new PlatformAuthError("PLAN_UNAVAILABLE", "Only the Trial plan is currently available.");
+  }
 
   if (useDatabaseAuth) {
     const sql = await getPlatformSql();
@@ -623,11 +683,11 @@ export async function registerPlatformUser({ name, businessName, email, password
           throw new PlatformAuthError("ACCOUNT_EXISTS", "An account already exists for this email.");
         }
 
-        const roleIds = await validateSelectableRoleIds(tx, selectedRoleIds, isGlobalAdmin);
+        const roleIds = isGlobalAdmin
+          ? []
+          : await validateSelectableRoleIds(tx, ["role_self_full_access"]);
         const id = crypto.randomUUID();
         const workspaceId = `workspace_${crypto.randomUUID()}`;
-        const trialStartsAt = new Date();
-        const trialEndsAt = new Date(trialStartsAt.getTime() + configuredFreeTrialDays() * 24 * 60 * 60 * 1000);
         const [user] = await tx`
           INSERT INTO platform_users
             (id, workspace_id, publishing_workspace_key, name, business_name,
@@ -637,11 +697,11 @@ export async function registerPlatformUser({ name, businessName, email, password
             (${id}, ${workspaceId},
              ${crypto.randomBytes(32).toString("base64url")},
              ${normalizedName}, ${normalizedBusiness}, ${normalizedEmail},
-             ${passwordHash(normalizedPassword)}, 'active',
+             ${hashPlatformPassword(normalizedPassword)}, 'active',
              ${isGlobalAdmin}, ${normalizedBusiness},
              ${isGlobalAdmin ? "exempt" : "trialing"},
-             ${isGlobalAdmin ? null : trialStartsAt.toISOString()},
-             ${isGlobalAdmin ? null : trialEndsAt.toISOString()})
+             NULL,
+             NULL)
           RETURNING *`;
         await tx`
           INSERT INTO platform_workspaces (id, name)
@@ -651,20 +711,24 @@ export async function registerPlatformUser({ name, businessName, email, password
           INSERT INTO workspace_memberships (user_id, workspace_id, status, approved_at)
           VALUES (${user.id}, ${workspaceId}, 'active', now())
           ON CONFLICT (user_id) DO NOTHING`;
+        await tx`
+          INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
+          VALUES (${user.id}, 'role_workspace_owner', ${user.id})
+          ON CONFLICT DO NOTHING`;
         for (const roleId of roleIds) {
           await tx`
             INSERT INTO user_role_entitlements
               (user_id, role_id, source, status, starts_at, expires_at)
             VALUES
-              (${user.id}, ${roleId}, 'trial', 'active', ${trialStartsAt.toISOString()}, ${trialEndsAt.toISOString()})`;
+              (${user.id}, ${roleId}, 'trial', 'active', now(), NULL)`;
         }
         if (!isGlobalAdmin) {
           await tx`
             INSERT INTO rbac_audit_events
               (id, actor_user_id, target_type, target_id, action, after_value)
             VALUES
-              (${crypto.randomUUID()}, ${user.id}, 'billing', ${user.id}, 'trial.started',
-               ${tx.json({ roleIds, trialEndsAt: trialEndsAt.toISOString() })})`;
+              (${crypto.randomUUID()}, ${user.id}, 'billing', ${user.id}, 'trial.ready',
+               ${tx.json({ roleIds, startsOn: "first_service_use" })})`;
         }
         const token = await createDatabaseSession(tx, user.id);
         await pruneDatabaseSessions(tx);
@@ -685,16 +749,8 @@ export async function registerPlatformUser({ name, businessName, email, password
     }
 
     const isGlobalAdmin = configuredGlobalAdminEmails().has(normalizedEmail);
-    const roleIds = normalizedRoleIds(selectedRoleIds);
-    const selectableIds = new Set(SELF_SERVICE_ROLE_CATALOG.map((role) => role.id));
-    if (!isGlobalAdmin && !roleIds.length) {
-      throw new PlatformAuthError("ROLE_REQUIRED", "Choose at least one access role for your free trial.");
-    }
-    if (roleIds.some((roleId) => !selectableIds.has(roleId))) {
-      throw new PlatformAuthError("INVALID_ROLE", "One or more selected access roles are unavailable.");
-    }
+    const roleIds = isGlobalAdmin ? [] : ["role_self_full_access"];
     const now = new Date();
-    const trialEndsAt = new Date(now.getTime() + configuredFreeTrialDays() * 24 * 60 * 60 * 1000);
     const user = {
       id: crypto.randomUUID(),
       workspaceId: `workspace_${crypto.randomUUID()}`,
@@ -702,14 +758,16 @@ export async function registerPlatformUser({ name, businessName, email, password
       name: normalizedName,
       businessName: normalizedBusiness,
       email: normalizedEmail,
-      passwordHash: passwordHash(normalizedPassword),
+      passwordHash: hashPlatformPassword(normalizedPassword),
       createdAt: now.toISOString(),
       status: "active",
       isGlobalAdmin,
       billingStatus: isGlobalAdmin ? "exempt" : "trialing",
-      trialStartsAt: isGlobalAdmin ? null : now.toISOString(),
-      trialEndsAt: isGlobalAdmin ? null : trialEndsAt.toISOString(),
+      trialStartsAt: null,
+      trialEndsAt: null,
       selectedRoleIds: roleIds,
+      assignedRoleIds: ["role_workspace_owner"],
+      isWorkspaceOwner: true,
     };
     const token = crypto.randomBytes(32).toString("base64url");
     store.users.push(user);
@@ -721,6 +779,72 @@ export async function registerPlatformUser({ name, businessName, email, password
       expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
     });
     return { token, user: publicUser(user) };
+  });
+}
+
+export async function activateWorkspaceTrial(workspaceIdInput, actorUserIdInput) {
+  const workspaceId = String(workspaceIdInput || "").trim();
+  const actorUserId = String(actorUserIdInput || "").trim();
+  if (!workspaceId || !actorUserId) return null;
+  const now = new Date();
+  const trialEndsAt = new Date(now.getTime() + configuredFreeTrialDays() * 24 * 60 * 60 * 1000);
+
+  if (!useDatabaseAuth) {
+    return mutateStore((store) => {
+      const billingUser = store.users.find((user) => (
+        user.workspaceId === workspaceId
+        && user.billingStatus === "trialing"
+      ));
+      if (!billingUser) return null;
+      if (billingUser.trialStartsAt || billingUser.trialEndsAt) {
+        return { trialStartsAt: billingUser.trialStartsAt || null, trialEndsAt: billingUser.trialEndsAt || null };
+      }
+      billingUser.trialStartsAt = now.toISOString();
+      billingUser.trialEndsAt = trialEndsAt.toISOString();
+      return { trialStartsAt: billingUser.trialStartsAt, trialEndsAt: billingUser.trialEndsAt };
+    });
+  }
+
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const [billingUser] = await tx`
+      SELECT trial_user.id, trial_user.trial_starts_at, trial_user.trial_ends_at
+        FROM workspace_memberships membership
+        JOIN platform_users trial_user ON trial_user.id = membership.user_id
+        JOIN user_role_entitlements entitlement
+          ON entitlement.user_id = membership.user_id AND entitlement.source = 'trial'
+       WHERE membership.workspace_id = ${workspaceId}
+         AND membership.status = 'active'
+         AND trial_user.status = 'active'
+         AND trial_user.billing_status = 'trialing'
+       ORDER BY membership.approved_at NULLS LAST, membership.created_at
+       LIMIT 1
+       FOR UPDATE OF trial_user`;
+    if (!billingUser) return null;
+    if (billingUser.trial_starts_at || billingUser.trial_ends_at) {
+      return {
+        trialStartsAt: billingUser.trial_starts_at || null,
+        trialEndsAt: billingUser.trial_ends_at || null,
+      };
+    }
+
+    await tx`
+      UPDATE user_role_entitlements
+         SET starts_at = ${now.toISOString()}, expires_at = ${trialEndsAt.toISOString()}, updated_at = now()
+       WHERE source = 'trial' AND user_id IN (
+         SELECT user_id FROM workspace_memberships WHERE workspace_id = ${workspaceId}
+       )`;
+    await tx`
+      UPDATE platform_users
+         SET trial_starts_at = ${now.toISOString()}, trial_ends_at = ${trialEndsAt.toISOString()}
+       WHERE id = ${billingUser.id}`;
+    await tx`
+      INSERT INTO rbac_audit_events
+        (id, actor_user_id, target_type, target_id, action, after_value)
+      VALUES
+        (${crypto.randomUUID()}, ${actorUserId}, 'workspace', ${workspaceId}, 'trial.started',
+         ${tx.json({ trialStartsAt: now.toISOString(), trialEndsAt: trialEndsAt.toISOString(), startsOn: "first_service_use" })})`;
+    return { trialStartsAt: now.toISOString(), trialEndsAt: trialEndsAt.toISOString() };
   });
 }
 
@@ -818,14 +942,30 @@ export async function applyPlatformPaymentEvent({
     const [processed] = await tx`
       SELECT event_id FROM platform_billing_events WHERE event_id = ${normalizedEventId}`;
     if (processed) return { duplicate: true, status };
-    const [user] = await tx`SELECT id, billing_status FROM platform_users WHERE id = ${normalizedUserId}`;
-    if (!user) throw new Error("The payment event user was not found.");
+    const [requestedUser] = await tx`SELECT id, workspace_id, billing_status FROM platform_users WHERE id = ${normalizedUserId}`;
+    if (!requestedUser) throw new Error("The payment event user was not found.");
+    const [workspaceOwner] = await tx`
+      SELECT owner.id, owner.billing_status
+        FROM workspace_memberships owner_membership
+        JOIN user_role_assignments owner_assignment
+          ON owner_assignment.user_id = owner_membership.user_id
+         AND owner_assignment.role_id = 'role_workspace_owner'
+        JOIN platform_users owner ON owner.id = owner_membership.user_id
+       WHERE owner_membership.workspace_id = ${requestedUser.workspace_id}
+         AND owner_membership.status = 'active'
+         AND owner.status = 'active'
+       ORDER BY owner_membership.approved_at NULLS LAST, owner_membership.created_at
+       LIMIT 1`;
+    const billingUser = workspaceOwner || requestedUser;
+    const billingUserId = String(billingUser.id);
 
     let roleIds = normalizedRoleIds(selectedRoleIds);
     if (!roleIds.length) {
       const selected = await tx`
         SELECT DISTINCT role_id FROM user_role_entitlements
-         WHERE user_id = ${normalizedUserId} AND source = 'trial'`;
+         WHERE source = 'trial' AND user_id IN (
+           SELECT user_id FROM workspace_memberships WHERE workspace_id = ${requestedUser.workspace_id}
+         )`;
       roleIds = selected.map((row) => String(row.role_id));
     }
     if (status === "active") {
@@ -835,34 +975,38 @@ export async function applyPlatformPaymentEvent({
           INSERT INTO user_role_entitlements
             (user_id, role_id, source, status, starts_at, expires_at, external_ref, updated_at)
           VALUES
-            (${normalizedUserId}, ${roleId}, 'payment', 'active', now(), NULL, ${normalizedEventId}, now())
+            (${billingUserId}, ${roleId}, 'payment', 'active', now(), NULL, ${normalizedEventId}, now())
           ON CONFLICT (user_id, role_id, source) DO UPDATE SET
             status = 'active', expires_at = NULL, external_ref = EXCLUDED.external_ref, updated_at = now()`;
       }
       await tx`
         UPDATE user_role_entitlements SET status = 'inactive', updated_at = now()
-         WHERE user_id = ${normalizedUserId} AND source = 'trial'`;
+         WHERE source = 'trial' AND user_id IN (
+           SELECT user_id FROM workspace_memberships WHERE workspace_id = ${requestedUser.workspace_id}
+         )`;
     } else if (["past_due", "canceled", "expired"].includes(status)) {
       await tx`
         UPDATE user_role_entitlements SET status = 'inactive', updated_at = now()
-         WHERE user_id = ${normalizedUserId} AND source = 'payment'`;
+         WHERE source = 'payment' AND user_id IN (
+           SELECT user_id FROM workspace_memberships WHERE workspace_id = ${requestedUser.workspace_id}
+         )`;
     }
 
-    await tx`UPDATE platform_users SET billing_status = ${status} WHERE id = ${normalizedUserId}`;
+    await tx`UPDATE platform_users SET billing_status = ${status} WHERE id = ${billingUserId}`;
     await tx`
       INSERT INTO platform_billing_events
         (event_id, user_id, provider, payment_status, details)
       VALUES
-        (${normalizedEventId}, ${normalizedUserId}, ${normalizedProvider}, ${status},
+        (${normalizedEventId}, ${billingUserId}, ${normalizedProvider}, ${status},
          ${tx.json(details && typeof details === "object" ? details : {})})`;
     await tx`
       INSERT INTO rbac_audit_events
         (id, actor_user_id, target_type, target_id, action, before_value, after_value)
       VALUES
-        (${crypto.randomUUID()}, ${normalizedUserId}, 'billing', ${normalizedUserId},
-         ${`payment.${status}`}, ${tx.json({ billingStatus: user.billing_status })},
+        (${crypto.randomUUID()}, ${billingUserId}, 'billing', ${billingUserId},
+         ${`payment.${status}`}, ${tx.json({ billingStatus: billingUser.billing_status })},
          ${tx.json({ billingStatus: status, roleIds, provider: normalizedProvider, eventId: normalizedEventId })})`;
-    return { duplicate: false, status, roleIds };
+    return { duplicate: false, status, roleIds, billingUserId };
   });
 }
 

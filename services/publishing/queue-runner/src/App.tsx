@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingEngine, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, assetUrl, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
+import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -109,7 +109,7 @@ const localCompanionHealthUrl = 'http://127.0.0.1:8792/api/health';
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [
   { role: 'operations_manager', username: 'operations.manager', description: 'Full workspace, users, audit, and automation access' },
   { role: 'post_uploader', username: 'content.uploader', description: 'Upload finished content and hand it to scheduling' },
-  { role: 'scheduler', username: 'post.scheduler', description: 'Select publishing apps and assign publish times' },
+  { role: 'scheduler', username: 'post.scheduler', description: 'Review selected destinations and assign publish times' },
   { role: 'viewer', username: 'workspace.viewer', description: 'Read-only access with no publishing actions' },
 ];
 
@@ -120,17 +120,25 @@ const roleInitials: Record<UserRole, string> = {
   viewer: 'VW',
 };
 
-function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'operate' | 'configure'): RolePermissions {
-  if (centralAccessLevel) {
+function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'operate' | 'configure', capabilities?: string[]): RolePermissions {
+  if (centralAccessLevel && Array.isArray(capabilities)) {
     return {
       canManageUsers: false,
-      canViewActivity: centralAccessLevel === 'configure',
-      canManageAccounts: centralAccessLevel === 'configure',
-      canEditContent: centralAccessLevel !== 'view',
-      canSchedulePosts: centralAccessLevel !== 'view',
-      canRunAutomation: centralAccessLevel !== 'view',
+      canViewActivity: capabilities.includes('publishing.view'),
+      canManageAccounts: capabilities.includes('publishing.accounts.configure'),
+      canEditContent: capabilities.includes('publishing.content.create') || capabilities.includes('publishing.content.edit'),
+      canSchedulePosts: capabilities.includes('publishing.schedule.manage'),
+      canRunAutomation: capabilities.includes('publishing.execute'),
     };
   }
+  if (centralAccessLevel) return {
+    canManageUsers: false,
+    canViewActivity: centralAccessLevel === 'configure',
+    canManageAccounts: centralAccessLevel === 'configure',
+    canEditContent: centralAccessLevel !== 'view',
+    canSchedulePosts: centralAccessLevel !== 'view',
+    canRunAutomation: centralAccessLevel === 'configure',
+  };
   return {
     canManageUsers: role === 'operations_manager',
     canViewActivity: role === 'operations_manager',
@@ -511,7 +519,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
 
 function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: () => void }) {
   const user = session.user;
-  const permissions = useMemo(() => permissionsForRole(user.role, user.centralAccessLevel), [user.role, user.centralAccessLevel]);
+  const permissions = useMemo(() => permissionsForRole(user.role, user.centralAccessLevel, user.capabilities), [user.role, user.centralAccessLevel, user.capabilities]);
   const [uploads, setUploads] = useState<PlatformUpload[]>([]);
   const [submissions, setSubmissions] = useState<ContentSubmission[]>([]);
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
@@ -724,10 +732,17 @@ function getAuditTimestamp(upload: PlatformUpload) {
   return upload.scheduledAt ?? upload.updatedAt ?? upload.uploadedAt;
 }
 
+function isWaitingForCompanion(upload: PlatformUpload, now = Date.now()) {
+  return upload.status === 'queued'
+    && Boolean(upload.scheduledAt)
+    && Date.parse(upload.scheduledAt || '') <= now;
+}
+
 function getAuditAction(upload: PlatformUpload) {
   if (upload.status === 'posted') return 'Published';
   if (upload.status === 'failed') return 'Needs attention';
   if (upload.status === 'processing') return 'Publishing now';
+  if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
   if (upload.scheduledAt) return 'Scheduled';
   return 'Queued';
 }
@@ -759,6 +774,9 @@ function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone
   }
   if (upload.safetyDeferredUntil) {
     return { tone: 'deferred', label: 'Safety paused', detail: `${upload.safetyReason || 'Held by a safety limit.'} Resumes after ${formatEventTime(upload.safetyDeferredUntil)}.`, timestamp };
+  }
+  if (isWaitingForCompanion(upload)) {
+    return { tone: 'scheduled', label: 'Waiting for Companion', detail: 'The job is safely queued and will retry when its assigned Companion is available.', timestamp: upload.scheduledAt! };
   }
   if (upload.scheduledAt) {
     return { tone: 'scheduled', label: 'Scheduled', detail: `Will publish ${formatEventTime(upload.scheduledAt)}`, timestamp: upload.scheduledAt };
@@ -1062,8 +1080,8 @@ function UnifiedComposer({
     .map(accountId => accounts.find(account => account.id === accountId))
     .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = Boolean(postFormat === 'video' && (handoffOnly || enabledAccounts.some(account => account.platform === 'youtube') || selectedPlatforms.includes('youtube')));
-  const selectedNeedsTitle = Boolean(postFormat === 'video' && (handoffOnly || selectedPlatforms.includes('youtube')));
+  const showYoutubeTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
+  const selectedNeedsTitle = showYoutubeTitle;
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
@@ -1169,6 +1187,7 @@ function UnifiedComposer({
     if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: handoffOnly ? 'Enter a video title.' : 'Enter a YouTube title.' });
     if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (handoffOnly) {
+      if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
       setSubmitting(true);
       try {
         await api.createSubmission({
@@ -1177,6 +1196,7 @@ function UnifiedComposer({
           title: selectedNeedsTitle ? title.trim() : '',
           description: description.trim(),
           rightsConfirmed,
+          destinations: selectedAccounts.map(account => ({ accountId: account.id })),
           confirmWarnings,
         });
         resetComposer();
@@ -1282,7 +1302,7 @@ function UnifiedComposer({
   return (
     <section className='unified-composer' aria-labelledby='unified-composer-heading'>
       <header className='unified-composer-heading'>
-        <div><p className='section-kicker'>{handoffOnly ? 'Content handoff' : 'Universal post'}</p><h1 id='unified-composer-heading'>{handoffOnly ? 'Prepare content for scheduling.' : 'Create once. Publish everywhere it fits.'}</h1><span>{handoffOnly ? 'Upload the finished content. The scheduler will choose apps, accounts, and publishing time.' : 'Choose a format, tailor the content, and send it to every compatible account from one controlled workflow.'}</span></div>
+        <div><p className='section-kicker'>{handoffOnly ? 'Content handoff' : 'Universal post'}</p><h1 id='unified-composer-heading'>{handoffOnly ? 'Prepare content for scheduling.' : 'Create once. Publish everywhere it fits.'}</h1><span>{handoffOnly ? 'Upload the finished content and choose its destination accounts. The scheduler only assigns the publishing time.' : 'Choose a format, tailor the content, and send it to every compatible account from one controlled workflow.'}</span></div>
         <div className='composer-progress' aria-label='Post creation steps'><span className={contentReady ? 'done' : 'active'}>1<i>Content</i></span><span className={handoffOnly ? contentReady ? 'active' : '' : contentReady && selectedAccounts.length ? 'done' : contentReady ? 'active' : ''}>2<i>{handoffOnly ? 'Handoff' : 'Destinations'}</i></span>{!handoffOnly && <span className={selectedAccounts.length ? 'active' : ''}>3<i>Timing</i></span>}</div>
       </header>
 
@@ -1325,7 +1345,7 @@ function UnifiedComposer({
           {!postFormat && <div className='composer-format-prompt'><span><ArrowRight size={18} /></span><div><strong>Select a format to continue</strong><small>The composer will reveal only the fields and channels that apply.</small></div></div>}
         </div>
 
-        <div className='composer-destination-column' style={handoffOnly ? { display: 'none' } : undefined}>
+        <div className='composer-destination-column'>
           <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Channel control</small><strong>Publishing channels</strong><small>Choose accounts, edit app text, and preview before creating destinations.</small></span><span className='composer-selected-count'>{selectedAccounts.length} selected</span></div>
           <div className='composer-platform-grid'>
             {platforms.map(platform => {
@@ -1346,7 +1366,7 @@ function UnifiedComposer({
                   {platformAccounts.map(account => <label key={account.id} className={account.credentialConfigured ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.credentialConfigured ? 'Login ready' : 'Login required'}</small></span></label>)}
                 </div>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
-                <div className='composer-platform-tools'><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
+                <div className='composer-platform-tools'>{!handoffOnly && <button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button>}<button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
                 {activePanel && <div className={`composer-platform-panel ${copyMode}`}>
                   {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} {postFormat === 'text' ? 'post text' : 'description'}</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default {postFormat === 'text' ? 'post text' : 'description'}</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={title} description={platformText} postFormat={postFormat ?? 'image'} /></div>}
                 </div>}
@@ -1374,12 +1394,12 @@ function UnifiedComposer({
               </article>;
             })}
           </div>}
-        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>{handoffOnly ? 'The scheduler controls destinations and timing.' : 'Posts will enter the queue immediately.'}</strong><small>{handoffOnly ? 'Your upload is saved in the shared handoff queue and will not publish until a scheduler assigns it.' : 'Your role can prepare content; a scheduler can assign publishing times afterward.'}</small></span></div>}
+        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>{handoffOnly ? 'Selected destinations are locked for the scheduler.' : 'Posts will enter the queue immediately.'}</strong><small>{handoffOnly ? 'Your upload and destination accounts are saved together; the scheduler only chooses when they publish.' : 'Your role can prepare content; a scheduler can assign publishing times afterward.'}</small></span></div>}
       </div>
 
       <footer className='composer-footer'>
         <div>{message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || (!handoffOnly && !selectedAccounts.length)} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? 'Send to scheduler' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );
@@ -1657,11 +1677,11 @@ function Workboard({
             <div className='handoff-empty'><FolderOpen size={24} /><span><strong>No content submissions yet</strong><small>Uploads saved by a post uploader will remain here after sign-out.</small></span></div>
           ) : submissions.slice(0, 12).map(submission => (
             <article className={`handoff-row ${submission.status}`} key={submission.id}>
-              <span className='handoff-format'>{submission.postFormat === 'video' ? <Video size={20} /> : submission.postFormat === 'image' ? <ImageIcon size={20} /> : <FileText size={20} />}</span>
-              <span className='handoff-copy'><strong>{submission.title || submission.originalName}</strong><small>{submission.description} · Saved {formatEventTime(submission.createdAt)}</small></span>
-              <span className={`handoff-status ${submission.status}`}>{submission.status === 'awaiting_schedule' ? 'Awaiting schedule' : 'Scheduled'}</span>
+              <span className='handoff-format'><SubmissionMediaPreview submission={submission} /></span>
+              <span className='handoff-copy'><strong>{submission.title || submission.originalName}</strong><small>{submission.description} · Created by {submission.createdByName || submission.createdByUserId} · {submission.scheduledByUserId ? `Scheduled by ${submission.scheduledByName || submission.scheduledByUserId}` : `Saved ${formatEventTime(submission.createdAt)}`}</small></span>
+              <span className={`handoff-status ${submission.status}`}>{submission.status === 'awaiting_schedule' ? 'Awaiting schedule' : submission.status === 'scheduling' ? 'Scheduling' : 'Scheduled'}</span>
               {submission.status === 'awaiting_schedule' && permissions.canSchedulePosts
-                ? <button type='button' className='btn-primary' onClick={() => onScheduleSubmission(submission)}><CalendarClock size={15} />Choose apps & schedule</button>
+                ? <button type='button' className='btn-primary' onClick={() => onScheduleSubmission(submission)}><CalendarClock size={15} />Choose schedule</button>
                 : <span className='handoff-readonly'>{submission.status === 'scheduled' ? `${submission.destinationUploadIds.length} destinations` : user.role === 'viewer' ? 'View only' : 'Scheduler will complete this'}</span>}
             </article>
           ))}
@@ -1751,7 +1771,7 @@ function Workboard({
             <div className='review-queue-list'>{reviewQueue.length === 0 ? <div className='review-queue-empty'><CircleCheckBig size={24} /><strong>Nothing waiting for review.</strong><span>Every tracked post has been delivered.</span></div> : reviewQueue.map(upload => (
               <button className='review-queue-row' key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <div className={`review-queue-media review-${upload.status}`}><PostMediaPreview upload={upload} compact /><i><CustomIcon platform={upload.platform} size={17} /></i></div>
-                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
+                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : isWaitingForCompanion(upload) ? 'Waiting safely for the assigned Companion' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
                 <Pencil size={14} />
               </button>
             ))}</div>
@@ -1855,7 +1875,9 @@ function ScheduleSubmissionModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const destinationsLocked = submission.selectedAccountIds.length > 0;
   const compatibleAccounts = useMemo(() => accounts.filter(account => {
+    if (destinationsLocked && !submission.selectedAccountIds.includes(account.id)) return false;
     if (!account.enabled) return false;
     const rules = platformPostRules[account.platform];
     if (!rules.formats.includes(submission.postFormat)) return false;
@@ -1863,22 +1885,17 @@ function ScheduleSubmissionModal({
     const needsTitle = rules.titleRequired || rules.titleRequiredFor?.includes(submission.postFormat);
     if (needsTitle && !submission.title?.trim()) return false;
     return !(rules.titleLimit && (submission.title?.length ?? 0) > rules.titleLimit);
-  }), [accounts, submission]);
+  }), [accounts, destinationsLocked, submission]);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [selectedAccountIds] = useState<string[]>(() => destinationsLocked
+    ? submission.selectedAccountIds
+    : compatibleAccounts.map(account => account.id));
   const [timingMode, setTimingMode] = useState<'exact' | 'template'>('exact');
   const [exactAt, setExactAt] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60_000)));
   const [scheduleId, setScheduleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
-
-  const toggleAccount = (accountId: string) => {
-    setPendingPreflightWarnings([]);
-    setSelectedAccountIds(current => current.includes(accountId)
-      ? current.filter(id => id !== accountId)
-      : [...current, accountId]);
-  };
 
   const submit = async (confirmWarnings = false) => {
     setError('');
@@ -1917,18 +1934,18 @@ function ScheduleSubmissionModal({
   return (
     <div className='modal-overlay' onClick={onClose}>
       <div className='modal-panel submission-schedule-modal' role='dialog' aria-modal='true' aria-labelledby='submission-schedule-heading' onClick={event => event.stopPropagation()}>
-        <div className='modal-head'><span id='submission-schedule-heading'>Choose apps and schedule</span><button onClick={onClose}><X size={22} /></button></div>
+        <div className='modal-head'><span id='submission-schedule-heading'>Schedule selected destinations</span><button onClick={onClose}><X size={22} /></button></div>
         <div className='modal-body'>
           <div className='submission-schedule-summary'>
-            <span className='handoff-format'>{submission.postFormat === 'video' ? <Video size={24} /> : submission.postFormat === 'image' ? <ImageIcon size={24} /> : <FileText size={24} />}</span>
+            <span className='handoff-format'><SubmissionMediaPreview submission={submission} /></span>
             <span><strong>{submission.title || submission.originalName}</strong><small>{submission.description}</small></span>
           </div>
           <section className='submission-destination-section'>
-            <div className='workboard-section-head'><div><p className='section-kicker'>Destinations</p><h2>Publishing accounts</h2></div><span>{selectedAccountIds.length} selected</span></div>
+            <div className='workboard-section-head'><div><p className='section-kicker'>Destinations</p><h2>{destinationsLocked ? 'Selected by uploader' : 'Compatible legacy destinations'}</h2></div><span>{selectedAccountIds.length} {destinationsLocked ? 'locked' : 'selected'}</span></div>
             <div className='submission-account-grid'>
               {compatibleAccounts.length === 0 ? <div className='handoff-empty'><CircleAlert size={22} /><span><strong>No compatible enabled accounts</strong><small>An operations manager must configure an account that supports this content.</small></span></div> : compatibleAccounts.map(account => (
                 <label key={account.id} className={selectedAccountIds.includes(account.id) ? 'selected' : ''}>
-                  <input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} />
+                  <input type='checkbox' checked readOnly disabled />
                   <CustomIcon platform={account.platform} size={22} />
                   <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {publishingEngineLabels[accountPublishingEngine(account)]}</small></span>
                 </label>
@@ -1987,6 +2004,7 @@ function PlatformScheduleModal({
   const scheduleLabel = (upload: PlatformUpload) => {
     if (upload.status === 'failed') return 'Needs review';
     if (upload.status === 'processing') return 'Publishing now';
+    if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
     if (upload.scheduledAt) return formatEventTime(upload.scheduledAt);
     if (upload.scheduleId) return `Template #${upload.scheduleId}`;
     return 'Needs a publish time';
@@ -2437,17 +2455,41 @@ function uploadPostFormat(upload: PlatformUpload): PostFormat {
   return 'text';
 }
 
+function useSecurePublishingMedia(fileName: string, enabled: boolean) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!enabled || !fileName) { setUrl(''); return; }
+    let active = true;
+    let objectUrl = '';
+    api.media(fileName).then(blob => {
+      if (!active) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }).catch(() => active && setUrl(''));
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [enabled, fileName]);
+  return url;
+}
+
 function PostMediaPreview({ upload, compact = false, networkPreview = false }: { upload: PlatformUpload; compact?: boolean; networkPreview?: boolean }) {
-  if (uploadPostFormat(upload) === 'text') {
+  const postFormat = uploadPostFormat(upload);
+  const mediaUrl = useSecurePublishingMedia(upload.fileName, postFormat !== 'text');
+  if (postFormat === 'text') {
     return compact ? <div className='post-preview-text'><FileText size={22} /><span>Text</span></div> : null;
   }
-  const mediaUrl = assetUrl(upload.url, { compact, controls: !compact && !networkPreview });
-  if (mediaUrl.startsWith('chrome-extension://')) {
-    return <iframe className='extension-media-preview' src={mediaUrl} title={upload.originalName} loading='lazy' />;
-  }
+  if (!mediaUrl) return <div className='post-preview-file'><Loader2 className='spin' size={22} /><span>Loading media</span></div>;
   if (upload.mimeType.startsWith('image/')) return <img src={mediaUrl} alt='' />;
   if (upload.mimeType.startsWith('video/')) return <video src={mediaUrl} controls={!compact && !networkPreview} muted playsInline autoPlay={compact} loop={compact} />;
   return <div className='post-preview-file'><FileText size={28} /><span>{upload.originalName}</span></div>;
+}
+
+function SubmissionMediaPreview({ submission }: { submission: ContentSubmission }) {
+  const mediaUrl = useSecurePublishingMedia(submission.fileName, submission.postFormat !== 'text');
+  if (submission.postFormat === 'text') return <FileText size={24} />;
+  if (!mediaUrl) return <Loader2 className='spin' size={22} />;
+  return submission.mimeType.startsWith('image/')
+    ? <img src={mediaUrl} alt='' />
+    : <video src={mediaUrl} muted controls playsInline />;
 }
 
 function PlatformPostPreview({
@@ -2641,7 +2683,7 @@ function EditPostModal({
                 <CustomIcon platform={upload.platform} size={28} />
                 <div><strong>{upload.originalName}</strong><span>{platformLabels[upload.platform]}</span></div>
               </div>
-              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
+              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={!canEditContent}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}

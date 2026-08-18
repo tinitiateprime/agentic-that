@@ -158,11 +158,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function mediaBlob(fileName: string) {
+  if (centralIdentitySeed) authToken = await getClientServiceToken("publishing", centralIdentitySeed);
+  const headers = new Headers();
+  if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+  const response = await publishingFetch(`/api/media/${encodeURIComponent(fileName)}`, { headers });
+  if (!response.ok) throw new Error(response.status === 404 ? "Publishing media is unavailable." : "Unable to load publishing media.");
+  return response.blob();
+}
+
 export function assetUrl(url: string, options: { compact?: boolean; controls?: boolean } = {}) {
   return publishingAssetUrl(url, options);
 }
 
 export const api = {
+  media: mediaBlob,
   health: async () => {
     const health = await request<{
       ok: boolean;
@@ -363,12 +373,17 @@ export const api = {
     title: string;
     description: string;
     rightsConfirmed: boolean;
+    destinations: UnifiedPostDestinationInput[];
     confirmWarnings?: boolean;
   }) => {
     if (payload.postFormat === "text") {
       return request<ContentSubmission>("/api/submissions/text", {
         method: "POST",
-        body: JSON.stringify({ description: payload.description, confirmWarnings: payload.confirmWarnings }),
+        body: JSON.stringify({
+          description: payload.description,
+          selectedAccountIds: payload.destinations.map(destination => destination.accountId),
+          confirmWarnings: payload.confirmWarnings,
+        }),
       });
     }
 
@@ -408,6 +423,7 @@ export const api = {
           stagedUploadId: session.id,
           title: payload.title,
           description: payload.description,
+          selectedAccountIds: payload.destinations.map(destination => destination.accountId),
           rightsConfirmed: payload.rightsConfirmed,
           confirmWarnings: payload.confirmWarnings,
         }),

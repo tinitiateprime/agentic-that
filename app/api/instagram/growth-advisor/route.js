@@ -1,6 +1,6 @@
 import {
   accessErrorResponse,
-  authorizeApiAccess
+  authorizeApiCapability
 } from "@platform/server/access-control";
 import {
   GrowthAdvisorError,
@@ -42,7 +42,7 @@ function consumeRateLimit(userId) {
 export async function GET(request) {
   let principal;
   try {
-    principal = await authorizeApiAccess("scraping.instagram", "view");
+    principal = await authorizeApiCapability("scraping.view");
   } catch (error) {
     return accessErrorResponse(error);
   }
@@ -69,7 +69,7 @@ export async function GET(request) {
 export async function POST(request) {
   let principal;
   try {
-    principal = await authorizeApiAccess("scraping.instagram", "operate");
+    principal = await authorizeApiCapability("scraping.analyze");
   } catch (error) {
     return accessErrorResponse(error);
   }

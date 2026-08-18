@@ -14,11 +14,11 @@ export default async function AccessDeniedPage({ searchParams }) {
     <main className="access-state-page">
       <section className="access-state-card">
         <a className="access-state-brand" href="/apps">AT <span>AgenticThat</span></a>
-        <p className="access-state-kicker">{trialExpired ? "Trial expired" : "Access not selected"}</p>
-        <h1>{trialExpired ? "Your free trial has ended." : "This module is not in your selected access."}</h1>
+        <p className="access-state-kicker">{trialExpired ? "Trial expired" : "Plan access required"}</p>
+        <h1>{trialExpired ? "Your free trial has ended." : "This module is not available for this workspace."}</h1>
         <p>{trialExpired
           ? "Your selected roles are inactive until a successful payment activates them."
-          : "Regular-user roles are selected during onboarding and activated by trial or payment status; administrators do not assign them."}</p>
+          : "Workspace plan access and employee roles both control which services can be opened."}</p>
         <dl>
           <div><dt>Resource</dt><dd>{params?.resource || "Requested module"}</dd></div>
           <div><dt>Required level</dt><dd>{params?.level || "view"}</dd></div>

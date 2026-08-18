@@ -131,6 +131,7 @@ test("selects a recent live run as a cache fallback without chaining cached or r
   const runs: InstagramRun[] = [
     {
       id: "cached-chain",
+      workspaceId: "workspace-test",
       query: "@bakery",
       requestedQuery: "@bakery",
       maxResults: 10,
@@ -141,6 +142,7 @@ test("selects a recent live run as a cache fallback without chaining cached or r
     },
     {
       id: "engagement-live",
+      workspaceId: "workspace-test",
       query: "@bakery",
       requestedQuery: "@bakery",
       maxResults: 10,
@@ -150,6 +152,7 @@ test("selects a recent live run as a cache fallback without chaining cached or r
     },
     {
       id: "latest-live",
+      workspaceId: "workspace-test",
       query: "@bakery",
       requestedQuery: "@bakery",
       maxResults: 10,

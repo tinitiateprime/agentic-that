@@ -5,6 +5,7 @@ import { getCurrentPlatformUser } from "@platform/server/auth-store";
 import {
   AccessDeniedError,
   assertPrincipalAccess,
+  assertPrincipalCapability,
   getCurrentPrincipal,
   requireAccess,
   rbacEnforcementMode,
@@ -15,6 +16,17 @@ import { hashPassword } from "./password.js";
 export { hashPassword, verifyPassword } from "./password.js";
 
 const COOKIE_NAME = "session";
+
+function capabilityForLevel(requiredLevel) {
+  if (requiredLevel === "configure") return "messaging.configure";
+  if (requiredLevel === "operate") return "messaging.operate";
+  return "messaging.view";
+}
+
+async function assertWhatsAppAccess(principal, requiredLevel) {
+  await assertPrincipalAccess(principal, "messaging.whatsapp", requiredLevel);
+  return assertPrincipalCapability(principal, capabilityForLevel(requiredLevel));
+}
 
 // --- Sessions --------------------------------------------------------------
 export async function createSession(userId) {
@@ -169,7 +181,7 @@ export async function getCurrentUser(requiredLevel = "view") {
   if (platformUser) {
     const principal = await getCurrentPrincipal();
     try {
-      await assertPrincipalAccess(principal, "messaging.whatsapp", requiredLevel);
+      await assertWhatsAppAccess(principal, requiredLevel);
     } catch (error) {
       if (error instanceof AccessDeniedError) return null;
       throw error;
@@ -187,7 +199,7 @@ export async function whatsappAccessErrorResponse(requiredLevel = "view") {
     return Response.json({ error: "Sign in to continue.", code: "UNAUTHENTICATED" }, { status: 401 });
   }
   try {
-    await assertPrincipalAccess(principal, "messaging.whatsapp", requiredLevel);
+    await assertWhatsAppAccess(principal, requiredLevel);
   } catch (error) {
     if (error instanceof AccessDeniedError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status });
@@ -201,6 +213,14 @@ export async function whatsappAccessErrorResponse(requiredLevel = "view") {
 // AgenticThat platform login route, which owns /login.
 export async function requireUser(requiredLevel = "view") {
   const principal = await requireAccess("messaging.whatsapp", requiredLevel, "/dashboard");
+  try {
+    await assertPrincipalCapability(principal, capabilityForLevel(requiredLevel));
+  } catch (error) {
+    if (error instanceof AccessDeniedError) {
+      redirect(`/access-denied?capability=${encodeURIComponent(capabilityForLevel(requiredLevel))}`);
+    }
+    throw error;
+  }
   const platformUser = await getCurrentPlatformUser();
   if (!platformUser) redirect("/?auth=login&next=/dashboard");
   return ensurePlatformWorkspaceUser({ ...platformUser, workspaceId: principal.workspaceId });

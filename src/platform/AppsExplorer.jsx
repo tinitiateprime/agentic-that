@@ -187,7 +187,13 @@ export default function AppsExplorer({ user, access = {} }) {
                 </div>
                 <div className={styles.serviceGrid}>
                   {category.services.map((service) => (
-                    <ServiceCard service={service} status={statusFor(service)} allowed={accessSatisfies(access[accessResourceForService(service)] || "none", "view")} key={`${service.category}-${service.slug}`} />
+                    <ServiceCard
+                      service={service}
+                      status={statusFor(service)}
+                      allowed={accessSatisfies(access[accessResourceForService(service)] || "none", "view")
+                        && (!service.availability || service.availability !== "live" || user?.capabilities?.includes(`${service.category}.view`))}
+                      key={`${service.category}-${service.slug}`}
+                    />
                   ))}
                 </div>
               </section>

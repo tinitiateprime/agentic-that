@@ -1140,6 +1140,7 @@ textarea, input[type="datetime-local"], .field input[type="text"] {
 .handoff-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid #E1EAE6; border-radius: 10px; background: #F9FBFA; }
 .handoff-row.scheduled { opacity: .78; }
 .handoff-format { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 10px; color: #246B52; background: #E7F4EF; }
+.handoff-format img,.handoff-format video{width:100%;height:100%;object-fit:cover;border-radius:10px}
 .handoff-copy { display: grid; min-width: 0; gap: 3px; }
 .handoff-copy strong { overflow: hidden; color: #183D31; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .handoff-copy small { overflow: hidden; color: #70837B; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }

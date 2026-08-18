@@ -255,6 +255,6 @@ const facebookPlatformConfig = {
   },
 };
 
-export default function FacebookScraperConsole({ publishingIdentityToken = "" }) {
-  return <InstagramScraperConsole publishingIdentityToken={publishingIdentityToken} platformConfig={facebookPlatformConfig} />;
+export default function FacebookScraperConsole({ publishingIdentityToken = "", capabilities = null }) {
+  return <InstagramScraperConsole publishingIdentityToken={publishingIdentityToken} capabilities={capabilities} platformConfig={facebookPlatformConfig} />;
 }

@@ -201,7 +201,7 @@ export async function createRole(actor, input) {
     id: `role_${crypto.randomUUID()}`,
     name: text(input.name, "Role name", 100),
     description: String(input.description || "").trim().slice(0, 500),
-    isSelfSelectable: input.isSelfSelectable !== false,
+    isSelfSelectable: false,
     grants: validateGrantInput(input.grants || []),
   };
   await sql.begin(async (tx) => {
@@ -228,9 +228,7 @@ export async function updateRole(actor, roleIdInput, input) {
     if (before.is_system) throw new Error("System roles cannot be edited.");
     const name = text(input.name || before.name, "Role name", 100);
     const description = String(input.description ?? before.description ?? "").trim().slice(0, 500);
-    const isSelfSelectable = input.isSelfSelectable === undefined
-      ? Boolean(before.is_self_selectable)
-      : Boolean(input.isSelfSelectable);
+    const isSelfSelectable = false;
     await tx`
       UPDATE rbac_roles
          SET name = ${name}, description = ${description}, is_self_selectable = ${isSelfSelectable}, updated_at = now()

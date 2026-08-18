@@ -3,7 +3,7 @@ import { z } from "zod";
 export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube"] as const;
 export const postFormats = ["image", "video", "text"] as const;
 export const uploadStatuses = ["queued", "processing", "posted", "failed"] as const;
-export const submissionStatuses = ["awaiting_schedule", "scheduled"] as const;
+export const submissionStatuses = ["awaiting_schedule", "scheduling", "scheduled"] as const;
 export const scheduleFrequencies = ["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"] as const;
 export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
@@ -78,7 +78,8 @@ export const userProfileSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   lastLoginAt: z.string().optional(),
-  centralAccessLevel: centralAccessLevelSchema.optional()
+  centralAccessLevel: centralAccessLevelSchema.optional(),
+  capabilities: z.array(z.string()).optional()
 });
 
 export const createUserProfileSchema = z.object({
@@ -102,6 +103,7 @@ export const updateUserProfileSchema = z.object({
 export const platformAccountSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
+  companionId: z.string().optional(),
   platform: platformSchema,
   displayName: z.string(),
   handle: z.string(),
@@ -125,7 +127,8 @@ export const upsertPlatformAccountSchema = z.object({
   enabled: z.boolean().optional(),
   executionEngine: publishingEngineSchema.optional(),
   safetyMode: accountSafetyModeSchema.optional(),
-  twoFactorEnabled: z.boolean().optional()
+  twoFactorEnabled: z.boolean().optional(),
+  companionId: z.string().optional()
 });
 
 export const publishingScheduleSchema = z.object({
@@ -261,7 +264,10 @@ export const platformUploadSchema = z.object({
   scheduledAt: z.string().optional(),
   scheduleId: scheduleIdSchema.optional(),
   createdByUserId: z.string().optional(),
+  createdByName: z.string().optional(),
   scheduledByUserId: z.string().optional(),
+  scheduledByName: z.string().optional(),
+  sourceSubmissionId: z.string().optional(),
   lastUpdatedByUserId: z.string().optional(),
   automation: uploadAutomationSchema
 });
@@ -280,7 +286,11 @@ export const contentSubmissionSchema = z.object({
   rightsConfirmed: z.boolean(),
   status: submissionStatusSchema,
   createdByUserId: z.string(),
+  createdByName: z.string().optional(),
+  selectedAccountIds: z.array(z.string()).min(1),
   scheduledByUserId: z.string().optional(),
+  scheduledByName: z.string().optional(),
+  schedulingLeaseExpiresAt: z.string().optional(),
   destinationUploadIds: z.array(z.string()),
   createdAt: z.string(),
   updatedAt: z.string()

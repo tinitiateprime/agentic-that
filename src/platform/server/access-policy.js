@@ -1,6 +1,7 @@
 import {
   ACCESS_LEVELS,
   ACCESS_RESOURCE_KEYS,
+  CAPABILITY_KEYS,
   LIVE_ACCESS_CATALOG,
   accessCategory,
   accessLevelRank,
@@ -15,6 +16,18 @@ function grantMap(rows = []) {
     result.set(key, normalizeAccessLevel(row?.accessLevel || row?.access_level));
   }
   return result;
+}
+
+export function evaluateCapabilities({ roleGrants = [], active = true, globalAdmin = false } = {}) {
+  if (!active) return [];
+  if (globalAdmin) return [...CAPABILITY_KEYS];
+  const capabilities = new Set();
+  for (const row of roleGrants) {
+    const key = String(row?.resourceKey || row?.resource_key || "");
+    const level = normalizeAccessLevel(row?.accessLevel || row?.access_level);
+    if (CAPABILITY_KEYS.includes(key) && level !== "none") capabilities.add(key);
+  }
+  return [...capabilities].sort();
 }
 
 function roleLevelForResource(grants, resourceKey) {
@@ -79,7 +92,9 @@ export function validateGrantInput(grants) {
   return grants.map((grant) => {
     const resourceKey = String(grant?.resourceKey || "").trim();
     const accessLevel = String(grant?.accessLevel || "").trim();
-    if (!ACCESS_RESOURCE_KEYS.includes(resourceKey)) throw new Error(`Unknown resource: ${resourceKey}`);
+    if (!ACCESS_RESOURCE_KEYS.includes(resourceKey) && !CAPABILITY_KEYS.includes(resourceKey)) {
+      throw new Error(`Unknown resource: ${resourceKey}`);
+    }
     if (!ACCESS_LEVELS.includes(accessLevel)) throw new Error(`Unknown access level: ${accessLevel}`);
     if (seen.has(resourceKey)) throw new Error(`Duplicate permission: ${resourceKey}`);
     seen.add(resourceKey);

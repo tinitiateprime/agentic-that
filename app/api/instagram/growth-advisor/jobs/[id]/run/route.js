@@ -1,6 +1,6 @@
 import {
   accessErrorResponse,
-  authorizeApiAccess
+  authorizeApiCapability
 } from "@platform/server/access-control";
 import {
   executeGrowthAdvisorJob,
@@ -23,7 +23,7 @@ export async function POST(_request, context) {
 
   let principal;
   try {
-    principal = await authorizeApiAccess("scraping.instagram", "operate");
+    principal = await authorizeApiCapability("scraping.analyze");
   } catch (error) {
     return accessErrorResponse(error);
   }

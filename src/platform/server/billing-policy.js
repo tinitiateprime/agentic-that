@@ -13,7 +13,11 @@ export function resolveBillingStatus(statusInput, trialEndsAt, nowMs = Date.now(
 
 export function selfServiceRoleGrants({ selectedRoleIds = [], billingStatus, trialEndsAt, nowMs = Date.now() }) {
   const status = resolveBillingStatus(billingStatus, trialEndsAt, nowMs);
-  const trialStillActive = trialEndsAt && new Date(trialEndsAt).getTime() > nowMs;
+  // A trial with no end date is ready but has not started yet. It receives its
+  // configured access so the first service can be opened and atomically start
+  // the workspace clock.
+  const trialStillActive = status === "trialing"
+    && (!trialEndsAt || new Date(trialEndsAt).getTime() > nowMs);
   if (status !== "active" && !trialStillActive) return [];
   const selected = new Set(selectedRoleIds.map(String));
   return SELF_SERVICE_ROLE_CATALOG

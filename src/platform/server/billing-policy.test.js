@@ -14,6 +14,16 @@ test("a selected role grants access during the seven-day trial", () => {
   assert.deepEqual(grants, [{ roleId: "role_self_messaging", resourceKey: "messaging", accessLevel: "configure" }]);
 });
 
+test("a ready trial grants access before its first service starts the clock", () => {
+  const grants = selfServiceRoleGrants({
+    selectedRoleIds: ["role_self_full_access"],
+    billingStatus: "trialing",
+    trialEndsAt: null,
+    nowMs: now,
+  });
+  assert.equal(grants.length, 3);
+});
+
 test("trial status and selected access expire at the configured end time", () => {
   assert.equal(resolveBillingStatus("trialing", "2026-08-18T00:00:00.000Z", now), "expired");
   assert.deepEqual(selfServiceRoleGrants({

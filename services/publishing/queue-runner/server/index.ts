@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import {
   cancelAllInstagramCompanionJobs,
   cancelInstagramCompanionJob,
@@ -43,6 +44,7 @@ import {
   upsertPublishingScheduleSchema,
   unifiedPostDestinationsSchema,
   type Platform,
+  type PlatformAccount,
   type PostFormat,
   type PublishingSchedule,
   type PlatformUpload,
@@ -51,6 +53,7 @@ import {
 } from "../shared/schema.js";
 import {
   automationInput,
+  claimContentSubmission,
   createPlatformAccount,
   createContentSubmission,
   createPublishingSchedule,
@@ -79,6 +82,7 @@ import {
   loginUser,
   platformWorkspaceManagerStatus,
   recoverInterruptedPublishingWork,
+  releaseContentSubmissionClaim,
   nextPublishingScheduleOccurrence,
   setupPlatformWorkspaceManager,
   upsertCentralWorkspaceActor,
@@ -99,6 +103,8 @@ import {
   startManualAccountSession,
 } from "./services/publisher.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
+import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
+import { publishingCompanionId } from "./companion-identity.js";
 import { assessScheduledPublishingSafety } from "./services/safety-governor.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import {
@@ -189,13 +195,6 @@ function safeUploadFileName(originalName: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "local-post";
   return `${Date.now()}-${randomUUID().slice(0, 8)}-${safeBase}${extension}`;
-}
-
-async function removeStoredUploadFile(fileName: string) {
-  const resolvedUploadDir = path.resolve(uploadDir);
-  const storedFilePath = path.resolve(resolvedUploadDir, fileName);
-  if (!storedFilePath.startsWith(`${resolvedUploadDir}${path.sep}`)) return;
-  await fs.promises.unlink(storedFilePath).catch(() => undefined);
 }
 
 type StoredUploadFile = {
@@ -318,9 +317,29 @@ type RequestWithUser = express.Request & {
   user?: UserProfile;
   centralAccessLevel?: CentralAccessLevel;
   centralGrants?: Record<string, unknown>;
+  centralCapabilities?: string[];
 };
-type RequestWithInstagramOwner = express.Request & { instagramOwnerKey?: string };
-type RequestWithFacebookOwner = express.Request & { facebookOwnerKey?: string };
+type RequestWithInstagramOwner = express.Request & { instagramOwnerKey?: string; trialWorkspaceId?: string };
+type RequestWithFacebookOwner = express.Request & { facebookOwnerKey?: string; trialWorkspaceId?: string };
+
+const companionTrialScrapeLimiter = new RollingTrialUsageLimiter();
+const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
+
+function companionTrialScrapeLimitKey(
+  req: RequestWithInstagramOwner | RequestWithFacebookOwner,
+  platform: "instagram" | "facebook",
+) {
+  if (!req.trialWorkspaceId) return null;
+  return `${req.trialWorkspaceId}:${platform}`;
+}
+
+function companionTrialScrapeLimit(key: string) {
+  return companionTrialScrapeLimiter.check(key, TRIAL_SCRAPES_PER_PROFILE_PER_HOUR, 60 * 60_000);
+}
+
+function recordCompanionTrialScrape(key: string) {
+  companionTrialScrapeLimiter.consume(key, TRIAL_SCRAPES_PER_PROFILE_PER_HOUR, 60 * 60_000);
+}
 
 const tokenPayloadSchema = z.object({
   sub: z.string(),
@@ -389,12 +408,14 @@ const stagedSubmissionSchema = z.object({
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().trim().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
+  selectedAccountIds: z.array(z.string().trim().min(1)).min(1, "Choose at least one publishing account").max(100),
   rightsConfirmed: z.boolean().optional().default(false),
   confirmWarnings: z.boolean().optional().default(false)
 });
 
 const textSubmissionSchema = z.object({
   description: z.string().trim().min(1, "Write your post text."),
+  selectedAccountIds: z.array(z.string().trim().min(1)).min(1, "Choose at least one publishing account").max(100),
   confirmWarnings: z.boolean().optional().default(false)
 });
 
@@ -516,9 +537,18 @@ async function authenticateApi(req: express.Request, res: express.Response, next
         res.status(403).json({ message: `Your AgenticThat role requires ${requiredLevel} Publishing access for this action.` });
         return;
       }
-      request.user = await upsertCentralWorkspaceActor(platformIdentity(token), centralAccessLevel);
+      const centralCapabilities = Array.isArray(centralIdentity.capabilities)
+        ? centralIdentity.capabilities.map(String)
+        : [];
+      const requiredCapability = requiredPublishingCapability(req);
+      if (requiredCapability && !centralCapabilities.includes(requiredCapability)) {
+        res.status(403).json({ message: `Your workspace role does not include ${requiredCapability}.` });
+        return;
+      }
+      request.user = await upsertCentralWorkspaceActor(platformIdentity(token), centralAccessLevel, centralCapabilities);
       request.centralAccessLevel = centralAccessLevel;
       request.centralGrants = centralIdentity.grants;
+      request.centralCapabilities = centralCapabilities;
       next();
       return;
     }
@@ -564,6 +594,35 @@ function requiredPublishingLevel(req: express.Request): CentralAccessLevel {
   return "operate";
 }
 
+function requiredPublishingCapability(req: express.Request) {
+  const requestPath = req.originalUrl.split("?")[0];
+  if (requestPath.startsWith("/api/users")) return "workspace.team.manage";
+  if (requestPath === "/api/automation/consent") return "publishing.schedule.manage";
+  if (requestPath.startsWith("/api/automation")) return "publishing.execute";
+  if (requestPath === "/api/publishing-safety/assess") return "publishing.schedule.manage";
+  if (req.method === "GET" || req.method === "HEAD") return "publishing.view";
+  if (/^\/api\/(?:platforms\/[^/]+\/accounts|accounts(?:\/|$))/.test(requestPath)) return "publishing.accounts.configure";
+  if (requestPath.startsWith("/api/schedules") || /^\/api\/submissions\/[^/]+\/schedule$/.test(requestPath)) return "publishing.schedule.manage";
+  if (requestPath.startsWith("/api/posts/unified")) return "publishing.execute";
+  if (requestPath.startsWith("/api/submissions") || requestPath.startsWith("/api/staged-uploads")) return "publishing.content.create";
+  if (/^\/api\/uploads\/[^/]+\/status$/.test(requestPath) || (req.method === "DELETE" && requestPath.startsWith("/api/uploads/"))) return "publishing.execute";
+  if (req.method === "PATCH" && /^\/api\/uploads\/[^/]+$/.test(requestPath)) {
+    const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+    const fields = Object.keys(body);
+    return fields.length > 0 && fields.every(field => field === "scheduledAt" || field === "scheduleId")
+      ? "publishing.schedule.manage"
+      : "publishing.content.edit";
+  }
+  return "publishing.execute";
+}
+
+function assertCentralCapability(req: RequestWithUser, capability: string) {
+  if (req.centralCapabilities === undefined) return;
+  if (!req.centralCapabilities.includes(capability)) {
+    throw new PublishingAccessError(`Your workspace role does not include ${capability}.`);
+  }
+}
+
 class PublishingAccessError extends Error {}
 
 function centralPlatformAccess(req: RequestWithUser, platform: Platform) {
@@ -584,14 +643,22 @@ function filterCentralPlatforms<T extends { platform: Platform }>(req: RequestWi
   return req.centralGrants ? rows.filter(row => Boolean(centralPlatformAccess(req, row.platform))) : rows;
 }
 
+function filterVisibleAccounts(req: RequestWithUser, rows: PlatformAccount[]) {
+  const visible = filterCentralPlatforms(req, rows);
+  return req.centralCapabilities !== undefined && req.user?.role === "post_uploader"
+    ? visible.filter(account => account.enabled)
+    : visible;
+}
+
 function requireRoles(...roles: UserRole[]): express.RequestHandler {
   return (req, res, next) => {
-    const user = (req as RequestWithUser).user;
+    const request = req as RequestWithUser;
+    const user = request.user;
     if (!user) {
       res.status(401).json({ message: "Sign in to continue." });
       return;
     }
-    if (!roles.includes(user.role)) {
+    if (request.centralCapabilities === undefined && !roles.includes(user.role)) {
       res.status(403).json({ message: "Your role cannot perform this action." });
       return;
     }
@@ -790,9 +857,8 @@ async function scheduleContentSubmission(
   confirmWarnings: boolean,
 ) {
   const createdUploads: PlatformUpload[] = [];
-  const submission = await getContentSubmission(submissionId, user.workspaceId);
+  const submission = await claimContentSubmission(submissionId, user.id, user.workspaceId);
   if (!submission) throw new Error("Content submission not found.");
-  if (submission.status !== "awaiting_schedule") throw new Error("This content submission has already been scheduled.");
 
   const file: StoredUploadFile = {
     originalname: submission.originalName,
@@ -801,11 +867,14 @@ async function scheduleContentSubmission(
     size: submission.size,
   };
   const title = submission.title?.trim() || "";
-  const destinations = scheduleSubmissionSchema.parse({ destinations: destinationsInput }).destinations;
-  const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
-  if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
-
   try {
+    const destinations = scheduleSubmissionSchema.parse({ destinations: destinationsInput }).destinations;
+    const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
+    if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
+    const selectedAccountIds = new Set(submission.selectedAccountIds);
+    if (selectedAccountIds.size > 0 && (uniqueAccountIds.size !== selectedAccountIds.size || [...uniqueAccountIds].some(accountId => !selectedAccountIds.has(accountId)))) {
+      throw new Error("The Scheduler must use exactly the publishing accounts selected by the uploader.");
+    }
     const [allAccounts, allSchedules] = await Promise.all([
       listPlatformAccounts(undefined, user.workspaceId),
       listPublishingSchedules(user.workspaceId),
@@ -860,7 +929,11 @@ async function scheduleContentSubmission(
         caption: submission.description,
         scheduledAt,
         scheduleId: destination.scheduleId,
-      }, user.id, user.workspaceId));
+      }, user.id, user.workspaceId, {
+        createdByUserId: submission.createdByUserId,
+        scheduledByUserId: user.id,
+        sourceSubmissionId: submission.id,
+      }));
     }
 
     const safelyQueuedUploads = await applyPublishingSafetyDeferrals(createdUploads, safety.issues);
@@ -874,8 +947,32 @@ async function scheduleContentSubmission(
     return { submission: completed, uploads: safelyQueuedUploads };
   } catch (error) {
     await Promise.all(createdUploads.map(upload => deleteUpload(upload.id, user.workspaceId).catch(() => undefined)));
+    await releaseContentSubmissionClaim(submission.id, user.id, user.workspaceId).catch(() => undefined);
     throw error;
   }
+}
+
+async function validateSubmissionAccounts(
+  req: RequestWithUser,
+  user: UserProfile,
+  file: StoredUploadFile,
+  title: string,
+  description: string,
+  selectedAccountIds: string[],
+) {
+  assertCentralCapability(req, "publishing.destinations.select");
+  const uniqueIds = [...new Set(selectedAccountIds)];
+  if (uniqueIds.length !== selectedAccountIds.length) throw new Error("Each publishing account can be selected only once.");
+  const accounts = await listPlatformAccounts(undefined, user.workspaceId);
+  const accountById = new Map(accounts.map(account => [account.id, account]));
+  for (const accountId of uniqueIds) {
+    const account = accountById.get(accountId);
+    if (!account) throw new Error("One of the selected publishing accounts is unavailable in this workspace.");
+    if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
+    assertCentralPlatformAccess(req, account.platform, "operate");
+    assertPlatformPostCompatible(account.platform, file, title, description);
+  }
+  return uniqueIds;
 }
 
 app.use(
@@ -899,7 +996,6 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
-app.use("/uploads", express.static(uploadDir));
 if (fs.existsSync(runtimeDesktopAssets)) {
   app.use("/desktop", express.static(runtimeDesktopAssets));
 }
@@ -919,7 +1015,7 @@ app.get("/api/health", async (_req, res) => {
       chromeInstalled: browser.chromeInstalled,
       embeddedBrowser: browser.embeddedBrowser,
       engines: browser.engines,
-      companionInstanceId: process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID?.trim() || null,
+      companionInstanceId: publishingCompanionId(),
       extensionBridge: true,
       capabilities: {
         publishing: true,
@@ -969,10 +1065,15 @@ function platformIdentity(token: string) {
   };
 }
 
-function scrapingIdentity(token: string, resource: "scraping.instagram" | "scraping.facebook") {
+function scrapingIdentity(
+  token: string,
+  resource: "scraping.instagram" | "scraping.facebook",
+  requiredCapability: "scraping.view" | "scraping.run" = "scraping.run",
+) {
   const identity = verifyServiceAccessToken(token, "scraping");
   const level = identity?.grants?.[resource];
-  if (!identity || !["operate", "configure"].includes(level)) return null;
+  if (!identity || !level || !["view", "operate", "configure"].includes(level)) return null;
+  if (!Array.isArray(identity.capabilities) || !identity.capabilities.includes(requiredCapability)) return null;
   return identity;
 }
 
@@ -1011,9 +1112,12 @@ async function authenticateInstagramScraping(
       return;
     }
 
-    const centralIdentity = scrapingIdentity(token, "scraping.instagram");
+    const centralIdentity = scrapingIdentity(token, "scraping.instagram", req.method === "GET" ? "scraping.view" : "scraping.run");
     if (centralIdentity) {
       (req as RequestWithInstagramOwner).instagramOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
+      if (centralIdentity.billingStatus === "trialing") {
+        (req as RequestWithInstagramOwner).trialWorkspaceId = centralIdentity.workspaceId;
+      }
       next();
       return;
     }
@@ -1059,9 +1163,12 @@ async function authenticateFacebookScraping(
       res.status(401).json({ message: "Sign in to AgenticThat to use Local Companion Facebook scraping." });
       return;
     }
-    const centralIdentity = scrapingIdentity(token, "scraping.facebook");
+    const centralIdentity = scrapingIdentity(token, "scraping.facebook", req.method === "GET" ? "scraping.view" : "scraping.run");
     if (centralIdentity) {
       (req as RequestWithFacebookOwner).facebookOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
+      if (centralIdentity.billingStatus === "trialing") {
+        (req as RequestWithFacebookOwner).trialWorkspaceId = centralIdentity.workspaceId;
+      }
       next();
       return;
     }
@@ -1174,7 +1281,18 @@ app.post("/api/auth/platform/facebook-scraping", (req, res, next) => {
 
 app.post("/api/scraping/instagram/jobs", authenticateInstagramScraping, (req: RequestWithInstagramOwner, res, next) => {
   try {
-    res.status(202).json(createInstagramCompanionJob(instagramCompanionOwner(req), req.body || {}));
+    const body = req.body || {};
+    const trialLimitKey = companionTrialScrapeLimitKey(req, "instagram");
+    const trialLimit = trialLimitKey ? companionTrialScrapeLimit(trialLimitKey) : null;
+    if (trialLimit && !trialLimit.allowed) {
+      res.status(429).json({
+        message: `Trial limit reached for Instagram scraping. Try again in ${trialLimit.retryAfterSeconds} seconds.`,
+      });
+      return;
+    }
+    const job = createInstagramCompanionJob(instagramCompanionOwner(req), body);
+    if (trialLimitKey) recordCompanionTrialScrape(trialLimitKey);
+    res.status(202).json(job);
   } catch (error) {
     if (error instanceof Error && /Companion scraping is unavailable/i.test(error.message)) {
       res.status(503).json({
@@ -1214,7 +1332,18 @@ app.delete("/api/scraping/instagram/jobs/:id", authenticateInstagramScraping, as
 
 app.post("/api/scraping/facebook/jobs", authenticateFacebookScraping, (req: RequestWithFacebookOwner, res, next) => {
   try {
-    res.status(202).json(createFacebookCompanionJob(facebookCompanionOwner(req), req.body || {}));
+    const body = req.body || {};
+    const trialLimitKey = companionTrialScrapeLimitKey(req, "facebook");
+    const trialLimit = trialLimitKey ? companionTrialScrapeLimit(trialLimitKey) : null;
+    if (trialLimit && !trialLimit.allowed) {
+      res.status(429).json({
+        message: `Trial limit reached for Facebook scraping. Try again in ${trialLimit.retryAfterSeconds} seconds.`,
+      });
+      return;
+    }
+    const job = createFacebookCompanionJob(facebookCompanionOwner(req), body);
+    if (trialLimitKey) recordCompanionTrialScrape(trialLimitKey);
+    res.status(202).json(job);
   } catch (error) {
     if (error instanceof Error && /Companion Facebook scraping is unavailable/i.test(error.message)) {
       res.status(503).json({ message: error.message, code: "companion_unavailable" });
@@ -1247,6 +1376,30 @@ app.delete("/api/scraping/facebook/jobs/:id", authenticateFacebookScraping, asyn
 });
 
 app.use("/api", authenticateApi);
+
+app.get("/api/media/:fileName", async (req: RequestWithUser, res, next) => {
+  try {
+    const user = currentUser(req);
+    const fileName = path.basename(pathParam(req.params.fileName, "fileName"));
+    const [submission, upload] = await Promise.all([
+      listContentSubmissions(user.workspaceId).then(items => items.find(item => item.fileName === fileName)),
+      listUploads(undefined, undefined, user.workspaceId).then(items => items.find(item => item.fileName === fileName)),
+    ]);
+    const media = submission || upload;
+    if (!media) {
+      res.status(404).json({ message: "Publishing media not found." });
+      return;
+    }
+    const bytes = await readPublishingMedia(fileName, user.workspaceId);
+    res.setHeader("Content-Type", media.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(bytes);
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/auth/me", (req: RequestWithUser, res) => {
   res.json(currentUser(req));
@@ -1379,7 +1532,7 @@ app.get("/api/accounts", async (req: RequestWithUser, res, next) => {
   try {
     const platform = req.query.platform ? platformSchema.parse(req.query.platform) : undefined;
     if (platform) assertCentralPlatformAccess(req, platform, "view");
-    res.json(filterCentralPlatforms(req, await listPlatformAccounts(platform, currentUser(req).workspaceId)));
+    res.json(filterVisibleAccounts(req, await listPlatformAccounts(platform, currentUser(req).workspaceId)));
   } catch (error) {
     next(error);
   }
@@ -1391,7 +1544,7 @@ app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager")
     assertCentralPlatformAccess(req, platform, "configure");
     const payload = upsertPlatformAccountSchema.parse(req.body);
     const user = currentUser(req);
-    const account = await createPlatformAccount(platform, payload, user.workspaceId);
+    const account = await createPlatformAccount(platform, { ...payload, companionId: publishingCompanionId() }, user.workspaceId);
     await logActivity(user.id, "account.created", "publishing_account", account.id, `${account.displayName} account was added for ${platform}.`, { platform, handle: account.handle });
     res.status(201).json(account);
   } catch (error) {
@@ -1414,7 +1567,7 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
     const nextEngine = payload.executionEngine ?? previousEngine;
     const engineChanged = nextEngine !== previousEngine;
     if (engineChanged) assertAccountEngineChangeAllowed(accountId);
-    const account = await updatePlatformAccount(accountId, payload, user.workspaceId);
+    const account = await updatePlatformAccount(accountId, { ...payload, companionId: publishingCompanionId() }, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
@@ -1659,6 +1812,13 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
   try {
     const user = currentUser(req);
     const payload = textSubmissionSchema.parse(req.body);
+    assertCentralCapability(req, "publishing.submissions.create");
+    const selectedAccountIds = await validateSubmissionAccounts(req, user, {
+      originalname: "Text post",
+      filename: "",
+      mimetype: "text/plain",
+      size: Buffer.byteLength(payload.description, "utf8"),
+    }, "", payload.description, payload.selectedAccountIds);
     const preflightIssues = evaluateContentPreflight({
       postFormat: "text",
       description: payload.description,
@@ -1676,6 +1836,7 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
       url: "",
       description: payload.description,
       rightsConfirmed: true,
+      selectedAccountIds,
     }, user.workspaceId, user.id);
     res.status(201).json(submission);
   } catch (error) {
@@ -1685,9 +1846,11 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
 
 app.post("/api/submissions/staged", requireRoles("operations_manager", "post_uploader"), async (req: RequestWithUser, res, next) => {
   let finalFileName: string | null = null;
+  let finalWorkspaceId: string | null = null;
   try {
     const user = currentUser(req);
     const payload = stagedSubmissionSchema.parse(req.body);
+    assertCentralCapability(req, "publishing.submissions.create");
     const record = await readStagedUpload(payload.stagedUploadId);
     if (record.workspaceId !== user.workspaceId || (record.userId !== user.id && user.role !== "operations_manager")) {
       throw new Error("This staged upload belongs to another workspace.");
@@ -1716,9 +1879,17 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       rightsConfirmed: payload.rightsConfirmed,
     });
     assertContentPreflight(preflightIssues, payload.confirmWarnings);
+    const selectedAccountIds = await validateSubmissionAccounts(req, user, {
+      originalname: record.originalName,
+      filename: record.fileName,
+      mimetype: record.mimeType,
+      size: record.size,
+    }, payload.title, payload.description, payload.selectedAccountIds);
 
     finalFileName = record.fileName;
+    finalWorkspaceId = user.workspaceId;
     await fs.promises.rename(stagedPath, path.join(uploadDir, record.fileName));
+    await storePublishingMedia(record.fileName, user.workspaceId, record.mimeType);
     const submission = await createContentSubmission({
       originalName: record.originalName,
       fileName: record.fileName,
@@ -1729,11 +1900,12 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       title: payload.title,
       description: payload.description,
       rightsConfirmed: payload.rightsConfirmed,
+      selectedAccountIds,
     }, user.workspaceId, user.id);
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(submission);
   } catch (error) {
-    if (finalFileName) await removeStoredUploadFile(finalFileName);
+    if (finalFileName && finalWorkspaceId) await deletePublishingMedia(finalFileName, finalWorkspaceId);
     next(error);
   }
 });
@@ -1771,6 +1943,7 @@ app.post("/api/posts/unified/text", requireRoles("operations_manager"), async (r
 
 app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   let finalFileName: string | null = null;
+  let finalWorkspaceId: string | null = null;
   try {
     const user = currentUser(req);
     const payload = stagedUnifiedPostSchema.parse(req.body);
@@ -1784,7 +1957,9 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async 
     await assertStagedMediaSignature(record, stagedPath);
 
     finalFileName = record.fileName;
+    finalWorkspaceId = user.workspaceId;
     await fs.promises.rename(stagedPath, path.join(uploadDir, record.fileName));
+    await storePublishingMedia(record.fileName, user.workspaceId, record.mimeType);
     const createdUploads = await createUnifiedPosts({
       originalname: record.originalName,
       filename: record.fileName,
@@ -1797,7 +1972,7 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async 
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(createdUploads);
   } catch (error) {
-    if (finalFileName) await removeStoredUploadFile(finalFileName);
+    if (finalFileName && finalWorkspaceId) await deletePublishingMedia(finalFileName, finalWorkspaceId);
     next(error);
   }
 });
@@ -1827,6 +2002,10 @@ app.patch("/api/uploads/:id/status", requireRoles("operations_manager"), async (
 app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
+    if (req.centralCapabilities !== undefined && user.role === "post_uploader") {
+      res.status(403).json({ message: "Submitted content is locked after handoff to the Scheduler." });
+      return;
+    }
     const uploadId = pathParam(req.params.id, "id");
     const existing = await findUploadOrThrow(uploadId, user.workspaceId);
     assertCentralPlatformAccess(req, existing.platform, "operate");
@@ -1917,8 +2096,9 @@ app.delete("/api/uploads/:id", requireRoles("operations_manager"), async (req: R
       return;
     }
 
-    const fileStillUsed = (await listUploads()).some(upload => upload.fileName === deleted.fileName);
-    if (!fileStillUsed) await removeStoredUploadFile(deleted.fileName);
+    const fileStillUsed = (await listUploads(undefined, undefined, user.workspaceId)).some(upload => upload.fileName === deleted.fileName)
+      || (await listContentSubmissions(user.workspaceId)).some(submission => submission.fileName === deleted.fileName);
+    if (!fileStillUsed && deleted.fileName) await deletePublishingMedia(deleted.fileName, user.workspaceId);
 
     await logActivity(user.id, "post.deleted", "post", deleted.id, `${deleted.title || deleted.originalName} was deleted.`, { platform: deleted.platform, accountId: deleted.accountId });
     res.status(204).send();

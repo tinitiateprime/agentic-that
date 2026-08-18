@@ -2556,3 +2556,4 @@
     scale: 1.01;
   }
 }
+.workspace-run-history{margin-bottom:18px;padding:20px;border:1px solid var(--border,#dfe3ea);border-radius:16px;background:#fff}.workspace-run-history h2{margin:4px 0 14px}.workspace-run-history>div:last-child{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:9px}.workspace-run-history button{display:grid;gap:4px;text-align:left;padding:12px;border:1px solid #dfe3ea;border-radius:10px;background:#f8f9fc;cursor:pointer}.workspace-run-history button:hover{border-color:#6574d8;background:#f2f4ff}.workspace-run-history button span{font-size:12px;color:#6b7280}.viewer-only-panel{text-align:center}.viewer-only-panel h2{margin:7px 0}.viewer-only-panel p:last-child{color:#667085}

@@ -9,6 +9,7 @@ import {
   requireScrapingServiceAccess,
   ScrapingServiceAuthError
 } from "../../../../lib/scraping-service-auth.ts";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -19,6 +20,23 @@ const jsonHeaders = {
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "authorization, content-type, cache-control, pragma"
 };
+const trialScrapeLimiter = new RollingTrialUsageLimiter();
+const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
+
+function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
+  if (identity.billingStatus !== "trialing") return;
+  const result = trialScrapeLimiter.consume(
+    `${identity.workspaceId}:instagram`,
+    TRIAL_SCRAPES_PER_PROFILE_PER_HOUR,
+    60 * 60_000,
+  );
+  if (!result.allowed) {
+    throw new ScrapingServiceAuthError(
+      `Trial limit reached for Instagram scraping. Try again in ${result.retryAfterSeconds} seconds.`,
+      429,
+    );
+  }
+}
 
 class InstagramRequestError extends Error {}
 
@@ -141,7 +159,7 @@ function friendlyScrapeMessage(error: unknown) {
   return message.length > 280 ? `${message.slice(0, 277)}...` : message;
 }
 
-async function executeScrape(input: InstagramJobInput, store: InstagramRunStore) {
+async function executeScrape(input: InstagramJobInput, store: InstagramRunStore, createdByUserId?: string) {
   const scrape = await runInstagramScrape({
     query: input.requestedQuery,
     maxResults: input.maxResults,
@@ -188,6 +206,7 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore)
   }
 
   return store.saveRun({
+    createdByUserId,
     query: scrape.query,
     requestedQuery: input.requestedQuery,
     maxResults: input.maxResults,
@@ -237,7 +256,7 @@ export async function executeInstagramJob(jobId: string, workspaceId: string) {
   const running = await store.updateJob(jobId, { status: "running", error: undefined });
   if (!running) return null;
   try {
-    const run = await executeScrape(running.input, store);
+    const run = await executeScrape(running.input, store, running.createdByUserId);
     const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
     return complete ? jobResponse(complete, store) : null;
   } catch (error) {
@@ -275,7 +294,8 @@ export async function handleInstagramRequest(request: Request) {
 
     if (request.method === "POST" && route === "jobs") {
       const input = prepareScrapeInput(await readBody(request));
-      return json({ job: await store.createJob(input) }, 201);
+      enforceTrialScrapeLimit(identity);
+      return json({ job: await store.createJob(input, String(identity.sub)) }, 201);
     }
     const runJobMatch = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJobMatch) {
@@ -297,7 +317,8 @@ export async function handleInstagramRequest(request: Request) {
 
     if (request.method === "POST" && route === "scrape") {
       const input = prepareScrapeInput(await readBody(request));
-      const run = await executeScrape(input, store);
+      enforceTrialScrapeLimit(identity);
+      const run = await executeScrape(input, store, String(identity.sub));
       return json({
         run,
         results: run.results,

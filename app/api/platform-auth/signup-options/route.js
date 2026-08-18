@@ -1,14 +1,14 @@
-import { listSignupRoleOptions } from "@platform/server/auth-store";
+import { listSignupPlanOptions } from "@platform/server/auth-store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    return Response.json(await listSignupRoleOptions(), {
+    return Response.json(await listSignupPlanOptions(), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    console.error("Unable to load signup roles", error);
-    return Response.json({ error: "Signup access options are unavailable." }, { status: 503 });
+    console.error("Unable to load signup plans", error);
+    return Response.json({ error: "Signup plan options are unavailable." }, { status: 503 });
   }
 }

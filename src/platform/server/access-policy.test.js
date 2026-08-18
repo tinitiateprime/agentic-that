@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateAccess } from "./access-policy.js";
+import { evaluateAccess, evaluateCapabilities } from "./access-policy.js";
 
 test("category grants flow to apps and an app grant overrides its role category", () => {
   const access = evaluateAccess({
@@ -40,4 +40,18 @@ test("direct category and app overrides are final", () => {
 test("inactive users receive no access and global admins receive configure", () => {
   assert.equal(evaluateAccess({ active: false, globalAdmin: true })["messaging.telegram"], "none");
   assert.equal(evaluateAccess({ active: true, globalAdmin: true })["messaging.telegram"], "configure");
+});
+
+test("operational capabilities combine across roles and disappear for inactive members", () => {
+  const roleGrants = [
+    { roleId: "uploader", resourceKey: "publishing.view", accessLevel: "operate" },
+    { roleId: "uploader", resourceKey: "publishing.content.create", accessLevel: "operate" },
+    { roleId: "scheduler", resourceKey: "publishing.schedule.manage", accessLevel: "operate" },
+  ];
+  assert.deepEqual(evaluateCapabilities({ roleGrants }), [
+    "publishing.content.create",
+    "publishing.schedule.manage",
+    "publishing.view",
+  ]);
+  assert.deepEqual(evaluateCapabilities({ roleGrants, active: false }), []);
 });

@@ -1,17 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Database, LogOut, Menu, Settings2, X } from "lucide-react";
+import { Boxes, Database, LogOut, Menu, Settings2, UsersRound, X } from "lucide-react";
 import { useState } from "react";
 import styles from "./product-shell.module.css";
 
 const navigation = [
   { href: "/apps", label: "Store", description: "Choose a service", icon: Boxes, id: "apps" },
-  { href: "/config-manager", label: "Connections", description: "Add and sign in accounts", icon: Settings2, id: "connections" },
-  { href: "/content-manager", label: "Content", description: "Review accounts and activity", icon: Database, id: "content" },
+  { href: "/config-manager", label: "Connections", description: "Add and sign in accounts", icon: Settings2, id: "connections", anyCapability: ["publishing.accounts.configure", "messaging.configure"] },
+  { href: "/content-manager", label: "Content", description: "Review accounts and activity", icon: Database, id: "content", anyCapability: ["publishing.view", "messaging.view"] },
+  { href: "/workspace-team", label: "Team", description: "Members and roles", icon: UsersRound, id: "team", capability: "workspace.team.manage" },
 ];
 
 function billingLabel(user) {
+  if (user?.billingStatus === "trialing" && !user.trialStartsAt) {
+    return "Trial ready · starts with first service";
+  }
   if (user?.billingStatus === "trialing" && user.trialEndsAt) {
     const days = Math.max(0, Math.ceil((new Date(user.trialEndsAt).getTime() - Date.now()) / 86_400_000));
     return `Free trial · ${days} day${days === 1 ? "" : "s"} left`;
@@ -25,6 +29,16 @@ function billingLabel(user) {
 export default function ProductShell({ user, active = "apps", children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const initial = String(user?.name || user?.email || "A").charAt(0).toUpperCase();
+  const capabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
+  const navigationHref = (item) => {
+    if (item.id === "connections") return capabilities.includes("messaging.configure")
+      ? "/config-manager?service=messaging"
+      : "/config-manager?service=publishing";
+    if (item.id === "content") return capabilities.includes("messaging.view")
+      ? "/content-manager?service=messaging"
+      : "/content-manager?service=publishing";
+    return item.href;
+  };
 
   async function signOut() {
     await Promise.allSettled([
@@ -56,10 +70,13 @@ export default function ProductShell({ user, active = "apps", children }) {
 
         <nav className={styles.sidebarNav} aria-label="Workspace navigation">
           <span>Workspace tools</span>
-          {navigation.map((item) => {
+          {navigation.filter((item) => (
+            (!item.capability || capabilities.includes(item.capability))
+            && (!item.anyCapability || item.anyCapability.some((capability) => capabilities.includes(capability)))
+          )).map((item) => {
             const Icon = item.icon;
             return (
-              <Link className={active === item.id ? styles.navActive : ""} href={item.href} key={item.id} onClick={() => setMenuOpen(false)} aria-current={active === item.id ? "page" : undefined}>
+              <Link className={active === item.id ? styles.navActive : ""} href={navigationHref(item)} key={item.id} onClick={() => setMenuOpen(false)} aria-current={active === item.id ? "page" : undefined}>
                 <Icon size={19} />
                 <span className={styles.navCopy}><strong>{item.label}</strong><small>{item.description}</small></span>
               </Link>

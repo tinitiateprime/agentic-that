@@ -8,28 +8,14 @@ const EMPTY_FORM = {
   email: "",
   password: "",
   confirmPassword: "",
-  selectedRoleIds: [],
+  plan: "trial",
 };
 
 const SIGNUP_STEPS = [
-  { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 4", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
-  { id: 2, shortLabel: "Roles", eyebrow: "Step 2 of 4", title: "Choose your access", description: "Select the modules you want to use during your free trial." },
-  { id: 3, shortLabel: "Trial / pay", eyebrow: "Step 3 of 4", title: "Start with a free trial", description: "Review your access. No payment method is required to get started." },
-  { id: 4, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "Your selected modules are now available in AgenticThat." },
+  { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
+  { id: 2, shortLabel: "Plan", eyebrow: "Step 2 of 3", title: "Choose your plan", description: "Start the Trial plan now. Free and Premium plans are coming later." },
+  { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available during your trial." },
 ];
-
-const FULL_ACCESS_ROLE_ID = "role_self_full_access";
-
-function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
 
 export default function AuthModal({ open, initialMode = "login", onClose, onAuthenticated }) {
   const firstInputRef = useRef(null);
@@ -42,9 +28,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [roleOptions, setRoleOptions] = useState([]);
   const [trialDays, setTrialDays] = useState(7);
-  const [rolesLoading, setRolesLoading] = useState(false);
   const [signupStep, setSignupStep] = useState(1);
   const [completedUser, setCompletedUser] = useState(null);
 
@@ -89,18 +73,15 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   useEffect(() => {
     if (!open || mode !== "signup") return;
     let active = true;
-    setRolesLoading(true);
     fetch("/api/platform-auth/signup-options", { cache: "no-store" })
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "Access options are unavailable.");
+        if (!response.ok) throw new Error(data.error || "Plan options are unavailable.");
         if (active) {
-          setRoleOptions(Array.isArray(data.roles) ? data.roles : []);
           setTrialDays(Number(data.trialDays) || 7);
         }
       })
       .catch((loadError) => { if (active) setError(loadError.message); })
-      .finally(() => { if (active) setRolesLoading(false); });
     return () => { active = false; };
   }, [open, mode]);
 
@@ -113,7 +94,6 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
   const isSignup = mode === "signup";
   const activeStep = SIGNUP_STEPS[signupStep - 1];
-  const selectedRoles = roleOptions.filter((role) => form.selectedRoleIds.includes(role.id));
   const update = (field) => (event) => {
     setForm((current) => ({ ...current, [field]: event.target.value }));
   };
@@ -128,26 +108,6 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   const goToStep = (step) => {
     setError("");
     setSignupStep(step);
-  };
-
-  const toggleRole = (roleId) => {
-    setForm((current) => {
-      if (roleId === FULL_ACCESS_ROLE_ID) {
-        return {
-          ...current,
-          selectedRoleIds: current.selectedRoleIds.includes(roleId) ? [] : [roleId],
-        };
-      }
-
-      const withoutFullAccess = current.selectedRoleIds.filter((id) => id !== FULL_ACCESS_ROLE_ID);
-      return {
-        ...current,
-        selectedRoleIds: withoutFullAccess.includes(roleId)
-          ? withoutFullAccess.filter((id) => id !== roleId)
-          : [...withoutFullAccess, roleId],
-      };
-    });
-    setError("");
   };
 
   function validateAccountDetails() {
@@ -212,16 +172,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
       return;
     }
 
-    if (signupStep === 2) {
-      if (!form.selectedRoleIds.length) {
-        setError("Choose at least one access role for your free trial.");
-        return;
-      }
-      goToStep(3);
-      return;
-    }
-
-    if (signupStep === 4) {
+    if (signupStep === 3) {
       finishSignup();
       return;
     }
@@ -237,7 +188,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
       if (!response.ok) throw new Error(data.error || "Unable to continue. Please try again.");
       setCompletedUser(data.user);
       completedUserRef.current = data.user;
-      setSignupStep(4);
+      setSignupStep(3);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to continue. Please try again.");
     } finally {
@@ -336,82 +287,74 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
             )}
 
             {isSignup && signupStep === 2 && (
-              <fieldset className="auth-role-picker">
-                <legend>Choose trial access</legend>
-                <p>Select individual module roles or Full Access. You can update your selection when the payment flow is available.</p>
-                {rolesLoading ? <span className="auth-role-loading">Loading access options…</span> : roleOptions.map((role) => (
-                  <label className={form.selectedRoleIds.includes(role.id) ? "selected" : ""} key={role.id}>
-                    <input type="checkbox" checked={form.selectedRoleIds.includes(role.id)} onChange={() => toggleRole(role.id)} />
-                    <span><strong>{role.name}</strong><small>{role.description}</small></span>
-                  </label>
-                ))}
-              </fieldset>
-            )}
-
-            {isSignup && signupStep === 3 && (
               <div className="auth-plan-step">
+                <div className="auth-plan-card disabled" aria-disabled="true">
+                  <div className="auth-plan-card-head">
+                    <span className="auth-plan-payment-icon" aria-hidden="true">F</span>
+                    <div><strong>Free plan</strong><small>Coming soon</small></div>
+                  </div>
+                  <p>A permanent limited plan will be added later.</p>
+                </div>
                 <div className="auth-plan-card selected">
                   <div className="auth-plan-card-head">
                     <span className="auth-plan-check">✓</span>
-                    <div><strong>{trialDays}-day free trial</strong><small>Selected</small></div>
+                    <div><strong>{trialDays}-day Trial plan</strong><small>Available now · no card required</small></div>
                   </div>
-                  <p>Use all selected modules now. No card is required. Access pauses when the trial ends unless payment is completed.</p>
-                  <div className="auth-selected-roles" aria-label="Selected roles">
-                    {selectedRoles.map((role) => <span key={role.id}>{role.name}</span>)}
-                  </div>
+                  <p>Includes every Messaging, Publishing, and Scraping service. The workspace clock starts only when someone first opens a service.</p>
+                  <ul className="auth-trial-limits">
+                    <li>Publishing uses built-in safe posting intervals.</li>
+                    <li>Scraping allows 2 runs per platform each hour.</li>
+                    <li>Telegram allows 20 messages per hour and 100 per day.</li>
+                  </ul>
                 </div>
                 <div className="auth-plan-card disabled" aria-disabled="true">
                   <div className="auth-plan-card-head">
-                    <span className="auth-plan-payment-icon" aria-hidden="true">₹</span>
-                    <div><strong>Activate paid access</strong><small>Payment gateway coming soon</small></div>
+                    <span className="auth-plan-payment-icon" aria-hidden="true">P</span>
+                    <div><strong>Premium plan</strong><small>Coming soon</small></div>
                   </div>
-                  <p>Once connected, successful payment will keep your selected roles active after the trial.</p>
+                  <p>Higher limits and paid access will be enabled later.</p>
                 </div>
-                <p className="auth-plan-note"><span>✓</span> You will not be charged during signup.</p>
+                <p className="auth-plan-note"><span>✓</span> Trial limits are shared by the whole workspace.</p>
               </div>
             )}
 
-            {isSignup && signupStep === 4 && (
+            {isSignup && signupStep === 3 && (
               <div className="auth-success" role="status">
                 <div className="auth-success-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
                 </div>
                 <strong>Welcome, {completedUser?.name || form.name}.</strong>
-                <p>Your {trialDays}-day trial is active for {selectedRoles.map((role) => role.name).join(", ")}.</p>
-                {formatDate(completedUser?.trialEndsAt) && (
-                  <span>Trial access continues through {formatDate(completedUser.trialEndsAt)}.</span>
-                )}
+                <p>Every service is ready. Your {trialDays}-day trial clock starts when your workspace first uses any service.</p>
+                <span>No payment method is required.</span>
               </div>
             )}
 
             <div className={`auth-error${error ? " visible" : ""}`} role="alert">{error || " "}</div>
 
-            <div className={`auth-actions${isSignup && signupStep > 1 && signupStep < 4 ? " has-back" : ""}`}>
-              {isSignup && signupStep > 1 && signupStep < 4 && (
+            <div className={`auth-actions${isSignup && signupStep === 2 ? " has-back" : ""}`}>
+              {isSignup && signupStep === 2 && (
                 <button className="auth-back" type="button" onClick={() => goToStep(signupStep - 1)} disabled={busy}>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m5 5-5-5 5-5" /></svg>
                   Back
                 </button>
               )}
 
-              <button className="auth-submit" type="submit" disabled={busy || (isSignup && signupStep === 2 && rolesLoading)}>
+              <button className="auth-submit" type="submit" disabled={busy}>
                 <span>{busy
                   ? "Creating your workspace..."
                   : !isSignup
                     ? "Continue to AgenticThat"
                     : signupStep === 1
-                      ? "Continue to roles"
+                      ? "Continue to plans"
                       : signupStep === 2
-                        ? "Review free trial"
-                        : signupStep === 3
-                          ? `Start ${trialDays}-day free trial`
-                          : "Open my workspace"}</span>
+                        ? `Start ${trialDays}-day Trial plan`
+                        : "Open my workspace"}</span>
                 {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
               </button>
             </div>
           </form>
 
-          {(!isSignup || signupStep < 4) && <p className="auth-legal">By continuing, you agree to the Terms of Service and Privacy Policy.</p>}
+          {(!isSignup || signupStep < 3) && <p className="auth-legal">By continuing, you agree to the Terms of Service and Privacy Policy.</p>}
         </div>
       </section>
     </div>
