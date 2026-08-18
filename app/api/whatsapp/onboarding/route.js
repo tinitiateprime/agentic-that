@@ -1,5 +1,5 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getAccountForBusiness, listTenantNumbers, upsertAccount, syncNumbers } from "@whatsapp/lib/tenant";
 import { metaListPhoneNumbers, watiGetContacts } from "@whatsapp/lib/wa/provider";
 import { hasEncryptionKey } from "@whatsapp/lib/crypto";
@@ -14,8 +14,8 @@ import { hasEncryptionKey } from "@whatsapp/lib/crypto";
 // Credentials are validated against Meta before they're stored, so a typo
 // surfaces immediately instead of failing later on the first send.
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const sql = await getSql();
   const [business] = await sql`SELECT * FROM businesses WHERE id = ${user.business_id}`;
@@ -47,8 +47,8 @@ export async function GET() {
 }
 
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const body = await req.json().catch(() => ({}));
   const sql = await getSql();

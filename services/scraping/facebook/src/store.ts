@@ -30,6 +30,7 @@ export type FacebookJobInput = {
 
 export type FacebookRun = {
   id: string;
+  workspaceId: string;
   requestedQuery: string;
   query: string;
   inputMode: FacebookInputMode;
@@ -50,6 +51,7 @@ export type FacebookRun = {
 
 export type FacebookJob = {
   id: string;
+  workspaceId: string;
   status: "pending" | "running" | "complete" | "failed";
   input: FacebookJobInput;
   createdAt: string;
@@ -92,14 +94,22 @@ export class FacebookRunStore {
   private readonly jobsFile = path.join(facebookServiceInfo.dataDir, "jobs.json");
   private readonly blobs = useNetlifyBlobs();
 
+  constructor(private readonly workspaceId: string) {
+    if (!workspaceId) throw new Error("FacebookRunStore requires a workspace ID.");
+  }
+
+  private belongsToWorkspace(value: { workspaceId?: string }) {
+    return value.workspaceId === this.workspaceId;
+  }
+
   async listRuns() {
     if (this.blobs) {
       const store = getStore("facebook-scraper");
       const listed = await store.list({ prefix: "runs/" });
       const runs = await Promise.all(listed.blobs.map(async ({ key }) => validRun(await store.get(key, { type: "json", consistency: "strong" }))));
-      return runs.filter((run): run is FacebookRun => Boolean(run)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50);
+      return runs.filter((run): run is FacebookRun => run !== null && this.belongsToWorkspace(run)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50);
     }
-    return (await this.readRuns()).runs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return (await this.readRuns()).runs.filter(run => this.belongsToWorkspace(run)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async listQueries() {
@@ -112,12 +122,15 @@ export class FacebookRunStore {
   }
 
   async getRun(id: string) {
-    if (this.blobs) return validRun(await getStore("facebook-scraper").get(`runs/${id}`, { type: "json", consistency: "strong" }));
+    if (this.blobs) {
+      const run = validRun(await getStore("facebook-scraper").get(`runs/${id}`, { type: "json", consistency: "strong" }));
+      return run && this.belongsToWorkspace(run) ? run : null;
+    }
     return (await this.listRuns()).find(run => run.id === id) || null;
   }
 
-  async saveRun(input: Omit<FacebookRun, "id" | "createdAt">) {
-    const run: FacebookRun = { ...input, id: randomUUID(), createdAt: new Date().toISOString() };
+  async saveRun(input: Omit<FacebookRun, "id" | "workspaceId" | "createdAt">) {
+    const run: FacebookRun = { ...input, id: randomUUID(), workspaceId: this.workspaceId, createdAt: new Date().toISOString() };
     if (this.blobs) {
       await getStore("facebook-scraper").setJSON(`runs/${run.id}`, run);
       return run;
@@ -130,7 +143,7 @@ export class FacebookRunStore {
 
   async createJob(input: FacebookJobInput) {
     const timestamp = new Date().toISOString();
-    const job: FacebookJob = { id: randomUUID(), status: "pending", input, createdAt: timestamp, updatedAt: timestamp };
+    const job: FacebookJob = { id: randomUUID(), workspaceId: this.workspaceId, status: "pending", input, createdAt: timestamp, updatedAt: timestamp };
     if (this.blobs) {
       await getStore("facebook-scraper").setJSON(`jobs/${job.id}`, job);
       return job;
@@ -142,8 +155,11 @@ export class FacebookRunStore {
   }
 
   async getJob(id: string) {
-    if (this.blobs) return validJob(await getStore("facebook-scraper").get(`jobs/${id}`, { type: "json", consistency: "strong" }));
-    return (await this.readJobs()).jobs.find(job => job.id === id) || null;
+    if (this.blobs) {
+      const job = validJob(await getStore("facebook-scraper").get(`jobs/${id}`, { type: "json", consistency: "strong" }));
+      return job && this.belongsToWorkspace(job) ? job : null;
+    }
+    return (await this.readJobs()).jobs.find(job => job.id === id && this.belongsToWorkspace(job)) || null;
   }
 
   async updateJob(id: string, updates: Partial<Omit<FacebookJob, "id" | "input" | "createdAt">>) {
@@ -155,7 +171,7 @@ export class FacebookRunStore {
       return job;
     }
     return this.mutateJobs(database => {
-      const index = database.jobs.findIndex(job => job.id === id);
+      const index = database.jobs.findIndex(job => job.id === id && this.belongsToWorkspace(job));
       if (index === -1) return null;
       database.jobs[index] = { ...database.jobs[index], ...updates, updatedAt: new Date().toISOString() };
       return database.jobs[index];

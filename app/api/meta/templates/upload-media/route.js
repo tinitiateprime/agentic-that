@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaUploadTemplateImage, metaConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
@@ -7,8 +7,8 @@ const MAX_BYTES = 5 * 1024 * 1024; // Meta's limit for template header images
 // Uploads an image for use as a template HEADER and returns its handle, which
 // gets passed to POST /api/meta/templates as headerImageHandle.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const creds = await credsForBusiness(user.business_id);
 
   if (!metaConfigured(creds)) {

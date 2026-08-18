@@ -5,7 +5,7 @@ import { ArrowRight, Check } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { VIEWPORT_ONCE, fadeInUp, scaleIn } from "../motion-presets.ts";
 
-const ASSURANCES = ["No credit card required", "14-day free trial", "Cancel anytime"];
+const ASSURANCES = ["No credit card required", "7-day free trial", "Cancel anytime"];
 
 export function ClosingCta() {
   const [email, setEmail] = useState("");

@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { listCalls, missedCalls, callStatusSummary, acknowledgeCall } from "@whatsapp/lib/data";
 
 // Call log for the signed-in business.
@@ -7,7 +7,7 @@ import { listCalls, missedCalls, callStatusSummary, acknowledgeCall } from "@wha
 //   POST { callId } -> mark a missed call as seen (clears the Notify alert)
 export async function GET(req) {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
 
   const missedOnly = new URL(req.url).searchParams.get("missed") === "1";
   const calls = missedOnly
@@ -18,8 +18,8 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
 
   const { callId } = await req.json();
   if (!callId) return Response.json({ error: "callId required" }, { status: 400 });

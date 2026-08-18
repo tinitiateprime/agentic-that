@@ -1,5 +1,5 @@
 import { getCurrentPlatformUser } from "@platform/server/auth-store";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { credsForProvider, listTenantNumbers } from "@whatsapp/lib/tenant";
 
@@ -10,7 +10,7 @@ export async function GET() {
   if (!platformUser) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const workspaceUser = await getCurrentUser();
-  if (!workspaceUser) return Response.json({ error: "Workspace unavailable" }, { status: 503 });
+  if (!workspaceUser) return whatsappAccessErrorResponse("view");
 
   const sql = await getSql();
   const [business] = await sql`

@@ -1,12 +1,12 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaRequestVerificationCode, metaConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 // Kicks off Meta's SMS/voice verification for a phone number id (Meta then
 // sends a code to that number's carrier connection).
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
   const creds = await credsForBusiness(user.business_id);
 
   if (!metaConfigured(creds)) {

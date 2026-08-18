@@ -37,13 +37,3 @@
 
 [functions.growth-advisor-background]
   node_bundler = "esbuild"
-
-[[redirects]]
-  from = "/console"
-  to = "/console/index.html"
-  status = 200
-
-[[redirects]]
-  from = "/console/*"
-  to = "/console/:splat"
-  status = 200

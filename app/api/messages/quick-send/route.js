@@ -1,5 +1,5 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getBusiness } from "@whatsapp/lib/data";
 import { sendToContact, sendTemplateToContact, renderTemplate } from "@whatsapp/lib/wa/messaging";
 import {
@@ -23,8 +23,8 @@ const SAMPLE_TEMPLATES = new Set(["hello_world", "3p_direct_integration_test_tem
 //     start a conversation); the typed text stays in the composer for after
 //     the customer replies.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const creds = await credsForBusiness(user.business_id);
 
   const { phone, name, body, phoneNumberId } = await req.json();

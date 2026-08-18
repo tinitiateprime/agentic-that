@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaEditTemplate, metaTemplatesConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
@@ -6,8 +6,8 @@ import { credsForBusiness } from "@whatsapp/lib/tenant";
 // headerText?, headerImageHandle?, footerText?, buttons? }. Name and language
 // can't change; an edited APPROVED template returns to PENDING review.
 export async function PATCH(req, { params }) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const creds = await credsForBusiness(user.business_id);
 
   if (!metaTemplatesConfigured(creds)) {

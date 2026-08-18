@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { updateMetaAccount, upsertAccount, syncNumbers, credsForProvider } from "@whatsapp/lib/tenant";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
@@ -10,8 +10,8 @@ import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 // exchanges the code server-side, verifies it against Meta the same way the
 // manual "WABA id / Access token" form does, and saves through the same path.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const { code, wabaId, phoneNumberId } = await req.json();
   if (!code || !wabaId) {

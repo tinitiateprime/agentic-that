@@ -1,12 +1,12 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { credsForProvider, upsertAccount } from "@whatsapp/lib/tenant";
 
 // Saves this business's Baileys connection service config (Settings →
 // WhatsApp connection). `secret` is optional on update — omit it to keep
 // whatever's already stored (see upsertAccount's COALESCE-on-conflict).
 export async function PATCH(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const { serviceUrl, secret } = await req.json();
   if (!serviceUrl?.trim()) return Response.json({ error: "Service URL is required" }, { status: 400 });

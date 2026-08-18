@@ -1,7 +1,11 @@
 import { getSql } from "@whatsapp/lib/db";
 import { verifyPassword, createSession, setSessionCookie } from "@whatsapp/lib/auth";
+import { rbacEnforcementMode } from "@platform/server/access-control";
 
 export async function POST(req) {
+  if (rbacEnforcementMode() !== "shadow") {
+    return Response.json({ error: "Use your AgenticThat login." }, { status: 410 });
+  }
   try {
     const { email, password } = await req.json();
     const normalizedEmail = String(email || "").trim().toLowerCase();

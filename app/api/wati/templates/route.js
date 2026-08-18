@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { watiGetTemplates, watiConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForProvider } from "@whatsapp/lib/tenant";
 
@@ -7,7 +7,7 @@ import { credsForProvider } from "@whatsapp/lib/tenant";
 // only APPROVED templates (the ones usable for broadcasts).
 export async function GET(req) {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
   const creds = await credsForProvider(user.business_id, "wati");
 
   if (!watiConfigured(creds)) {

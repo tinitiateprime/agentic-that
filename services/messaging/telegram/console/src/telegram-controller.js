@@ -1,4 +1,8 @@
-export function initTelegramConsole() {
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
+
+export function initTelegramConsole(options = {}) {
+let centralServiceToken = String(options.serviceToken || "");
+const apiBase = String(options.apiBase || "").replace(/\/$/, "");
 const keys = {
   selected: "telegramWorkflow:selectedAccount",
   inboxView: "telegramWorkflow:inboxView",
@@ -140,7 +144,13 @@ function toggleTelegramGuide() {
 
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, options = {}) {
-  const response = await fetch(path, { method: options.method || "GET", credentials: "same-origin", headers: options.body ? { "content-type": "application/json" } : {}, body: options.body ? JSON.stringify(options.body) : undefined });
+  const endpoint = apiBase ? apiBase + path.replace(/^\/v1/, "") : path;
+  const headers = options.body ? { "content-type": "application/json" } : {};
+  if (centralServiceToken) {
+    centralServiceToken = await getClientServiceToken("telegram", centralServiceToken);
+    headers.authorization = `Bearer ${centralServiceToken}`;
+  }
+  const response = await fetch(endpoint, { method: options.method || "GET", credentials: "same-origin", headers, body: options.body ? JSON.stringify(options.body) : undefined });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new ApiError(data.error || "The request could not be completed.", response.status);
   return data;
@@ -148,7 +158,7 @@ async function api(path, options = {}) {
 
 function status(node, message = "", tone = "") { node.textContent = message; tone ? node.dataset.tone = tone : delete node.dataset.tone; }
 function busy(form, isBusy) { const button = form.querySelector("button[type='submit']"); if (button) button.disabled = isBusy; }
-function onError(error, node) { if (error instanceof ApiError && error.status === 401) return signedOut("Your session has ended. Please sign in again."); status(node, error instanceof Error ? error.message : "Something went wrong.", "error"); }
+function onError(error, node) { if (error instanceof ApiError && error.status === 401 && centralServiceToken) { window.location.assign("/?auth=login&next=/console"); return; } if (error instanceof ApiError && error.status === 401) return signedOut("Your session has ended. Please sign in again."); status(node, error instanceof Error ? error.message : "Something went wrong.", "error"); }
 function showAuthError(error) { status(el.signInStatus, error instanceof Error ? error.message : "Sign in failed.", "error"); }
 
 function configManagerContinuation() {
@@ -976,7 +986,15 @@ el.tokenSignInForm.addEventListener("submit", async (event) => {
   catch (error) { showAuthError(error); }
   finally { busy(el.tokenSignInForm, false); }
 });
-el.signOut.addEventListener("click", async () => { try { await api("/v1/auth/session", { method: "DELETE" }); } catch {} signedOut("", true); });
+el.signOut.addEventListener("click", async () => {
+  if (centralServiceToken) {
+    await fetch("/api/platform-auth/logout", { method: "POST" }).catch(() => undefined);
+    window.location.assign("/");
+    return;
+  }
+  try { await api("/v1/auth/session", { method: "DELETE" }); } catch {}
+  signedOut("", true);
+});
 el.refreshAccounts.addEventListener("click", async () => { status(el.messageStatus, "Refreshing accounts..."); try { await loadAccounts(); status(el.messageStatus, "Account list is up to date.", "success"); } catch (error) { onError(error, el.messageStatus); } });
 el.profileSelect.addEventListener("change", () => selectAccount(el.profileSelect.value));
 
@@ -1127,7 +1145,13 @@ document.addEventListener("keydown", (event) => {
 
 (async function restoreSession() {
   try { const data = await api("/v1/me"); await finishWorkspaceSignIn(data.user); }
-  catch (error) { signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again."); }
+  catch (error) {
+    if (centralServiceToken && error instanceof ApiError && error.status === 401) {
+      window.location.assign("/?auth=login&next=/console");
+      return;
+    }
+    signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again.");
+  }
   setView("dashboard");
   runScheduler();
   setInterval(runScheduler, 30000);

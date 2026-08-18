@@ -18,6 +18,7 @@ import { readConfig, type AppConfig } from "./config.ts";
 import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, type ConfiguredLoginUser } from "./login-config.ts";
 import { RequestRateLimiter } from "./rate-limit.ts";
 import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserStore, type TelegramAccountWithSession } from "./store.ts";
+import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonBody = Record<string, unknown>;
@@ -47,8 +48,6 @@ const frontendDistDirs = [
   path.resolve(telegramRoot, "..", "..", "dist")
 ];
 const publicFiles = new Map([
-  ["/console", { file: "index.html", type: "text/html; charset=utf-8" }],
-  ["/console/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/console/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
   ["/console/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   ["/console/assets/guide/telegram-phone-entry.png", { file: "assets/guide/telegram-phone-entry.png", type: "image/png" }],
@@ -308,16 +307,39 @@ async function requireUser(request: IncomingMessage): Promise<AppUser> {
   const authorization = request.headers.authorization ?? "";
   const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
   if (bearer) {
+    const identity = verifyServiceAccessToken(bearer, "telegram");
+    if (identity) {
+      const grantedLevel = String(identity.grants?.["messaging.telegram"] || "none");
+      if (!identity.workspaceId || !identity.sub || !["view", "operate", "configure"].includes(grantedLevel)) {
+        throw new HttpError(403, "Telegram access is not granted to this user.");
+      }
+      const accessLevel = grantedLevel as "view" | "operate" | "configure";
+      return store.findOrCreatePlatformWorkspaceUser(
+        String(identity.workspaceId),
+        String(identity.sub),
+        String(identity.name || identity.email || "AgenticThat workspace"),
+        accessLevel
+      );
+    }
     const user = await store.findUserByAccessToken(bearer);
-    if (user) return user;
+    if (user && process.env.RBAC_ENFORCEMENT_MODE === "shadow") return user;
   }
 
   const browserSession = readCookie(request, "app_session");
   if (browserSession) {
     const user = await store.findUserByBrowserSession(browserSession);
-    if (user) return user;
+    if (user && process.env.RBAC_ENFORCEMENT_MODE === "shadow") return user;
   }
   throw new HttpError(401, "Sign in is required.");
+}
+
+const accessRank = { view: 1, operate: 2, configure: 3 } as const;
+
+function requireUserLevel(user: AppUser, required: keyof typeof accessRank) {
+  const current = user.accessLevel;
+  if (!current || accessRank[current] < accessRank[required]) {
+    throw new HttpError(403, `This action requires ${required} access to Telegram.`);
+  }
 }
 
 function hasProvisioningKey(request: IncomingMessage) {
@@ -573,6 +595,13 @@ function telegramSendError(error: unknown) {
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
+  if (request.method === "GET" && (url.pathname === "/console" || url.pathname === "/console/")) {
+    const platformUrl = (config.corsOrigin || "/").replace(/\/$/, "") + "/console";
+    response.writeHead(302, { ...responseHeaders(request, "text/plain; charset=utf-8"), location: platformUrl });
+    response.end("Continue in AgenticThat.");
+    return;
+  }
+
   if (await servePublicAsset(request, response, url.pathname)) return;
 
   if (request.method === "OPTIONS") {
@@ -593,6 +622,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/users") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Telegram users are managed by AgenticThat.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`provision:${clientAddress(request)}`, Math.max(3, Math.floor(config.rateLimitMaxRequests / 10)));
     if (!hasProvisioningKey(request)) throw new HttpError(401, "A valid provisioning key is required.");
@@ -603,6 +635,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/password") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Use your AgenticThat login.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`password-login:${clientAddress(request)}`, Math.max(5, Math.floor(config.rateLimitMaxRequests / 6)));
     const body = await readJsonBody(request);
@@ -632,6 +667,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/register") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Telegram users are managed by AgenticThat.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`password-register:${clientAddress(request)}`, Math.max(3, Math.floor(config.rateLimitMaxRequests / 10)));
     const body = await readJsonBody(request);
@@ -654,6 +692,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/session") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Use your AgenticThat login.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`browser-login:${clientAddress(request)}`, Math.max(5, Math.floor(config.rateLimitMaxRequests / 6)));
     const body = await readJsonBody(request);
@@ -685,6 +726,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/telegram/login/start") {
+    requireUserLevel(user, "configure");
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
     const credentials = sharedTelegramApiCredentials();
@@ -715,6 +757,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const codeChallengeId = challengeIdFromPath(url.pathname, "code");
   if (request.method === "POST" && codeChallengeId) {
+    requireUserLevel(user, "configure");
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, codeChallengeId);
     if (!challenge || challenge.status !== "code_sent") throw new HttpError(404, "Active login challenge was not found.");
@@ -758,6 +801,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const passwordChallengeId = challengeIdFromPath(url.pathname, "password");
   if (request.method === "POST" && passwordChallengeId) {
+    requireUserLevel(user, "configure");
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, passwordChallengeId);
     if (!challenge || challenge.status !== "password_required") throw new HttpError(404, "Password login challenge was not found.");
@@ -800,6 +844,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const accountId = accountIdFromPath(url.pathname);
   if (request.method === "DELETE" && accountId) {
+    requireUserLevel(user, "configure");
     const account = await store.deleteAccount(user.id, accountId);
     if (!account) throw new HttpError(404, "Telegram account was not found.");
     await stopTelegramListener(account.id);
@@ -813,6 +858,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/messages") {
+    requireUserLevel(user, "operate");
     const body = await readJsonBody(request);
     const account = await store.getAccountWithSession(user.id, requiredString(body, "accountId", 64));
     if (!account) throw new HttpError(404, "Telegram account was not found.");

@@ -1,10 +1,14 @@
 import { getSql } from "@whatsapp/lib/db";
 import { hashPassword, createSession, setSessionCookie, getCurrentUser } from "@whatsapp/lib/auth";
+import { rbacEnforcementMode } from "@platform/server/access-control";
 
 // Self-serve signup. Each signup creates a NEW tenant: one business (the
 // workspace) plus its first admin user, then signs them in. WhatsApp isn't
 // connected yet — the client is sent to /onboarding to finish setup.
 export async function POST(req) {
+  if (rbacEnforcementMode() !== "shadow") {
+    return Response.json({ error: "Create your account through AgenticThat." }, { status: 410 });
+  }
   // Already signed in? Don't silently create a second workspace.
   if (await getCurrentUser()) {
     return Response.json({ error: "You're already signed in." }, { status: 400 });

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { getClientServiceToken } from "@platform/client-service-token";
 import {
   ArrowLeft,
   Check,
@@ -171,6 +172,7 @@ export default function ProfileComparisonWorkspace({
   engagementName = "Likes",
   comparisonInputHint = "",
   profileNotFoundMessage = "",
+  serviceToken = "",
 }) {
   const [profiles, setProfiles] = useState(() => [
     emptyProfile("profile-1", seedProfile),
@@ -443,7 +445,12 @@ export default function ProfileComparisonWorkspace({
     let dispatched = false;
     for (let attempt = 0; attempt < 3 && !dispatched; attempt += 1) {
       try {
-        const runResponse = await fetch(runUrl, { method: "POST", cache: "no-store" });
+        const token = await getClientServiceToken("scraping", serviceToken);
+        const runResponse = await fetch(runUrl, {
+          method: "POST",
+          cache: "no-store",
+          headers: { authorization: `Bearer ${token}` }
+        });
         if (!runResponse.ok) {
           const failureData = await runResponse.json().catch(() => ({}));
           const failure = new Error(failureData.error || "The AI analysis could not be started.");

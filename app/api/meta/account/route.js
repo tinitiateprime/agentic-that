@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { updateMetaAccount, syncNumbers } from "@whatsapp/lib/tenant";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
@@ -8,8 +8,8 @@ import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 // etc.) without hand-editing the database or relying on env vars, which only
 // apply to a business with no account row at all.
 export async function PATCH(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const { wabaId, accessToken, appId, appSecret, apiVersion } = await req.json();
   if (!wabaId?.trim() || !accessToken?.trim()) {

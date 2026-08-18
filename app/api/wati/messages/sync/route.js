@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { importContacts, syncWatiMessages } from "@whatsapp/lib/data";
 import {
@@ -13,8 +13,8 @@ import { credsForProvider } from "@whatsapp/lib/tenant";
 // getMessages calls keeps a manual sync inside WATI's documented request-rate
 // envelope. A later click can sync another selected batch when needed.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const creds = await credsForProvider(user.business_id, "wati");
   if (!watiConfigured(creds)) {
     return Response.json({ error: "WATI isn't configured." }, { status: 400 });

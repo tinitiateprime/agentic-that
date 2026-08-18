@@ -1,5 +1,6 @@
 import { getFacebookScraperInfo, runFacebookScrape } from "./scraper.ts";
 import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./store.ts";
+import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
 
 const headers = {
   "content-type": "application/json; charset=utf-8",
@@ -8,7 +9,7 @@ const headers = {
   expires: "0",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type,cache-control,pragma",
+  "access-control-allow-headers": "authorization,content-type,cache-control,pragma",
 };
 
 class FacebookRequestError extends Error {}
@@ -123,8 +124,8 @@ async function jobResponse(job: FacebookJob, store: FacebookRunStore) {
   };
 }
 
-export async function executeFacebookJob(jobId: string) {
-  const store = new FacebookRunStore();
+export async function executeFacebookJob(jobId: string, workspaceId: string) {
+  const store = new FacebookRunStore(workspaceId);
   const current = await store.getJob(jobId);
   if (!current) return null;
   if (["complete", "failed"].includes(current.status)) return jobResponse(current, store);
@@ -145,11 +146,16 @@ export async function executeFacebookJob(jobId: string) {
 export async function handleFacebookRequest(request: Request) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
   const route = routePath(new URL(request.url));
-  const store = new FacebookRunStore();
   try {
     if (request.method === "GET" && (route === "" || route === "health")) {
       return json({ ok: true, service: "facebook-scraper", scraper: await getFacebookScraperInfo() });
     }
+    const identity = requireScrapingServiceAccess(
+      request,
+      "scraping.facebook",
+      request.method === "GET" ? "view" : "operate"
+    );
+    const store = new FacebookRunStore(identity.workspaceId);
     if (request.method === "GET" && route === "runs") return json({ runs: await store.listRuns() });
     if (request.method === "GET" && route === "runs/queries") return json({ queries: await store.listQueries() });
     if (request.method === "GET" && route.startsWith("runs/")) {
@@ -161,7 +167,7 @@ export async function handleFacebookRequest(request: Request) {
     }
     const runJob = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJob) {
-      const result = await executeFacebookJob(runJob[1]);
+      const result = await executeFacebookJob(runJob[1], identity.workspaceId);
       return result ? json(result) : json({ message: "Job not found" }, 404);
     }
     const getJob = route.match(/^jobs\/([^/]+)$/);
@@ -179,6 +185,9 @@ export async function handleFacebookRequest(request: Request) {
     }
     return json({ message: "Not found" }, 404);
   } catch (error) {
-    return json({ message: friendlyError(error) }, error instanceof FacebookRequestError ? 400 : 500);
+    return json(
+      { message: friendlyError(error) },
+      error instanceof ScrapingServiceAuthError ? error.status : error instanceof FacebookRequestError ? 400 : 500
+    );
   }
 }

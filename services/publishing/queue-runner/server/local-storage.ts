@@ -551,7 +551,6 @@ export async function loginUser(username: string, password: string) {
 type PlatformWorkspaceIdentity = {
   platformUserId: string;
   workspaceId: string;
-  workspaceKey: string;
   fullName: string;
   email: string;
 };
@@ -582,11 +581,58 @@ function platformManagerUsername(store: Store, identity: PlatformWorkspaceIdenti
 }
 
 function assertWorkspaceKey(user: StoredUser, identity: PlatformWorkspaceIdentity) {
-  const providedHash = workspaceKeyHash(identity.workspaceKey);
-  if (user.workspaceKeyHash && user.workspaceKeyHash !== providedHash) {
-    throw new Error("This Operations Manager belongs to another workspace.");
-  }
+  // The signed central service token now proves workspace ownership. Keep a
+  // deterministic local binding only to migrate older Companion stores.
+  const providedHash = workspaceKeyHash(`central-workspace:${identity.workspaceId}`);
   return providedHash;
+}
+
+export async function upsertCentralWorkspaceActor(
+  identity: PlatformWorkspaceIdentity,
+  accessLevel: "view" | "operate" | "configure",
+) {
+  return mutateStore(store => {
+    const timestamp = nowIso();
+    const index = findPlatformManager(store, identity);
+    const role: UserRole = accessLevel === "view" ? "viewer" : "operations_manager";
+    if (index >= 0) {
+      const existing = store.users[index];
+      const updated: StoredUser = {
+        ...existing,
+        workspaceId: identity.workspaceId,
+        platformUserId: identity.platformUserId,
+        username: normalizeUsername(existing.username) || platformManagerUsername(store, identity, existing.id),
+        fullName: identity.fullName,
+        email: identity.email.toLowerCase(),
+        role,
+        centralAccessLevel: accessLevel,
+        isActive: true,
+        lastLoginAt: timestamp,
+        updatedAt: timestamp,
+      };
+      store.users[index] = updated;
+      return publicUser(updated);
+    }
+    const stored: StoredUser = {
+      id: "user_" + nanoid(12),
+      workspaceId: identity.workspaceId,
+      platformUserId: identity.platformUserId,
+      workspaceKeyHash: workspaceKeyHash(`central-workspace:${identity.workspaceId}`),
+      username: platformManagerUsername(store, identity),
+      fullName: identity.fullName,
+      email: identity.email.toLowerCase(),
+      role,
+      centralAccessLevel: accessLevel,
+      isActive: true,
+      passwordHash: hashPassword(randomBytes(48).toString("base64url")),
+      platformPasswordConfigured: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastLoginAt: timestamp,
+    };
+    store.users.push(stored);
+    return publicUser(stored);
+  });
 }
 
 export async function platformWorkspaceManagerStatus(identity: PlatformWorkspaceIdentity) {
@@ -623,7 +669,7 @@ export async function setupPlatformWorkspaceManager(identity: PlatformWorkspaceI
   return mutateStore(store => {
     const existingIndex = findPlatformManager(store, identity);
     const timestamp = nowIso();
-    const keyHash = workspaceKeyHash(identity.workspaceKey);
+    const keyHash = workspaceKeyHash(`central-workspace:${identity.workspaceId}`);
     if (existingIndex >= 0) {
       const existing = store.users[existingIndex];
       assertWorkspaceKey(existing, identity);

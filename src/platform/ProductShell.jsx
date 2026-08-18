@@ -11,6 +11,17 @@ const navigation = [
   { href: "/content-manager", label: "Content", description: "Review accounts and activity", icon: Database, id: "content" },
 ];
 
+function billingLabel(user) {
+  if (user?.billingStatus === "trialing" && user.trialEndsAt) {
+    const days = Math.max(0, Math.ceil((new Date(user.trialEndsAt).getTime() - Date.now()) / 86_400_000));
+    return `Free trial · ${days} day${days === 1 ? "" : "s"} left`;
+  }
+  if (user?.billingStatus === "expired") return "Free trial expired";
+  if (user?.billingStatus === "past_due") return "Payment past due";
+  if (user?.billingStatus === "payment_pending") return "Payment pending";
+  return "";
+}
+
 export default function ProductShell({ user, active = "apps", children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const initial = String(user?.name || user?.email || "A").charAt(0).toUpperCase();
@@ -56,6 +67,16 @@ export default function ProductShell({ user, active = "apps", children }) {
           })}
         </nav>
 
+        {user?.isGlobalAdmin && (
+          <nav className={styles.sidebarNav} aria-label="Administration">
+            <span>Administration</span>
+            <Link href="/admin-center" onClick={() => setMenuOpen(false)}>
+              <Settings2 size={19} />
+              <span className={styles.navCopy}><strong>Admin Center</strong><small>Users, roles and workspaces</small></span>
+            </Link>
+          </nav>
+        )}
+
         <section className={styles.workspacePath} aria-label="Getting started">
           <strong>Getting started</strong>
           <ol>
@@ -71,6 +92,7 @@ export default function ProductShell({ user, active = "apps", children }) {
             <span className={styles.accountCopy}>
               <strong>{user?.name || "Workspace owner"}</strong>
               <small>{user?.businessName || user?.email || "Personal workspace"}</small>
+              {billingLabel(user) && <small>{billingLabel(user)}</small>}
             </span>
           </section>
           <button className={styles.signOut} type="button" onClick={signOut}>

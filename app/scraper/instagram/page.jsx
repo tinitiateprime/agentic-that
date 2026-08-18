@@ -1,23 +1,20 @@
 import InstagramScraperConsole from "@instagram/console/src/InstagramScraperConsole";
 import ProductShell from "@platform/ProductShell";
-import { createPublishingIdentityToken, getCurrentPlatformUser } from "@platform/server/auth-store";
-import { redirect } from "next/navigation";
+import { createServiceIdentityToken } from "@platform/server/auth-store";
+import { requireAccess } from "@platform/server/access-control";
 
 export const metadata = {
   title: "Instagram Scraper - AgenticThat",
 };
 
 export default async function InstagramScraperPage() {
-  const user = await getCurrentPlatformUser();
-  if (!user) {
-    redirect("/?auth=login&next=/scraper/instagram");
-  }
+  const user = await requireAccess("scraping.instagram", "view", "/scraper/instagram");
   return (
     <ProductShell
-      user={{ id: user.id, name: user.name, email: user.email, businessName: user.businessName }}
+      user={{ id: user.userId, name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialEndsAt: user.trialEndsAt }}
       active="apps"
     >
-      <InstagramScraperConsole publishingIdentityToken={await createPublishingIdentityToken(user)} />
+      <InstagramScraperConsole publishingIdentityToken={await createServiceIdentityToken(user, "scraping")} />
     </ProductShell>
   );
 }

@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { credsForProvider } from "@whatsapp/lib/tenant";
 
 // Server-side proxy to this business's Baileys connection service — keeps
@@ -7,7 +7,7 @@ import { credsForProvider } from "@whatsapp/lib/tenant";
 // before switching the live channel.
 export async function GET() {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
 
   const creds = await credsForProvider(user.business_id, "baileys");
   if (!creds?.serviceUrl) return Response.json({ error: "No service URL configured" }, { status: 400 });

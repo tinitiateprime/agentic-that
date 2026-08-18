@@ -6,7 +6,7 @@ import { TerminalMockup } from "../components/TerminalMockup.tsx";
 import { GhostButton, PrimaryButton } from "../components/primitives.tsx";
 import { fadeInRight, fadeInUp, staggerContainer } from "../motion-presets.ts";
 
-const TRUST_BADGES = ["No credit card required", "14-day free trial"];
+const TRUST_BADGES = ["No credit card required", "7-day free trial"];
 
 export function Hero() {
   return (

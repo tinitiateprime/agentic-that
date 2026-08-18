@@ -5,7 +5,8 @@ import {
   getProductService,
   getServicesByCategory,
 } from "@platform/product-catalog";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { accessResourceForService } from "@platform/access-catalog";
+import { requireAccess } from "@platform/server/access-control";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +26,7 @@ export default async function AppDetailPage({ params }) {
   const category = getProductCategory(categoryId);
   if (!service || !category) notFound();
 
-  const user = await getCurrentPlatformUser();
-  if (!user) redirect(`/?auth=login&next=/apps/${categoryId}/${slug}`);
+  const user = await requireAccess(accessResourceForService(service), "view", `/apps/${categoryId}/${slug}`);
 
   const related = getServicesByCategory(categoryId)
     .filter((candidate) => candidate.slug !== slug)
@@ -34,7 +34,8 @@ export default async function AppDetailPage({ params }) {
 
   return (
     <ServiceDetail
-      user={{ id: user.id, name: user.name, email: user.email, businessName: user.businessName }}
+      user={{ id: user.userId, name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialEndsAt: user.trialEndsAt }}
+      accessLevel={user.access[accessResourceForService(service)]}
       service={service}
       category={category}
       related={related}

@@ -1,4 +1,7 @@
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import {
+  accessErrorResponse,
+  authorizeApiAccess
+} from "@platform/server/access-control";
 import {
   GrowthAdvisorError,
   growthAdvisorModel,
@@ -37,12 +40,18 @@ function consumeRateLimit(userId) {
 }
 
 export async function GET(request) {
-  const user = await getCurrentPlatformUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  let principal;
+  try {
+    principal = await authorizeApiAccess("scraping.instagram", "view");
+  } catch (error) {
+    return accessErrorResponse(error);
+  }
   const jobId = new URL(request.url).searchParams.get("job_id")?.trim();
   if (jobId) {
     const storedJob = await jobStore.getJob(jobId);
-    if (!storedJob || storedJob.userId !== user.id) {
+    const isLegacyOwner = storedJob?.workspaceId === storedJob?.userId
+      && storedJob?.userId === principal.userId;
+    if (!storedJob || (storedJob.workspaceId !== principal.workspaceId && !isLegacyOwner)) {
       return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
     }
     const job = await failStaleGrowthAdvisorJob(storedJob, jobStore);
@@ -58,8 +67,12 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const user = await getCurrentPlatformUser();
-  if (!user) return Response.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
+  let principal;
+  try {
+    principal = await authorizeApiAccess("scraping.instagram", "operate");
+  } catch (error) {
+    return accessErrorResponse(error);
+  }
 
   const apiKey = configuredApiKey();
   if (!apiKey) {
@@ -69,7 +82,7 @@ export async function POST(request) {
     }, { status: 503 });
   }
 
-  if (!consumeRateLimit(user.id)) {
+  if (!consumeRateLimit(principal.userId)) {
     return Response.json({
       error: "Too many AI requests. Wait a few minutes and try again.",
       code: "AI_APP_RATE_LIMITED"
@@ -88,7 +101,12 @@ export async function POST(request) {
       throw new GrowthAdvisorError("The AI request is not valid JSON.", "INVALID_REQUEST", 400);
     }
     const input = validateAdvisorRequest(body);
-    const job = await jobStore.createJob(user.id, input, growthAdvisorModel());
+    const job = await jobStore.createJob(
+      principal.userId,
+      input,
+      growthAdvisorModel(),
+      principal.workspaceId
+    );
     return Response.json({ ok: true, ...growthAdvisorJobPayload(job) }, {
       status: 201,
       headers: { "Cache-Control": "no-store" }

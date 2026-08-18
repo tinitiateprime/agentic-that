@@ -12,6 +12,7 @@ import {
 
 export type InstagramRun = {
   id: string;
+  workspaceId: string;
   query: string;
   requestedQuery: string;
   maxResults: number;
@@ -49,6 +50,7 @@ export type InstagramJobInput = {
 
 export type InstagramJob = {
   id: string;
+  workspaceId: string;
   status: "pending" | "running" | "complete" | "failed";
   input: InstagramJobInput;
   createdAt: string;
@@ -109,6 +111,14 @@ export class InstagramRunStore {
   private readonly jobsFile = path.join(instagramServiceInfo.dataDir, "jobs.json");
   private readonly useBlobs = shouldUseNetlifyBlobs();
 
+  constructor(private readonly workspaceId: string) {
+    if (!workspaceId) throw new Error("InstagramRunStore requires a workspace ID.");
+  }
+
+  private belongsToWorkspace(value: { workspaceId?: string }) {
+    return value.workspaceId === this.workspaceId;
+  }
+
   async listRuns() {
     if (this.useBlobs) {
       const store = getStore("instagram-scraper");
@@ -119,13 +129,13 @@ export class InstagramRunStore {
       }));
       if (runs.some(Boolean)) {
         return runs
-          .filter((run): run is InstagramRun => Boolean(run))
+          .filter((run): run is InstagramRun => run !== null && this.belongsToWorkspace(run))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, 50);
       }
     }
     const database = await this.readDatabase();
-    return database.runs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return database.runs.filter((run) => this.belongsToWorkspace(run)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async listKeywords() {
@@ -144,15 +154,16 @@ export class InstagramRunStore {
         consistency: "strong"
       });
       const run = coerceRun(value);
-      if (run) return run;
+      if (run && this.belongsToWorkspace(run)) return run;
     }
     return (await this.listRuns()).find((run) => run.id === id) || null;
   }
 
-  async saveRun(input: Omit<InstagramRun, "id" | "createdAt">) {
+  async saveRun(input: Omit<InstagramRun, "id" | "workspaceId" | "createdAt">) {
     const run: InstagramRun = {
       ...input,
       id: randomUUID(),
+      workspaceId: this.workspaceId,
       createdAt: new Date().toISOString()
     };
     if (this.useBlobs) {
@@ -169,6 +180,7 @@ export class InstagramRunStore {
     const timestamp = new Date().toISOString();
     const job: InstagramJob = {
       id: randomUUID(),
+      workspaceId: this.workspaceId,
       status: "pending",
       input,
       createdAt: timestamp,
@@ -190,9 +202,10 @@ export class InstagramRunStore {
         type: "json",
         consistency: "strong"
       });
-      return coerceJob(value);
+      const job = coerceJob(value);
+      return job && this.belongsToWorkspace(job) ? job : null;
     }
-    return (await this.readJobsDatabase()).jobs.find((job) => job.id === id) || null;
+    return (await this.readJobsDatabase()).jobs.find((job) => job.id === id && this.belongsToWorkspace(job)) || null;
   }
 
   async updateJob(id: string, updates: Partial<Omit<InstagramJob, "id" | "input" | "createdAt">>) {
@@ -204,7 +217,7 @@ export class InstagramRunStore {
       return job;
     }
     return this.mutateLocalJobs((database) => {
-      const index = database.jobs.findIndex((job) => job.id === id);
+      const index = database.jobs.findIndex((job) => job.id === id && this.belongsToWorkspace(job));
       if (index === -1) return null;
       database.jobs[index] = {
         ...database.jobs[index],

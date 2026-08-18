@@ -5,6 +5,10 @@ import {
   type InstagramJob,
   type InstagramJobInput
 } from "./store.ts";
+import {
+  requireScrapingServiceAccess,
+  ScrapingServiceAuthError
+} from "../../../../lib/scraping-service-auth.ts";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -13,7 +17,7 @@ const jsonHeaders = {
   expires: "0",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type, cache-control, pragma"
+  "access-control-allow-headers": "authorization, content-type, cache-control, pragma"
 };
 
 class InstagramRequestError extends Error {}
@@ -219,8 +223,8 @@ async function jobResponse(job: InstagramJob, store: InstagramRunStore) {
   };
 }
 
-export async function executeInstagramJob(jobId: string) {
-  const store = new InstagramRunStore();
+export async function executeInstagramJob(jobId: string, workspaceId: string) {
+  const store = new InstagramRunStore(workspaceId);
   const current = await store.getJob(jobId);
   if (!current) return null;
   if (current.status === "complete" || current.status === "failed") return jobResponse(current, store);
@@ -249,12 +253,17 @@ export async function handleInstagramRequest(request: Request) {
   if (request.method === "OPTIONS") return new Response(null, { headers: jsonHeaders, status: 204 });
 
   const route = routePath(new URL(request.url));
-  const store = new InstagramRunStore();
 
   try {
     if (request.method === "GET" && (route === "" || route === "health")) {
       return json({ ok: true, service: "instagram-scraper", scraper: await getInstagramScraperInfo() });
     }
+    const identity = requireScrapingServiceAccess(
+      request,
+      "scraping.instagram",
+      request.method === "GET" ? "view" : "operate"
+    );
+    const store = new InstagramRunStore(identity.workspaceId);
     if (request.method === "GET" && route === "runs") return json({ runs: await store.listRuns() });
     if (request.method === "GET" && route === "runs/keywords") {
       return json({ keywords: await store.listKeywords() });
@@ -270,7 +279,7 @@ export async function handleInstagramRequest(request: Request) {
     }
     const runJobMatch = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJobMatch) {
-      const result = await executeInstagramJob(runJobMatch[1]);
+      const result = await executeInstagramJob(runJobMatch[1], identity.workspaceId);
       return result ? json(result) : json({ message: "Job not found" }, 404);
     }
     const getJobMatch = route.match(/^jobs\/([^/]+)$/);
@@ -305,6 +314,9 @@ export async function handleInstagramRequest(request: Request) {
     return json({ message: "Not found" }, 404);
   } catch (error) {
     const message = friendlyScrapeMessage(error);
-    return json({ message }, error instanceof InstagramRequestError ? 400 : 500);
+    return json(
+      { message },
+      error instanceof ScrapingServiceAuthError ? error.status : error instanceof InstagramRequestError ? 400 : 500
+    );
   }
 }

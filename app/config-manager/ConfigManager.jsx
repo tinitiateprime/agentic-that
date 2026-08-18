@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
+import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
 
@@ -68,6 +69,8 @@ const messagingPlatformLogos = {
   telegram: "/telegram-logo.svg",
   whatsapp: "/whatsapp-logo.svg"
 };
+const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
+const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 
 const services = [
   {
@@ -125,9 +128,10 @@ async function responsePayload(response) {
   return payload;
 }
 
-async function telegramRequest(path, init = {}) {
+async function telegramRequest(path, identityToken, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
     ...init,
     headers,
@@ -139,7 +143,7 @@ async function telegramRequest(path, init = {}) {
 async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", "Bearer " + token);
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
   const response = await publishingFetch(path, {
     ...init,
     headers
@@ -181,6 +185,8 @@ export default function ConfigManager({
   initialPublishingPlatform,
   initialTelegramConnect,
   publishingIdentityToken,
+  telegramIdentityToken,
+  effectiveAccess,
   user,
   telegramDashboardUrl,
   publishQueueUrl
@@ -195,11 +201,19 @@ export default function ConfigManager({
   const [publishingManagerStatus, setPublishingManagerStatus] = useState(null);
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
+  const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
+  const visibleServices = services.filter((service) => (
+    service.id === "messaging" ? allowedMessagingPlatforms.length > 0
+      : service.id === "publishing" ? allowedPublishingPlatforms.length > 0
+        : false
+  ));
 
   const loadTelegram = useCallback(async () => {
+    if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me");
-      const accountData = await telegramRequest("/telegram/accounts");
+      const me = await telegramRequest("/me", telegramIdentityToken);
+      const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
       setTelegramStatus("ready");
@@ -208,7 +222,7 @@ export default function ConfigManager({
       setTelegramAccounts([]);
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
-  }, []);
+  }, [telegramIdentityToken]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
     const session = candidateSession ?? readPublishingSession();
@@ -242,33 +256,20 @@ export default function ConfigManager({
   }, []);
 
   const connectPublishing = useCallback(async () => {
-    if (!publishingIdentityToken) return loadPublishing();
+    if (!publishingIdentityToken) { setPublishingStatus("unauthorized"); return; }
     try {
-      const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
-        method: "POST",
-        body: JSON.stringify({ token: publishingIdentityToken })
-      });
-      setPublishingManagerStatus(managerStatus);
-      const savedSession = readPublishingSession();
-      if (savedSession) {
-        try {
-          const me = await publishingRequest("/api/auth/me", savedSession.token);
-          if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
-        } catch {
-          // Show this workspace's password screen.
-        }
-      }
+      const me = await publishingRequest("/api/auth/me", publishingIdentityToken);
+      const centralSession = { token: publishingIdentityToken, user: me };
+      setPublishingManagerStatus({ configured: true, username: me.email || me.username, workspaceId: me.workspaceId });
       window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-      setPublishingSession(null);
-      setPublishingAccounts([]);
-      setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
+      return loadPublishing(centralSession);
     } catch (error) {
       window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
       setPublishingSession(null);
       setPublishingAccounts([]);
       setPublishingManagerStatus(null);
       setPublishingStatus(
-        error.status === 401 && error.message === "Sign in to continue."
+        error.status === 401
           ? "needs-upgrade"
           : "offline"
       );
@@ -280,7 +281,7 @@ export default function ConfigManager({
   }, [connectPublishing, loadTelegram]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
-  const activeDefinition = services.find(service => service.id === activeService) || services[0];
+  const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
     setActiveService(serviceId);
@@ -323,7 +324,7 @@ export default function ConfigManager({
         <div className="config-layout">
         <aside className="config-service-nav">
           <div className="config-nav-heading"><span>Services</span><small>Choose a destination</small></div>
-          {services.map(service => (
+          {visibleServices.map(service => (
             <button
               key={service.id}
               className={activeService === service.id ? "active" : ""}
@@ -371,6 +372,8 @@ export default function ConfigManager({
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
               continueTelegramConnect={initialTelegramConnect}
+              telegramIdentityToken={telegramIdentityToken}
+              allowedPlatforms={allowedMessagingPlatforms}
               onReload={loadTelegram}
               setNotice={setNotice}
             />
@@ -383,6 +386,7 @@ export default function ConfigManager({
               initialPlatform={initialPublishingPlatform}
               publishQueueUrl={publishQueueUrl}
               publishingIdentityToken={publishingIdentityToken}
+              allowedPlatforms={allowedPublishingPlatforms}
               managerStatus={publishingManagerStatus}
               accountEmail={user.email}
               onSession={session => {
@@ -417,13 +421,15 @@ function MessagingManager({
   accounts,
   dashboardUrl,
   continueTelegramConnect,
+  telegramIdentityToken,
+  allowedPlatforms,
   onReload,
   setNotice
 }) {
   return (
     <>
       <div className="config-platform-tabs messaging-tabs" role="tablist" aria-label="Messaging platform">
-        {messagingPlatforms.map(item => (
+        {allowedPlatforms.map(item => (
           <button
             type="button"
             role="tab"
@@ -447,6 +453,7 @@ function MessagingManager({
           accounts={accounts}
           dashboardUrl={dashboardUrl}
           continueTelegramConnect={continueTelegramConnect}
+          telegramIdentityToken={telegramIdentityToken}
           onReload={onReload}
           setNotice={setNotice}
         />
@@ -495,6 +502,7 @@ function TelegramManager({
   accounts,
   dashboardUrl,
   continueTelegramConnect,
+  telegramIdentityToken,
   onReload,
   setNotice
 }) {
@@ -524,7 +532,7 @@ function TelegramManager({
     const creating = workspaceAuthMode === "register";
     setBusy(true);
     try {
-      const data = await telegramRequest(creating ? "/auth/register" : "/auth/password", {
+      const data = await telegramRequest(creating ? "/auth/register" : "/auth/password", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({
           username: workspaceUsername.trim(),
@@ -559,7 +567,7 @@ function TelegramManager({
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/start", {
+      const data = await telegramRequest("/telegram/login/start", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({ phone: phone.trim() })
       });
@@ -580,7 +588,7 @@ function TelegramManager({
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/code", {
+      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/code", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({ code: code.trim() })
       });
@@ -602,7 +610,7 @@ function TelegramManager({
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/password", {
+      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/password", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({ password })
       });
@@ -624,7 +632,7 @@ function TelegramManager({
     if (!window.confirm("Disconnect " + (account.displayName || account.username || "this Telegram account") + "?")) return;
     setBusy(true);
     try {
-      await telegramRequest("/telegram/accounts/" + encodeURIComponent(account.id), { method: "DELETE" });
+      await telegramRequest("/telegram/accounts/" + encodeURIComponent(account.id), telegramIdentityToken, { method: "DELETE" });
       setNotice({ tone: "success", message: "Telegram account disconnected." });
       await onReload();
     } catch (error) {
@@ -767,6 +775,7 @@ function PublishingManager({
   initialPlatform,
   publishQueueUrl,
   publishingIdentityToken,
+  allowedPlatforms,
   managerStatus,
   accountEmail,
   onSession,
@@ -955,7 +964,7 @@ function PublishingManager({
       </div>
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
-        {publishPlatforms.map(platform => {
+        {allowedPlatforms.map(platform => {
           const count = accounts.filter(account => account.platform === platform).length;
           return (
             <button

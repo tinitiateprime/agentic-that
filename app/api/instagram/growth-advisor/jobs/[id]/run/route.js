@@ -1,4 +1,7 @@
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import {
+  accessErrorResponse,
+  authorizeApiAccess
+} from "@platform/server/access-control";
 import {
   executeGrowthAdvisorJob,
   GrowthAdvisorJobStore,
@@ -18,14 +21,23 @@ export async function POST(_request, context) {
     }, { status: 503 });
   }
 
-  const user = await getCurrentPlatformUser();
-  if (!user) return Response.json({ error: "Unauthorized", code: "UNAUTHORIZED" }, { status: 401 });
+  let principal;
+  try {
+    principal = await authorizeApiAccess("scraping.instagram", "operate");
+  } catch (error) {
+    return accessErrorResponse(error);
+  }
   const { id } = await context.params;
   const job = await jobStore.getJob(id);
-  if (!job || job.userId !== user.id) {
+  const isLegacyOwner = job?.workspaceId === job?.userId && job?.userId === principal.userId;
+  if (!job || (job.workspaceId !== principal.workspaceId && !isLegacyOwner)) {
     return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
   }
-  const completed = await executeGrowthAdvisorJob(id, { store: jobStore });
+  const completed = await executeGrowthAdvisorJob(id, {
+    store: jobStore,
+    workspaceId: principal.workspaceId,
+    userId: principal.userId
+  });
   if (!completed) {
     return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
   }

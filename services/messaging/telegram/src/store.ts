@@ -4,7 +4,13 @@ import { access, mkdir, open, readFile, rename, stat, unlink, writeFile, type Fi
 import path from "node:path";
 import { SecretCipher } from "./crypto.ts";
 
-export type AppUser = { id: string; displayName: string };
+export type AppUser = {
+  id: string;
+  displayName: string;
+  platformUserId?: string;
+  workspaceId?: string;
+  accessLevel?: "view" | "operate" | "configure";
+};
 
 export type TelegramAccount = {
   id: string;
@@ -55,6 +61,8 @@ type AppUserRow = {
   tokenHash: string;
   configuredLogin: string;
   passwordHash?: string;
+  platformWorkspaceId?: string;
+  platformUserId?: string;
   createdAt: string;
 };
 
@@ -282,6 +290,46 @@ export class MultiUserStore {
       };
       database.appUsers.push(row);
       return { id: row.id, displayName: row.displayName };
+    });
+  }
+
+  async findOrCreatePlatformWorkspaceUser(
+    workspaceId: string,
+    platformUserId: string,
+    displayName: string,
+    accessLevel: "view" | "operate" | "configure"
+  ): Promise<AppUser> {
+    return this.updateDatabase((database) => {
+      const existing = database.appUsers.find((user) => user.platformWorkspaceId === workspaceId);
+      if (existing) {
+        existing.displayName = displayName || existing.displayName;
+        existing.platformUserId = platformUserId;
+        return {
+          id: existing.id,
+          displayName: existing.displayName,
+          platformUserId,
+          workspaceId,
+          accessLevel
+        };
+      }
+
+      const row: AppUserRow = {
+        id: randomUUID(),
+        displayName: displayName || "AgenticThat workspace",
+        tokenHash: hashToken(`platform-workspace:${randomBytes(32).toString("base64url")}`),
+        configuredLogin: "",
+        platformWorkspaceId: workspaceId,
+        platformUserId,
+        createdAt: nowIso()
+      };
+      database.appUsers.push(row);
+      return {
+        id: row.id,
+        displayName: row.displayName,
+        platformUserId,
+        workspaceId,
+        accessLevel
+      };
     });
   }
 

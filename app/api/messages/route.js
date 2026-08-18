@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getBusiness, getContact, listTemplates, markContactRead, lastInboundPhoneId } from "@whatsapp/lib/data";
 import {
   sendToContact,
@@ -8,8 +8,8 @@ import {
 } from "@whatsapp/lib/wa/messaging";
 
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
 
   const {
     contactId,

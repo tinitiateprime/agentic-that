@@ -248,6 +248,9 @@ async function migrate(sql) {
       currency      TEXT NOT NULL DEFAULT 'INR',
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS platform_workspace_id TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_platform_workspace_id
+       ON businesses(platform_workspace_id) WHERE platform_workspace_id IS NOT NULL`,
     `CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
       business_id   INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -257,9 +260,9 @@ async function migrate(sql) {
       role          TEXT NOT NULL DEFAULT 'admin',
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
-    // Stable bridge to the AgenticThat account. Existing WhatsApp-only users
-    // are claimed by matching their unique email the first time they enter
-    // from the main product; new AgenticThat users receive a workspace lazily.
+    // Stable bridge to the AgenticThat account. Legacy users are claimed only
+    // after both the central and legacy sessions prove the mapping; email is
+    // never used as ownership proof.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_user_id
        ON users(platform_user_id) WHERE platform_user_id IS NOT NULL`,

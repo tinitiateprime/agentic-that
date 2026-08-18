@@ -19,6 +19,7 @@ export const submissionStatusSchema = z.enum(submissionStatuses);
 export const scheduleFrequencySchema = z.enum(scheduleFrequencies);
 export const scheduleStatusSchema = z.enum(scheduleStatuses);
 export const userRoleSchema = z.enum(userRoles);
+export const centralAccessLevelSchema = z.enum(["view", "operate", "configure"]);
 export const accountSafetyStatusSchema = z.enum(accountSafetyStatuses);
 export const accountSafetyModeSchema = z.enum(accountSafetyModes);
 export const publishingEngineSchema = z.enum(publishingEngines);
@@ -76,7 +77,8 @@ export const userProfileSchema = z.object({
   isActive: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  lastLoginAt: z.string().optional()
+  lastLoginAt: z.string().optional(),
+  centralAccessLevel: centralAccessLevelSchema.optional()
 });
 
 export const createUserProfileSchema = z.object({

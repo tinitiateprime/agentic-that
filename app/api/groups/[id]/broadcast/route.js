@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getBusiness, getGroup, listGroupMembers, listNewGroupMembers, listTemplates } from "@whatsapp/lib/data";
 import { sendToContact, sendTemplateToContact, sendButtonsToContact, renderTemplate } from "@whatsapp/lib/wa/messaging";
 
@@ -16,8 +16,8 @@ import { sendToContact, sendTemplateToContact, sendButtonsToContact, renderTempl
 //     Sent as an interactive button/session message to each group member via
 //     the active provider (WA_PROVIDER=meta).
 export async function POST(req, { params }) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const { id } = await params;
 
   const business = await getBusiness(user.business_id);

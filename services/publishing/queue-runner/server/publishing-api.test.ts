@@ -143,13 +143,14 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(unsafeLinkError.issues?.some(issue => issue.code === "private_link"), true);
 
   const { signPublishingWorkspaceIdentity } = await import("../../../../lib/publishing-workspace-auth.js");
-  const scrapingIdentityToken = signPublishingWorkspaceIdentity({
-    sub: "instagram-scraping-user",
+  const { signServiceAccessToken } = await import("../../../../lib/service-access-token.js");
+  const scrapingIdentityToken = signServiceAccessToken({
+    audience: "scraping",
+    subject: "instagram-scraping-user",
     workspaceId: "instagram-scraping-workspace",
-    workspaceKey: "instagram-scraping-workspace-key-that-is-long-enough",
     name: "Instagram Scraping User",
     email: "scraping@example.test",
-    businessName: "Instagram Scraping Workspace",
+    grants: { "scraping.instagram": "operate", "scraping.facebook": "none" },
   });
   const scrapingSessionResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
     method: "POST",

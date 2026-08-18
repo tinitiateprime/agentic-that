@@ -9,7 +9,7 @@ import OnboardingWizard from "./OnboardingWizard";
 export const metadata = { title: "Set up your workspace — Tinitiate WA" };
 
 export default async function OnboardingPage() {
-  const user = await requireUser();
+  const user = await requireUser("configure");
   const sql = await getSql();
   const [business] = await sql`SELECT * FROM businesses WHERE id = ${user.business_id}`;
 

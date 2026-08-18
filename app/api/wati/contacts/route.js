@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { watiGetContacts, watiConfigured, normalizeWaNumber } from "@whatsapp/lib/wa/provider";
 import { existingPhoneSet } from "@whatsapp/lib/data";
 import { credsForProvider } from "@whatsapp/lib/tenant";
@@ -7,7 +7,7 @@ import { credsForProvider } from "@whatsapp/lib/tenant";
 // with whether it already exists in the CRM (inCrm).
 export async function GET() {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
   const creds = await credsForProvider(user.business_id, "wati");
 
   if (!watiConfigured(creds)) {

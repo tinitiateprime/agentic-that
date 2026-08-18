@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import { getClientServiceToken } from "@platform/client-service-token";
 import {
   getInstagramCompanionStatus,
   runInstagramCompanionJob
@@ -216,14 +217,25 @@ const engagementExportColumns = [
   "views_captured_at"
 ];
 
-async function apiGet(path, serviceUrl = API_URL) {
-  const response = await fetch(`${serviceUrl}${path}`, { cache: "no-store" });
+async function serviceHeaders(identityToken, headers = {}) {
+  const token = await getClientServiceToken("scraping", identityToken);
+  return { ...headers, authorization: `Bearer ${token}` };
+}
+
+async function apiGet(path, serviceUrl = API_URL, identityToken = "") {
+  const response = await fetch(`${serviceUrl}${path}`, {
+    cache: "no-store",
+    headers: await serviceHeaders(identityToken)
+  });
   if (!response.ok) return {};
   return response.json();
 }
 
-async function apiGetRequired(path, serviceUrl = API_URL) {
-  const response = await fetch(`${serviceUrl}${path}`, { cache: "no-store" });
+async function apiGetRequired(path, serviceUrl = API_URL, identityToken = "") {
+  const response = await fetch(`${serviceUrl}${path}`, {
+    cache: "no-store",
+    headers: await serviceHeaders(identityToken)
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.detail || data.message || `Request failed (${response.status})`);
@@ -231,11 +243,11 @@ async function apiGetRequired(path, serviceUrl = API_URL) {
   return data;
 }
 
-async function apiPost(path, body, serviceUrl = API_URL) {
+async function apiPost(path, body, serviceUrl = API_URL, identityToken = "") {
   const response = await fetch(`${serviceUrl}${path}`, {
     cache: "no-store",
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: await serviceHeaders(identityToken, { "content-type": "application/json" }),
     body: JSON.stringify(body)
   });
   const data = await response.json().catch(() => ({}));
@@ -245,13 +257,13 @@ async function apiPost(path, body, serviceUrl = API_URL) {
   return data;
 }
 
-async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_URL) {
-  const created = await apiPost("/jobs", payload, serviceUrl);
+async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_URL, identityToken = "") {
+  const created = await apiPost("/jobs", payload, serviceUrl, identityToken);
   const jobId = created?.job?.id;
   if (!jobId) throw new Error("The background scrape could not be created.");
 
   onStatus("Scraping public pages");
-  let data = await apiPost(`/jobs/${jobId}/run`, {}, serviceUrl);
+  let data = await apiPost(`/jobs/${jobId}/run`, {}, serviceUrl, identityToken);
   const deadline = Date.now() + 16 * 60_000;
   let pollingFailures = 0;
   while (data?.job?.status !== "complete") {
@@ -264,7 +276,7 @@ async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_UR
     onStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
     try {
-      data = await apiGetRequired(`/jobs/${jobId}`, serviceUrl);
+      data = await apiGetRequired(`/jobs/${jobId}`, serviceUrl, identityToken);
       pollingFailures = 0;
     } catch (pollError) {
       pollingFailures += 1;
@@ -504,17 +516,19 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
     if (scrapeEngine !== "companion") return;
     let active = true;
     setCompanionStatus({ checking: true, ready: false, message: "Checking Companion…" });
-    companionStatusCheck(publishingIdentityToken).then(status => {
+    getClientServiceToken("scraping", publishingIdentityToken)
+      .then(token => companionStatusCheck(token))
+      .then(status => {
       if (active) setCompanionStatus({ checking: false, ...status });
     });
     return () => { active = false; };
   }, [companionStatusCheck, publishingIdentityToken, scrapeEngine]);
 
   useEffect(() => {
-    apiGet(savedQueriesPath, serviceUrl)
+    apiGet(savedQueriesPath, serviceUrl, publishingIdentityToken)
       .then((data) => setKeywords(data[savedQueriesKey] || []))
       .catch(() => {});
-  }, [savedQueriesKey, savedQueriesPath, serviceUrl]);
+  }, [publishingIdentityToken, savedQueriesKey, savedQueriesPath, serviceUrl]);
 
   const completeUserGuide = () => {
     window.clearTimeout(tourTypingTimer.current);
@@ -583,11 +597,14 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
   };
 
   const runSelectedInstagramJob = async (payload, onStatus) => {
-    if (scrapeEngine !== "companion") return normalizeJob(await runInstagramJob(payload, onStatus, serviceUrl));
+    if (scrapeEngine !== "companion") {
+      return normalizeJob(await runInstagramJob(payload, onStatus, serviceUrl, publishingIdentityToken));
+    }
     const controller = new AbortController();
     setCancelActiveScrape(() => () => controller.abort());
     try {
-      return normalizeJob(await companionJobRunner(payload, onStatus, controller.signal, publishingIdentityToken));
+      const companionToken = await getClientServiceToken("scraping", publishingIdentityToken);
+      return normalizeJob(await companionJobRunner(payload, onStatus, controller.signal, companionToken));
     } finally {
       setCancelActiveScrape(null);
     }
@@ -1285,6 +1302,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", platformConfig 
             engagementName={engagementName}
             comparisonInputHint={platformConfig.comparisonInputHint}
             profileNotFoundMessage={platformConfig.profileNotFoundMessage}
+            serviceToken={publishingIdentityToken}
           />
         )}
 

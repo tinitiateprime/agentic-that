@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingEngine, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, assetUrl, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, type AuthResponse } from "./lib/api.ts";
+import { api, assetUrl, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -120,7 +120,17 @@ const roleInitials: Record<UserRole, string> = {
   viewer: 'VW',
 };
 
-function permissionsForRole(role: UserRole): RolePermissions {
+function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'operate' | 'configure'): RolePermissions {
+  if (centralAccessLevel) {
+    return {
+      canManageUsers: false,
+      canViewActivity: centralAccessLevel === 'configure',
+      canManageAccounts: centralAccessLevel === 'configure',
+      canEditContent: centralAccessLevel !== 'view',
+      canSchedulePosts: centralAccessLevel !== 'view',
+      canRunAutomation: centralAccessLevel !== 'view',
+    };
+  }
   return {
     canManageUsers: role === 'operations_manager',
     canViewActivity: role === 'operations_manager',
@@ -156,37 +166,21 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
   useEffect(() => {
     if (publishingIdentityToken) {
       let cancelled = false;
-      api.platformStatus(publishingIdentityToken)
-        .then(async status => {
+      setCentralAuthToken(publishingIdentityToken);
+      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      api.me()
+        .then(user => {
           if (cancelled) return;
-          const savedSession = readSavedSession();
-          if (savedSession) {
-            try {
-              const user = await api.me();
-              if (cancelled) return;
-              if (user.workspaceId === status.workspaceId) {
-                const currentSession = { token: savedSession.token, user };
-                window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentSession));
-                setSession(currentSession);
-                setPlatformStatus({ state: 'ready', configured: true, username: status.username, workspaceId: status.workspaceId });
-                return;
-              }
-            } catch {
-              // Show this workspace's password screen below.
-            }
-          }
-          setAuthToken(null);
-          window.sessionStorage.removeItem(AUTH_SESSION_KEY);
-          setSession(null);
-          setPlatformStatus({ state: 'ready', configured: status.configured, username: status.username, workspaceId: status.workspaceId });
+          setSession({ token: publishingIdentityToken, user });
+          setPlatformStatus({ state: 'ready', configured: true, username: user.email || user.username, workspaceId: user.workspaceId });
         })
         .catch(error => {
           if (cancelled) return;
-          setAuthToken(null);
+          setCentralAuthToken(null);
           window.sessionStorage.removeItem(AUTH_SESSION_KEY);
           setSession(null);
           const rawMessage = error instanceof Error ? error.message : 'The publishing workspace could not be opened.';
-          const upgradeRequired = rawMessage === 'Sign in to continue.';
+          const upgradeRequired = /sign in|session expired/i.test(rawMessage);
           const connectionHelpRequired = /companion|extension|unavailable|failed to fetch/i.test(rawMessage);
           setPlatformStatus({
             state: 'error',
@@ -194,7 +188,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
             username: '',
             workspaceId: '',
             message: upgradeRequired
-              ? 'This computer is running an older Publishing Companion that cannot open account-owned workspaces.'
+              ? 'This computer is running an older Publishing Companion that cannot verify AgenticThat access tokens.'
               : rawMessage,
             upgradeRequired,
             connectionHelpRequired,
@@ -205,6 +199,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
       };
     }
 
+    setCentralAuthToken(null);
     const savedSession = readSavedSession();
     if (!savedSession) return;
 
@@ -229,6 +224,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
   }, [publishingIdentityToken]);
 
   const signIn = (response: AuthResponse) => {
+    setCentralAuthToken(null);
     const nextSession = { token: response.token, user: response.user };
     setAuthToken(response.token);
     window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
@@ -236,20 +232,25 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
   };
 
   const signOut = () => {
-    setAuthToken(null);
+    setCentralAuthToken(null);
     window.sessionStorage.removeItem(AUTH_SESSION_KEY);
     setSession(null);
+    if (publishingIdentityToken) {
+      void fetch('/api/platform-auth/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/';
+      });
+    }
   };
 
   return session
     ? <Dashboard session={session} onSignOut={signOut} />
     : publishingIdentityToken
-      ? <PlatformManagerAccess
-          identityToken={publishingIdentityToken}
-          status={platformStatus}
-          onSignIn={signIn}
-          onConfigured={() => setPlatformStatus(current => ({ ...current, configured: true }))}
-        />
+      ? <main className='auth-page'><section className='auth-card'>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
+          <h1>{platformStatus.state === 'error' ? 'Publishing access could not be opened.' : 'Opening your publishing workspace…'}</h1>
+          <p>{platformStatus.state === 'error' ? platformStatus.message : 'Verifying your AgenticThat role and workspace.'}</p>
+          {platformStatus.state === 'error' && <a className='button primary' href='/apps'>Return to the Store</a>}
+        </section></main>
     : <LandingPage onSignIn={signIn} />;
 }
 
@@ -510,7 +511,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
 
 function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: () => void }) {
   const user = session.user;
-  const permissions = useMemo(() => permissionsForRole(user.role), [user.role]);
+  const permissions = useMemo(() => permissionsForRole(user.role, user.centralAccessLevel), [user.role, user.centralAccessLevel]);
   const [uploads, setUploads] = useState<PlatformUpload[]>([]);
   const [submissions, setSubmissions] = useState<ContentSubmission[]>([]);
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);

@@ -21,8 +21,10 @@ import type {
 } from "../../shared/schema.ts";
 import { isPublishingExtensionActive, publishingAssetUrl, publishingFetch } from "../../../../../lib/publishing-endpoint.ts";
 import { detectPublishingExtension } from "../../../../../lib/publishing-extension-bridge.ts";
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
 
 let authToken: string | null = null;
+let centralIdentitySeed: string | null = null;
 
 export type AuthResponse = {
   user: UserProfile;
@@ -88,10 +90,18 @@ export function setAuthToken(token: string | null) {
   authToken = token;
 }
 
+export function setCentralAuthToken(token: string | null) {
+  centralIdentitySeed = token;
+  authToken = token;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  if (centralIdentitySeed) {
+    authToken = await getClientServiceToken("publishing", centralIdentitySeed);
   }
   if (authToken) {
     headers.set("Authorization", `Bearer ${authToken}`);

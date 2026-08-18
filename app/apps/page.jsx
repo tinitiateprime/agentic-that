@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import AppsExplorer from "@platform/AppsExplorer";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { getCurrentPrincipal } from "@platform/server/access-control";
 
 export const metadata = {
   title: "Apps — AgenticThat",
@@ -8,17 +8,23 @@ export const metadata = {
 };
 
 export default async function AppsPage() {
-  const user = await getCurrentPlatformUser();
+  const user = await getCurrentPrincipal();
   if (!user) redirect("/?auth=login&next=/apps");
+  if (user.status === "pending") redirect("/pending-approval");
+  if (user.status !== "active") redirect("/pending-approval");
 
   return (
     <AppsExplorer
       user={{
-        id: user.id,
+        id: user.userId,
         name: user.name,
         email: user.email,
         businessName: user.businessName,
+        isGlobalAdmin: user.isGlobalAdmin,
+        billingStatus: user.billingStatus,
+        trialEndsAt: user.trialEndsAt,
       }}
+      access={user.access}
     />
   );
 }

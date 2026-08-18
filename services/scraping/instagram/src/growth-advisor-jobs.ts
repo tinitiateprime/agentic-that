@@ -18,6 +18,7 @@ export type GrowthAdvisorJobResult = AdvisorPlanResult | AdvisorQuestionResult;
 export type GrowthAdvisorJob = {
   id: string;
   userId: string;
+  workspaceId: string;
   status: GrowthAdvisorJobStatus;
   input: AdvisorRequest;
   provider: "gemini";
@@ -41,16 +42,18 @@ type JobsDatabase = {
 };
 
 export type GrowthAdvisorJobRepository = {
-  createJob(userId: string, input: AdvisorRequest, model?: string): Promise<GrowthAdvisorJob>;
+  createJob(userId: string, input: AdvisorRequest, model?: string, workspaceId?: string): Promise<GrowthAdvisorJob>;
   getJob(id: string): Promise<GrowthAdvisorJob | null>;
   updateJob(
     id: string,
-    updates: Partial<Omit<GrowthAdvisorJob, "id" | "userId" | "input" | "createdAt">>
+    updates: Partial<Omit<GrowthAdvisorJob, "id" | "userId" | "workspaceId" | "input" | "createdAt">>
   ): Promise<GrowthAdvisorJob | null>;
 };
 
 type ExecuteDependencies = {
   store?: GrowthAdvisorJobRepository;
+  workspaceId?: string;
+  userId?: string;
   apiKey?: string;
   model?: string;
   timeoutMs?: number;
@@ -94,11 +97,12 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
   );
   private readonly useBlobs = shouldUseNetlifyBlobs();
 
-  async createJob(userId: string, input: AdvisorRequest, model = growthAdvisorModel()) {
+  async createJob(userId: string, input: AdvisorRequest, model = growthAdvisorModel(), workspaceId = userId) {
     const timestamp = new Date().toISOString();
     const job: GrowthAdvisorJob = {
       id: randomUUID(),
       userId,
+      workspaceId,
       status: "pending",
       input,
       provider: "gemini",
@@ -130,7 +134,7 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
 
   async updateJob(
     id: string,
-    updates: Partial<Omit<GrowthAdvisorJob, "id" | "userId" | "input" | "createdAt">>
+    updates: Partial<Omit<GrowthAdvisorJob, "id" | "userId" | "workspaceId" | "input" | "createdAt">>
   ) {
     if (this.useBlobs) {
       const current = await this.getJob(id);
@@ -249,6 +253,10 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
   const store = dependencies.store || new GrowthAdvisorJobStore();
   const current = await store.getJob(id);
   if (!current) return null;
+  if (dependencies.workspaceId && current.workspaceId !== dependencies.workspaceId) {
+    const isLegacyOwner = current.workspaceId === current.userId && current.userId === dependencies.userId;
+    if (!isLegacyOwner) return null;
+  }
   if (current.status === "complete" || current.status === "failed") return current;
   if (current.status === "running" && Date.now() - Date.parse(current.updatedAt) < RUN_LEASE_MS) return current;
 
@@ -333,5 +341,5 @@ function coerceJob(value: unknown) {
   const job = value as Partial<GrowthAdvisorJob>;
   if (!job.id || !job.userId || !job.input || !job.createdAt || !job.updatedAt) return null;
   if (!["pending", "running", "complete", "failed"].includes(String(job.status))) return null;
-  return job as GrowthAdvisorJob;
+  return { ...job, workspaceId: job.workspaceId || job.userId } as GrowthAdvisorJob;
 }

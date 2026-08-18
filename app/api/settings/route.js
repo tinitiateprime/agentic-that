@@ -1,10 +1,10 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { credsForProvider } from "@whatsapp/lib/tenant";
 
 export async function PATCH(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
   const { name, admin_number, currency, active_wa_provider } = await req.json();
   const sql = await getSql();
   const [biz] = await sql`SELECT * FROM businesses WHERE id = ${user.business_id}`;

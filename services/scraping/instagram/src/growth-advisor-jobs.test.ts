@@ -34,6 +34,7 @@ class MemoryJobStore implements GrowthAdvisorJobRepository {
     this.job = {
       id: "job-1",
       userId: "user-1",
+      workspaceId: "workspace-1",
       status: "pending",
       input,
       provider: "gemini",
@@ -131,5 +132,25 @@ test("public job payload hides the user and benchmark input", () => {
   const payload = growthAdvisorJobPayload(store.job);
   assert.equal(payload.job.id, "job-1");
   assert.equal("userId" in payload.job, false);
+  assert.equal("workspaceId" in payload.job, false);
   assert.equal("input" in payload.job, false);
+});
+
+test("does not execute a growth-advisor job from another workspace", async () => {
+  const store = new MemoryJobStore();
+  let calls = 0;
+  const completed = await executeGrowthAdvisorJob("job-1", {
+    store,
+    workspaceId: "workspace-2",
+    userId: "user-2",
+    apiKey: "server-only-key",
+    requestAdvice: async () => {
+      calls += 1;
+      return plan;
+    }
+  });
+
+  assert.equal(completed, null);
+  assert.equal(store.job.status, "pending");
+  assert.equal(calls, 0);
 });

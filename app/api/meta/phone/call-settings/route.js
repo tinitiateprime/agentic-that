@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaGetCallSettings, metaUpdateCallSettings, metaConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
@@ -10,7 +10,7 @@ import { credsForBusiness } from "@whatsapp/lib/tenant";
 // in-chat call button for customers), so it's driven explicitly from Settings.
 export async function GET(req) {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
   const creds = await credsForBusiness(user.business_id);
   if (!metaConfigured(creds)) {
     return Response.json({ error: "Meta isn't configured — set META_ACCESS_TOKEN." }, { status: 400 });
@@ -27,8 +27,8 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
   const creds = await credsForBusiness(user.business_id);
   if (!metaConfigured(creds)) {
     return Response.json({ error: "Meta isn't configured — set META_ACCESS_TOKEN." }, { status: 400 });

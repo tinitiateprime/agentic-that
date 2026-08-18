@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
+import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
@@ -55,6 +56,8 @@ const messagingLogos = {
   telegram: "/telegram-logo.svg",
   whatsapp: "/whatsapp-logo.svg"
 };
+const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
+const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 const roleLabels = {
   operations_manager: "Operations Manager",
   post_uploader: "Post Uploader",
@@ -124,9 +127,10 @@ async function responsePayload(response) {
   return payload;
 }
 
-async function telegramRequest(path, init = {}) {
+async function telegramRequest(path, identityToken, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
     ...init,
     headers,
@@ -138,7 +142,7 @@ async function telegramRequest(path, init = {}) {
 async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", "Bearer " + token);
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
   const response = await publishingFetch(path, {
     ...init,
     headers
@@ -220,6 +224,8 @@ export default function ContentManager({
   initialMessagingPlatform,
   initialPublishingPlatform,
   publishingIdentityToken,
+  telegramIdentityToken,
+  effectiveAccess,
   user,
   telegramDashboardUrl,
   publishQueueUrl
@@ -236,11 +242,19 @@ export default function ContentManager({
   const [publishingAccounts, setPublishingAccounts] = useState([]);
   const [publishingUploads, setPublishingUploads] = useState([]);
   const [publishingSchedules, setPublishingSchedules] = useState([]);
+  const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "view"));
+  const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "view"));
+  const visibleServices = services.filter((service) => (
+    service.id === "messaging" ? allowedMessagingPlatforms.length > 0
+      : service.id === "publishing" ? allowedPublishingPlatforms.length > 0
+        : false
+  ));
 
   const loadTelegram = useCallback(async () => {
+    if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me");
-      const accountData = await telegramRequest("/telegram/accounts");
+      const me = await telegramRequest("/me", telegramIdentityToken);
+      const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
       setTelegramStatus("ready");
@@ -249,7 +263,7 @@ export default function ContentManager({
       setTelegramAccounts([]);
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
-  }, []);
+  }, [telegramIdentityToken]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
     const session = candidateSession ?? readPublishingSession();
@@ -291,27 +305,12 @@ export default function ContentManager({
   }, []);
 
   const connectPublishing = useCallback(async () => {
-    if (!publishingIdentityToken) return loadPublishing();
+    if (!publishingIdentityToken) { setPublishingStatus("unauthorized"); return; }
     try {
-      const managerStatus = await publishingRequest("/api/auth/platform/status", "", {
-        method: "POST",
-        body: JSON.stringify({ token: publishingIdentityToken })
-      });
-      const savedSession = readPublishingSession();
-      if (savedSession) {
-        try {
-          const me = await publishingRequest("/api/auth/me", savedSession.token);
-          if (me.workspaceId === managerStatus.workspaceId) return loadPublishing(savedSession);
-        } catch {
-          // Ask for this workspace's manager password in Config Manager.
-        }
-      }
+      const me = await publishingRequest("/api/auth/me", publishingIdentityToken);
+      const centralSession = { token: publishingIdentityToken, user: me };
       window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-      setPublishingSession(null);
-      setPublishingAccounts([]);
-      setPublishingUploads([]);
-      setPublishingSchedules([]);
-      setPublishingStatus(managerStatus.configured ? "needs-login" : "needs-setup");
+      return loadPublishing(centralSession);
     } catch (error) {
       window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
       setPublishingSession(null);
@@ -319,7 +318,7 @@ export default function ContentManager({
       setPublishingUploads([]);
       setPublishingSchedules([]);
       setPublishingStatus(
-        error.status === 401 && error.message === "Sign in to continue."
+        error.status === 401
           ? "needs-upgrade"
           : "offline"
       );
@@ -333,7 +332,7 @@ export default function ContentManager({
   const connectedAccounts = telegramAccounts.length + publishingAccounts.length;
   const activePublishingAccounts = publishingAccounts.filter((account) => account.enabled).length;
   const queuedUploads = publishingUploads.filter((upload) => upload.status === "queued").length;
-  const activeDefinition = services.find((service) => service.id === activeService) || services[0];
+  const activeDefinition = visibleServices.find((service) => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
     setActiveService(serviceId);
@@ -390,7 +389,7 @@ export default function ContentManager({
         <div className="content-layout">
         <aside className="content-service-nav">
           <div className="content-nav-heading"><span>Services</span><small>Grouped by app</small></div>
-          {services.map((service) => {
+          {visibleServices.map((service) => {
             const count = service.id === "messaging"
               ? telegramAccounts.length
               : service.id === "publishing"
@@ -439,6 +438,7 @@ export default function ContentManager({
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
               onReload={loadTelegram}
+              allowedPlatforms={allowedMessagingPlatforms}
             />
           )}
           {activeService === "publishing" && (
@@ -451,6 +451,8 @@ export default function ContentManager({
               platform={publishingPlatform}
               publishQueueUrl={publishQueueUrl}
               onPlatformChange={selectPublishingPlatform}
+              allowedPlatforms={allowedPublishingPlatforms}
+              canConfigure={hasAccess(effectiveAccess, `publishing.${publishingPlatform}`, "configure")}
               onReconnect={connectPublishing}
               onSession={(session) => {
                 if (!session) {
@@ -479,11 +481,11 @@ export default function ContentManager({
   );
 }
 
-function MessagingContent({ platform, onPlatformChange, status, user, accounts, dashboardUrl, onReload }) {
+function MessagingContent({ platform, onPlatformChange, status, user, accounts, dashboardUrl, onReload, allowedPlatforms }) {
   return (
     <>
       <div className="content-app-tabs messaging-tabs" role="tablist" aria-label="Messaging apps">
-        {messagingPlatforms.map((item) => (
+        {allowedPlatforms.map((item) => (
           <button
             type="button"
             role="tab"
@@ -613,6 +615,8 @@ function PublishingContent({
   platform,
   publishQueueUrl,
   onPlatformChange,
+  allowedPlatforms,
+  canConfigure,
   onReconnect,
   onSession
 }) {
@@ -679,7 +683,7 @@ function PublishingContent({
       <div className="content-connection-bar">
         <div><CheckCircle2 size={18} /><span><strong>Publish Queue connected</strong><small>{session?.user?.fullName || "Workspace user"} - {roleLabels[session?.user?.role] || "Workspace role"}</small></span></div>
         <div className="content-bar-actions">
-          <a className="content-secondary" href="/config-manager?service=publishing"><Settings2 size={14} />Manage accounts</a>
+          {canConfigure && <a className="content-secondary" href="/config-manager?service=publishing"><Settings2 size={14} />Manage accounts</a>}
           <a className="content-secondary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={14} /></a>
           <button className="content-tertiary" type="button" onClick={() => onSession(null)}>Change login</button>
         </div>
@@ -694,7 +698,7 @@ function PublishingContent({
       </div>
 
       <div className="content-app-tabs" role="tablist" aria-label="Publishing apps">
-        {publishPlatforms.map((item) => {
+        {allowedPlatforms.map((item) => {
           const count = accounts.filter((account) => account.platform === item).length;
           return (
             <button

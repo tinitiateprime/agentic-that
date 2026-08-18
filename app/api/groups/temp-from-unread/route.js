@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { createTempGroupFromUnread } from "@whatsapp/lib/data";
 
 // Bundle every chat with unread replies into a temporary group, so the whole
@@ -6,8 +6,8 @@ import { createTempGroupFromUnread } from "@whatsapp/lib/data";
 // is_temp and expires after `ttlHours`, so these snapshots clean themselves up
 // instead of accumulating next to real groups.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
 
   const { ttlHours } = await req.json().catch(() => ({}));
   const result = await createTempGroupFromUnread(user.business_id, {

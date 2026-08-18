@@ -8,6 +8,7 @@ import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
+import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import {
   cancelAllInstagramCompanionJobs,
   cancelInstagramCompanionJob,
@@ -80,6 +81,7 @@ import {
   recoverInterruptedPublishingWork,
   nextPublishingScheduleOccurrence,
   setupPlatformWorkspaceManager,
+  upsertCentralWorkspaceActor,
   updatePublishingSchedule,
   updatePlatformAccount,
   updateUploadDetails,
@@ -311,7 +313,12 @@ function assertPlatformPostCompatible(platform: Platform, file: StoredUploadFile
   }
 }
 
-type RequestWithUser = express.Request & { user?: UserProfile };
+type CentralAccessLevel = "view" | "operate" | "configure";
+type RequestWithUser = express.Request & {
+  user?: UserProfile;
+  centralAccessLevel?: CentralAccessLevel;
+  centralGrants?: Record<string, unknown>;
+};
 type RequestWithInstagramOwner = express.Request & { instagramOwnerKey?: string };
 type RequestWithFacebookOwner = express.Request & { facebookOwnerKey?: string };
 
@@ -497,7 +504,26 @@ async function authenticateApi(req: express.Request, res: express.Response, next
       return;
     }
 
-    const user = await userFromAuthToken(token);
+    const centralIdentity = verifyPublishingWorkspaceIdentity(token);
+    if (centralIdentity) {
+      const centralAccessLevel = publishingAccessLevel(centralIdentity.grants);
+      if (!centralAccessLevel) {
+        res.status(403).json({ message: "Your AgenticThat role cannot access Publishing." });
+        return;
+      }
+      const requiredLevel = requiredPublishingLevel(req);
+      if (publishingLevelRank(centralAccessLevel) < publishingLevelRank(requiredLevel)) {
+        res.status(403).json({ message: `Your AgenticThat role requires ${requiredLevel} Publishing access for this action.` });
+        return;
+      }
+      request.user = await upsertCentralWorkspaceActor(platformIdentity(token), centralAccessLevel);
+      request.centralAccessLevel = centralAccessLevel;
+      request.centralGrants = centralIdentity.grants;
+      next();
+      return;
+    }
+
+    const user = legacyHumanAuthAllowed() ? await userFromAuthToken(token) : null;
     if (!user) {
       res.status(401).json({ message: "Session expired. Sign in again." });
       return;
@@ -508,6 +534,54 @@ async function authenticateApi(req: express.Request, res: express.Response, next
   } catch (error) {
     next(error);
   }
+}
+
+function legacyHumanAuthAllowed() {
+  return process.env.NODE_ENV === "test" || process.env.RBAC_ENFORCEMENT_MODE === "shadow";
+}
+
+function publishingLevelRank(level: CentralAccessLevel) {
+  return level === "configure" ? 3 : level === "operate" ? 2 : 1;
+}
+
+function publishingAccessLevel(grants: Record<string, unknown>): CentralAccessLevel | null {
+  let result: CentralAccessLevel | null = null;
+  for (const [resource, rawLevel] of Object.entries(grants || {})) {
+    if (!resource.startsWith("publishing.")) continue;
+    const level = rawLevel === "configure" || rawLevel === "operate" || rawLevel === "view" ? rawLevel : null;
+    if (level && (!result || publishingLevelRank(level) > publishingLevelRank(result))) result = level;
+  }
+  return result;
+}
+
+function requiredPublishingLevel(req: express.Request): CentralAccessLevel {
+  if (req.method === "GET" || req.method === "HEAD") return "view";
+  const path = req.originalUrl.split("?")[0];
+  if (
+    path.startsWith("/api/users") ||
+    /^\/api\/(?:platforms\/[^/]+\/accounts|accounts(?:\/|$))/.test(path)
+  ) return "configure";
+  return "operate";
+}
+
+class PublishingAccessError extends Error {}
+
+function centralPlatformAccess(req: RequestWithUser, platform: Platform) {
+  if (!req.centralGrants) return req.centralAccessLevel || null;
+  const level = req.centralGrants[`publishing.${platform}`];
+  return level === "view" || level === "operate" || level === "configure" ? level : null;
+}
+
+function assertCentralPlatformAccess(req: RequestWithUser, platform: Platform, required: CentralAccessLevel) {
+  if (!req.centralGrants) return;
+  const level = centralPlatformAccess(req, platform);
+  if (!level || publishingLevelRank(level) < publishingLevelRank(required)) {
+    throw new PublishingAccessError(`Your AgenticThat role requires ${required} access to publishing.${platform}.`);
+  }
+}
+
+function filterCentralPlatforms<T extends { platform: Platform }>(req: RequestWithUser, rows: T[]) {
+  return req.centralGrants ? rows.filter(row => Boolean(centralPlatformAccess(req, row.platform))) : rows;
 }
 
 function requireRoles(...roles: UserRole[]): express.RequestHandler {
@@ -617,6 +691,7 @@ async function createUnifiedPosts(
   descriptionInput: string,
   destinationsInput: unknown,
   preflightOptions: { rightsConfirmed: boolean; confirmWarnings: boolean },
+  request?: RequestWithUser,
 ) {
   const createdUploads: PlatformUpload[] = [];
   const title = titleInput.trim();
@@ -641,6 +716,7 @@ async function createUnifiedPosts(
     const destinationAccounts = destinations.map(destination => {
       const account = accountById.get(destination.accountId);
       if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
+      if (request) assertCentralPlatformAccess(request, account.platform, "operate");
       return { destination, account };
     });
 
@@ -864,6 +940,10 @@ app.get("/api/health", async (_req, res) => {
 
 app.post("/api/auth/login", async (req, res, next) => {
   try {
+    if (!legacyHumanAuthAllowed()) {
+      res.status(410).json({ message: "Use your AgenticThat login." });
+      return;
+    }
     const payload = loginInputSchema.parse(req.body);
     const user = await loginUser(payload.username, payload.password);
     if (!user) {
@@ -883,10 +963,17 @@ function platformIdentity(token: string) {
   return {
     platformUserId: identity.sub,
     workspaceId: identity.workspaceId,
-    workspaceKey: identity.workspaceKey,
     fullName: identity.name,
     email: identity.email,
+    grants: identity.grants,
   };
+}
+
+function scrapingIdentity(token: string, resource: "scraping.instagram" | "scraping.facebook") {
+  const identity = verifyServiceAccessToken(token, "scraping");
+  const level = identity?.grants?.[resource];
+  if (!identity || !["operate", "configure"].includes(level)) return null;
+  return identity;
 }
 
 function signInstagramScrapingToken(identity: ReturnType<typeof platformIdentity>) {
@@ -924,10 +1011,21 @@ async function authenticateInstagramScraping(
       return;
     }
 
-    const user = await userFromAuthToken(token);
+    const centralIdentity = scrapingIdentity(token, "scraping.instagram");
+    if (centralIdentity) {
+      (req as RequestWithInstagramOwner).instagramOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
+      next();
+      return;
+    }
+
+    const user = legacyHumanAuthAllowed() ? await userFromAuthToken(token) : null;
     if (user) {
       (req as RequestWithInstagramOwner).instagramOwnerKey = `${user.workspaceId}:${user.id}`;
       next();
+      return;
+    }
+    if (!legacyHumanAuthAllowed()) {
+      res.status(401).json({ message: "A current AgenticThat scraping token is required." });
       return;
     }
 
@@ -961,10 +1059,20 @@ async function authenticateFacebookScraping(
       res.status(401).json({ message: "Sign in to AgenticThat to use Local Companion Facebook scraping." });
       return;
     }
-    const user = await userFromAuthToken(token);
+    const centralIdentity = scrapingIdentity(token, "scraping.facebook");
+    if (centralIdentity) {
+      (req as RequestWithFacebookOwner).facebookOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
+      next();
+      return;
+    }
+    const user = legacyHumanAuthAllowed() ? await userFromAuthToken(token) : null;
     if (user) {
       (req as RequestWithFacebookOwner).facebookOwnerKey = `${user.workspaceId}:${user.id}`;
       next();
+      return;
+    }
+    if (!legacyHumanAuthAllowed()) {
+      res.status(401).json({ message: "A current AgenticThat scraping token is required." });
       return;
     }
     const rawPayload = verifiedTokenPayload(token);
@@ -987,6 +1095,10 @@ function facebookCompanionOwner(req: RequestWithFacebookOwner) {
 
 app.post("/api/auth/platform/status", async (req, res, next) => {
   try {
+    if (!legacyHumanAuthAllowed()) {
+      res.status(410).json({ message: "Publishing access is managed by AgenticThat." });
+      return;
+    }
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
     res.json(await platformWorkspaceManagerStatus(platformIdentity(token)));
   } catch (error) {
@@ -996,6 +1108,10 @@ app.post("/api/auth/platform/status", async (req, res, next) => {
 
 app.post("/api/auth/platform/setup", async (req, res, next) => {
   try {
+    if (!legacyHumanAuthAllowed()) {
+      res.status(410).json({ message: "Publishing passwords are disabled. Use AgenticThat." });
+      return;
+    }
     const payload = platformPasswordSchema.parse(req.body);
     const user = await setupPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
     res.json({ user, token: signAuthToken(user) });
@@ -1006,6 +1122,10 @@ app.post("/api/auth/platform/setup", async (req, res, next) => {
 
 app.post("/api/auth/platform/login", async (req, res, next) => {
   try {
+    if (!legacyHumanAuthAllowed()) {
+      res.status(410).json({ message: "Publishing passwords are disabled. Use AgenticThat." });
+      return;
+    }
     const payload = platformPasswordSchema.parse(req.body);
     const user = await loginPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
     if (!user) {
@@ -1021,10 +1141,14 @@ app.post("/api/auth/platform/login", async (req, res, next) => {
 app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    const identity = platformIdentity(token);
+    const identity = scrapingIdentity(token, "scraping.instagram");
+    if (!identity) {
+      res.status(403).json({ message: "Instagram scraping operate access is required." });
+      return;
+    }
     res.json({
-      token: signInstagramScrapingToken(identity),
-      expiresInSeconds: Math.max(300, Math.min(4 * 60 * 60, Number(process.env.INSTAGRAM_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60)),
+      token,
+      expiresInSeconds: Math.max(1, Number(identity.exp) - Math.floor(Date.now() / 1000)),
     });
   } catch (error) {
     next(error);
@@ -1034,10 +1158,14 @@ app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
 app.post("/api/auth/platform/facebook-scraping", (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    const identity = platformIdentity(token);
+    const identity = scrapingIdentity(token, "scraping.facebook");
+    if (!identity) {
+      res.status(403).json({ message: "Facebook scraping operate access is required." });
+      return;
+    }
     res.json({
-      token: signFacebookScrapingToken(identity),
-      expiresInSeconds: Math.max(300, Math.min(4 * 60 * 60, Number(process.env.FACEBOOK_COMPANION_TOKEN_TTL_SECONDS) || 2 * 60 * 60)),
+      token,
+      expiresInSeconds: Math.max(1, Number(identity.exp) - Math.floor(Date.now() / 1000)),
     });
   } catch (error) {
     next(error);
@@ -1228,7 +1356,8 @@ app.get("/api/uploads", async (req: RequestWithUser, res, next) => {
   try {
     const platform = req.query.platform ? platformSchema.parse(req.query.platform) : undefined;
     const accountId = typeof req.query.accountId === "string" ? req.query.accountId : undefined;
-    res.json(await listUploads(platform, accountId, currentUser(req).workspaceId));
+    if (platform) assertCentralPlatformAccess(req, platform, "view");
+    res.json(filterCentralPlatforms(req, await listUploads(platform, accountId, currentUser(req).workspaceId)));
   } catch (error) {
     next(error);
   }
@@ -1237,6 +1366,7 @@ app.get("/api/uploads", async (req: RequestWithUser, res, next) => {
 app.get("/api/platforms/:platform/uploads", async (req: RequestWithUser, res, next) => {
   try {
     const platform = platformSchema.parse(req.params.platform);
+    assertCentralPlatformAccess(req, platform, "view");
     const accountId = typeof req.query.accountId === "string" ? req.query.accountId : undefined;
     res.json(await listUploads(platform, accountId, currentUser(req).workspaceId));
   } catch (error) {
@@ -1248,7 +1378,8 @@ app.get("/api/platforms/:platform/uploads", async (req: RequestWithUser, res, ne
 app.get("/api/accounts", async (req: RequestWithUser, res, next) => {
   try {
     const platform = req.query.platform ? platformSchema.parse(req.query.platform) : undefined;
-    res.json(await listPlatformAccounts(platform, currentUser(req).workspaceId));
+    if (platform) assertCentralPlatformAccess(req, platform, "view");
+    res.json(filterCentralPlatforms(req, await listPlatformAccounts(platform, currentUser(req).workspaceId)));
   } catch (error) {
     next(error);
   }
@@ -1257,6 +1388,7 @@ app.get("/api/accounts", async (req: RequestWithUser, res, next) => {
 app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const platform = platformSchema.parse(req.params.platform);
+    assertCentralPlatformAccess(req, platform, "configure");
     const payload = upsertPlatformAccountSchema.parse(req.body);
     const user = currentUser(req);
     const account = await createPlatformAccount(platform, payload, user.workspaceId);
@@ -1277,6 +1409,7 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
+    assertCentralPlatformAccess(req, existing.platform, "configure");
     const previousEngine = existing.executionEngine ?? "companion";
     const nextEngine = payload.executionEngine ?? previousEngine;
     const engineChanged = nextEngine !== previousEngine;
@@ -1315,7 +1448,10 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
 app.delete("/api/accounts/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
-    const account = await deletePlatformAccount(pathParam(req.params.id, "id"), user.workspaceId);
+    const accountId = pathParam(req.params.id, "id");
+    const existing = await getPlatformAccount(accountId, user.workspaceId);
+    if (existing) assertCentralPlatformAccess(req, existing.platform, "configure");
+    const account = await deletePlatformAccount(accountId, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
@@ -1340,10 +1476,12 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     }
     const user = currentUser(req);
     const accountId = pathParam(req.params.id, "id");
-    if (!(await getPlatformAccount(accountId, user.workspaceId))) {
+    const existing = await getPlatformAccount(accountId, user.workspaceId);
+    if (!existing) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
+    assertCentralPlatformAccess(req, existing.platform, "configure");
     const { surface } = manualLoginRequestSchema.parse(req.body ?? {});
     const { account, started, surface: activeSurface } = await startManualAccountSession(accountId, surface);
     const surfaceLabel = activeSurface === "embedded" ? "Companion" : "Chrome or Edge";
@@ -1624,7 +1762,7 @@ app.post("/api/posts/unified/text", requireRoles("operations_manager"), async (r
       filename: "",
       mimetype: "text/plain",
       size: Buffer.byteLength(payload.description, "utf8"),
-    }, user, "", payload.description, payload.destinations, { rightsConfirmed: true, confirmWarnings: payload.confirmWarnings });
+    }, user, "", payload.description, payload.destinations, { rightsConfirmed: true, confirmWarnings: payload.confirmWarnings }, req);
     res.status(201).json(createdUploads);
   } catch (error) {
     next(error);
@@ -1655,7 +1793,7 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async 
     }, user, payload.title, payload.description, payload.destinations, {
       rightsConfirmed: payload.rightsConfirmed,
       confirmWarnings: payload.confirmWarnings,
-    });
+    }, req);
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(createdUploads);
   } catch (error) {
@@ -1670,6 +1808,8 @@ app.patch("/api/uploads/:id/status", requireRoles("operations_manager"), async (
     const user = currentUser(req);
     const payload = updateUploadStatusSchema.parse(req.body);
     const uploadId = pathParam(req.params.id, "id");
+    const existing = await findUploadOrThrow(uploadId, user.workspaceId);
+    assertCentralPlatformAccess(req, existing.platform, "operate");
     const item = await updateUploadStatus(uploadId, payload.status, payload.failureReason ?? "Post status updated", user.id, user.workspaceId);
 
     if (!item) {
@@ -1689,6 +1829,7 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), a
     const user = currentUser(req);
     const uploadId = pathParam(req.params.id, "id");
     const existing = await findUploadOrThrow(uploadId, user.workspaceId);
+    assertCentralPlatformAccess(req, existing.platform, "operate");
     let payload;
     let action = "post.updated";
     let summaryDetail = "details";
@@ -1766,7 +1907,10 @@ app.patch("/api/uploads/:id", requireRoles("operations_manager", "scheduler"), a
 app.delete("/api/uploads/:id", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
-    const deleted = await deleteUpload(pathParam(req.params.id, "id"), user.workspaceId);
+    const uploadId = pathParam(req.params.id, "id");
+    const existing = await findUploadOrThrow(uploadId, user.workspaceId);
+    assertCentralPlatformAccess(req, existing.platform, "operate");
+    const deleted = await deleteUpload(uploadId, user.workspaceId);
 
     if (!deleted) {
       res.status(404).json({ message: "Upload not found" });
@@ -1868,6 +2012,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
       code: error.code,
       issues: error.issues,
     });
+    return;
+  }
+
+  if (error instanceof PublishingAccessError) {
+    res.status(403).json({ message: error.message });
     return;
   }
 

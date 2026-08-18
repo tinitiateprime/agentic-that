@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { credsForProvider, upsertAccount } from "@whatsapp/lib/tenant";
 import { watiGetContacts } from "@whatsapp/lib/wa/provider";
@@ -6,8 +6,8 @@ import { watiGetContacts } from "@whatsapp/lib/wa/provider";
 // Settings -> WATI onboarding. Credentials are verified live before the
 // encrypted account row is created or updated.
 export async function PATCH(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("configure");
+  if (!user) return whatsappAccessErrorResponse("configure");
 
   const body = await req.json().catch(() => ({}));
   const existing = await credsForProvider(user.business_id, "wati");

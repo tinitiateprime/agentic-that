@@ -30,6 +30,7 @@ import { productCategories, productServices, serviceDetailHref } from "./product
 import { useProductStatus } from "./use-product-status";
 import ProductShell from "./ProductShell";
 import styles from "./app-store.module.css";
+import { accessResourceForService, accessSatisfies } from "./access-catalog";
 
 const categoryPresentation = {
   messaging: { icon: MessageCircleMore, accent: "#087360", tint: "#e6f4f0" },
@@ -82,13 +83,14 @@ function ServiceStatus({ status }) {
   );
 }
 
-function ServiceCard({ service, status }) {
+function ServiceCard({ service, status, allowed }) {
   const capabilities = serviceCapabilities(service);
 
   return (
     <Link
       className={styles.serviceCard}
-      href={serviceDetailHref(service)}
+      href={allowed || service.availability !== "live" ? serviceDetailHref(service) : `/access-denied?resource=${encodeURIComponent(accessResourceForService(service))}`}
+      aria-label={!allowed && service.availability === "live" ? `${service.name}: access required` : undefined}
       style={{ "--service-accent": service.accent, "--service-tint": service.tint }}
     >
       <div className={styles.serviceVisual} aria-hidden="true">
@@ -99,7 +101,7 @@ function ServiceCard({ service, status }) {
           <div className={styles.serviceIdentity}>
             <h3>{service.name}</h3>
           </div>
-          <ServiceStatus status={status} />
+          <ServiceStatus status={!allowed && service.availability === "live" ? { state: "locked", label: "Access required" } : status} />
         </div>
         <div className={styles.cardBody}>
           <p>{service.shortDescription}</p>
@@ -123,7 +125,7 @@ function ServiceCard({ service, status }) {
   );
 }
 
-export default function AppsExplorer({ user }) {
+export default function AppsExplorer({ user, access = {} }) {
   const [query, setQuery] = useState("");
   const { statusFor } = useProductStatus();
   const normalizedQuery = query.trim().toLowerCase();
@@ -185,7 +187,7 @@ export default function AppsExplorer({ user }) {
                 </div>
                 <div className={styles.serviceGrid}>
                   {category.services.map((service) => (
-                    <ServiceCard service={service} status={statusFor(service)} key={`${service.category}-${service.slug}`} />
+                    <ServiceCard service={service} status={statusFor(service)} allowed={accessSatisfies(access[accessResourceForService(service)] || "none", "view")} key={`${service.category}-${service.slug}`} />
                   ))}
                 </div>
               </section>

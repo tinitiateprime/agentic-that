@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaGetTemplates, metaCreateTemplate, metaTemplatesConfigured } from "@whatsapp/lib/wa/provider";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
@@ -7,7 +7,7 @@ import { credsForBusiness } from "@whatsapp/lib/tenant";
 // every template (incl. pending/rejected); otherwise only APPROVED ones.
 export async function GET(req) {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
   const creds = await credsForBusiness(user.business_id);
 
   if (!metaTemplatesConfigured(creds)) {
@@ -31,8 +31,8 @@ export async function GET(req) {
 // bodyText, headerText?, headerImageHandle?, footerText?, buttons? }.
 // `buttons` is [{ type: "QUICK_REPLY"|"URL"|"PHONE_NUMBER", text, url?, phoneNumber? }].
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const creds = await credsForBusiness(user.business_id);
 
   if (!metaTemplatesConfigured(creds)) {
