@@ -54,8 +54,49 @@ try {
     (New-Object Text.UTF8Encoding($false))
   )
 
+  $centralAuthScript = @'
+import { signPublishingWorkspaceIdentity } from "./lib/publishing-workspace-auth.ts";
+import { serviceTokenPublicKeyPem } from "./lib/service-access-token.js";
+
+const platforms = ["facebook", "instagram", "x", "linkedin", "youtube"];
+const grants = Object.fromEntries(platforms.map(platform => [`publishing.${platform}`, "configure"]));
+const capabilities = [
+  "publishing.view",
+  "publishing.accounts.configure",
+  "publishing.content.create",
+  "publishing.content.edit",
+  "publishing.schedule.manage",
+  "publishing.execute",
+  "workspace.team.manage",
+];
+
+const token = signPublishingWorkspaceIdentity({
+  sub: "companion-smoke-user",
+  workspaceId: "companion-smoke-workspace",
+  name: "Companion Smoke",
+  email: "companion-smoke@agenticthat.local",
+  grants,
+  capabilities,
+}, 5 * 60);
+
+process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem() }));
+'@
+
+  Push-Location $projectRoot
+  try {
+    $centralAuth = ($centralAuthScript | node --import tsx --input-type=module -) | ConvertFrom-Json
+  } finally {
+    Pop-Location
+  }
+  if (-not $centralAuth.token -or -not $centralAuth.publicKey) {
+    throw "Could not create a temporary AgenticThat workspace token for the smoke test."
+  }
+
   $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  $hadServiceTokenPublicKey = Test-Path Env:SERVICE_TOKEN_PUBLIC_KEY
+  $previousServiceTokenPublicKey = $env:SERVICE_TOKEN_PUBLIC_KEY
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  $env:SERVICE_TOKEN_PUBLIC_KEY = $centralAuth.publicKey
   $env:AGENTICTHAT_COMPANION_DATA_DIR = $smokeRoot
   $env:AGENTICTHAT_COMPANION_DISABLE_AUTOSTART = "1"
   $process = Start-Process -FilePath $executable -ArgumentList "--hidden" -WindowStyle Hidden -PassThru
@@ -108,12 +149,7 @@ try {
     throw "The running Companion browser-debug endpoint was lost after a second launch."
   }
 
-  $login = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/auth/login" -ContentType "application/json" -Body (@{
-    username = $smokeUsername
-    password = $smokePassword
-  } | ConvertTo-Json) -TimeoutSec 5
-  if (-not $login.token) { throw "The smoke-test operations manager could not sign in." }
-  $authorization = @{ Authorization = "Bearer $($login.token)" }
+  $authorization = @{ Authorization = "Bearer $($centralAuth.token)" }
   $instagramAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/instagram/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "Instagram smoke account"
@@ -230,6 +266,11 @@ try {
   Remove-Item Env:AGENTICTHAT_COMPANION_DISABLE_AUTOSTART -ErrorAction SilentlyContinue
   if ($null -ne $previousElectronRunAsNode) {
     $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode
+  }
+  if ($hadServiceTokenPublicKey) {
+    $env:SERVICE_TOKEN_PUBLIC_KEY = $previousServiceTokenPublicKey
+  } else {
+    Remove-Item Env:SERVICE_TOKEN_PUBLIC_KEY -ErrorAction SilentlyContinue
   }
 
   $resolvedSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
