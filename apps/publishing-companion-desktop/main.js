@@ -33,7 +33,9 @@ const configuredServicePort = Number(process.env.AGENTICTHAT_COMPANION_SERVICE_P
 const SERVICE_PORT = Number.isInteger(configuredServicePort) && configuredServicePort > 0 && configuredServicePort < 65536
   ? configuredServicePort
   : 8792;
-const SERVICE_HOST = process.env.AGENTICTHAT_COMPANION_SERVICE_HOST?.trim() || "127.0.0.1";
+// The desktop API is deliberately loopback-only. Workspace sharing uses the
+// outbound paired-token connection, never an exposed local port or tunnel.
+const SERVICE_HOST = "127.0.0.1";
 const SERVICE_ORIGIN = `http://127.0.0.1:${SERVICE_PORT}`;
 const configuredDesktopDebugPort = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 0);
 const REQUESTED_DESKTOP_DEBUG_PORT = Number.isInteger(configuredDesktopDebugPort) && configuredDesktopDebugPort > 0
@@ -1082,7 +1084,9 @@ function createWindow() {
   mainWindow.removeMenu();
   void mainWindow.loadFile(path.join(app.getAppPath(), "control.html"));
   mainWindow.once("ready-to-show", () => {
-    if (!process.argv.includes("--hidden")) mainWindow.show();
+    // The Companion is a background agent. Its tray menu is the normal manual
+    // entry point; login and explicit activity requests reveal the window.
+    if (process.argv.includes("--show")) mainWindow.show();
   });
   mainWindow.on("close", event => {
     if (quitting) return;

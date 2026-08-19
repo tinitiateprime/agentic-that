@@ -85,6 +85,11 @@ function accountReadiness(account, companion) {
   return isOnline(companion) ? "ready" : "waiting_for_companion";
 }
 
+function hasActiveJobLease(job, companionId, timestamp = Date.now()) {
+  const expiresAt = Date.parse(job?.leaseExpiresAt || "");
+  return job?.leaseOwner === companionId && Number.isFinite(expiresAt) && expiresAt > timestamp;
+}
+
 function publicCompanion(companion) {
   if (!companion) return null;
   return {
@@ -157,6 +162,24 @@ function uploadPublic(document, upload) {
     jobAttemptCount: job?.attemptCount || 0,
     companionStatus: accountState?.companionStatus || "offline",
   };
+}
+
+function resumeReconnectJobs(document, account, companion, timestamp) {
+  if (!account.credentialConfigured || !isOnline(companion, timestamp)) return;
+  for (const job of document.jobs) {
+    if (job.workspaceId !== account.workspaceId || job.accountId !== account.id || job.state !== "reconnect_required") continue;
+    const upload = document.uploads.find((item) => item.id === job.uploadId);
+    job.state = job.notBefore && Date.parse(job.notBefore) > timestamp ? "waiting_for_companion" : "queued";
+    job.leaseOwner = null;
+    job.leaseExpiresAt = null;
+    job.message = "The social session was reconnected. Publishing will continue automatically.";
+    job.updatedAt = now();
+    if (upload && upload.status !== "posted") {
+      upload.status = "queued";
+      upload.failureReason = null;
+      upload.updatedAt = job.updatedAt;
+    }
+  }
 }
 
 function findOwned(document, collection, workspaceId, itemId, label) {
@@ -441,6 +464,7 @@ export async function heartbeatCentralCompanion(token, input = {}) {
         account.companionId = companion.id;
         account.updatedAt = timestamp;
       }
+      resumeReconnectJobs(document, account, companion, timestamp);
     }
     return { document, result: publicCompanion(companion) };
   });
@@ -880,11 +904,17 @@ export async function updateCentralJob(token, jobId, input = {}) {
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
     const job = findOwned(document, "jobs", companion.workspaceId, jobId, "Publishing job");
-    if (job.leaseOwner && job.leaseOwner !== companion.id) throw new Error("This job belongs to a different Companion.");
+    if (TERMINAL_JOB_STATES.has(job.state)) throw new Error("This publishing job is already complete.");
+    if (!hasActiveJobLease(job, companion.id)) {
+      throw new Error("This Companion no longer holds the publishing job lease.");
+    }
     const upload = findOwned(document, "uploads", companion.workspaceId, job.uploadId, "Post");
     const account = findOwned(document, "accounts", companion.workspaceId, job.accountId, "Account");
     const state = states.has(input.state) ? input.state : "failed";
     const timestamp = now();
+    companion.status = "online";
+    companion.lastSeenAt = timestamp;
+    companion.updatedAt = timestamp;
     job.updatedAt = timestamp;
     job.leaseExpiresAt = new Date(Date.now() + JOB_LEASE_MS).toISOString();
     job.message = String(input.message || "").slice(0, 500) || null;
@@ -930,3 +960,11 @@ export async function publishingDashboard(workspaceId) {
 export function centralMediaFileName(originalName) {
   return cleanFileName(originalName);
 }
+
+// Kept deliberately small so recovery behaviour can be regression-tested
+// without connecting a test run to a production document store.
+export const centralPublishingTestHelpers = {
+  accountReadiness,
+  hasActiveJobLease,
+  resumeReconnectJobs,
+};

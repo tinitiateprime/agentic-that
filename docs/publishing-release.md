@@ -86,15 +86,3 @@ Content Uploaders and Schedulers use the website from their own devices. They
 see the accounts allowed by their role but do not install, configure, or receive
 the Companion's social-media session. If the paired Companion is offline, jobs
 remain safely queued and resume after it reconnects.
-
-### Retired tunnel deployment
-
-Do not use this older tunnel-based approach for new workspaces; it is retained
-only as historical release documentation.
-
-To let invited team members use one workspace Companion, run the Companion on an
-always-on machine and expose it through an HTTPS tunnel or domain. Start the app
-with `AGENTICTHAT_COMPANION_SERVICE_HOST=0.0.0.0`, then save the public HTTPS
-origin in **Connections → Publishing → Workspace Companion**. Team browsers keep
-using their local Companion first and automatically fall back to the saved
-workspace Companion.

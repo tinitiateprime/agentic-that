@@ -42,6 +42,13 @@ function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 
   return account.safetyStatus ?? 'healthy';
 }
 
+function accountConnectionLabel(account: PlatformAccount) {
+  if (!account.enabled) return 'Paused';
+  if (account.readiness === 'reconnect_required' || account.sessionStatus === 'reconnect_required' || !account.credentialConfigured) return 'Reconnect Required';
+  if (account.readiness === 'waiting_for_companion' || account.companionStatus === 'offline') return 'Waiting for Companion';
+  return 'Ready';
+}
+
 function accountPublishingEngine(account: PlatformAccount): PublishingEngine {
   return account.executionEngine ?? 'companion';
 }
@@ -339,10 +346,8 @@ function PlatformManagerAccess({
                 <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
               </div>}
               {status.connectionHelpRequired && !status.upgradeRequired && <>
-                <p className='temporary-access'>Confirm <strong>Local service: Connected</strong> in the Companion window. Then allow Local network access in Chrome, or install the Chrome bridge.</p>
+                <p className='temporary-access'>Refresh the page. If publishing is still unavailable, ask the Workspace Manager to open the paired Companion.</p>
                 <div className='publishing-setup-actions'>
-                  <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Download Chrome bridge</a>
-                  <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
                   <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
                 </div>
               </>}
@@ -741,6 +746,7 @@ function isWaitingForCompanion(upload: PlatformUpload, now = Date.now()) {
 
 function getAuditAction(upload: PlatformUpload) {
   if (upload.status === 'posted') return 'Published';
+  if (upload.statusDetail === 'reconnect_required') return 'Reconnect Required';
   if (upload.status === 'failed') return 'Needs attention';
   if (upload.statusDetail === 'opening_platform') return 'Opening Platform';
   if (upload.statusDetail === 'uploading') return 'Uploading';
@@ -769,6 +775,9 @@ function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone
   }
   if (upload.publishActionState === 'uncertain') {
     return { tone: 'uncertain', label: 'Confirmation unclear', detail: upload.failureReason || 'The final action was not retried. Inspect the platform before trying again.', timestamp };
+  }
+  if (upload.statusDetail === 'reconnect_required') {
+    return { tone: 'failed', label: 'Reconnect Required', detail: upload.failureReason || 'The saved social-media session needs to be reconnected by a Publishing Manager.', timestamp };
   }
   if (upload.status === 'failed') {
     return { tone: 'failed', label: 'Failed', detail: upload.failureReason || 'Publishing stopped and needs review.', timestamp };
@@ -1371,7 +1380,7 @@ function UnifiedComposer({
                   <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformAccounts.length : '—'}</i>
                 </button>
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
-                  {platformAccounts.map(account => <label key={account.id} className={account.credentialConfigured ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.credentialConfigured ? 'Login ready' : 'Login required'}</small></span></label>)}
+                  {platformAccounts.map(account => <label key={account.id} className={accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
                 </div>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
                 <div className='composer-platform-tools'>{!handoffOnly && <button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button>}<button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
@@ -1721,7 +1730,7 @@ function Workboard({
             const health = accountHealthStatus(account);
             return <article key={account.id} className={`account-health-row ${health}`}>
               <CustomIcon platform={account.platform} size={18} />
-              <span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {accountConnectionLabel(account)} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
               <em>{accountHealthLabels[health]}</em>
               {account.safetyReason && <small title={account.safetyReason}>{account.safetyReason}</small>}
             </article>;

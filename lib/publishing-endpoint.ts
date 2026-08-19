@@ -81,7 +81,7 @@ export async function publishingFetch(path: string, init: RequestInit = {}) {
   const origin = await resolvePublishingOrigin();
   if (!origin && typeof window !== "undefined") {
     throw new Error(
-      "The publishing companion could not be reached. Install the AgenticThat Chrome extension, start Start Publishing Companion.cmd, and try again."
+      "Publishing is unavailable right now. Refresh the page, or ask your Workspace Manager to open the paired Companion."
     );
   }
   const normalizedPath = path.startsWith("/api/") ? path : `/api/${path.replace(/^\//, "")}`;

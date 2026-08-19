@@ -30,8 +30,6 @@ import { rememberPublishingAccounts } from "@platform/use-product-status";
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
-const publishingExtensionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim()
-  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
   instagram: "Instagram",
@@ -639,11 +637,10 @@ function PublishingContent({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="The website cannot reach the Companion"
-        copy="Confirm Local service says Connected in the Companion window. Then allow Local network access in Chrome, or install the Chrome bridge."
+        title="Publishing is temporarily unavailable"
+        copy="Refresh this page. If it continues, ask the Workspace Manager to open the paired Companion."
         action={
           <div className="content-empty-actions">
-            <a className="content-primary" href={publishingExtensionDownloadUrl} target="_blank" rel="noreferrer">Download Chrome bridge<ExternalLink size={15} /></a>
             <button className="content-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
           </div>
         }
@@ -753,6 +750,13 @@ function PublishingContent({
 }
 
 function PublishingAccountCard({ account, uploads }) {
+  const connectionLabel = !account.enabled
+    ? "Paused"
+    : account.readiness === "reconnect_required" || account.sessionStatus === "reconnect_required" || !account.credentialConfigured
+      ? "Reconnect required"
+      : account.readiness === "waiting_for_companion" || account.companionStatus === "offline"
+        ? "Waiting for Companion"
+        : "Ready";
   const counts = uploads.reduce((result, upload) => {
     result[upload.status] = (result[upload.status] || 0) + 1;
     return result;
@@ -767,7 +771,7 @@ function PublishingAccountCard({ account, uploads }) {
       <header>
         <span><img src={platformLogos[account.platform]} alt="" /></span>
         <div><h3>{account.displayName}</h3><p>{account.handle}</p></div>
-        <StatusPill active={account.enabled && account.credentialConfigured}>{!account.enabled ? "Paused" : account.credentialConfigured ? "Ready" : "Login required"}</StatusPill>
+        <StatusPill active={connectionLabel === "Ready"}>{connectionLabel}</StatusPill>
       </header>
       <div className="content-post-counts">
         {Object.keys(statusLabels).map((status) => (
@@ -779,7 +783,7 @@ function PublishingAccountCard({ account, uploads }) {
       </div>
       <div className="content-account-fields">
         <AccountField label="Login identity" value={account.loginIdentifier} />
-        <AccountField label="Publishing login" value={account.credentialConfigured ? "Saved session ready" : "Open Login in Config Manager"} />
+        <AccountField label="Publishing login" value={connectionLabel === "Reconnect required" ? "Reconnect in Connections" : connectionLabel} />
         <AccountField label="Queued posts" value={String(counts.queued || 0)} />
         <AccountField label="Latest activity" value={formatDate(latestActivity)} />
         <AccountField label="Added" value={formatDate(account.createdAt)} />

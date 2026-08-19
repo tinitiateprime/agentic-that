@@ -37,8 +37,6 @@ import { rememberPublishingAccounts } from "@platform/use-product-status";
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
-const publishingExtensionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim()
-  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip";
 const publishingHealthUrl = "http://127.0.0.1:8792/api/health";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
@@ -238,7 +236,11 @@ export default function ConfigManager({
   }, [telegramIdentityToken]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
-    const session = candidateSession ?? readPublishingSession();
+    // Publishing is authorized by the current AgenticThat workspace session.
+    // A previous local Publish Queue password must never become the authority.
+    const session = publishingIdentityToken
+      ? { token: publishingIdentityToken }
+      : candidateSession ?? readPublishingSession();
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
@@ -266,7 +268,7 @@ export default function ConfigManager({
         setPublishingStatus("offline");
       }
     }
-  }, []);
+  }, [publishingIdentityToken]);
 
   const connectPublishing = useCallback(async () => {
     if (!publishingIdentityToken) { setPublishingStatus("unauthorized"); return; }
@@ -935,9 +937,9 @@ function PublishingManager({
     setCompanionBusy(true);
     try {
       const healthResponse = await fetch(publishingHealthUrl, { cache: "no-store", mode: "cors", targetAddressSpace: "loopback" });
-      if (!healthResponse.ok) throw new Error("Open the latest AgenticThat Companion on this device, then pair it again.");
+      if (!healthResponse.ok) throw new Error("Install and open AgenticThat Companion on this device, then try again.");
       const health = await healthResponse.json();
-      if (!health.automationReady || !health.companionInstanceId) throw new Error("The local Companion is not ready. Open it and try again.");
+      if (!health.automationReady || !health.companionInstanceId) throw new Error("AgenticThat Companion is still starting. Wait a moment and try again.");
       const companionInstanceId = String(health.companionInstanceId);
       const data = await publishingRequest("/api/companion/pair", session.token, {
         method: "POST",
@@ -955,9 +957,9 @@ function PublishingManager({
         })
       });
       onCompanionSaved(data.companion || null);
-      setNotice({ tone: "success", message: "This device is now the workspace Companion. It will serve authorized team members automatically." });
+      setNotice({ tone: "success", message: "This device is paired. It will publish for authorized workspace members automatically." });
     } catch (error) {
-      setNotice({ tone: "error", message: error.message });
+      setNotice({ tone: "error", message: error instanceof Error && /Companion|pair/i.test(error.message) ? error.message : "Could not pair this device. Open AgenticThat Companion here, then try again." });
     } finally {
       setCompanionBusy(false);
     }
@@ -984,12 +986,11 @@ function PublishingManager({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="The website cannot reach the Companion"
-        copy="Confirm Local service says Connected in the Companion window. In Chrome, allow Local network access for this site, or install the Chrome bridge, then try again."
+        title="Companion is not ready on this device"
+        copy="Install and open AgenticThat Companion on this computer, then try again. Team members do not need to do this."
         action={
           <div className="config-empty-actions">
-            <a className="config-primary" href={publishingExtensionDownloadUrl} target="_blank" rel="noreferrer">Download Chrome bridge<ExternalLink size={15} /></a>
-            <a className="config-secondary" href={publishingHealthUrl} target="_blank" rel="noreferrer">Test local service<ExternalLink size={15} /></a>
+            <a className="config-primary" href={publishingCompanionDownloadUrl}>Install Companion<ExternalLink size={15} /></a>
             <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
           </div>
         }
@@ -1061,7 +1062,7 @@ function PublishingManager({
           <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}{workspaceCompanion ? "Re-pair this device" : "Pair this device"}</button>
           {workspaceCompanion && <button className="config-secondary" type="button" onClick={() => void removeWorkspaceCompanion()} disabled={companionBusy}>Remove</button>}
         </div>
-        <p>No public URL, ngrok, or Cloudflare setup is needed.</p>
+        <p>Team members can use their normal workspace on any device.</p>
       </section>
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
@@ -1115,7 +1116,7 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Connected · Companion offline" : "Login required"}</span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : "Reconnect required"}</span>
               <span className="config-account-meta config-account-engine">{(account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
@@ -1168,7 +1169,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
           <fieldset className="config-engine-field wide">
             <legend>Publishing engine</legend>
             <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
-              <button type="button" className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Visible tabs inside Companion</small></span></button>
+              <button type="button" className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Runs in the background and opens only when attention is needed</small></span></button>
               <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button>
             </div>
             {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}

@@ -248,6 +248,7 @@ async function updateCentralJobStatus(pairing: CentralCompanionPairing, jobId: s
 }
 
 async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
+  let leaseHeartbeat: NodeJS.Timeout | null = null;
   try {
     const account = await upsertSyncedPlatformAccount(job.account);
     if (!account.credentialConfigured) {
@@ -259,6 +260,13 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
     await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");
     await updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.");
+    // Publishing media can take longer than a single job lease. Refresh the
+    // lease while this Companion owns the browser so another process cannot
+    // pick up the same post and submit it twice.
+    leaseHeartbeat = setInterval(() => {
+      void updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.")
+        .catch(() => undefined);
+    }, 60_000);
     await runAutomation({ trigger: "scheduler", workspaceId: pairing.workspaceId, uploadIds: [job.upload.id] });
     const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId)).find((item) => item.id === job.upload.id);
     if (localUpload?.status === "posted") {
@@ -270,6 +278,8 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);
     await updateCentralJobStatus(pairing, job.id, reconnect ? "reconnect_required" : "failed", message, !reconnect).catch(() => undefined);
+  } finally {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
   }
 }
 
