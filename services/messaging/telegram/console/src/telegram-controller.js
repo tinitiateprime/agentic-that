@@ -144,15 +144,61 @@ function toggleTelegramGuide() {
 
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, options = {}) {
-  const endpoint = apiBase ? apiBase + path.replace(/^\/v1/, "") : path;
-  const headers = options.body ? { "content-type": "application/json" } : {};
-  if (centralServiceToken) {
-    centralServiceToken = await getClientServiceToken("telegram", centralServiceToken);
-    headers.authorization = `Bearer ${centralServiceToken}`;
+  const endpoint = apiBase
+    ? apiBase + path.replace(/^\/v1/, "")
+    : path;
+
+  const makeRequest = async (forceRefresh = false) => {
+    const headers = options.body
+      ? { "content-type": "application/json" }
+      : {};
+
+    if (centralServiceToken) {
+      try {
+        centralServiceToken = await getClientServiceToken(
+          "telegram",
+          centralServiceToken,
+          forceRefresh
+        );
+
+        headers.authorization = `Bearer ${centralServiceToken}`;
+      } catch (error) {
+        if (error?.status === 401) {
+          throw new ApiError("Your session has ended.", 401);
+        }
+
+        throw error;
+      }
+    }
+
+    return fetch(endpoint, {
+      method: options.method || "GET",
+      credentials: "same-origin",
+      headers,
+      body: options.body
+        ? JSON.stringify(options.body)
+        : undefined,
+    });
+  };
+
+  let response = await makeRequest(false);
+
+  // A Netlify deploy/session refresh can leave the browser holding
+  // an otherwise valid-looking but no-longer-accepted service token.
+  // Refresh it once before treating the request as unauthorized.
+  if (response.status === 401 && centralServiceToken) {
+    response = await makeRequest(true);
   }
-  const response = await fetch(endpoint, { method: options.method || "GET", credentials: "same-origin", headers, body: options.body ? JSON.stringify(options.body) : undefined });
+
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(data.error || "The request could not be completed.", response.status);
+
+  if (!response.ok) {
+    throw new ApiError(
+      data.error || "The request could not be completed.",
+      response.status
+    );
+  }
+
   return data;
 }
 
