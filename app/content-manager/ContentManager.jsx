@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { publishingFetch } from "../../lib/publishing-endpoint";
 import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
+import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
@@ -270,6 +271,7 @@ export default function ContentManager({
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
+      rememberPublishingAccounts([]);
       setPublishingUploads([]);
       setPublishingSchedules([]);
       setPublishingStatus("needs-login");
@@ -285,8 +287,10 @@ export default function ContentManager({
       ]);
 
       const nextSession = { token: session.token, user: me };
+      const accountList = accountsResult.status === "fulfilled" && Array.isArray(accountsResult.value) ? accountsResult.value : [];
       setPublishingSession(nextSession);
-      setPublishingAccounts(accountsResult.status === "fulfilled" && Array.isArray(accountsResult.value) ? accountsResult.value : []);
+      setPublishingAccounts(accountList);
+      rememberPublishingAccounts(accountList);
       setPublishingUploads(uploadsResult.status === "fulfilled" && Array.isArray(uploadsResult.value) ? uploadsResult.value : []);
       setPublishingSchedules(schedulesResult.status === "fulfilled" && Array.isArray(schedulesResult.value) ? schedulesResult.value : []);
       setPublishingStatus("ready");
@@ -295,6 +299,7 @@ export default function ContentManager({
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
         setPublishingAccounts([]);
+        rememberPublishingAccounts([]);
         setPublishingUploads([]);
         setPublishingSchedules([]);
         setPublishingStatus("needs-login");

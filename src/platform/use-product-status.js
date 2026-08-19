@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { publishingFetch } from "../../lib/publishing-endpoint";
+import { getClientServiceToken } from "./client-service-token";
 
-const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const PUBLISH_ACCOUNT_SUMMARY_KEY = "agenticthat-publish-account-summary";
 
 function readJson(key, fallback) {
@@ -16,25 +17,60 @@ function readJson(key, fallback) {
 async function jsonResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.error || "Unable to check service status");
+    const error = new Error(data.error || data.message || "Unable to check service status");
     error.status = response.status;
     throw error;
   }
   return data;
 }
 
+function summarizePublishingAccounts(accounts) {
+  return Array.isArray(accounts)
+    ? accounts.map(({ workspaceId, platform, displayName, handle, enabled, credentialConfigured }) => ({
+        workspaceId,
+        platform,
+        displayName,
+        handle,
+        enabled: Boolean(enabled),
+        credentialConfigured: Boolean(credentialConfigured),
+      }))
+    : [];
+}
+
+async function loadPublishingAccounts() {
+  const headers = new Headers();
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing"));
+  const response = await publishingFetch("/api/accounts", {
+    cache: "no-store",
+    headers,
+  });
+  return jsonResponse(response);
+}
+
 export function useProductStatus() {
   const [whatsapp, setWhatsapp] = useState({ state: "checking" });
   const [telegram, setTelegram] = useState({ state: "checking", accounts: 0 });
+  const [publishing, setPublishing] = useState({ state: "checking" });
   const [publishingAccounts, setPublishingAccounts] = useState([]);
 
   const refresh = useCallback(async () => {
     setWhatsapp({ state: "checking" });
     setTelegram({ state: "checking", accounts: 0 });
 
-    const publishingSession = readJson(PUBLISH_SESSION_KEY, null);
-    const cachedAccounts = readJson(PUBLISH_ACCOUNT_SUMMARY_KEY, []);
-    setPublishingAccounts(publishingSession?.token && Array.isArray(cachedAccounts) ? cachedAccounts : []);
+    const cachedAccounts = summarizePublishingAccounts(readJson(PUBLISH_ACCOUNT_SUMMARY_KEY, []));
+    setPublishingAccounts(cachedAccounts);
+    setPublishing({ state: cachedAccounts.length ? "ready" : "checking" });
+
+    void loadPublishingAccounts()
+      .then((accounts) => {
+        const accountList = summarizePublishingAccounts(accounts);
+        rememberPublishingAccounts(accountList);
+        setPublishingAccounts(accountList);
+        setPublishing({ state: "ready" });
+      })
+      .catch(() => {
+        setPublishing({ state: cachedAccounts.length ? "ready" : "setup" });
+      });
 
     void fetch("/api/apps/status", { cache: "no-store", credentials: "include" })
       .then(jsonResponse)
@@ -86,27 +122,20 @@ export function useProductStatus() {
     }
     if (service.connectionKind === "publishing") {
       const account = publishingAccounts.find((item) => item.platform === service.platform && item.enabled && item.credentialConfigured);
+      if (!account && publishing.state === "checking") return { state: "checking", label: "Checking" };
       return account
         ? { state: "connected", label: "Connected", detail: account.displayName || account.handle || "Login ready" }
         : { state: "setup", label: "Setup required" };
     }
     return { state: "setup", label: "Setup required" };
-  }, [publishingAccounts, telegram, whatsapp]);
+  }, [publishing, publishingAccounts, telegram, whatsapp]);
 
-  const summary = useMemo(() => ({ whatsapp, telegram, publishingAccounts }), [publishingAccounts, telegram, whatsapp]);
+  const summary = useMemo(() => ({ whatsapp, telegram, publishing, publishingAccounts }), [publishing, publishingAccounts, telegram, whatsapp]);
   return { statusFor, refresh, summary };
 }
 
 export function rememberPublishingAccounts(accounts) {
   if (typeof window === "undefined") return;
-  const summary = Array.isArray(accounts)
-    ? accounts.map(({ platform, displayName, handle, enabled, credentialConfigured }) => ({
-        platform,
-        displayName,
-        handle,
-        enabled: Boolean(enabled),
-        credentialConfigured: Boolean(credentialConfigured),
-      }))
-    : [];
+  const summary = summarizePublishingAccounts(accounts);
   window.sessionStorage.setItem(PUBLISH_ACCOUNT_SUMMARY_KEY, JSON.stringify(summary));
 }
