@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  windows-release:
+  portable-release:
     runs-on: windows-latest
     steps:
       - name: Check out source
@@ -31,35 +31,19 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci --prefix apps/publishing-companion-desktop
 
-      - name: Require Windows signing certificate
-        shell: pwsh
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Build unsigned portable Companion
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)) {
-            throw "WINDOWS_CERTIFICATE_BASE64 is required. Public Companion releases must never be unsigned."
-          }
-          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
-            throw "WINDOWS_CERTIFICATE_PASSWORD is required. Public Companion releases must never be unsigned."
-          }
-          $certificatePath = Join-Path $env:RUNNER_TEMP "agenticthat-signing.pfx"
-          [System.IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-          "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          npm run publishing:brand-assets
+          npm --prefix apps/publishing-companion-desktop run make
 
-      - name: Build extension and Windows companion
-        run: npm run publishing:release:windows
-        env:
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-
-      - name: Verify trusted Windows signatures
+      - name: Collect portable Companion ZIP
         shell: pwsh
-        run: ./scripts/verify-publishing-windows-signatures.ps1
+        run: ./scripts/collect-publishing-release-artifacts.ps1 -PortableOnly
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: publishing-companion-windows
+          name: publishing-companion-portable
           path: artifacts/*
           if-no-files-found: error
 

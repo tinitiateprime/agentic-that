@@ -32,13 +32,11 @@ Use Microsoft Store MSIX distribution as the primary public installation path:
    MSIX, so users do not receive SmartScreen or Smart App Control warnings
    during Store installation.
 
-Public Windows releases require an RSA Authenticode certificate issued by a CA
-in the Microsoft Trusted Root Program. Add its base64-encoded PFX as the GitHub
-Actions secret `WINDOWS_CERTIFICATE_BASE64` and its password as
-`WINDOWS_CERTIFICATE_PASSWORD`. The release workflow fails closed when either
-secret is absent or when the Portable app and Setup executable do not have valid,
-timestamped signatures. Unsigned builds are allowed only for local development
-and must never be distributed.
+The current GitHub release workflow publishes an **unsigned Portable ZIP only**
+for product testing. Windows may show a security warning because it is not code
+signed. Switch back to signed portable and installer releases before public
+production distribution by adding `WINDOWS_CERTIFICATE_BASE64` and
+`WINDOWS_CERTIFICATE_PASSWORD` and restoring signature verification.
 
 For a zero-warning consumer installation, publish an MSIX package through the
 Microsoft Store. Microsoft signs Store MSIX submissions after certification.
@@ -67,11 +65,10 @@ git tag publishing-v1.1.3
 git push origin publishing-v1.1.3
 ```
 
-GitHub Actions signs the packaged Companion binaries before creating the
-Portable ZIP, signs the Windows installer, verifies both signatures and their
-trusted timestamps, then builds the extension ZIP. The tag job publishes all
-three as a GitHub Release. It also publishes the portable ZIP with a stable
-unversioned filename, which is the download used by Netlify.
+GitHub Actions builds the Portable ZIP and publishes it with both a versioned
+filename and a stable unversioned filename, which is the download used by
+Netlify. This temporary test-release workflow does not publish an installer or
+extension ZIP.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The
