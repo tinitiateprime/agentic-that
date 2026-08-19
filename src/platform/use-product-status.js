@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { publishingFetch } from "../../lib/publishing-endpoint";
 import { getClientServiceToken } from "./client-service-token";
 
 const PUBLISH_ACCOUNT_SUMMARY_KEY = "agenticthat-publish-account-summary";
@@ -40,9 +39,10 @@ function summarizePublishingAccounts(accounts) {
 async function loadPublishingAccounts() {
   const headers = new Headers();
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing"));
-  const response = await publishingFetch("/api/accounts", {
+  const response = await fetch("/api/publishing/accounts", {
     cache: "no-store",
     headers,
+    credentials: "include",
   });
   return jsonResponse(response);
 }

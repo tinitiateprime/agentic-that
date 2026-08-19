@@ -252,6 +252,7 @@ export const platformUploadSchema = z.object({
   title: z.string().optional(),
   caption: z.string().min(1, "Caption is required"),
   status: uploadStatusSchema,
+  statusDetail: z.enum(["queued", "waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "reconnect_required"]).optional(),
   failureReason: z.string().optional(),
   attemptCount: z.number().int().nonnegative().optional(),
   lastAttemptAt: z.string().optional(),

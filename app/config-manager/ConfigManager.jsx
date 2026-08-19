@@ -30,7 +30,6 @@ import {
   Zap
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { publishingFetch } from "../../lib/publishing-endpoint";
 import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
@@ -144,21 +143,22 @@ async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
-  const response = await publishingFetch(path, {
+  const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
+  const response = await fetch("/api/publishing" + normalized, {
     ...init,
-    headers
+    headers,
+    credentials: "include"
   });
   return responsePayload(response);
 }
 
-async function workspaceCompanionRequest(init = {}) {
+async function localCompanionRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await fetch("/api/workspace-companion", {
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
+  const response = await fetch("http://127.0.0.1:8792" + path, {
     ...init,
-    cache: "no-store",
-    credentials: "include",
-    headers
+    cache: "no-store", headers, mode: "cors", targetAddressSpace: "loopback"
   });
   return responsePayload(response);
 }
@@ -292,7 +292,7 @@ export default function ConfigManager({
   const loadWorkspaceCompanion = useCallback(async () => {
     if (!publishingIdentityToken) return;
     try {
-      const data = await workspaceCompanionRequest();
+      const data = await publishingRequest("/api/companion", publishingIdentityToken);
       setWorkspaceCompanion(data.companion || null);
     } catch {
       setWorkspaceCompanion(null);
@@ -302,6 +302,11 @@ export default function ConfigManager({
   useEffect(() => {
     void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion()]);
   }, [connectPublishing, loadTelegram, loadWorkspaceCompanion]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void loadWorkspaceCompanion(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [loadWorkspaceCompanion]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
@@ -817,12 +822,7 @@ function PublishingManager({
   const [busy, setBusy] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [sharedCompanionUrl, setSharedCompanionUrl] = useState(workspaceCompanion?.origin || "");
   const [companionBusy, setCompanionBusy] = useState(false);
-
-  useEffect(() => {
-    setSharedCompanionUrl(workspaceCompanion?.origin || "");
-  }, [workspaceCompanion?.origin]);
 
   const platformAccounts = useMemo(
     () => accounts.filter(account => account.platform === selectedPlatform),
@@ -901,13 +901,21 @@ function PublishingManager({
   };
 
   const startLogin = async (account, surface = "engine") => {
+    if (!workspaceCompanion) {
+      setNotice({ tone: "error", message: "Pair this manager device as the Workspace Companion before signing in to a social account." });
+      return;
+    }
     setLoginAccountId(account.id);
     try {
-      const result = await publishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, {
+      await localCompanionRequest("/api/companion/accounts/import", session.token, {
+        method: "POST",
+        body: JSON.stringify({ account })
+      });
+      const result = await localCompanionRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, {
         method: "POST",
         body: JSON.stringify({ surface })
       });
-      setNotice({ tone: "success", message: result.message });
+      setNotice({ tone: "success", message: result.message || "Complete the sign-in in the Companion browser. The workspace will update automatically." });
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -923,28 +931,31 @@ function PublishingManager({
     window.location.assign(destination.toString());
   };
 
-  const registerSharedCompanion = async (event) => {
-    event.preventDefault();
+  const pairWorkspaceCompanion = async () => {
     setCompanionBusy(true);
     try {
-      let companionInstanceId = "";
-      try {
-        const healthResponse = await fetch(publishingHealthUrl, { cache: "no-store" });
-        const health = healthResponse.ok ? await healthResponse.json() : {};
-        companionInstanceId = String(health.companionInstanceId || "");
-      } catch {
-        companionInstanceId = "";
-      }
-      const data = await workspaceCompanionRequest({
+      const healthResponse = await fetch(publishingHealthUrl, { cache: "no-store", mode: "cors", targetAddressSpace: "loopback" });
+      if (!healthResponse.ok) throw new Error("Open the latest AgenticThat Companion on this device, then pair it again.");
+      const health = await healthResponse.json();
+      if (!health.automationReady || !health.companionInstanceId) throw new Error("The local Companion is not ready. Open it and try again.");
+      const companionInstanceId = String(health.companionInstanceId);
+      const data = await publishingRequest("/api/companion/pair", session.token, {
         method: "POST",
         body: JSON.stringify({
-          origin: sharedCompanionUrl.trim(),
           label: "Workspace Companion",
           companionInstanceId
         })
       });
+      await localCompanionRequest("/api/companion/pair", session.token, {
+        method: "POST",
+        body: JSON.stringify({
+          serverOrigin: window.location.origin,
+          pairingToken: data.token,
+          companion: data.companion
+        })
+      });
       onCompanionSaved(data.companion || null);
-      setNotice({ tone: "success", message: "Workspace Companion was saved for this workspace." });
+      setNotice({ tone: "success", message: "This device is now the workspace Companion. It will serve authorized team members automatically." });
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -952,13 +963,12 @@ function PublishingManager({
     }
   };
 
-  const removeSharedCompanion = async () => {
+  const removeWorkspaceCompanion = async () => {
     setCompanionBusy(true);
     try {
-      await workspaceCompanionRequest({ method: "DELETE" });
+      await publishingRequest("/api/companion", session.token, { method: "DELETE" });
       onCompanionSaved(null);
-      setSharedCompanionUrl("");
-      setNotice({ tone: "success", message: "Workspace Companion was removed." });
+      setNotice({ tone: "success", message: "Workspace Companion pairing was removed." });
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -1039,29 +1049,20 @@ function PublishingManager({
         </div>
       </div>
 
-      <form className="config-shared-companion" onSubmit={registerSharedCompanion}>
+      <section className="config-shared-companion">
         <div>
           <span><MonitorCheck size={18} /></span>
           <div>
             <strong>Workspace Companion</strong>
-            <small>{workspaceCompanion?.origin ? "Team browsers use this when local Companion is not available." : "Optional: save one always-on Companion URL for this workspace."}</small>
+            <small>{workspaceCompanion?.status === "online" ? "Online — it can publish for authorized workspace members." : workspaceCompanion ? "Offline — queued posts will continue when it reconnects." : "Pair the manager device once. Team members do not install or configure it."}</small>
           </div>
         </div>
-        <label>
-          <span>Shared Companion URL</span>
-          <input
-            value={sharedCompanionUrl}
-            onChange={event => setSharedCompanionUrl(event.target.value)}
-            placeholder="https://companion.yourcompany.com"
-            required
-          />
-        </label>
         <div className="config-shared-companion-actions">
-          <button className="config-primary" type="submit" disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Save</button>
-          {workspaceCompanion?.origin && <button className="config-secondary" type="button" onClick={() => void removeSharedCompanion()} disabled={companionBusy}>Remove</button>}
+          <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}{workspaceCompanion ? "Re-pair this device" : "Pair this device"}</button>
+          {workspaceCompanion && <button className="config-secondary" type="button" onClick={() => void removeWorkspaceCompanion()} disabled={companionBusy}>Remove</button>}
         </div>
-        <p>Use HTTPS for Netlify. Do not use 127.0.0.1 for team devices.</p>
-      </form>
+        <p>No public URL, ngrok, or Cloudflare setup is needed.</p>
+      </section>
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
         {allowedPlatforms.map(platform => {
@@ -1114,7 +1115,7 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Connected" : "Login required"}</span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Connected · Companion offline" : "Login required"}</span>
               <span className="config-account-meta config-account-engine">{(account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>

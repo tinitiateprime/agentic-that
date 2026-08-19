@@ -91,6 +91,8 @@ import {
   updateUploadDetails,
   updateUploadStatus,
   updateUserProfile,
+  upsertSyncedPlatformAccount,
+  upsertSyncedUpload,
 } from "./local-storage.js";
 import {
   assertAccountEngineChangeAllowed,
@@ -139,6 +141,8 @@ const allowedUploadMimePrefixes = ["image/", "video/"];
 const imageUploadExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const videoUploadExtensions = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"]);
 const maxUploadFileSize = Number(process.env.UPLOAD_MAX_FILE_BYTES ?? 500 * 1024 * 1024);
+const centralPairingFile = path.join(uploadDir, ".workspace-companion", "pairing.json");
+const centralPollIntervalMs = Math.max(5_000, Number(process.env.AGENTICTHAT_COMPANION_POLL_MS ?? 12_000));
 const configuredWebOrigins = new Set(
   (process.env.PUBLISH_QUEUE_WEB_ORIGIN ?? process.env.WEB_ORIGIN ?? "")
     .split(",")
@@ -148,6 +152,163 @@ const configuredWebOrigins = new Set(
 
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(stagedUploadDir, { recursive: true });
+
+type CentralCompanionPairing = {
+  serverOrigin: string;
+  pairingToken: string;
+  companionId: string;
+  workspaceId: string;
+  savedAt: string;
+};
+
+type CentralPublishingJob = {
+  id: string;
+  upload: PlatformUpload;
+  account: PlatformAccount;
+};
+
+let centralPollingTimer: NodeJS.Timeout | null = null;
+let centralPollInFlight = false;
+
+function centralServerOrigin(value: unknown) {
+  const raw = String(value || "").trim().replace(/\/$/, "");
+  const url = new URL(raw);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
+    throw new Error("The AgenticThat server URL must use HTTPS.");
+  }
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("The AgenticThat server URL is invalid.");
+  }
+  return url.origin;
+}
+
+async function readCentralPairing(): Promise<CentralCompanionPairing | null> {
+  try {
+    const value = JSON.parse(await fs.promises.readFile(centralPairingFile, "utf8")) as CentralCompanionPairing;
+    if (!value?.serverOrigin || !value?.pairingToken || !value?.workspaceId || !value?.companionId) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCentralPairing(value: CentralCompanionPairing) {
+  await fs.promises.mkdir(path.dirname(centralPairingFile), { recursive: true });
+  const temporary = `${centralPairingFile}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(temporary, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
+  await fs.promises.rename(temporary, centralPairingFile);
+}
+
+async function centralRequest(pairing: CentralCompanionPairing, endpoint: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("X-AgenticThat-Companion-Token", pairing.pairingToken);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch(`${pairing.serverOrigin}/api/publishing${endpoint}`, { ...init, headers });
+  if (!response.ok) {
+    const payload = await response.text().catch(() => "");
+    throw new Error(payload || `AgenticThat server returned ${response.status}.`);
+  }
+  return response;
+}
+
+async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
+  const accounts = await listPlatformAccounts(undefined, pairing.workspaceId);
+  await centralRequest(pairing, "/companion/heartbeat", {
+    method: "POST",
+    body: JSON.stringify({ companionInstanceId: publishingCompanionId(), accounts }),
+  });
+}
+
+async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string) {
+  const safeName = path.basename(String(fileName || ""));
+  if (!safeName || safeName !== fileName) throw new Error("The publishing media filename is invalid.");
+  const localPath = path.join(uploadDir, safeName);
+  try {
+    await fs.promises.access(localPath);
+    return localPath;
+  } catch {
+    // Download only after the local copy is confirmed absent.
+  }
+  const response = await centralRequest(pairing, `/media/${encodeURIComponent(safeName)}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error("The publishing media file is empty.");
+  const temporary = `${localPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+  await fs.promises.writeFile(temporary, bytes, { mode: 0o600 });
+  await fs.promises.rename(temporary, localPath);
+  return localPath;
+}
+
+async function updateCentralJobStatus(pairing: CentralCompanionPairing, jobId: string, state: string, message?: string, retry?: boolean) {
+  await centralRequest(pairing, `/companion/jobs/${encodeURIComponent(jobId)}/status`, {
+    method: "POST",
+    body: JSON.stringify({ state, message, retry }),
+  });
+}
+
+async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
+  try {
+    const account = await upsertSyncedPlatformAccount(job.account);
+    if (!account.credentialConfigured) {
+      await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
+      return;
+    }
+    if (job.upload.fileName) await downloadCentralPublishingMedia(pairing, job.upload.fileName);
+    await upsertSyncedUpload(job.upload);
+    await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
+    await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");
+    await updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.");
+    await runAutomation({ trigger: "scheduler", workspaceId: pairing.workspaceId, uploadIds: [job.upload.id] });
+    const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId)).find((item) => item.id === job.upload.id);
+    if (localUpload?.status === "posted") {
+      await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false);
+      return;
+    }
+    await updateCentralJobStatus(pairing, job.id, "failed", localUpload?.failureReason || "The local publisher did not confirm delivery.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
+    const reconnect = /login|session|credential|authenticat/i.test(message);
+    await updateCentralJobStatus(pairing, job.id, reconnect ? "reconnect_required" : "failed", message, !reconnect).catch(() => undefined);
+  }
+}
+
+async function pollCentralWorkspaceCompanion() {
+  if (centralPollInFlight) return;
+  centralPollInFlight = true;
+  try {
+    const pairing = await readCentralPairing();
+    if (!pairing) return;
+    await heartbeatCentralPairing(pairing);
+    const response = await centralRequest(pairing, "/companion/jobs?limit=1");
+    const payload = await response.json() as { jobs?: CentralPublishingJob[] };
+    for (const job of payload.jobs || []) await runCentralPublishingJob(pairing, job);
+  } catch (error) {
+    // A network outage is normal while the server is unavailable. The next
+    // heartbeat retries automatically without exposing secrets in the UI.
+    const message = error instanceof Error ? error.message : String(error);
+    if (/pairing is no longer valid/i.test(message)) {
+      await fs.promises.unlink(centralPairingFile).catch(() => undefined);
+      console.warn("Workspace Companion pairing was removed from the server. Pair this device again to resume publishing.");
+    } else {
+      console.warn("Workspace Companion reconnect pending:", message);
+    }
+  } finally {
+    centralPollInFlight = false;
+  }
+}
+
+function startCentralWorkspaceCompanionPolling() {
+  if (centralPollingTimer) return;
+  void pollCentralWorkspaceCompanion();
+  centralPollingTimer = setInterval(() => void pollCentralWorkspaceCompanion(), centralPollIntervalMs);
+}
+
+function stopCentralWorkspaceCompanionPolling() {
+  if (!centralPollingTimer) return;
+  clearInterval(centralPollingTimer);
+  centralPollingTimer = null;
+}
 
 app.use((req, res, next) => {
   if (req.headers["access-control-request-private-network"] === "true") {
@@ -991,7 +1152,18 @@ app.use(
         loopbackOrigin = false;
       }
 
-      callback(null, loopbackOrigin || configuredWebOrigins.has(requestOrigin));
+      let trustedAgenticThatOrigin = false;
+      try {
+        const origin = new URL(requestOrigin);
+        // The local service still verifies every API call with a short-lived
+        // AgenticThat workspace token. Allowing HTTPS customer domains here
+        // avoids a manual CORS/tunnel setup for Netlify custom domains.
+        trustedAgenticThatOrigin = origin.protocol === "https:";
+      } catch {
+        trustedAgenticThatOrigin = false;
+      }
+
+      callback(null, loopbackOrigin || trustedAgenticThatOrigin || configuredWebOrigins.has(requestOrigin));
     }
   })
 );
@@ -1031,6 +1203,38 @@ app.get("/api/health", async (_req, res) => {
       storage: "unavailable",
       message: error instanceof Error ? error.message : "Local storage unavailable"
     });
+  }
+});
+
+app.post("/api/companion/pair", async (req, res, next) => {
+  try {
+    const header = req.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+    const identity = verifyPublishingWorkspaceIdentity(token);
+    if (!identity || !Array.isArray(identity.capabilities) || !identity.capabilities.includes("publishing.accounts.configure")) {
+      res.status(403).json({ message: "A Publishing Manager must pair the workspace Companion." });
+      return;
+    }
+    const body = z.object({
+      serverOrigin: z.string().min(1),
+      pairingToken: z.string().min(32),
+      companion: z.object({ id: z.string().min(1), workspaceId: z.string().min(1) }),
+    }).parse(req.body ?? {});
+    if (body.companion.workspaceId !== identity.workspaceId) {
+      res.status(403).json({ message: "This Companion can only be paired to its own workspace." });
+      return;
+    }
+    await writeCentralPairing({
+      serverOrigin: centralServerOrigin(body.serverOrigin),
+      pairingToken: body.pairingToken,
+      companionId: body.companion.id,
+      workspaceId: body.companion.workspaceId,
+      savedAt: new Date().toISOString(),
+    });
+    startCentralWorkspaceCompanionPolling();
+    res.status(201).json({ paired: true, workspaceId: body.companion.workspaceId, companionInstanceId: publishingCompanionId() });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -1376,6 +1580,34 @@ app.delete("/api/scraping/facebook/jobs/:id", authenticateFacebookScraping, asyn
 });
 
 app.use("/api", authenticateApi);
+
+app.post("/api/companion/accounts/import", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
+  try {
+    const account = req.body?.account as PlatformAccount | undefined;
+    const user = currentUser(req);
+    if (!account || typeof account !== "object" || !account.id || !account.platform || account.workspaceId !== user.workspaceId) {
+      res.status(400).json({ message: "A valid workspace publishing account is required." });
+      return;
+    }
+    const selectedPlatform = platformSchema.parse(account.platform);
+    assertCentralPlatformAccess(req, selectedPlatform, "configure");
+    const imported = await upsertSyncedPlatformAccount({
+      ...account,
+      platform: selectedPlatform,
+      credentialConfigured: Boolean(account.credentialConfigured),
+      enabled: account.enabled !== false,
+      executionEngine: account.executionEngine === "external_browser" ? "external_browser" : "companion",
+      displayName: String(account.displayName || account.handle || selectedPlatform),
+      handle: String(account.handle || ""),
+      loginIdentifier: String(account.loginIdentifier || ""),
+      createdAt: account.createdAt || new Date().toISOString(),
+      updatedAt: account.updatedAt || new Date().toISOString(),
+    });
+    res.status(201).json(imported);
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/media/:fileName", async (req: RequestWithUser, res, next) => {
   try {
@@ -2260,6 +2492,7 @@ export function createPublishingHttpServer(options: PublishingHttpServerOptions 
         console.warn("Could not reconcile saved publishing sessions:", error instanceof Error ? error.message : error);
       });
       startScheduler();
+      startCentralWorkspaceCompanionPolling();
     })();
   });
   return server;
@@ -2277,6 +2510,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   stopScheduler();
+  stopCentralWorkspaceCompanionPolling();
   server?.close();
 }
 

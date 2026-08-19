@@ -692,6 +692,7 @@ async function openInstagramScrapingBrowser(request) {
       sandbox: true,
       spellcheck: false,
       backgroundThrottling: false,
+      backgroundThrottling: false,
     },
   });
   workerWindow.removeMenu();
@@ -894,8 +895,10 @@ async function openManagedBrowser(request) {
   view.setVisible(false);
   await view.webContents.loadURL(targetUrl);
 
-  showCompanion("activity", request.purpose === "login");
-  notifyWorkspaceState({ revealActivity: true });
+  // Publishing stays in the background. Only a human login needs the
+  // Companion window to be shown automatically.
+  if (request.purpose === "login") showCompanion("activity", true);
+  notifyWorkspaceState({ revealActivity: request.purpose === "login" });
   applyWorkspaceLayout();
 
   return {
@@ -933,8 +936,8 @@ async function openExternalActivity(request) {
     openedAt: new Date().toISOString(),
     closedAt: null,
   });
-  showCompanion("activity", false);
-  notifyWorkspaceState({ revealActivity: true });
+  if (request.purpose === "login") showCompanion("activity", true);
+  notifyWorkspaceState({ revealActivity: request.purpose === "login" });
   return { id, workspaceBounds };
 }
 
@@ -1072,6 +1075,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false,
       preload: path.join(app.getAppPath(), "preload.cjs"),
     },
   });

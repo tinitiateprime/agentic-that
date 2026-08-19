@@ -1229,6 +1229,54 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
   });
 }
 
+// Central workspace metadata never includes secrets. This keeps a local account
+// record in sync with the server while preserving the encrypted local session.
+export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
+  return mutateStore(store => {
+    const index = store.accounts.findIndex(account => account.id === input.id && account.workspaceId === input.workspaceId);
+    const timestamp = nowIso();
+    const executionEngine = input.executionEngine === "external_browser" ? "external_browser" : "companion";
+    if (index < 0) {
+      const created: PlatformAccount = {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        companionId: input.companionId || undefined,
+        platform: input.platform,
+        displayName: input.displayName,
+        handle: input.handle,
+        loginIdentifier: input.loginIdentifier || "",
+        credentialConfigured: Boolean(input.credentialConfigured),
+        enabled: input.enabled !== false,
+        executionEngine,
+        safetyStatus: input.enabled === false ? "paused" : "healthy",
+        safetyMode: input.safetyMode || "protected",
+        twoFactorEnabled: Boolean(input.twoFactorEnabled),
+        createdAt: input.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      store.accounts.push(created);
+      return created;
+    }
+    const existing = store.accounts[index];
+    const updated: PlatformAccount = {
+      ...existing,
+      displayName: input.displayName || existing.displayName,
+      handle: input.handle || existing.handle,
+      loginIdentifier: input.loginIdentifier || existing.loginIdentifier,
+      enabled: input.enabled !== false,
+      executionEngine,
+      companionId: input.companionId || existing.companionId,
+      // A central heartbeat can safely turn a disconnected session off, but it
+      // must never erase a session that this Companion has just saved locally.
+      credentialConfigured: Boolean(input.credentialConfigured) || existing.credentialConfigured,
+      safetyStatus: input.enabled === false ? "paused" : existing.safetyStatus === "paused" ? "healthy" : existing.safetyStatus,
+      updatedAt: timestamp,
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+}
+
 export async function pausePlatformAccountForSafety(
   accountId: string,
   status: "warning" | "paused" | "restricted",
@@ -1720,6 +1768,28 @@ export async function createUpload(
   });
   await insertPostStatusHistory(upload.id, null, "queued", "Post created", upload.uploadedAt, actorUserId);
   return upload;
+}
+
+export async function upsertSyncedUpload(input: PlatformUpload) {
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === input.id && upload.workspaceId === input.workspaceId);
+    const timestamp = nowIso();
+    const normalized: PlatformUpload = {
+      ...input,
+      postFormat: input.postFormat || "text",
+      extension: input.extension || path.extname(input.originalName || "").replace(".", ""),
+      status: index >= 0 ? store.uploads[index].status : "queued",
+      publishActionState: input.publishActionState === "submitted" || input.publishActionState === "uncertain" || input.publishActionState === "prepared" || input.publishActionState === "confirmed"
+        ? input.publishActionState
+        : "not_started",
+      uploadedAt: input.uploadedAt || timestamp,
+      updatedAt: timestamp,
+      automation: input.automation || createAutomation(input.platform, input.accountId, input.id, input.url),
+    };
+    if (index >= 0) store.uploads[index] = { ...store.uploads[index], ...normalized, status: store.uploads[index].status };
+    else store.uploads.unshift(normalized);
+    return index >= 0 ? store.uploads[index] : normalized;
+  });
 }
 
 export async function updateUploadStatus(

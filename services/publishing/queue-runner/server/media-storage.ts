@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { publishingUploadDirectory } from "./runtime-paths.js";
+import { publishingUploadDirectory } from "./runtime-paths.ts";
 
 const sharedMediaEnabled = () => (
   process.env.DATA_STORE === "netlify-blobs"

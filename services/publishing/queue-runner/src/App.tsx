@@ -526,7 +526,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [schedules, setSchedules] = useState<PublishingSchedule[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [connectionMode, setConnectionMode] = useState<'desktop' | 'extension' | 'direct' | 'checking'>('checking');
+  const [connectionMode, setConnectionMode] = useState<'central' | 'desktop' | 'extension' | 'direct' | 'checking'>('checking');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -583,8 +583,10 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       await api.runAutomation();
       setAutomationNotice({
         variant: 'success',
-        title: 'Automation started',
-        message: 'Publishing will use saved manual sessions only. Accounts without an active saved session will fail for review.',
+        title: connectionMode === 'central' ? 'Posts queued' : 'Automation started',
+        message: connectionMode === 'central'
+          ? 'The workspace Companion will publish automatically when it is online.'
+          : 'Publishing will use saved manual sessions only. Accounts without an active saved session will fail for review.',
       });
       window.setTimeout(() => void refresh(false), 5000);
     } catch (e) {
@@ -733,14 +735,16 @@ function getAuditTimestamp(upload: PlatformUpload) {
 }
 
 function isWaitingForCompanion(upload: PlatformUpload, now = Date.now()) {
-  return upload.status === 'queued'
-    && Boolean(upload.scheduledAt)
-    && Date.parse(upload.scheduledAt || '') <= now;
+  return upload.statusDetail === 'waiting_for_companion'
+    || (upload.status === 'queued' && Boolean(upload.scheduledAt) && Date.parse(upload.scheduledAt || '') <= now);
 }
 
 function getAuditAction(upload: PlatformUpload) {
   if (upload.status === 'posted') return 'Published';
   if (upload.status === 'failed') return 'Needs attention';
+  if (upload.statusDetail === 'opening_platform') return 'Opening Platform';
+  if (upload.statusDetail === 'uploading') return 'Uploading';
+  if (upload.statusDetail === 'publishing') return 'Publishing';
   if (upload.status === 'processing') return 'Publishing now';
   if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
   if (upload.scheduledAt) return 'Scheduled';
@@ -770,7 +774,11 @@ function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone
     return { tone: 'failed', label: 'Failed', detail: upload.failureReason || 'Publishing stopped and needs review.', timestamp };
   }
   if (upload.status === 'processing') {
-    return { tone: 'processing', label: 'Publishing now', detail: 'The local Companion is working on this destination.', timestamp };
+    const detailLabel = upload.statusDetail === 'opening_platform' ? 'Opening Platform'
+      : upload.statusDetail === 'uploading' ? 'Uploading'
+        : upload.statusDetail === 'publishing' ? 'Publishing'
+          : 'Publishing now';
+    return { tone: 'processing', label: detailLabel, detail: 'The local Companion is working on this destination.', timestamp };
   }
   if (upload.safetyDeferredUntil) {
     return { tone: 'deferred', label: 'Safety paused', detail: `${upload.safetyReason || 'Held by a safety limit.'} Resumes after ${formatEventTime(upload.safetyDeferredUntil)}.`, timestamp };
@@ -1438,7 +1446,7 @@ function Workboard({
   submissions: ContentSubmission[];
   accounts: PlatformAccount[];
   schedules: PublishingSchedule[];
-  connectionMode: 'desktop' | 'extension' | 'direct' | 'checking';
+  connectionMode: 'central' | 'desktop' | 'extension' | 'direct' | 'checking';
   users: UserProfile[];
   activityLogs: ActivityLog[];
   loading: boolean;
@@ -1585,7 +1593,7 @@ function Workboard({
         </nav>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
-          <span className='workboard-status' title={connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
+          <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && (isRunning
             ? <button className='workboard-stop' onClick={onStop}><X size={16} />Emergency stop</button>
@@ -1635,7 +1643,7 @@ function Workboard({
 
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
-          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={user.role === 'post_uploader'} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
+          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={!permissions.canRunAutomation} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
         </div>
       </section>
 

@@ -95,6 +95,11 @@ export function setCentralAuthToken(token: string | null) {
   authToken = token;
 }
 
+function centralPublishingPath(path: string) {
+  const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
+  return `/api/publishing${normalized}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -109,10 +114,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   let response: Response;
   try {
-    response = await publishingFetch(path, {
-      ...init,
-      headers
-    });
+    response = centralIdentitySeed
+      ? await fetch(centralPublishingPath(path), { ...init, headers, credentials: "same-origin" })
+      : await publishingFetch(path, { ...init, headers });
   } catch (error) {
     const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
     throw new Error(`Publish Queue Runner is unavailable. Confirm the publishing service is running and try again.${detail}`);
@@ -162,7 +166,9 @@ async function mediaBlob(fileName: string) {
   if (centralIdentitySeed) authToken = await getClientServiceToken("publishing", centralIdentitySeed);
   const headers = new Headers();
   if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
-  const response = await publishingFetch(`/api/media/${encodeURIComponent(fileName)}`, { headers });
+  const response = centralIdentitySeed
+    ? await fetch(`/api/publishing/media/${encodeURIComponent(fileName)}`, { headers, credentials: "same-origin" })
+    : await publishingFetch(`/api/media/${encodeURIComponent(fileName)}`, { headers });
   if (!response.ok) throw new Error(response.status === 404 ? "Publishing media is unavailable." : "Unable to load publishing media.");
   return response.blob();
 }
@@ -187,9 +193,10 @@ export const api = {
       extensionBridge?: boolean;
       platforms?: Platform[];
     }>("/api/health");
-    if (isPublishingExtensionActive() && !health.extensionBridge) {
+    if (!centralIdentitySeed && isPublishingExtensionActive() && !health.extensionBridge) {
       throw new Error("Restart Start Publishing Companion.cmd to load the extension-compatible publishing service.");
     }
+    if (centralIdentitySeed) return { ...health, transport: "central" as const };
     const bridge = await detectPublishingExtension();
     return {
       ...health,

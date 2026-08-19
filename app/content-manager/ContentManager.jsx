@@ -23,7 +23,6 @@ import {
   Zap
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { publishingFetch } from "../../lib/publishing-endpoint";
 import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
@@ -144,9 +143,11 @@ async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
-  const response = await publishingFetch(path, {
+  const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
+  const response = await fetch("/api/publishing" + normalized, {
     ...init,
-    headers
+    headers,
+    credentials: "include"
   });
   return responsePayload(response);
 }
