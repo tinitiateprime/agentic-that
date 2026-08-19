@@ -22,6 +22,8 @@ import { pathToFileURL } from "node:url";
 
 const DASHBOARD_URL = "https://agentic-that.netlify.app/publishing";
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
+const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
+  || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
 // Temporarily keep the complete AgenticThat workspace out of Companion until
 // the product team approves that experience. The implementation remains below
 // so it can be restored without rebuilding the live-browser integration.
@@ -224,6 +226,28 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_SCHEDULER_CRON = "* * * * *";
   process.env.PUBLISH_QUEUE_SCHEDULER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
+}
+
+async function configureServiceTokenVerifier() {
+  if (process.env.SERVICE_TOKEN_PUBLIC_KEY?.trim()) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(SERVICE_TOKEN_PUBLIC_KEY_URL, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Public key request returned ${response.status}.`);
+    const payload = await response.json();
+    const publicKey = String(payload?.publicKey || "").trim();
+    if (!publicKey.includes("BEGIN PUBLIC KEY")) throw new Error("Public key response is invalid.");
+    process.env.SERVICE_TOKEN_PUBLIC_KEY = publicKey;
+    if (payload.keyId) process.env.SERVICE_TOKEN_KEY_ID = String(payload.keyId).trim();
+    if (payload.issuer) process.env.SERVICE_TOKEN_ISSUER = String(payload.issuer).trim();
+    console.log("AgenticThat workspace token verification is configured.");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function installFileLogging() {
@@ -1243,6 +1267,7 @@ if (started || !ownsSingleInstanceLock) {
     createTray();
     saveAutoStart(settings.autoStart);
     try {
+      await configureServiceTokenVerifier();
       await desktopDebugEndpoint();
       await startPublishingService();
       console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
