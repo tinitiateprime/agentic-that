@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { getStore } from "@netlify/blobs";
 import { publishingUploadDirectory } from "./runtime-paths.js";
 
 export type PublishingExecutionLease = {
@@ -18,6 +17,11 @@ const distributedStoreEnabled = () => (
   || process.env.NETLIFY === "true"
   || Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+
+async function netlifyBlobStore(name: string) {
+  const { getStore } = await import("@netlify/blobs");
+  return getStore(name);
+}
 
 function safePart(value: string) {
   const normalized = String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -47,7 +51,7 @@ export async function claimPublishingExecution(
     expiresAt: new Date(Date.now() + leaseMs).toISOString(),
   };
   if (distributedStoreEnabled()) {
-    const store = getStore("agentic-that-publishing-execution-leases");
+    const store = await netlifyBlobStore("agentic-that-publishing-execution-leases");
     const key = leaseKey(workspaceId, uploadId);
     const current = await store.getWithMetadata(key, { type: "json", consistency: "strong" });
     if (!current) {
@@ -78,7 +82,7 @@ export async function claimPublishingExecution(
 
 export async function releasePublishingExecution(lease: PublishingExecutionLease) {
   if (distributedStoreEnabled()) {
-    const store = getStore("agentic-that-publishing-execution-leases");
+    const store = await netlifyBlobStore("agentic-that-publishing-execution-leases");
     const key = leaseKey(lease.workspaceId, lease.uploadId);
     const current = await store.getWithMetadata(key, { type: "json", consistency: "strong" });
     if (!current || current.data?.token !== lease.token) return false;

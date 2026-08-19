@@ -1247,12 +1247,18 @@ if (started || !ownsSingleInstanceLock) {
       await startPublishingService();
       console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
     } catch (error) {
-      console.error("Could not start publishing service:", error instanceof Error ? error.message : error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isPortConflict = /port 8792|EADDRINUSE|address already in use/i.test(errorMessage);
+      console.error("Could not start publishing service:", errorMessage);
       await dialog.showMessageBox(mainWindow, {
         type: "error",
         title: "Companion could not start",
-        message: "Another AgenticThat Companion is already running.",
-        detail: "Close every older Companion version, then open this version again.",
+        message: isPortConflict
+          ? "Another AgenticThat Companion is already running."
+          : "AgenticThat Companion could not start its local service.",
+        detail: isPortConflict
+          ? "Close every older Companion version, then open this version again."
+          : errorMessage,
         buttons: ["Close"],
       });
       app.quit();

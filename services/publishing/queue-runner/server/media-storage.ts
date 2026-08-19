@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { getStore } from "@netlify/blobs";
 import { publishingUploadDirectory } from "./runtime-paths.js";
 
 const sharedMediaEnabled = () => (
@@ -8,6 +7,11 @@ const sharedMediaEnabled = () => (
   || process.env.NETLIFY === "true"
   || Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+
+async function netlifyBlobStore(name: string) {
+  const { getStore } = await import("@netlify/blobs");
+  return getStore(name);
+}
 
 function safeFileName(fileName: string) {
   const base = path.basename(String(fileName || ""));
@@ -24,7 +28,7 @@ export async function storePublishingMedia(fileName: string, workspaceId: string
   if (!sharedMediaEnabled()) return localPath;
   const bytes = await fs.readFile(localPath);
   const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  await getStore("agentic-that-publishing-media").set(mediaKey(workspaceId, fileName), payload, {
+  await (await netlifyBlobStore("agentic-that-publishing-media")).set(mediaKey(workspaceId, fileName), payload, {
     metadata: { workspaceId, fileName, mimeType },
   });
   return localPath;
@@ -33,7 +37,8 @@ export async function storePublishingMedia(fileName: string, workspaceId: string
 export async function readPublishingMedia(fileName: string, workspaceId: string) {
   const safeName = safeFileName(fileName);
   if (sharedMediaEnabled()) {
-    const bytes = await getStore("agentic-that-publishing-media").get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
+    const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
+      .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
     if (bytes) return Buffer.from(bytes);
   }
   return fs.readFile(path.join(publishingUploadDirectory(), safeName));
@@ -48,7 +53,8 @@ export async function ensurePublishingMediaLocal(fileName: string, workspaceId: 
   } catch {
     if (!sharedMediaEnabled()) throw new Error(`Publishing media ${safeName} is missing.`);
   }
-  const bytes = await getStore("agentic-that-publishing-media").get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
+  const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
+    .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
   if (!bytes) throw new Error(`Publishing media ${safeName} is missing from shared storage.`);
   await fs.mkdir(path.dirname(localPath), { recursive: true });
   const temporary = `${localPath}.${process.pid}.tmp`;
@@ -64,6 +70,8 @@ export async function deletePublishingMedia(fileName: string, workspaceId: strin
   const safeName = safeFileName(fileName);
   await fs.unlink(path.join(publishingUploadDirectory(), safeName)).catch(() => undefined);
   if (sharedMediaEnabled()) {
-    await getStore("agentic-that-publishing-media").delete(mediaKey(workspaceId, safeName)).catch(() => undefined);
+    await (await netlifyBlobStore("agentic-that-publishing-media"))
+      .delete(mediaKey(workspaceId, safeName))
+      .catch(() => undefined);
   }
 }

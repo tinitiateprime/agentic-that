@@ -24,7 +24,7 @@ launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 optional and used only for the system-browser login fallback.
 
-Version 1.6.5 provides the shared Instagram and Facebook Local Companion engines. Facebook profile analysis scans the public Reels grid for current views, correlates every loaded Reel with its exact reactions, comment count, and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most Discussed lists only after the full scanned set is verified. Comment bodies are not collected or displayed. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, with a fresh anonymous embedded browser as the browser-launch fallback.
+Version 1.6.6 provides the shared Instagram and Facebook Local Companion engines. Facebook profile analysis scans the public Reels grid for current views, correlates every loaded Reel with its exact reactions, comment count, and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most Discussed lists only after the full scanned set is verified. Comment bodies are not collected or displayed. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, with a fresh anonymous embedded browser as the browser-launch fallback.
 Instagram and Facebook scraping use hidden temporary browser partitions and never reuse connected publishing/login sessions. See
 [`docs/instagram-companion-engine.md`](../../docs/instagram-companion-engine.md)
 for its API, isolation, queue, and failure behavior.
