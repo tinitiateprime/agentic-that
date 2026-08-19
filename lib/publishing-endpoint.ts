@@ -9,6 +9,8 @@ const localPublishingOrigin = "http://127.0.0.1:8792";
 
 let activePublishingOrigin = configuredPublishingOrigin;
 let lastCompanionCheckAt = 0;
+let registeredPublishingOrigin = "";
+let lastRegisteredCheckAt = 0;
 let companionCheck: Promise<string> | null = null;
 
 type LocalRequestInit = RequestInit & {
@@ -59,12 +61,48 @@ async function detectLocalPublishingCompanion() {
   }
 }
 
+async function registeredWorkspacePublishingOrigin() {
+  if (typeof window === "undefined") return "";
+  if (Date.now() - lastRegisteredCheckAt < 10_000) return registeredPublishingOrigin;
+  lastRegisteredCheckAt = Date.now();
+  try {
+    const response = await fetch("/api/workspace-companion", {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      registeredPublishingOrigin = "";
+      return "";
+    }
+    const data = await response.json() as { companion?: { origin?: string } | null };
+    const origin = String(data.companion?.origin || "").trim().replace(/\/$/, "");
+    if (!origin) {
+      registeredPublishingOrigin = "";
+      return "";
+    }
+    const url = new URL(origin);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      registeredPublishingOrigin = "";
+      return "";
+    }
+    registeredPublishingOrigin = url.origin;
+    return registeredPublishingOrigin;
+  } catch {
+    registeredPublishingOrigin = "";
+    return "";
+  }
+}
+
 export async function resolvePublishingOrigin() {
   if (configuredPublishingOrigin) {
     activePublishingOrigin = configuredPublishingOrigin;
     return configuredPublishingOrigin;
   }
-  return detectLocalPublishingCompanion();
+  const local = await detectLocalPublishingCompanion();
+  if (local) return local;
+  const registered = await registeredWorkspacePublishingOrigin();
+  activePublishingOrigin = registered;
+  return registered;
 }
 
 export async function publishingFetch(path: string, init: RequestInit = {}) {

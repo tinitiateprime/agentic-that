@@ -151,6 +151,18 @@ async function publishingRequest(path, token, init = {}) {
   return responsePayload(response);
 }
 
+async function workspaceCompanionRequest(init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch("/api/workspace-companion", {
+    ...init,
+    cache: "no-store",
+    credentials: "include",
+    headers
+  });
+  return responsePayload(response);
+}
+
 function ServiceMark({ service }) {
   if (service.logo) return <img src={service.logo} alt="" />;
   const Icon = service.icon;
@@ -201,6 +213,7 @@ export default function ConfigManager({
   const [publishingManagerStatus, setPublishingManagerStatus] = useState(null);
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const [workspaceCompanion, setWorkspaceCompanion] = useState(null);
   const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
   const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
   const visibleServices = services.filter((service) => (
@@ -276,9 +289,19 @@ export default function ConfigManager({
     }
   }, [loadPublishing, publishingIdentityToken]);
 
+  const loadWorkspaceCompanion = useCallback(async () => {
+    if (!publishingIdentityToken) return;
+    try {
+      const data = await workspaceCompanionRequest();
+      setWorkspaceCompanion(data.companion || null);
+    } catch {
+      setWorkspaceCompanion(null);
+    }
+  }, [publishingIdentityToken]);
+
   useEffect(() => {
-    void Promise.all([loadTelegram(), connectPublishing()]);
-  }, [connectPublishing, loadTelegram]);
+    void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion()]);
+  }, [connectPublishing, loadTelegram, loadWorkspaceCompanion]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
@@ -387,6 +410,7 @@ export default function ConfigManager({
               publishQueueUrl={publishQueueUrl}
               publishingIdentityToken={publishingIdentityToken}
               allowedPlatforms={allowedPublishingPlatforms}
+              workspaceCompanion={workspaceCompanion}
               managerStatus={publishingManagerStatus}
               accountEmail={user.email}
               onSession={session => {
@@ -395,6 +419,7 @@ export default function ConfigManager({
               }}
               onReload={() => loadPublishing(publishingSession)}
               onReconnect={connectPublishing}
+              onCompanionSaved={setWorkspaceCompanion}
               setNotice={setNotice}
             />
           )}
@@ -776,11 +801,13 @@ function PublishingManager({
   publishQueueUrl,
   publishingIdentityToken,
   allowedPlatforms,
+  workspaceCompanion,
   managerStatus,
   accountEmail,
   onSession,
   onReload,
   onReconnect,
+  onCompanionSaved,
   setNotice
 }) {
   const [password, setPassword] = useState("");
@@ -790,6 +817,12 @@ function PublishingManager({
   const [busy, setBusy] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [sharedCompanionUrl, setSharedCompanionUrl] = useState(workspaceCompanion?.origin || "");
+  const [companionBusy, setCompanionBusy] = useState(false);
+
+  useEffect(() => {
+    setSharedCompanionUrl(workspaceCompanion?.origin || "");
+  }, [workspaceCompanion?.origin]);
 
   const platformAccounts = useMemo(
     () => accounts.filter(account => account.platform === selectedPlatform),
@@ -890,6 +923,49 @@ function PublishingManager({
     window.location.assign(destination.toString());
   };
 
+  const registerSharedCompanion = async (event) => {
+    event.preventDefault();
+    setCompanionBusy(true);
+    try {
+      let companionInstanceId = "";
+      try {
+        const healthResponse = await fetch(publishingHealthUrl, { cache: "no-store" });
+        const health = healthResponse.ok ? await healthResponse.json() : {};
+        companionInstanceId = String(health.companionInstanceId || "");
+      } catch {
+        companionInstanceId = "";
+      }
+      const data = await workspaceCompanionRequest({
+        method: "POST",
+        body: JSON.stringify({
+          origin: sharedCompanionUrl.trim(),
+          label: "Workspace Companion",
+          companionInstanceId
+        })
+      });
+      onCompanionSaved(data.companion || null);
+      setNotice({ tone: "success", message: "Workspace Companion was saved for this workspace." });
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setCompanionBusy(false);
+    }
+  };
+
+  const removeSharedCompanion = async () => {
+    setCompanionBusy(true);
+    try {
+      await workspaceCompanionRequest({ method: "DELETE" });
+      onCompanionSaved(null);
+      setSharedCompanionUrl("");
+      setNotice({ tone: "success", message: "Workspace Companion was removed." });
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setCompanionBusy(false);
+    }
+  };
+
   if (status === "checking") {
     return <div className="config-loading"><Loader2 className="spin" size={23} />Checking Publish Queue access…</div>;
   }
@@ -962,6 +1038,30 @@ function PublishingManager({
           <button className="config-tertiary" type="button" onClick={signOutPublishing}>Change login</button>
         </div>
       </div>
+
+      <form className="config-shared-companion" onSubmit={registerSharedCompanion}>
+        <div>
+          <span><MonitorCheck size={18} /></span>
+          <div>
+            <strong>Workspace Companion</strong>
+            <small>{workspaceCompanion?.origin ? "Team browsers use this when local Companion is not available." : "Optional: save one always-on Companion URL for this workspace."}</small>
+          </div>
+        </div>
+        <label>
+          <span>Shared Companion URL</span>
+          <input
+            value={sharedCompanionUrl}
+            onChange={event => setSharedCompanionUrl(event.target.value)}
+            placeholder="https://companion.yourcompany.com"
+            required
+          />
+        </label>
+        <div className="config-shared-companion-actions">
+          <button className="config-primary" type="submit" disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Save</button>
+          {workspaceCompanion?.origin && <button className="config-secondary" type="button" onClick={() => void removeSharedCompanion()} disabled={companionBusy}>Remove</button>}
+        </div>
+        <p>Use HTTPS for Netlify. Do not use 127.0.0.1 for team devices.</p>
+      </form>
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
         {allowedPlatforms.map(platform => {

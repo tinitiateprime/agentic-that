@@ -33,6 +33,7 @@ const configuredServicePort = Number(process.env.AGENTICTHAT_COMPANION_SERVICE_P
 const SERVICE_PORT = Number.isInteger(configuredServicePort) && configuredServicePort > 0 && configuredServicePort < 65536
   ? configuredServicePort
   : 8792;
+const SERVICE_HOST = process.env.AGENTICTHAT_COMPANION_SERVICE_HOST?.trim() || "127.0.0.1";
 const SERVICE_ORIGIN = `http://127.0.0.1:${SERVICE_PORT}`;
 const configuredDesktopDebugPort = Number(process.env.AGENTICTHAT_DESKTOP_DEBUG_PORT || 0);
 const REQUESTED_DESKTOP_DEBUG_PORT = Number.isInteger(configuredDesktopDebugPort) && configuredDesktopDebugPort > 0
@@ -208,7 +209,7 @@ function configureRuntimeEnvironment() {
   }
 
   process.env.NODE_ENV = "production";
-  process.env.PUBLISH_QUEUE_SERVICE_HOST = "127.0.0.1";
+  process.env.PUBLISH_QUEUE_SERVICE_HOST = SERVICE_HOST;
   process.env.PUBLISH_QUEUE_SERVICE_PORT = String(SERVICE_PORT);
   process.env.PUBLISH_QUEUE_WEB_ORIGIN = DASHBOARD_ORIGIN;
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");

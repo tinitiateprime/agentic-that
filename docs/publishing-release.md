@@ -76,3 +76,12 @@ unversioned filename, which is the download used by Netlify.
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The
 artifacts are available from that workflow run.
+
+## Shared workspace Companion
+
+To let invited team members use one workspace Companion, run the Companion on an
+always-on machine and expose it through an HTTPS tunnel or domain. Start the app
+with `AGENTICTHAT_COMPANION_SERVICE_HOST=0.0.0.0`, then save the public HTTPS
+origin in **Connections → Publishing → Workspace Companion**. Team browsers keep
+using their local Companion first and automatically fall back to the saved
+workspace Companion.

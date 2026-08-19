@@ -574,6 +574,81 @@
   gap: 5px;
 }
 
+.config-shared-companion {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.3fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #d9e6e2;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.config-shared-companion > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-shared-companion > div:first-child > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--cm-accent);
+  border: 1px solid #cfe4dd;
+  border-radius: 9px;
+  background: #f0f9f5;
+}
+
+.config-shared-companion strong,
+.config-shared-companion small,
+.config-shared-companion label {
+  display: grid;
+  gap: 4px;
+}
+
+.config-shared-companion strong {
+  color: #193b32;
+  font-size: 12px;
+}
+
+.config-shared-companion small,
+.config-shared-companion label span,
+.config-shared-companion p {
+  color: var(--cm-muted);
+  font-size: 9px;
+}
+
+.config-shared-companion input {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  color: var(--cm-ink);
+  border: 1px solid #cfdcd7;
+  border-radius: 9px;
+  outline: none;
+  background: #fff;
+  font-size: 11px;
+}
+
+.config-shared-companion input:focus {
+  border-color: var(--cm-accent);
+  box-shadow: 0 0 0 3px rgba(8, 116, 97, 0.1);
+}
+
+.config-shared-companion-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.config-shared-companion p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .config-form-card,
 .config-auth-card {
   margin-top: 18px;
