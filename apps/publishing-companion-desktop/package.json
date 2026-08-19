@@ -1,7 +1,7 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Publishing Companion",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "description": "Local scheduler and browser publisher for AgenticThat",
   "author": "AgenticThat",
   "private": true,

@@ -98,25 +98,23 @@ https://<your-netlify-site>.netlify.app/api/webhooks/wati?token=<wati-webhook-se
 
 Read-only WhatsApp Web monitoring requires a separately deployed Baileys service. Configure its HTTPS URL and shared secret from `/settings`; the archive does not contain a runnable Baileys service. For a legacy environment-configured monitor, the equivalent variables are `BAILEYS_SERVICE_URL` and `BAILEYS_API_SECRET`.
 
-Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service instead of the included Netlify Function. For the normal local publishing setup, omit both Publish Queue URL variables. The Chrome extension connects the dashboard to the companion at `http://127.0.0.1:8792`, keeping account configuration, schedules, local media, and browser sessions together on the computer that performs publishing.
+Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service instead of the included Netlify Function. For publishing, omit both Publish Queue URL variables. The paired Workspace Companion keeps social-media sessions and browser profiles on the manager device, while the AgenticThat server keeps workspace account metadata, content, schedules, queue state, and live publishing status. Team members use the website directly and do not configure a local URL, tunnel, or Companion connection.
 
 ## Publish Queue distribution
 
 Interactive social login and browser publishing use the installable Windows
-companion because a request-based Netlify Function cannot own persistent Chrome
-profiles or a continuously running scheduler. Customers install the extension
-and companion from the setup card on `/publishing`; they do not configure local
-environment variables, download the repository, or run commands. After
-downloading the portable companion, they extract the ZIP and open
+Companion because a request-based Netlify Function cannot own persistent Chrome
+profiles or a continuously running scheduler. A Workspace Manager installs and
+pairs it once from Connections; other workspace users do not install it. After
+downloading the portable companion, the manager extracts the ZIP and opens
 `AgenticThat Publishing Companion.exe` from the extracted folder.
 
 After the Chrome Web Store approves the extension, set
 `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` to its public listing and redeploy. Keep
 `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable portable GitHub
-Release URL shown above. Do not set either Publish Queue API URL for this
-local-extension architecture. The companion generates and protects its own
-credentials and stores each customer's queue and browser sessions on that
-customer's computer.
+Release URL shown above. Do not set either Publish Queue API URL. The Companion
+generates and protects its own local credentials and browser sessions; central
+workspace posts and schedules remain available to the authorized team.
 
 ## Webhook
 

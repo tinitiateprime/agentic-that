@@ -77,7 +77,23 @@ For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The
 artifacts are available from that workflow run.
 
-## Shared workspace Companion
+## Workspace Companion
+
+The Workspace Manager installs and pairs one Companion from **Connections →
+Publishing → Pair this device**. No ngrok, Cloudflare URL, public port, or team
+device setup is required. The paired Companion keeps social-media sessions on
+the manager device, polls the AgenticThat server for approved workspace jobs,
+and reports live progress back to the website.
+
+Content Uploaders and Schedulers use the website from their own devices. They
+see the accounts allowed by their role but do not install, configure, or receive
+the Companion's social-media session. If the paired Companion is offline, jobs
+remain safely queued and resume after it reconnects.
+
+### Retired tunnel deployment
+
+Do not use this older tunnel-based approach for new workspaces; it is retained
+only as historical release documentation.
 
 To let invited team members use one workspace Companion, run the Companion on an
 always-on machine and expose it through an HTTPS tunnel or domain. Start the app
