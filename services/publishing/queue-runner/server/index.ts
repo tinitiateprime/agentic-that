@@ -250,7 +250,10 @@ async function updateCentralJobStatus(pairing: CentralCompanionPairing, jobId: s
 async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
   let leaseHeartbeat: NodeJS.Timeout | null = null;
   try {
-    const account = await upsertSyncedPlatformAccount(job.account);
+    const account = await upsertSyncedPlatformAccount({
+  ...job.account,
+  companionId: publishingCompanionId(),
+});
     if (!account.credentialConfigured) {
       await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
       return;
