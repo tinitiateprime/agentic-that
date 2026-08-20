@@ -740,9 +740,40 @@ export async function deleteCentralSchedule(principal, scheduleId) {
   });
 }
 
+function normalizeCentralSubmission(submission) {
+  const description = String(
+    submission.description ??
+    submission.caption ??
+    ""
+  ).trim();
+
+  return {
+    ...submission,
+
+    description,
+    caption: description,
+
+    selectedAccountIds: Array.isArray(submission.selectedAccountIds)
+      ? submission.selectedAccountIds
+      : [],
+
+    destinationUploadIds: Array.isArray(submission.destinationUploadIds)
+      ? submission.destinationUploadIds
+      : [],
+
+    rightsConfirmed:
+      submission.postFormat === "text"
+        ? true
+        : submission.rightsConfirmed !== false,
+  };
+}
+
 export async function listCentralSubmissions(workspaceId) {
   const document = await getPublishingSnapshot(workspaceId);
-  return document.submissions.filter((item) => item.workspaceId === workspaceId);
+
+  return document.submissions
+    .filter((item) => item.workspaceId === workspaceId)
+    .map(normalizeCentralSubmission);
 }
 
 export async function createCentralSubmission(principal, input = {}) {
@@ -754,13 +785,17 @@ export async function createCentralSubmission(principal, input = {}) {
     if (!selectedAccountIds.length) throw new Error("Choose at least one workspace account.");
     if (new Set(selectedAccountIds).size !== selectedAccountIds.length) throw new Error("Each publishing account can be selected only once.");
     const format = input.postFormat || postFormat(input.mimeType, input.originalName);
-    const caption = String(input.caption || "").trim();
-    if (!caption) throw new Error("Post text or description is required.");
+    const description = String(
+  input.description ??
+  input.caption ??
+  ""
+).trim();
+    if (!description) throw new Error("Post text or description is required.");
     if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
     for (const accountId of selectedAccountIds) {
       const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
       if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
-      if (caption.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
+      if (description.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
       if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
       if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
     }
@@ -768,7 +803,7 @@ export async function createCentralSubmission(principal, input = {}) {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
       originalName: input.originalName || "Text post", fileName: input.fileName || "", mimeType: input.mimeType || "text/plain",
       extension: input.extension || "", size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
-      caption, selectedAccountIds, status: "awaiting_schedule", createdAt: timestamp,
+      description, selectedAccountIds, status: "awaiting_schedule", createdAt: timestamp,
       updatedAt: timestamp, createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
     };
     document.submissions.push(submission);

@@ -322,23 +322,23 @@ export async function POST(request, context) {
       // Direct posts enter the executable queue immediately. Keep that path
       // limited to a Publishing Manager; uploaders use submissions instead.
       const user = await principal("publishing.execute");
-      return Response.json(await createPosts(user, { ...body, postFormat: "text", caption: body.description || "" }), { status: 201 });
+      return Response.json(await createPosts(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "staged") {
       const user = await principal("publishing.execute");
       const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createPosts(user, { ...body, ...media, caption: body.description || "" }), { status: 201 });
+      return Response.json(await createPosts(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "text") {
       const user = await principal("publishing.content.create");
       await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
-      return Response.json(await createCentralSubmission(user, { ...body, postFormat: "text", caption: body.description || "" }), { status: 201 });
+      return Response.json(await createCentralSubmission(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "staged") {
       const user = await principal("publishing.content.create");
       await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
       const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createCentralSubmission(user, { ...body, ...media, caption: body.description || "" }), { status: 201 });
+      return Response.json(await createCentralSubmission(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[2] === "schedule") {
       const user = await principal("publishing.schedule.manage");
@@ -359,7 +359,7 @@ export async function POST(request, context) {
       return Response.json({ granted: true, message: "Publishing jobs are authorized for the workspace Companion." });
     }
     if (parts[0] === "publishing-safety" && parts[1] === "assess") {
-      const user = await principal("publishing.execute");
+      const user = await principal("publishing.schedule.manage");
       await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
       return Response.json({ allowed: true, issues: [], assessments: [] });
     }

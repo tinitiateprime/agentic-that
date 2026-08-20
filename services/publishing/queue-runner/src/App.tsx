@@ -1924,7 +1924,6 @@ function ScheduleSubmissionModal({
     setLoading(true);
     try {
       await api.assessPublishingSafety(submission.postFormat, destinations);
-      await api.authorizePublishing();
       await api.scheduleSubmission(
         submission.id,
         destinations,
@@ -2629,8 +2628,8 @@ function EditPostModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [title, setTitle] = useState(upload.title ?? upload.caption);
-  const [caption, setCaption] = useState(upload.caption);
+  const [title, setTitle] = useState(upload.title ?? upload.caption ?? "");
+  const [caption, setCaption] = useState(upload.caption ?? "");
   const [accountId, setAccountId] = useState(upload.accountId);
   const [scheduleMode, setScheduleMode] = useState<'none' | 'exact' | 'template'>(upload.scheduleId ? 'template' : upload.scheduledAt ? 'exact' : 'none');
   const [scheduleId, setScheduleId] = useState<number | ''>(upload.scheduleId ?? '');
@@ -2676,7 +2675,10 @@ function EditPostModal({
             : { scheduleId: Number(scheduleId) }),
         }];
         await api.assessPublishingSafety(postFormat, destinations);
-        await api.authorizePublishing();
+
+if (permissions.canRunAutomation) {
+  await api.authorizePublishing();
+}
       }
       await api.updateUploadDetails(upload.id, payload as any);
       onSuccess();

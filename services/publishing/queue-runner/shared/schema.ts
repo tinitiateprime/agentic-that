@@ -253,9 +253,21 @@ export const platformUploadSchema = z.object({
   size: z.number(),
   url: z.string(),
   title: z.string().optional(),
+
   caption: z.string().min(1, "Caption is required"),
+
   status: uploadStatusSchema,
-  statusDetail: z.enum(["queued", "waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "reconnect_required"]).optional(),
+  statusDetail: z.enum([
+    "queued",
+    "waiting_for_companion",
+    "opening_platform",
+    "uploading",
+    "publishing",
+    "published",
+    "failed",
+    "reconnect_required"
+  ]).optional(),
+
   failureReason: z.string().optional(),
   attemptCount: z.number().int().nonnegative().optional(),
   lastAttemptAt: z.string().optional(),
@@ -263,16 +275,21 @@ export const platformUploadSchema = z.object({
   publishActionState: publishActionStateSchema.optional(),
   safetyDeferredUntil: z.string().optional(),
   safetyReason: z.string().optional(),
+
   uploadedAt: z.string(),
   updatedAt: z.string(),
+
   scheduledAt: z.string().optional(),
   scheduleId: scheduleIdSchema.optional(),
+
   createdByUserId: z.string().optional(),
   createdByName: z.string().optional(),
   scheduledByUserId: z.string().optional(),
   scheduledByName: z.string().optional(),
+
   sourceSubmissionId: z.string().optional(),
   lastUpdatedByUserId: z.string().optional(),
+
   automation: uploadAutomationSchema
 });
 
@@ -294,7 +311,9 @@ export const contentSubmissionSchema = z.object({
   selectedAccountIds: z.array(z.string()).min(1),
   scheduledByUserId: z.string().optional(),
   scheduledByName: z.string().optional(),
+
   schedulingLeaseExpiresAt: z.string().optional(),
+
   destinationUploadIds: z.array(z.string()),
   createdAt: z.string(),
   updatedAt: z.string()
