@@ -39,3 +39,27 @@ test("central publishing reports account readiness and accepts only the active C
   assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_2", leaseExpiresAt: new Date(timestamp + 1_000).toISOString() }, "companion_1", timestamp), false);
   assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1_000).toISOString() }, "companion_1", timestamp), false);
 });
+
+test("central publishing skips a disconnected account without starving later ready jobs", () => {
+  const timestamp = Date.now();
+  const document = {
+    accounts: [
+      { id: "account_disconnected", enabled: true, credentialConfigured: false },
+      { id: "account_ready", enabled: true, credentialConfigured: true },
+    ],
+    uploads: [
+      { id: "upload_disconnected" },
+      { id: "upload_ready" },
+    ],
+    jobs: [
+      { id: "job_disconnected", workspaceId: "workspace_1", accountId: "account_disconnected", uploadId: "upload_disconnected", state: "queued", attemptCount: 0 },
+      { id: "job_ready", workspaceId: "workspace_1", accountId: "account_ready", uploadId: "upload_ready", state: "queued", attemptCount: 0 },
+    ],
+  };
+
+  const selected = centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp, 1);
+
+  assert.equal(document.jobs[0].state, "waiting_for_companion");
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].job.id, "job_ready");
+});

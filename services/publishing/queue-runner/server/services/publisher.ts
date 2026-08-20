@@ -333,6 +333,11 @@ async function saveAccountSessionState(
       console.log(`Retained protected Companion session for ${account.platform} account ${account.handle}.`);
       return;
     }
+    // Refresh the encrypted recovery copy after every successful external
+    // browser run. Some providers issue or rotate cookies while a post is
+    // being published, and Chrome may not persist session-only cookies when
+    // the managed window closes.
+    await exportStandardBrowserSession(account, context);
     fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
     console.log(`Retained dedicated external browser profile for ${account.platform} account ${account.handle}.`);
   } catch (error) {
@@ -412,6 +417,34 @@ async function exportStandardBrowserSession(account: PublishingAccount, context:
   console.log(`Saved protected ${account.platform} login session for ${account.handle}.`);
 }
 
+export async function installBrowserStorageState(context: BrowserContext, state: BrowserStorageState) {
+  const origins = Array.isArray(state.origins) ? state.origins : [];
+  const cookies = Array.isArray(state.cookies) ? state.cookies : [];
+  if (cookies.length > 0) await context.addCookies(cookies);
+
+  // Electron exposes its persistent partition over CDP. Playwright's
+  // setStorageState() tries to create a temporary target, which Electron does
+  // not support. Installing storage before provider navigation restores the
+  // same data without clearing device-bound managed-Chrome data.
+  const storageByOrigin = Object.fromEntries(origins.map(entry => [entry.origin, {
+    localStorage: Array.isArray(entry.localStorage) ? entry.localStorage : [],
+    sessionStorage: Array.isArray(entry.sessionStorage) ? entry.sessionStorage : [],
+  }]));
+  await context.addInitScript((entriesByOrigin: Record<string, {
+    localStorage: Array<{ name: string; value: string }>;
+    sessionStorage: Array<{ name: string; value: string }>;
+  }>) => {
+    const storage = entriesByOrigin[window.location.origin];
+    if (!storage) return;
+    for (const entry of storage.localStorage) {
+      window.localStorage.setItem(entry.name, entry.value);
+    }
+    for (const entry of storage.sessionStorage) {
+      window.sessionStorage.setItem(entry.name, entry.value);
+    }
+  }, storageByOrigin);
+}
+
 async function restoreAccountSessionState(
   account: PublishingAccount,
   context: BrowserContext,
@@ -425,33 +458,7 @@ async function restoreAccountSessionState(
     const key = sessionEncryptionKey();
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
-    if (engine === "external_browser") {
-      // The encrypted export lives inside this same protected persistent Chrome
-      // profile. Avoid clearing device-bound browser data while reopening it.
-      fs.rmSync(statePath, { force: true });
-      console.log(`Reused protected external browser session for ${account.handle}.`);
-      return;
-    }
-
-    const origins = Array.isArray(state.origins) ? state.origins : [];
-    const nativeState = {
-      cookies: Array.isArray(state.cookies) ? state.cookies : [],
-      origins: origins.map(({ origin, localStorage, indexedDB }) => ({
-        origin,
-        localStorage: Array.isArray(localStorage) ? localStorage : [],
-        ...(Array.isArray(indexedDB) ? { indexedDB } : {}),
-      })),
-    };
-    await context.setStorageState(nativeState as Parameters<BrowserContext["setStorageState"]>[0]);
-
-    const sessionStorageByOrigin = Object.fromEntries(
-      origins.map(entry => [entry.origin, Array.isArray(entry.sessionStorage) ? entry.sessionStorage : []]),
-    );
-    await context.addInitScript((storageByOrigin: Record<string, Array<{ name: string; value: string }>>) => {
-      for (const entry of storageByOrigin[window.location.origin] ?? []) {
-        window.sessionStorage.setItem(entry.name, entry.value);
-      }
-    }, sessionStorageByOrigin);
+    await installBrowserStorageState(context, state);
 
     const transferredUserAgent = state.userAgent;
     if (transferredUserAgent) {
@@ -467,7 +474,6 @@ async function restoreAccountSessionState(
       await Promise.all(context.pages().map(page => applyBrowserIdentity(page).catch(() => undefined)));
       context.on("page", page => { void applyBrowserIdentity(page).catch(() => undefined); });
     }
-    fs.rmSync(statePath, { force: true });
     console.log(`Imported protected ${account.platform} login into ${engine === "companion" ? "Companion" : "the external browser"} for ${account.handle}.`);
   } catch (error) {
     console.warn(
@@ -477,8 +483,37 @@ async function restoreAccountSessionState(
   }
 }
 
+async function verifyManagedExternalSession(account: PublishingAccount, fallbackReason?: unknown) {
+  const browser = await launchAccountBrowser(account, "login", "external_browser");
+  try {
+    await browser.update({
+      state: "opening",
+      detail: `Restarting the protected ${account.platform} browser once to verify the saved login.`,
+    });
+    await loginOnly(browser.page, account, { useSavedSessionOnly: true });
+    await exportStandardBrowserSession(account, browser.context);
+    markManagedChromeSession(account);
+    await browser.update({
+      state: "posted",
+      detail: "Login survived a fresh browser restart and is ready for publishing in Companion.",
+    });
+    if (fallbackReason) {
+      console.warn(
+        `${account.platform} kept the login in the protected managed Chrome profile for ${account.handle}:`,
+        errorMessage(fallbackReason),
+      );
+    }
+  } catch (error) {
+    await browser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
+    throw error;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 async function prepareStandardBrowserSession(account: PublishingAccount) {
   const externalBrowser = await launchAccountBrowser(account, "login", "external_browser");
+  let exportError: unknown = null;
   try {
     await externalBrowser.update({
       state: "waiting",
@@ -489,18 +524,12 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     try {
       await exportStandardBrowserSession(account, externalBrowser.context);
     } catch (error) {
-      clearSavedAccountSession(account);
-      markManagedChromeSession(account);
-      await externalBrowser.update({
-        state: "posted",
-        detail: "Login confirmed and saved in the protected Companion-managed Chrome profile.",
-      });
-      console.warn(`Could not create a transferable session for ${account.handle}; retained the protected managed Chrome profile:`, errorMessage(error));
-      return;
+      exportError = error;
+      console.warn(`Could not create a transferable session for ${account.handle}; verifying the protected managed Chrome profile:`, errorMessage(error));
     }
     await externalBrowser.update({
       state: "waiting",
-      detail: "Login confirmed. Transferring the protected session into Companion for verification.",
+      detail: "Login confirmed. Restart-checking the saved session before it is marked ready.",
     });
   } catch (error) {
     await externalBrowser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
@@ -509,10 +538,13 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     await externalBrowser.close().catch(() => undefined);
   }
 
+  if (exportError) {
+    await verifyManagedExternalSession(account, exportError);
+    return;
+  }
+
   if (!publishingDesktopHost()) {
-    clearSavedAccountSession(account);
-    markManagedChromeSession(account);
-    console.warn(`Companion was unavailable for embedded verification; retained the protected managed Chrome profile for ${account.handle}.`);
+    await verifyManagedExternalSession(account, new Error("Companion embedded verification is unavailable."));
     return;
   }
 
@@ -520,15 +552,11 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   try {
     companionBrowser = await launchAccountBrowser(account, "login", "companion");
   } catch (error) {
-    clearSavedAccountSession(account);
-    markManagedChromeSession(account);
-    await externalBrowser.update({
-      state: "posted",
-      detail: "The login was saved in the protected Companion-managed Chrome profile and is ready for publishing.",
-    }).catch(() => undefined);
-    console.warn(`Companion could not open embedded verification for ${account.handle}; retained the protected managed Chrome profile:`, errorMessage(error));
+    await verifyManagedExternalSession(account, error);
     return;
   }
+
+  let companionTransferError: unknown = null;
   try {
     await companionBrowser.update({
       state: "opening",
@@ -539,6 +567,7 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
       embeddedLogin: true,
     });
     await saveAccountSessionState(account, companionBrowser.context, "companion");
+    clearSavedAccountSession(account);
     await companionBrowser.update({
       state: "posted",
       detail: "Login confirmed, transferred, and verified inside Companion. The account is ready to publish.",
@@ -548,19 +577,18 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     });
     console.log(`${account.platform} login transferred and verified in Companion for ${account.handle}.`);
   } catch (error) {
-    clearSavedAccountSession(account);
+    companionTransferError = error;
     await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
-    markManagedChromeSession(account);
     await companionBrowser.update({
-      state: "posted",
-      detail: "The provider kept this login bound to Chrome. Companion securely saved that protected local profile and will use it for publishing without asking you to sign in again.",
+      state: "opening",
+      detail: "The provider kept this login bound to Chrome. Companion is restart-checking the protected profile before saving it.",
     }).catch(() => undefined);
-    console.warn(
-      `${account.platform} rejected the embedded session transfer for ${account.handle}; using the protected Companion-managed Chrome profile:`,
-      errorMessage(error),
-    );
   } finally {
     await companionBrowser.close().catch(() => undefined);
+  }
+
+  if (companionTransferError) {
+    await verifyManagedExternalSession(account, companionTransferError);
   }
 }
 

@@ -72,6 +72,12 @@ async function dismissCookiePrompt(page: Page) {
 async function isLoggedIn(page: Page) {
   if (/\/i\/flow\/login|\/login(?:\?|$)|account\/access/i.test(page.url())) return false;
 
+  // X's public shell can expose Home/Post navigation even while signed out.
+  // Require the protected login cookie as well as authenticated UI so a
+  // scheduled post cannot inherit a false-positive manual login.
+  const cookies = await page.context().cookies(["https://x.com", "https://twitter.com"]).catch(() => []);
+  if (!cookies.some(cookie => cookie.name === "auth_token")) return false;
+
   const signals = [
     page.locator('[data-testid="SideNav_AccountSwitcher_Button"]'),
     page.locator('[data-testid="AppTabBar_Home_Link"]'),

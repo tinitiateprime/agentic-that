@@ -874,6 +874,29 @@ export async function queueCentralUploads(principal, uploadIds) {
   });
 }
 
+function selectClaimableCentralJobs(document, workspaceId, timestamp, limit) {
+  const maximum = Math.max(1, Math.min(Number(limit) || 1, 5));
+  const selected = [];
+  const candidates = document.jobs
+    .filter((job) => job.workspaceId === workspaceId && ["queued", "waiting_for_companion"].includes(job.state))
+    .filter((job) => (!job.notBefore || Date.parse(job.notBefore) <= timestamp) && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= timestamp))
+    .filter((job) => job.attemptCount < MAX_JOB_ATTEMPTS);
+
+  for (const job of candidates) {
+    const upload = document.uploads.find((item) => item.id === job.uploadId);
+    const account = document.accounts.find((item) => item.id === job.accountId);
+    if (!upload || !account || !account.enabled) continue;
+    if (!account.credentialConfigured) {
+      job.state = "waiting_for_companion";
+      job.updatedAt = now();
+      continue;
+    }
+    selected.push({ job, upload, account });
+    if (selected.length >= maximum) break;
+  }
+  return selected;
+}
+
 export async function claimCentralJobs(token, limit = 1) {
   await initialize();
   const secretHash = hashSecret(token || "");
@@ -911,21 +934,9 @@ export async function claimCentralJobs(token, limit = 1) {
         }
       }
     }
-    const jobs = document.jobs
-      .filter((job) => job.workspaceId === companion.workspaceId && ["queued", "waiting_for_companion"].includes(job.state))
-      .filter((job) => (!job.notBefore || Date.parse(job.notBefore) <= timestamp) && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= timestamp))
-      .filter((job) => job.attemptCount < MAX_JOB_ATTEMPTS)
-      .slice(0, Math.max(1, Math.min(Number(limit) || 1, 5)));
+    const jobs = selectClaimableCentralJobs(document, companion.workspaceId, timestamp, limit);
     const result = [];
-    for (const job of jobs) {
-      const upload = document.uploads.find((item) => item.id === job.uploadId);
-      const account = document.accounts.find((item) => item.id === job.accountId);
-      if (!upload || !account || !account.enabled) continue;
-      if (!account.credentialConfigured) {
-        job.state = "waiting_for_companion";
-        job.updatedAt = now();
-        continue;
-      }
+    for (const { job, upload, account } of jobs) {
       job.state = "opening_platform";
       job.leaseOwner = companion.id;
       job.leaseExpiresAt = new Date(timestamp + JOB_LEASE_MS).toISOString();
@@ -1012,4 +1023,5 @@ export const centralPublishingTestHelpers = {
   companionPublishingEngine,
   hasActiveJobLease,
   resumeReconnectJobs,
+  selectClaimableCentralJobs,
 };
