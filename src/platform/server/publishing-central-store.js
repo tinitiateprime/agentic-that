@@ -558,7 +558,7 @@ export async function createCentralUpload(principal, input = {}) {
       postFormat: format, originalName: input.originalName || "Text post",
       fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
       size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
-      caption, status: "queued", publishActionState: "pending",
+      caption, status: "queued", publishActionState: "not_started",
       uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
       createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
       sourceSubmissionId: input.sourceSubmissionId || null, automation: { safetyDeferredUntil: null },
@@ -840,7 +840,7 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
         id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
         postFormat: submission.postFormat, originalName: submission.originalName, fileName: submission.fileName,
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
-        title: submission.title, caption: destination.caption ?? submission.caption, status: "queued", publishActionState: "pending",
+        title: submission.title, caption: destination.description ?? submission.description, status: "queued", publishActionState: "not_started",
         uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId,
         sourceSubmissionId: submission.id, createdByUserId: submission.createdByUserId, createdByName: submission.createdByName,
       };
