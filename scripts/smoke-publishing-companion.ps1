@@ -30,9 +30,11 @@ if ($packagedControlSource -notmatch "Instagram and Facebook") {
 if (Get-ChildItem -LiteralPath $packagedAppRoot -Filter "interaction-lock*" -ErrorAction SilentlyContinue) {
   throw "The packaged Companion still contains the obsolete publishing overlay."
 }
-if (Get-NetTCPConnection -LocalPort 8792 -State Listen -ErrorAction SilentlyContinue) {
-  throw "Port 8792 is already occupied. Stop the development companion before this smoke test."
-}
+$portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$portProbe.Start()
+$servicePort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+$portProbe.Stop()
+$serviceOrigin = "http://127.0.0.1:$servicePort"
 
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
 $smokeRoot = Join-Path $tempRoot ("AgenticThatCompanionSmoke-" + [guid]::NewGuid().ToString("N"))
@@ -101,9 +103,12 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   }
 
   $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  $hadCompanionServicePort = Test-Path Env:AGENTICTHAT_COMPANION_SERVICE_PORT
+  $previousCompanionServicePort = $env:AGENTICTHAT_COMPANION_SERVICE_PORT
   $hadServiceTokenPublicKey = Test-Path Env:SERVICE_TOKEN_PUBLIC_KEY
   $previousServiceTokenPublicKey = $env:SERVICE_TOKEN_PUBLIC_KEY
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  $env:AGENTICTHAT_COMPANION_SERVICE_PORT = [string]$servicePort
   $env:SERVICE_TOKEN_PUBLIC_KEY = $centralAuth.publicKey
   $env:AGENTICTHAT_COMPANION_DATA_DIR = $smokeRoot
   $env:AGENTICTHAT_COMPANION_DISABLE_AUTOSTART = "1"
@@ -112,7 +117,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $health = $null
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
     try {
-      $health = Invoke-RestMethod -Uri "http://127.0.0.1:8792/api/health" -TimeoutSec 2
+      $health = Invoke-RestMethod -Uri "$serviceOrigin/api/health" -TimeoutSec 2
       break
     } catch {
       Start-Sleep -Seconds 1
@@ -158,55 +163,55 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   }
 
   $authorization = @{ Authorization = "Bearer $($centralAuth.token)" }
-  $instagramAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/instagram/accounts" `
+  $instagramAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/instagram/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "Instagram smoke account"
       handle = "@agenticthat-smoke"
       enabled = $true
     } | ConvertTo-Json) -TimeoutSec 5
-  $manualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($instagramAccount.id)/manual-login" `
+  $manualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($instagramAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $manualLogin.started) { throw "The Instagram manual-login smoke session did not start." }
   if ($manualLogin.surface -ne "embedded") { throw "The login response did not identify the embedded Companion flow." }
   if ($manualLogin.message -notmatch "inside Companion") { throw "The login response did not describe the embedded Companion flow." }
 
-  $facebookAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/facebook/accounts" `
+  $facebookAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/facebook/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "Facebook smoke account"
       handle = "@agenticthat-smoke"
       enabled = $true
     } | ConvertTo-Json) -TimeoutSec 5
-  $facebookManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($facebookAccount.id)/manual-login" `
+  $facebookManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($facebookAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $facebookManualLogin.started) { throw "The Facebook manual-login smoke session did not start." }
 
-  $linkedinAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/linkedin/accounts" `
+  $linkedinAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/linkedin/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "LinkedIn smoke account"
       handle = "@agenticthat-smoke"
       enabled = $true
     } | ConvertTo-Json) -TimeoutSec 5
-  $linkedinManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($linkedinAccount.id)/manual-login" `
+  $linkedinManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($linkedinAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $linkedinManualLogin.started) { throw "The LinkedIn manual-login smoke session did not start." }
 
-  $xAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/x/accounts" `
+  $xAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/x/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "X smoke account"
       handle = "@agenticthat-smoke"
       enabled = $true
     } | ConvertTo-Json) -TimeoutSec 5
-  $xManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($xAccount.id)/manual-login" `
+  $xManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($xAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $xManualLogin.started) { throw "The X manual-login smoke session did not start." }
 
-  $youtubeAccount = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/platforms/youtube/accounts" `
+  $youtubeAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/youtube/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
       displayName = "YouTube smoke account"
       handle = "@agenticthat-smoke"
       enabled = $true
     } | ConvertTo-Json) -TimeoutSec 5
-  $youtubeManualLogin = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8792/api/accounts/$($youtubeAccount.id)/manual-login" `
+  $youtubeManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($youtubeAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $youtubeManualLogin.started) { throw "The YouTube manual-login smoke session did not start." }
 
@@ -241,7 +246,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"
-  $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "http://127.0.0.1:8792/api/health" -Headers @{
+  $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "$serviceOrigin/api/health" -Headers @{
     Origin = $productionOrigin
     "Access-Control-Request-Method" = "GET"
     "Access-Control-Request-Headers" = "authorization,content-type"
@@ -263,7 +268,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
-  Write-Host "All five platform logins: opened in isolated Chrome/Edge profiles"
+  Write-Host "All five platform logins: opened in isolated Companion partitions"
   Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"
@@ -272,6 +277,11 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
 } finally {
   Remove-Item Env:AGENTICTHAT_COMPANION_DATA_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:AGENTICTHAT_COMPANION_DISABLE_AUTOSTART -ErrorAction SilentlyContinue
+  if ($hadCompanionServicePort) {
+    $env:AGENTICTHAT_COMPANION_SERVICE_PORT = $previousCompanionServicePort
+  } else {
+    Remove-Item Env:AGENTICTHAT_COMPANION_SERVICE_PORT -ErrorAction SilentlyContinue
+  }
   if ($null -ne $previousElectronRunAsNode) {
     $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode
   }

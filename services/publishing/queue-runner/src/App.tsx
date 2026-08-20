@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingEngine, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
@@ -49,8 +49,8 @@ function accountConnectionLabel(account: PlatformAccount) {
   return 'Ready';
 }
 
-function accountPublishingEngine(account: PlatformAccount): PublishingEngine {
-  return account.executionEngine ?? 'companion';
+function accountPublishingEngine(_account: PlatformAccount) {
+  return 'companion' as const;
 }
 
 const accountHealthLabels = {
@@ -2218,7 +2218,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [handle, setHandle] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [enabled, setEnabled] = useState(true);
-  const [executionEngine, setExecutionEngine] = useState<PublishingEngine>('companion');
   const [safetyMode, setSafetyMode] = useState<'standard' | 'protected'>('protected');
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -2230,7 +2229,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle(account?.handle ?? '');
     setLoginIdentifier(account?.loginIdentifier ?? '');
     setEnabled(account?.enabled ?? true);
-    setExecutionEngine(account ? accountPublishingEngine(account) : 'companion');
     setSafetyMode(account?.safetyMode ?? (account ? 'standard' : 'protected'));
     setTwoFactorEnabled(account?.twoFactorEnabled ?? false);
   };
@@ -2241,7 +2239,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle('');
     setLoginIdentifier('');
     setEnabled(true);
-    setExecutionEngine('companion');
     setSafetyMode('protected');
     setTwoFactorEnabled(false);
   };
@@ -2262,7 +2259,6 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const saveAccount = async (loginAfterSave = false) => {
     if (!displayName.trim()) return alert('Account name is required.');
     if (!handle.trim()) return alert('Account handle is required.');
-    if (editing !== 'new' && editing && executionEngine !== accountPublishingEngine(editing) && editing.credentialConfigured && !confirm('Changing the publishing engine signs this account out. Continue and log in again?')) return;
     setLoading(true);
     try {
       const payload = {
@@ -2270,7 +2266,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
         handle: handle.trim(),
         loginIdentifier: loginIdentifier.trim(),
         enabled,
-        executionEngine,
+        executionEngine: 'companion' as const,
         safetyMode,
         twoFactorEnabled,
       };
@@ -2311,7 +2307,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
             <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay on the provider sign-in page' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
-            <div className='account-engine-field account-form-wide'><label>Publishing engine</label><div className='account-engine-picker' role='group' aria-label='Choose publishing engine'><button type='button' className={executionEngine === 'companion' ? 'active' : ''} aria-pressed={executionEngine === 'companion'} onClick={() => setExecutionEngine('companion')}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Visible tabs inside Companion</small></span></button><button type='button' className={executionEngine === 'external_browser' ? 'active' : ''} aria-pressed={executionEngine === 'external_browser'} onClick={() => setExecutionEngine('external_browser')}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button></div></div>
+            <div className='account-engine-field account-form-wide'><label>Publishing location</label><div className='account-engine-picker'><button type='button' className='active' aria-pressed='true' disabled><MonitorCheck size={18} /><span><strong>Companion</strong><small>All uploads and publishing run in visible protected Companion tabs. Chrome or Edge is used only as a login fallback.</small></span></button></div></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
           </div>
@@ -2330,11 +2326,11 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className='storage-access-path'>{account.loginIdentifier || publishingEngineLabels[accountPublishingEngine(account)]}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
-                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : accountPublishingEngine(account) === 'external_browser' ? <ExternalLink size={14} /> : <KeyRound size={14} />}Login
+                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
               </button>
-              {accountPublishingEngine(account) === 'companion' && <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Open login in Chrome or Edge' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
+              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with Chrome or Edge, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
                 <ExternalLink size={14} />Chrome
-              </button>}
+              </button>
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}
           </div>

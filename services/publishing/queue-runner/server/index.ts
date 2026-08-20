@@ -95,7 +95,6 @@ import {
   upsertSyncedUpload,
 } from "./local-storage.js";
 import {
-  assertAccountEngineChangeAllowed,
   cancelAutomation,
   isAutomationRunning,
   publishingBrowserRuntimeHealth,
@@ -771,7 +770,7 @@ function requiredPublishingLevel(req: express.Request): CentralAccessLevel {
 function requiredPublishingCapability(req: express.Request) {
   const requestPath = req.originalUrl.split("?")[0];
   if (requestPath.startsWith("/api/users")) return "workspace.team.manage";
-  if (requestPath === "/api/automation/consent") return "publishing.schedule.manage";
+  if (requestPath === "/api/automation/consent") return "publishing.accounts.configure";
   if (requestPath.startsWith("/api/automation")) return "publishing.execute";
   if (requestPath === "/api/publishing-safety/assess") return "publishing.schedule.manage";
   if (req.method === "GET" || req.method === "HEAD") return "publishing.view";
@@ -1609,7 +1608,7 @@ app.post("/api/companion/accounts/import", requireRoles("operations_manager"), a
       platform: selectedPlatform,
       credentialConfigured: Boolean(account.credentialConfigured),
       enabled: account.enabled !== false,
-      executionEngine: account.executionEngine === "external_browser" ? "external_browser" : "companion",
+      executionEngine: "companion",
       displayName: String(account.displayName || account.handle || selectedPlatform),
       handle: String(account.handle || ""),
       loginIdentifier: String(account.loginIdentifier || ""),
@@ -1660,7 +1659,7 @@ app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "sc
   }
 });
 
-app.post("/api/automation/consent", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
+app.post("/api/automation/consent", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const desktopHost = publishingDesktopHost();
     if (!desktopHost) {
@@ -1789,7 +1788,11 @@ app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager")
     assertCentralPlatformAccess(req, platform, "configure");
     const payload = upsertPlatformAccountSchema.parse(req.body);
     const user = currentUser(req);
-    const account = await createPlatformAccount(platform, { ...payload, companionId: publishingCompanionId() }, user.workspaceId);
+    const account = await createPlatformAccount(platform, {
+      ...payload,
+      executionEngine: "companion",
+      companionId: publishingCompanionId(),
+    }, user.workspaceId);
     await logActivity(user.id, "account.created", "publishing_account", account.id, `${account.displayName} account was added for ${platform}.`, { platform, handle: account.handle });
     res.status(201).json(account);
   } catch (error) {
@@ -1808,33 +1811,25 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
       return;
     }
     assertCentralPlatformAccess(req, existing.platform, "configure");
-    const previousEngine = existing.executionEngine ?? "companion";
-    const nextEngine = payload.executionEngine ?? previousEngine;
-    const engineChanged = nextEngine !== previousEngine;
-    if (engineChanged) assertAccountEngineChangeAllowed(accountId);
-    const account = await updatePlatformAccount(accountId, { ...payload, companionId: publishingCompanionId() }, user.workspaceId);
+    const account = await updatePlatformAccount(accountId, {
+      ...payload,
+      executionEngine: "companion",
+      companionId: publishingCompanionId(),
+    }, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
     }
-    if (engineChanged) {
-      await removeSavedAccountProfile(account).catch(error => {
-        console.warn(`Could not immediately clear the previous browser data for ${account.handle}:`, error instanceof Error ? error.message : error);
-      });
-    }
     await logActivity(
       user.id,
-      engineChanged ? "account.engine_changed" : "account.updated",
+      "account.updated",
       "publishing_account",
       account.id,
-      engineChanged
-        ? `${account.displayName} changed publishing engine and now requires login.`
-        : `${account.displayName} account was updated.`,
+      `${account.displayName} account was updated.`,
       {
         platform: account.platform,
         handle: account.handle,
-        executionEngine: account.executionEngine ?? "companion",
-        ...(engineChanged ? { previousEngine, sessionReset: true } : {}),
+        executionEngine: "companion",
       },
     );
     res.json(account);
@@ -1897,11 +1892,11 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       message: started
         ? activeSurface === "embedded"
           ? "Secure login opened inside Companion. Complete sign-in there; Companion will detect success, protect the local account session, and close the login pane automatically."
-          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will detect success, protect the account session, and close the login window automatically."
+          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will transfer and verify the protected session inside Companion before marking the account ready."
         : "Manual login is already running for this account.",
       started,
       surface: activeSurface,
-      executionEngine: account.executionEngine ?? "companion",
+      executionEngine: "companion",
     });
   } catch (error) {
     next(error);

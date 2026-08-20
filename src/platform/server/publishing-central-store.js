@@ -16,6 +16,10 @@ const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", 
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
 
+function companionPublishingEngine() {
+  return "companion";
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -55,6 +59,10 @@ function documentValue(value) {
     if (key === "version") continue;
     empty[key] = Array.isArray(value[key]) ? value[key] : [];
   }
+  empty.accounts = empty.accounts.map((account) => ({
+    ...account,
+    executionEngine: companionPublishingEngine(),
+  }));
   return empty;
 }
 
@@ -452,14 +460,14 @@ export async function heartbeatCentralCompanion(token, input = {}) {
           id: incoming.id || id("account"), workspaceId: companion.workspaceId, platform: incoming.platform,
           displayName: incoming.displayName || incoming.handle || incoming.platform, handle: incoming.handle || "",
           loginIdentifier: incoming.loginIdentifier || "", credentialConfigured: Boolean(incoming.credentialConfigured),
-          enabled: incoming.enabled !== false, executionEngine: incoming.executionEngine || "companion",
+          enabled: incoming.enabled !== false, executionEngine: companionPublishingEngine(),
           companionId: companion.id, safetyStatus: incoming.safetyStatus || "healthy", createdAt: timestamp, updatedAt: timestamp,
         };
         document.accounts.push(account);
       } else {
         account.credentialConfigured = Boolean(incoming.credentialConfigured);
         account.enabled = incoming.enabled !== false;
-        account.executionEngine = incoming.executionEngine || account.executionEngine || "companion";
+        account.executionEngine = companionPublishingEngine();
         account.safetyStatus = incoming.safetyStatus || account.safetyStatus || "healthy";
         account.companionId = companion.id;
         account.updatedAt = timestamp;
@@ -487,7 +495,7 @@ export async function createCentralAccount(principal, platformName, input = {}) 
       displayName: String(input.displayName || handle).trim().slice(0, 120) || handle,
       handle, loginIdentifier: String(input.loginIdentifier || "").trim().slice(0, 160),
       credentialConfigured: false, enabled: input.enabled !== false,
-      executionEngine: input.executionEngine || "companion", safetyStatus: "healthy",
+      executionEngine: companionPublishingEngine(), safetyStatus: "healthy",
       companionId: companion?.id || null, createdAt: timestamp, updatedAt: timestamp,
     };
     document.accounts.push(account);
@@ -501,9 +509,10 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
   return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
-    for (const key of ["displayName", "handle", "loginIdentifier", "executionEngine", "enabled"]) {
+    for (const key of ["displayName", "handle", "loginIdentifier", "enabled"]) {
       if (input[key] !== undefined) account[key] = key === "enabled" ? Boolean(input[key]) : String(input[key]).trim();
     }
+    account.executionEngine = companionPublishingEngine();
     account.updatedAt = now();
     return { document, result: publicAccount(document, account) };
   });
@@ -1000,6 +1009,7 @@ export function centralMediaFileName(originalName) {
 // without connecting a test run to a production document store.
 export const centralPublishingTestHelpers = {
   accountReadiness,
+  companionPublishingEngine,
   hasActiveJobLease,
   resumeReconnectJobs,
 };

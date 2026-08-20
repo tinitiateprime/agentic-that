@@ -36,6 +36,15 @@ export function getManualActionTimeoutMs() {
   return Number(process.env.MANUAL_ACTION_TIMEOUT_MS ?? 600000);
 }
 
+function closedLoginWindowError(platform: string) {
+  return new Error(`${platform} login window was closed before sign-in completed. Open Login and try again.`);
+}
+
+function isClosedPageError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /target page, context or browser has been closed|page has been closed|browser has been closed/i.test(message);
+}
+
 export async function waitForLoginWithManualFallback({
   page,
   platform,
@@ -60,7 +69,14 @@ export async function waitForLoginWithManualFallback({
   let ignoredLoginErrorLogged = false;
 
   while (Date.now() < (manualDeadline ?? normalDeadline)) {
-    const url = page.url();
+    if (page.isClosed()) throw closedLoginWindowError(platform);
+    let url: string;
+    try {
+      url = page.url();
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
     const embeddedBlock = embeddedLogin ? await embeddedLoginBlockReason(page) : null;
     if (embeddedBlock) {
       throw new Error(`${platform} blocked sign-in inside Companion: ${embeddedBlock} Use the Chrome fallback.`);
@@ -130,7 +146,12 @@ export async function waitForLoginWithManualFallback({
       }
     }
 
-    await page.waitForTimeout(pollMs);
+    try {
+      await page.waitForTimeout(pollMs);
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
   }
 
   throw new Error(`${platform} login/manual verification did not finish in time.`);

@@ -34,6 +34,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   const healthResponse = await fetch(`${origin}/api/health`);
   assert.equal(healthResponse.status, 200);
   const health = await healthResponse.json() as {
+    companionInstanceId?: string;
     capabilities?: { instagramScraping?: { available?: boolean; concurrency?: number } };
   };
   assert.equal(health.capabilities?.instagramScraping?.available, false);
@@ -97,8 +98,15 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(account.safetyMode, "protected");
   assert.equal(account.twoFactorEnabled, false);
 
-  const { pausePlatformAccountForSafety, updatePlatformAccountCredentialState } = await import("./local-storage.js");
+  const { bindPublishingAccountsToCompanion, getPlatformAccount, pausePlatformAccountForSafety, updatePlatformAccountCredentialState } = await import("./local-storage.js");
   await updatePlatformAccountCredentialState(account.id, true);
+  const binding = await bindPublishingAccountsToCompanion("companion_test_rebound");
+  assert.ok(binding.rebound > 0);
+  const reboundAccount = await getPlatformAccount(account.id);
+  assert.equal(reboundAccount?.executionEngine, "companion");
+  assert.equal(reboundAccount?.companionId, "companion_test_rebound");
+  assert.equal(reboundAccount?.credentialConfigured, true);
+  await bindPublishingAccountsToCompanion(health.companionInstanceId!);
   await pausePlatformAccountForSafety(account.id, "warning", "Uncertain publish result requires review.");
   const pausedAccounts = await (await api("/api/accounts?platform=facebook")).json() as Array<{
     id: string;
@@ -123,8 +131,8 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(resumeResponse.status, 200);
   const resumedAccount = await resumeResponse.json() as { enabled: boolean; credentialConfigured: boolean; executionEngine?: string; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
   assert.equal(resumedAccount.enabled, true);
-  assert.equal(resumedAccount.executionEngine, "external_browser");
-  assert.equal(resumedAccount.credentialConfigured, false);
+  assert.equal(resumedAccount.executionEngine, "companion");
+  assert.equal(resumedAccount.credentialConfigured, true);
   assert.equal(resumedAccount.safetyStatus, "healthy");
   assert.equal(resumedAccount.safetyReason, undefined);
   assert.equal(resumedAccount.safetyMode, "standard");
@@ -357,6 +365,14 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(textPosts[0].mimeType, "text/plain");
   assert.equal(textPosts[0].url, "");
   assert.equal(textPosts[0].status, "queued");
+  const { requeueAccountSessionFailures, updateUploadStatus: setStoredUploadStatus } = await import("./local-storage.js");
+  await setStoredUploadStatus(textPosts[0].id, "processing", "Testing a failed saved session");
+  await setStoredUploadStatus(textPosts[0].id, "failed", "Facebook saved browser session is not active. Login is required.");
+  assert.deepEqual(await requeueAccountSessionFailures(account.id), [textPosts[0].id]);
+  const recoveredTextPost = (await (await api("/api/uploads")).json() as Array<{ id: string; status: string; failureReason?: string }>)
+    .find(item => item.id === textPosts[0].id);
+  assert.equal(recoveredTextPost?.status, "queued");
+  assert.equal(recoveredTextPost?.failureReason, undefined);
 
   const instagramAccountResponse = await api("/api/platforms/instagram/accounts", {
     method: "POST",
@@ -588,6 +604,9 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal((await roleApi(schedulerLogin.token, "/api/submissions/text", {
     method: "POST",
     body: JSON.stringify({ description: "Schedulers cannot create content" }),
+  })).status, 403);
+  assert.equal((await roleApi(schedulerLogin.token, "/api/automation/consent", {
+    method: "POST",
   })).status, 403);
 
   const handoffScheduledAt = new Date(Date.now() + 10 * 60_000).toISOString();

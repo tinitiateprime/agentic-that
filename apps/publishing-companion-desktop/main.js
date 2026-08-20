@@ -951,6 +951,18 @@ function updateManagedBrowser(sessionId, activity) {
     ...activity,
     updatedAt: new Date().toISOString(),
   };
+  if (session.request.purpose === "login" && activity.state === "posted") {
+    for (const [candidateId, candidate] of managedBrowsers) {
+      if (
+        candidateId !== sessionId
+        && candidate.closedAt
+        && candidate.request.purpose === "login"
+        && candidate.request.accountId === session.request.accountId
+      ) {
+        managedBrowsers.delete(candidateId);
+      }
+    }
+  }
   notifyWorkspaceState({ revealActivity: session.request.purpose === "login" });
 }
 

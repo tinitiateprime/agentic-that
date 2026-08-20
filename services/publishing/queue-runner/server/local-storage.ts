@@ -1157,7 +1157,9 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
-      executionEngine: input.executionEngine ?? "companion",
+      // Chrome or Edge is only a login fallback. All actual publishing runs
+      // through the protected Companion partition.
+      executionEngine: "companion",
       safetyStatus: input.enabled === false ? "paused" : "healthy",
       safetyMode: input.safetyMode ?? "protected",
       twoFactorEnabled: input.twoFactorEnabled ?? false,
@@ -1181,14 +1183,13 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       && account.handle.toLowerCase() === input.handle.toLowerCase()
     );
     if (duplicate) throw new Error(platformLabels[existing.platform] + " account " + input.handle + " already exists.");
-    const previousEngine = existing.executionEngine ?? "companion";
-    const executionEngine = input.executionEngine ?? previousEngine;
+    const executionEngine = "companion" as const;
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName,
       handle: input.handle,
       loginIdentifier: input.loginIdentifier ?? "",
-      credentialConfigured: executionEngine === previousEngine ? existing.credentialConfigured : false,
+      credentialConfigured: existing.credentialConfigured,
       enabled: input.enabled ?? existing.enabled,
       executionEngine,
       companionId: input.companionId ?? existing.companionId,
@@ -1202,11 +1203,9 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       updatedAt: nowIso()
     };
     store.accounts[index] = updated;
-    if (!updated.enabled || executionEngine !== previousEngine) {
+    if (!updated.enabled) {
       const blockedAt = nowIso();
-      const reason = !updated.enabled
-        ? "Publishing account is disabled. Reconnect or enable it before retrying this destination."
-        : "Publishing account login must be reconnected after the execution engine changed.";
+      const reason = "Publishing account is disabled. Reconnect or enable it before retrying this destination.";
       store.uploads = store.uploads.map(upload => upload.accountId === accountId && upload.status === "queued"
         ? { ...upload, status: "failed" as const, failureReason: reason, updatedAt: blockedAt }
         : upload);
@@ -1229,13 +1228,71 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
   });
 }
 
+export async function bindPublishingAccountsToCompanion(companionId: string) {
+  const normalizedCompanionId = companionId.trim();
+  if (!normalizedCompanionId) throw new Error("A Companion instance ID is required.");
+  return mutateStore(store => {
+    const updatedAt = nowIso();
+    let rebound = 0;
+    store.accounts = store.accounts.map(account => {
+      if (account.executionEngine === "companion" && account.companionId === normalizedCompanionId) return account;
+      const requiresExternalSessionTransfer = account.executionEngine === "external_browser";
+      rebound += 1;
+      return {
+        ...account,
+        executionEngine: "companion" as const,
+        companionId: normalizedCompanionId,
+        credentialConfigured: requiresExternalSessionTransfer ? false : account.credentialConfigured,
+        updatedAt,
+      };
+    });
+    return { rebound, companionId: normalizedCompanionId };
+  });
+}
+
+function isReconnectFailure(upload: PlatformUpload) {
+  if (upload.status !== "failed") return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
+  return /saved browser session|sign in|log in|login|session (?:expired|invalid|is not active)|credential|authenticat|reconnect/i
+    .test(upload.failureReason ?? "");
+}
+
+export async function requeueAccountSessionFailures(accountId: string) {
+  const changedAt = nowIso();
+  const uploadIds = await mutateStore(store => {
+    const recovered: string[] = [];
+    store.uploads = store.uploads.map(upload => {
+      if (upload.accountId !== accountId || !isReconnectFailure(upload)) return upload;
+      recovered.push(upload.id);
+      return {
+        ...upload,
+        status: "queued" as const,
+        failureReason: undefined,
+        safetyDeferredUntil: undefined,
+        safetyReason: undefined,
+        publishActionState: "not_started" as const,
+        updatedAt: changedAt,
+      };
+    });
+    return recovered;
+  });
+  await Promise.all(uploadIds.map(uploadId => insertPostStatusHistory(
+    uploadId,
+    "failed",
+    "queued",
+    "Verified Companion login restored the publishing session",
+    changedAt,
+  )));
+  return uploadIds;
+}
+
 // Central workspace metadata never includes secrets. This keeps a local account
 // record in sync with the server while preserving the encrypted local session.
 export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
   return mutateStore(store => {
     const index = store.accounts.findIndex(account => account.id === input.id && account.workspaceId === input.workspaceId);
     const timestamp = nowIso();
-    const executionEngine = input.executionEngine === "external_browser" ? "external_browser" : "companion";
+    const executionEngine = "companion" as const;
     if (index < 0) {
       const created: PlatformAccount = {
         id: input.id,
@@ -1622,14 +1679,15 @@ function isStoreUploadReadyForAutomation(
   return isUploadReadyForAutomation(upload, now);
 }
 
-export async function listDueScheduleIdsWithQueuedUploads() {
+export async function listDueScheduleIdsWithQueuedUploads(companionId?: string) {
   const store = await readStore();
   const dueIds = dueScheduleIds(store);
   const accountById = new Map(store.accounts.map(account => [account.id, account]));
   const ids = new Set<number>();
   for (const upload of store.uploads) {
     const account = accountById.get(upload.accountId);
-    if (upload.scheduleId && isDueByPostSchedule(upload, account, dueIds)) ids.add(upload.scheduleId);
+    const assignedHere = !companionId || !account?.companionId || account.companionId === companionId;
+    if (assignedHere && upload.scheduleId && isDueByPostSchedule(upload, account, dueIds)) ids.add(upload.scheduleId);
   }
   return [...ids];
 }
@@ -1951,11 +2009,16 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
   return updatedUpload;
 }
 
-export async function listDueScheduledUploads() {
+export async function listDueScheduledUploads(companionId?: string) {
   const store = await readStore();
   const scheduledIds = dueScheduleIds(store);
+  const accountById = new Map(store.accounts.map(account => [account.id, account]));
   return store.uploads
-    .filter(upload => isStoreUploadReadyForAutomation(store, upload, "scheduledOnly", Date.now(), scheduledIds))
+    .filter(upload => {
+      const account = accountById.get(upload.accountId);
+      const assignedHere = !companionId || !account?.companionId || account.companionId === companionId;
+      return assignedHere && isStoreUploadReadyForAutomation(store, upload, "scheduledOnly", Date.now(), scheduledIds);
+    })
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 

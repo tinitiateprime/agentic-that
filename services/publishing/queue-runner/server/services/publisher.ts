@@ -5,6 +5,7 @@ import path from "node:path";
 import type { PlatformUpload, PublishingEngine } from "../../shared/schema.js";
 import {
   automationInput,
+  bindPublishingAccountsToCompanion,
   createAutomationRun,
   createAutomationRunPost,
   deferUploadForSafety,
@@ -14,6 +15,7 @@ import {
   listPlatformAccounts,
   listUploads,
   pausePlatformAccountForSafety,
+  requeueAccountSessionFailures,
   updatePlatformAccountCredentialState,
   updateUploadPublishActionState,
   updateUploadStatus,
@@ -72,8 +74,8 @@ type EncryptedSessionState = {
   ciphertext: string;
 };
 
-function accountEngine(account: PublishingAccount): PublishingEngine {
-  return account.executionEngine ?? "companion";
+function accountEngine(_account: PublishingAccount): PublishingEngine {
+  return "companion";
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
@@ -82,6 +84,14 @@ function accountSessionStatePath(account: PublishingAccount) {
 
 function legacyAccountSessionStatePath(account: PublishingAccount) {
   return path.join(externalBrowserProfilePath(account), "automation-session-state.json");
+}
+
+function hasExternalAccountProfile(account: PublishingAccount) {
+  try {
+    return fs.existsSync(externalBrowserProfilePath(account));
+  } catch {
+    return false;
+  }
 }
 
 function sessionEncryptionKey() {
@@ -151,14 +161,18 @@ function migrateLegacyAccountSessionState(account: PublishingAccount) {
   }
 }
 
-export async function removeSavedAccountProfile(account: PublishingAccount) {
-  await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+async function removeExternalAccountProfile(account: PublishingAccount) {
   const profilesRoot = path.resolve(externalBrowserProfilesRoot());
   const profilePath = path.resolve(externalBrowserProfilePath(account));
   if (!profilePath.startsWith(`${profilesRoot}${path.sep}`)) {
     throw new Error("The saved account profile path is invalid.");
   }
   await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 });
+}
+
+export async function removeSavedAccountProfile(account: PublishingAccount) {
+  await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+  await removeExternalAccountProfile(account);
 }
 
 export function hasSavedAccountSession(account: PublishingAccount) {
@@ -181,11 +195,12 @@ function clearSavedAccountSession(account: PublishingAccount) {
 }
 
 export async function reconcileSavedAccountSessions() {
+  const binding = await bindPublishingAccountsToCompanion(publishingCompanionId());
+  if (binding.rebound > 0) {
+    console.log(`Bound ${binding.rebound} publishing account(s) to this Companion instance.`);
+  }
   const accounts = await listPlatformAccounts();
   accounts.forEach(migrateLegacyAccountSessionState);
-  await Promise.all(accounts
-    .filter(account => accountEngine(account) === "companion" && !account.credentialConfigured && hasSavedAccountSession(account))
-    .map(account => updatePlatformAccountCredentialState(account.id, true)));
 }
 
 export function publishingBrowserRuntimeHealth() {
@@ -231,7 +246,7 @@ async function launchAccountBrowser(
   if (selectedEngine === "companion") {
     if (!desktopHost) {
       releaseAccount();
-      throw new Error("The Companion engine requires the Publishing Companion desktop app. Open Companion or choose the External browser engine for this account.");
+      throw new Error("Publishing requires the Publishing Companion desktop app. Open Companion and try again; Chrome or Edge is available only as a login fallback.");
     }
     return launchCompanionEngineBrowser({
       account,
@@ -335,32 +350,69 @@ async function restoreAccountSessionState(
   }
 }
 
-async function prepareStandardBrowserSession(account: PublishingAccount, transferToCompanion: boolean) {
-  const browser = await launchAccountBrowser(account, "login", "external_browser");
+async function prepareStandardBrowserSession(account: PublishingAccount) {
+  const externalBrowser = await launchAccountBrowser(account, "login", "external_browser");
   try {
-    await browser.update({
+    await externalBrowser.update({
       state: "waiting",
-      detail: `Complete ${account.platform} login in the dedicated Chrome or Edge window. Companion will detect success automatically.`,
+      detail: `Complete ${account.platform} login in Chrome or Edge. Companion will transfer and verify the session before saving it.`,
     });
-    await loginOnly(browser.page, account, { ignoreLoginErrors: true });
-    if (transferToCompanion) {
-      await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
-      await exportStandardBrowserSession(account, browser.context);
-    } else {
-      await saveAccountSessionState(account, browser.context, "external_browser");
-    }
-    await browser.update({
-      state: "posted",
-      detail: transferToCompanion
-        ? "Login confirmed and transferred securely into Companion."
-        : "Login confirmed in the dedicated external browser profile.",
+    await loginOnly(externalBrowser.page, account, { ignoreLoginErrors: true });
+    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+    await exportStandardBrowserSession(account, externalBrowser.context);
+    await externalBrowser.update({
+      state: "waiting",
+      detail: "Login confirmed. Transferring the protected session into Companion for verification.",
     });
-    console.log(`${account.platform} login confirmed for ${account.handle}. Closing the dedicated login window.`);
   } catch (error) {
-    await browser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
+    await externalBrowser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
     throw error;
   } finally {
-    await browser.close().catch(() => undefined);
+    await externalBrowser.close().catch(() => undefined);
+  }
+
+  if (!publishingDesktopHost()) {
+    const error = new Error("Keep Publishing Companion open while the Chrome or Edge login is transferred.");
+    await externalBrowser.update({ state: "failed", detail: error.message }).catch(() => undefined);
+    throw error;
+  }
+
+  let companionBrowser: PublishingBrowserSession;
+  try {
+    companionBrowser = await launchAccountBrowser(account, "login", "companion");
+  } catch (error) {
+    await externalBrowser.update({
+      state: "failed",
+      detail: `Companion could not open to verify the transferred login: ${errorMessage(error)}`,
+    }).catch(() => undefined);
+    throw error;
+  }
+  try {
+    await companionBrowser.update({
+      state: "opening",
+      detail: `Verifying the transferred ${account.platform} login inside Companion.`,
+    });
+    await loginOnly(companionBrowser.page, account, {
+      useSavedSessionOnly: true,
+      embeddedLogin: true,
+    });
+    await saveAccountSessionState(account, companionBrowser.context, "companion");
+    await companionBrowser.update({
+      state: "posted",
+      detail: "Login confirmed, transferred, and verified inside Companion. The account is ready to publish.",
+    });
+    await removeExternalAccountProfile(account).catch(error => {
+      console.warn(`Could not remove the temporary external login profile for ${account.handle}:`, errorMessage(error));
+    });
+    console.log(`${account.platform} login transferred and verified in Companion for ${account.handle}.`);
+  } catch (error) {
+    await companionBrowser.update({
+      state: "failed",
+      detail: `Companion could not verify the transferred login: ${errorMessage(error)}`,
+    }).catch(() => undefined);
+    throw error;
+  } finally {
+    await companionBrowser.close().catch(() => undefined);
   }
 }
 
@@ -649,7 +701,7 @@ async function prepareManualAccountSession(account: PublishingAccount, surface: 
   if (surface === "embedded") {
     await prepareEmbeddedCompanionSession(account);
   } else {
-    await prepareStandardBrowserSession(account, accountEngine(account) === "companion");
+    await prepareStandardBrowserSession(account);
   }
   console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
 }
@@ -676,20 +728,31 @@ export async function startManualAccountSession(
 
   if (existing) return { account, started: false, surface: existing.surface };
 
-  const useExternal = accountEngine(account) === "external_browser"
-    || requestedSurface === "external"
+  const useExternal = requestedSurface === "external"
+    || (requestedSurface === "engine" && !account.credentialConfigured && hasExternalAccountProfile(account))
     || !publishingDesktopHost();
   const surface: ManualLoginSurface = useExternal ? "external" : "embedded";
-  if (!account.credentialConfigured) await removeSavedAccountProfile(account);
+  if (!account.credentialConfigured) {
+    if (surface === "external") {
+      await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+      clearSavedAccountSession(account);
+    } else {
+      await removeSavedAccountProfile(account);
+    }
+  }
   if (surface === "external") externalBrowserExecutablePath();
 
   const operation = prepareManualAccountSession(account, surface)
     .then(async () => {
       await updatePlatformAccountCredentialState(account.id, true);
+      const requeued = await requeueAccountSessionFailures(account.id);
+      if (requeued.length > 0) {
+        console.log(`Requeued ${requeued.length} post(s) after the Companion login was verified.`);
+      }
     })
-    .catch(error => {
-      clearSavedAccountSession(account);
-      void updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
+    .catch(async error => {
+      await removeSavedAccountProfile(account).catch(() => clearSavedAccountSession(account));
+      await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
       console.error(
         `Manual session preparation failed for ${account.platform} account ${account.handle}:`,
         errorMessage(error),
