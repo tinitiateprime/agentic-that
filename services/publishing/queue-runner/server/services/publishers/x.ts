@@ -196,6 +196,29 @@ async function getPostComposer(page: Page) {
   return page.locator("body");
 }
 
+function xMediaPreviewLocators(page: Page, composer: Locator) {
+  // X can render the textarea in a nested dialog while mounting the media
+  // preview in a wider modal container. Search both scopes, prioritizing the
+  // page-level, composer-specific controls that are present in the current UI.
+  return [
+    page.locator('[role="dialog"] [data-testid="attachments"]'),
+    page.locator('[role="dialog"] [data-testid="media"]'),
+    page.locator('[role="dialog"] [data-testid^="removeMedia"]'),
+    page.locator('[role="dialog"] button[aria-label*="Remove media" i]'),
+    page.locator('[role="dialog"] img[src^="blob:"], [role="dialog"] video[src^="blob:"]'),
+    page.locator('[data-testid="attachments"]'),
+    page.locator('[data-testid="media"]'),
+    page.locator('[data-testid^="removeMedia"]'),
+    page.locator('button[aria-label*="Remove media" i]'),
+    page.locator('img[src^="blob:"], video[src^="blob:"]'),
+    composer.locator('[data-testid="attachments"]'),
+    composer.locator('[data-testid="media"]'),
+    composer.locator('[data-testid^="removeMedia"]'),
+    composer.locator('button[aria-label*="Remove media" i]'),
+    composer.locator('img[src^="blob:"], video[src^="blob:"]'),
+  ];
+}
+
 async function attachXMedia(page: Page, filePath: string) {
   console.log("Uploading X media...");
   const composer = await getPostComposer(page);
@@ -217,13 +240,7 @@ async function attachXMedia(page: Page, filePath: string) {
   let stablePreviewChecks = 0;
   while (Date.now() < deadline) {
     const selectedFileCount = await fileInput.evaluate((input: HTMLInputElement) => input.files?.length ?? 0).catch(() => 0);
-    const preview = await firstVisible([
-      composer.locator('[data-testid="attachments"]'),
-      composer.locator('[data-testid="media"]'),
-      composer.locator('[data-testid^="removeMedia"]'),
-      composer.locator('button[aria-label*="Remove media" i]'),
-      composer.locator('img[src^="blob:"], video[src^="blob:"]'),
-    ]);
+    const preview = await firstVisible(xMediaPreviewLocators(page, composer));
     const uploadError = await firstVisible([
       page.locator('[data-testid="toast"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
       page.locator('[role="alert"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
@@ -280,17 +297,16 @@ async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitte
 
   while (Date.now() < deadline) {
     const postButton = await firstVisible([
+      page.locator('[role="dialog"] [data-testid="tweetButton"]'),
+      page.locator('[role="dialog"] [data-testid="tweetButtonInline"]'),
       composer.locator('[data-testid="tweetButton"]'),
+      composer.locator('[data-testid="tweetButtonInline"]'),
       composer.getByRole("button", { name: /^Post$/i }),
+      page.locator('[data-testid="tweetButton"]'),
+      page.locator('[data-testid="tweetButtonInline"]'),
     ]);
     const mediaPreview = requireMedia
-      ? await firstVisible([
-        composer.locator('[data-testid="attachments"]'),
-        composer.locator('[data-testid="media"]'),
-        composer.locator('[data-testid^="removeMedia"]'),
-        composer.locator('button[aria-label*="Remove media" i]'),
-        composer.locator('img[src^="blob:"], video[src^="blob:"]'),
-      ])
+      ? await firstVisible(xMediaPreviewLocators(page, composer))
       : composer;
 
     if (postButton && mediaPreview && await postButton.isEnabled().catch(() => false)) {
