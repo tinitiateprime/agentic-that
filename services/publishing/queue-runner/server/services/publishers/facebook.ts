@@ -165,24 +165,42 @@ async function clickWhatsOnYourMind(page: Page) {
   await blockNotificationPrompt(page);
   await waitForFacebookHome(page);
 
-  const composerButton = await firstVisible([
+  const controls = () => [
     page.getByRole("button", { name: /What's on your mind/i }),
     page.locator('[role="button"]').filter({ hasText: /What's on your mind/i }),
+    page.locator('[aria-label*="What\'s on your mind" i]'),
     page.getByText(/What's on your mind/i),
-  ]);
+  ];
+  let composerReady: Locator | null = null;
+  const openingDeadline = Date.now() + 45000;
 
-  if (!composerButton) throw new Error("Could not find Facebook What's on your mind bar.");
+  for (let attempt = 1; attempt <= 3 && !composerReady && Date.now() < openingDeadline; attempt += 1) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
+    await page.waitForTimeout(attempt === 1 ? 750 : 1500);
+    for (const locator of controls()) {
+      if (Date.now() >= openingDeadline) break;
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 12); index += 1) {
+        if (Date.now() >= openingDeadline) break;
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await candidate.evaluate((element: HTMLElement) => {
+          element.scrollIntoView({ block: "center", inline: "center" });
+          element.focus();
+          element.click();
+        }).catch(() => undefined);
+        composerReady = await waitForAnyVisible([
+          createPostDialog(page),
+          reviewAudienceDialog(page),
+          updateSettingsDialog(page),
+        ], 3000);
+        if (composerReady) break;
+      }
+      if (composerReady) break;
+    }
+  }
 
-  await composerButton.scrollIntoViewIfNeeded();
-  await composerButton.click({ force: true, timeout: 10000 });
-
-  const composerReady = await waitForAnyVisible([
-    createPostDialog(page),
-    reviewAudienceDialog(page),
-    updateSettingsDialog(page),
-  ], 30000);
-
-  if (!composerReady) throw new Error("Facebook post composer did not open.");
+  if (!composerReady) throw new Error("Facebook What's on your mind control did not open the post composer.");
 
   console.log("Waiting briefly for Facebook audience screens...");
   await page.waitForTimeout(getComposerSettleMs());
@@ -218,15 +236,17 @@ async function clickVisibleButton(page: Page, label: RegExp, actionName: string,
 
   if (!button) throw new Error(`Could not find Facebook ${actionName} button.`);
 
-  await button.scrollIntoViewIfNeeded().catch(() => undefined);
-
   try {
-    await button.click({ force: true, timeout: 10000 });
+    await button.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus();
+      element.click();
+    });
     return;
   } catch {
-    const box = await button.boundingBox().catch(() => null);
-    if (!box) throw new Error(`Could not click Facebook ${actionName} button.`);
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await button.click({ force: true, timeout: 10000 }).catch(() => {
+      throw new Error(`Could not click Facebook ${actionName} button.`);
+    });
   }
 }
 
@@ -263,7 +283,11 @@ async function selectPublicAudience(page: Page) {
 
   if (!publicOption) throw new Error("Could not find Facebook Public audience option.");
 
-  await publicOption.click({ force: true, timeout: 10000 });
+  await publicOption.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.focus();
+    element.click();
+  }).catch(() => publicOption.click({ force: true, timeout: 10000 }));
   await page.waitForTimeout(500);
 
   if (await publicAudienceIsSelected(page)) return;
@@ -349,29 +373,24 @@ async function clickFacebookTextArea(page: Page) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
 
-  const placeholder = dialog.getByText(/What's on your mind/i).first();
   const editor = await firstVisible([
     dialog.locator('[contenteditable="true"][role="textbox"]'),
     dialog.locator('[role="textbox"]'),
     dialog.locator('[contenteditable="true"]'),
+    dialog.locator("textarea"),
   ]);
-  const placeholderBox = await placeholder.boundingBox().catch(() => null);
+  if (!editor) throw new Error("Could not find Facebook's empty caption area.");
 
-  if (placeholderBox) {
-    await page.mouse.click(placeholderBox.x + 24, placeholderBox.y + Math.max(18, placeholderBox.height / 2));
-    return;
-  }
-
-  if (editor) {
-    await editor.scrollIntoViewIfNeeded();
-    await editor.click({ force: true, timeout: 10000 });
-    return;
-  }
-
-  const dialogBox = await dialog.boundingBox().catch(() => null);
-  if (!dialogBox) throw new Error("Could not find Facebook caption area.");
-
-  await page.mouse.click(dialogBox.x + 40, dialogBox.y + 160);
+  console.log("Clicking Facebook empty caption area...");
+  await editor.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.click();
+    element.focus();
+  });
+  const focused = await editor.evaluate(element => (
+    document.activeElement === element || Boolean(element.contains(document.activeElement))
+  )).catch(() => false);
+  if (!focused) await editor.focus();
 }
 
 async function typeFacebookCaption(page: Page, caption: string) {
@@ -380,7 +399,23 @@ async function typeFacebookCaption(page: Page, caption: string) {
 
   console.log("Entering Facebook caption...");
   await clickFacebookTextArea(page);
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
+  const dialog = createPostDialog(page);
+  const editor = await firstVisible([
+    dialog.locator('[contenteditable="true"][role="textbox"]'),
+    dialog.locator('[role="textbox"]'),
+    dialog.locator('[contenteditable="true"]'),
+    dialog.locator("textarea"),
+  ]);
+  const enteredText = await editor?.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
+    "value" in element ? element.value : element.innerText || element.textContent || ""
+  )).catch(() => "");
+  const normalizedEnteredText = enteredText?.replace(/\s+/g, " ").trim();
+  if (!normalizedEnteredText || !normalizedEnteredText.includes(text.replace(/\s+/g, " "))) {
+    throw new Error("Facebook caption was not entered into the empty post area.");
+  }
   console.log("Facebook caption entered.");
 }
 
@@ -424,7 +459,11 @@ async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promis
 
   if (!readyPostButton) throw new Error("Facebook Post button did not become ready within 120 seconds.");
   console.log("Clicking the Facebook Post button once...");
-  await readyPostButton.click({ force: true, timeout: 10000 });
+  await readyPostButton.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.focus();
+    element.click();
+  }).catch(() => readyPostButton.click({ force: true, timeout: 10000 }));
   await onSubmitted?.();
   if (await waitForFacebookSubmissionStart(page, 10000)) {
     console.log("Facebook accepted the Post click.");

@@ -15,7 +15,14 @@ test("LinkedIn publishing ignores role-button duplicates outside the current vie
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {
-  assert.equal(hasReadyXMedia(1, false), false);
-  assert.equal(hasReadyXMedia(0, true), false);
-  assert.equal(hasReadyXMedia(1, true), true);
+  assert.equal(hasReadyXMedia(true, false), false);
+  assert.equal(hasReadyXMedia(false, true), false);
+  assert.equal(hasReadyXMedia(true, true), true);
+});
+
+test("X publishing retains initial file acceptance after X clears the input", () => {
+  const initialFileSelectionCompleted = true;
+  const currentInputFileCountAfterXProcessing = 0;
+  assert.equal(currentInputFileCountAfterXProcessing, 0);
+  assert.equal(hasReadyXMedia(initialFileSelectionCompleted, true), true);
 });

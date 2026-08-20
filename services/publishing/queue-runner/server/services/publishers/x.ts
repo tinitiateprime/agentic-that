@@ -234,12 +234,12 @@ async function attachXMedia(page: Page, filePath: string) {
   }
 
   await fileInput.setInputFiles(filePath);
+  const fileSelectionCompleted = true;
   console.log("X media selected; waiting for it to become ready...");
 
   const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
   let stablePreviewChecks = 0;
   while (Date.now() < deadline) {
-    const selectedFileCount = await fileInput.evaluate((input: HTMLInputElement) => input.files?.length ?? 0).catch(() => 0);
     const preview = await firstVisible(xMediaPreviewLocators(page, composer));
     const uploadError = await firstVisible([
       page.locator('[data-testid="toast"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
@@ -248,7 +248,9 @@ async function attachXMedia(page: Page, filePath: string) {
     const uploadErrorText = (await uploadError?.textContent())?.replace(/\s+/g, " ").trim();
     if (uploadErrorText) throw new Error(`X media upload error: ${uploadErrorText}`);
 
-    if (hasReadyXMedia(selectedFileCount, Boolean(preview))) {
+    // X clears input.files after accepting the upload. A completed assignment
+    // proves selection; the rendered preview proves that processing completed.
+    if (hasReadyXMedia(fileSelectionCompleted, Boolean(preview))) {
       stablePreviewChecks += 1;
       if (stablePreviewChecks >= 2) {
         console.log("X media preview is attached and ready.");
@@ -263,8 +265,8 @@ async function attachXMedia(page: Page, filePath: string) {
   throw new Error("X did not show an attached media preview, so Companion did not submit a text-only post.");
 }
 
-export function hasReadyXMedia(selectedFileCount: number, previewVisible: boolean) {
-  return selectedFileCount > 0 && previewVisible;
+export function hasReadyXMedia(fileSelectionCompleted: boolean, previewVisible: boolean) {
+  return fileSelectionCompleted && previewVisible;
 }
 
 async function fillXCaption(page: Page, caption: string) {

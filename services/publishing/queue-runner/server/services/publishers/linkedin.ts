@@ -17,7 +17,13 @@ function getPostHoldMs() {
 
 async function clickIfVisible(locator: Locator, timeout = 1500) {
   try {
-    await locator.first().click({ timeout });
+    const candidate = locator.first();
+    if (!await candidate.isVisible()) return false;
+    await candidate.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus();
+      element.click();
+    }).catch(() => candidate.click({ force: true, timeout }));
     return true;
   } catch {
     return false;
@@ -84,13 +90,17 @@ async function firstInViewport(page: Page, locators: Locator[]): Promise<Viewpor
 async function waitForLinkedInComposer(page: Page, timeout = 12000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const editor = await firstInViewport(page, [
+    // Publishing browser views can be positioned outside the desktop while
+    // still having a valid rendered editor. Require a visible editor in the
+    // active dialog, but do not require desktop viewport intersection.
+    const editor = await firstVisible([
       page.locator('[role="dialog"] [contenteditable="true"]'),
       page.locator('[role="dialog"] [role="textbox"]'),
+      page.locator('[role="dialog"] textarea'),
       page.locator('.share-creation-state__text-editor [contenteditable="true"]'),
       page.locator('.ql-editor[contenteditable="true"]'),
     ]);
-    if (editor) return editor.locator;
+    if (editor) return editor;
     await page.waitForTimeout(250);
   }
   return null;
@@ -141,106 +151,105 @@ async function getLoginError(page: Page) {
 async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
 
-  const startPostTarget = await firstInViewport(page, [
+  const controls = () => [
     page.getByRole("button", { name: /Start a post/i }),
+    page.locator('button[class*="share-box-feed-entry__trigger"]'),
+    page.locator('[data-view-name*="start-post" i]'),
+    page.locator('[data-control-name*="sharebox" i]'),
     page.locator("button").filter({ hasText: /Start a post/i }),
     page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
     page.locator('[aria-label*="Start a post" i]'),
-  ]);
+  ];
+  const activate = async (control: Locator) => {
+    await control.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus();
+      element.click();
+    });
+  };
 
-  if (!startPostTarget) {
-    throw new Error("Could not find an on-screen LinkedIn Start a post button.");
+  const openingDeadline = Date.now() + 45000;
+  for (let attempt = 1; attempt <= 3 && Date.now() < openingDeadline; attempt += 1) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
+    await page.waitForTimeout(attempt === 1 ? 750 : 1500);
+
+    const onScreen = await firstInViewport(page, controls());
+    if (onScreen) {
+      await activate(onScreen.locator).catch(() => undefined);
+      if (await waitForLinkedInComposer(page, 5000)) {
+        await page.waitForTimeout(750);
+        console.log("LinkedIn post composer opened.");
+        return;
+      }
+    }
+
+    // LinkedIn can retain a functional share control in a rendered duplicate
+    // that sits outside the browser viewport. A DOM click avoids Playwright's
+    // viewport actionability failure while still targeting the exact control.
+    for (const locator of controls()) {
+      if (Date.now() >= openingDeadline) break;
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 12); index += 1) {
+        if (Date.now() >= openingDeadline) break;
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await activate(candidate).catch(() => undefined);
+        if (await waitForLinkedInComposer(page, 3000)) {
+          await page.waitForTimeout(750);
+          console.log("LinkedIn post composer opened.");
+          return;
+        }
+      }
+    }
   }
 
-  await page.mouse.click(startPostTarget.point.x, startPostTarget.point.y);
-  if (await waitForLinkedInComposer(page, 8000)) {
-    await page.waitForTimeout(750);
-    console.log("LinkedIn post composer opened.");
-    return;
-  }
-
-  // LinkedIn occasionally ignores the first pointer action while its feed is
-  // hydrating. Retry the same on-screen control once, then require a real text
-  // editor rather than relying on placeholder copy that changes by locale/UI.
-  const retryTarget = await firstInViewport(page, [
-    page.getByRole("button", { name: /Start a post/i }),
-    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
-    page.locator('[aria-label*="Start a post" i]'),
-  ]);
-  if (!retryTarget) throw new Error("LinkedIn Start a post control moved outside the visible feed.");
-  await page.mouse.click(retryTarget.point.x, retryTarget.point.y);
-  if (!await waitForLinkedInComposer(page, 10000)) {
-    throw new Error("LinkedIn post composer did not open after clicking the on-screen Start a post control.");
-  }
-
-  await page.waitForTimeout(750);
-  console.log("LinkedIn post composer opened.");
+  throw new Error("LinkedIn Start a post control did not open the post editor after three verified attempts.");
 }
 
 async function typeLinkedInPostText(page: Page, text: string) {
   console.log("Entering LinkedIn post text...");
-  const textPreview = text.replace(/\s+/g, " ").trim().slice(0, 30);
+  const expectedText = text.replace(/\s+/g, " ").trim();
 
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const placeholder = page.getByText(/What do you want to talk about/i).first();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     const editor = await firstVisible([
       page.locator('[role="dialog"] [contenteditable="true"][data-placeholder*="What" i]'),
       page.locator('[role="dialog"] .ql-editor[contenteditable="true"]'),
       page.locator('[role="dialog"] [contenteditable="true"]'),
       page.locator('[role="dialog"] [role="textbox"]'),
+      page.locator('[role="dialog"] textarea'),
       page.locator(".share-creation-state__text-editor [contenteditable='true']"),
       page.locator(".ql-editor[contenteditable='true']"),
     ]);
+    if (!editor) throw new Error("Could not find LinkedIn's empty post text area.");
 
-    const placeholderBox = await placeholder.boundingBox().catch(() => null);
+    console.log("Clicking LinkedIn empty post text area...");
+    await editor.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.click();
+      element.focus();
+    });
+    await page.waitForTimeout(300);
 
-    if (placeholderBox) {
-      console.log("Clicking LinkedIn empty post text area...");
-      await page.mouse.click(placeholderBox.x + 24, placeholderBox.y + Math.max(12, placeholderBox.height / 2));
-    } else if (editor) {
-      console.log("Clicking LinkedIn post text editor...");
-      await editor.scrollIntoViewIfNeeded();
-      const editorBox = await editor.boundingBox().catch(() => null);
-      if (editorBox) {
-        await page.mouse.click(editorBox.x + 24, editorBox.y + Math.min(40, Math.max(16, editorBox.height / 2)));
-      } else {
-        await editor.click({ force: true, timeout: 10000 });
-      }
-    } else {
-      const dialog = page.locator('[role="dialog"]').last();
-      const dialogBox = await dialog.boundingBox().catch(() => null);
-      if (!dialogBox) throw new Error("Could not find LinkedIn post text box.");
-
-      console.log("Clicking LinkedIn post text area by dialog position...");
-      await page.mouse.click(dialogBox.x + 40, dialogBox.y + 150);
+    const focused = await editor.evaluate(element => (
+      document.activeElement === element || Boolean(element.contains(document.activeElement))
+    )).catch(() => false);
+    if (!focused) {
+      await editor.focus();
+      await page.waitForTimeout(200);
     }
 
-    await page.waitForTimeout(500);
+    // Set the requested caption exactly so a retained LinkedIn draft cannot
+    // duplicate text during a safe retry.
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.insertText(text);
+    await page.waitForTimeout(750);
 
-    const focusedEditor = await firstVisible([
-      page.locator('[role="dialog"] [contenteditable="true"][data-placeholder*="What" i]'),
-      page.locator('[role="dialog"] .ql-editor[contenteditable="true"]'),
-      page.locator('[role="dialog"] [contenteditable="true"]'),
-      page.locator('[role="dialog"] [role="textbox"]'),
-    ]);
-
-    if (focusedEditor) {
-      await focusedEditor.focus();
-      await focusedEditor.pressSequentially(text, { delay: 25 });
-    } else {
-      await page.keyboard.type(text, { delay: 25 });
-    }
-
-    await page.waitForTimeout(1000);
-
-    const textAppeared = await page
-      .locator('[role="dialog"]')
-      .getByText(textPreview, { exact: false })
-      .first()
-      .isVisible()
-      .catch(() => false);
-
-    if (!textPreview || textAppeared) {
+    const enteredText = await editor.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
+      "value" in element ? element.value : element.innerText || element.textContent || ""
+    )).catch(() => "");
+    const normalizedEnteredText = enteredText.replace(/\s+/g, " ").trim();
+    if (normalizedEnteredText === expectedText || normalizedEnteredText.includes(expectedText)) {
       console.log("LinkedIn post text entered.");
       return;
     }
@@ -305,20 +314,22 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 }
 
 async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
-  const postButton = page.getByRole("button", { name: /^Post$/i }).last();
-  await postButton.waitFor({ state: "visible", timeout: 60000 });
-
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
-    try {
-      if (await postButton.isEnabled()) {
-        console.log("Clicking LinkedIn Post button...");
-        await postButton.click({ force: true, timeout: 10000 });
-        await onSubmitted?.();
-        return;
-      }
-    } catch {
-      // Try again until LinkedIn enables the button.
+    const postButton = await firstVisible([
+      page.locator('[role="dialog"] button').filter({ hasText: /^Post$/i }),
+      page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Post$/i }),
+      page.getByRole("button", { name: /^Post$/i }),
+    ]);
+    if (postButton && await postButton.isEnabled().catch(() => false)) {
+      console.log("Clicking LinkedIn Post button...");
+      await postButton.evaluate((element: HTMLElement) => {
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.focus();
+        element.click();
+      }).catch(() => postButton.click({ force: true, timeout: 10000 }));
+      await onSubmitted?.();
+      return;
     }
 
     await page.waitForTimeout(1000);
