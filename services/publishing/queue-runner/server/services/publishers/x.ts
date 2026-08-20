@@ -212,6 +212,42 @@ async function attachXMedia(page: Page, filePath: string) {
 
   await fileInput.setInputFiles(filePath);
   console.log("X media selected; waiting for it to become ready...");
+
+  const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
+  let stablePreviewChecks = 0;
+  while (Date.now() < deadline) {
+    const selectedFileCount = await fileInput.evaluate((input: HTMLInputElement) => input.files?.length ?? 0).catch(() => 0);
+    const preview = await firstVisible([
+      composer.locator('[data-testid="attachments"]'),
+      composer.locator('[data-testid="media"]'),
+      composer.locator('[data-testid^="removeMedia"]'),
+      composer.locator('button[aria-label*="Remove media" i]'),
+      composer.locator('img[src^="blob:"], video[src^="blob:"]'),
+    ]);
+    const uploadError = await firstVisible([
+      page.locator('[data-testid="toast"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
+      page.locator('[role="alert"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
+    ]);
+    const uploadErrorText = (await uploadError?.textContent())?.replace(/\s+/g, " ").trim();
+    if (uploadErrorText) throw new Error(`X media upload error: ${uploadErrorText}`);
+
+    if (hasReadyXMedia(selectedFileCount, Boolean(preview))) {
+      stablePreviewChecks += 1;
+      if (stablePreviewChecks >= 2) {
+        console.log("X media preview is attached and ready.");
+        return;
+      }
+    } else {
+      stablePreviewChecks = 0;
+    }
+    await page.waitForTimeout(750);
+  }
+
+  throw new Error("X did not show an attached media preview, so Companion did not submit a text-only post.");
+}
+
+export function hasReadyXMedia(selectedFileCount: number, previewVisible: boolean) {
+  return selectedFileCount > 0 && previewVisible;
 }
 
 async function fillXCaption(page: Page, caption: string) {
@@ -236,7 +272,7 @@ async function fillXCaption(page: Page, caption: string) {
   console.log("X caption entered.");
 }
 
-async function clickXPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
+async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void) {
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer before publishing.");
 
@@ -247,8 +283,17 @@ async function clickXPostWhenReady(page: Page, onSubmitted?: () => Promise<void>
       composer.locator('[data-testid="tweetButton"]'),
       composer.getByRole("button", { name: /^Post$/i }),
     ]);
+    const mediaPreview = requireMedia
+      ? await firstVisible([
+        composer.locator('[data-testid="attachments"]'),
+        composer.locator('[data-testid="media"]'),
+        composer.locator('[data-testid^="removeMedia"]'),
+        composer.locator('button[aria-label*="Remove media" i]'),
+        composer.locator('img[src^="blob:"], video[src^="blob:"]'),
+      ])
+      : composer;
 
-    if (postButton && await postButton.isEnabled().catch(() => false)) {
+    if (postButton && mediaPreview && await postButton.isEnabled().catch(() => false)) {
       console.log("Clicking X Post button...");
       await postButton.click({ force: true, timeout: 10000 });
       await onSubmitted?.();
@@ -369,7 +414,7 @@ export async function postToX(page: Page, upload: PlatformUpload, accountLogin?:
   await openPostComposer(page);
   if (!isTextOnly) await attachXMedia(page, filePath);
   await fillXCaption(page, caption);
-  const composer = await clickXPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
+  const composer = await clickXPostWhenReady(page, !isTextOnly, accountLogin?.onFinalActionSubmitted);
   await waitForXPostComplete(page, composer);
 
   const holdTime = getPostHoldMs();

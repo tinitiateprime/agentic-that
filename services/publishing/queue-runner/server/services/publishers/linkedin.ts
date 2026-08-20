@@ -44,6 +44,58 @@ async function firstVisible(locators: Locator[]) {
   return null;
 }
 
+type ViewportTarget = {
+  locator: Locator;
+  point: { x: number; y: number };
+};
+
+export function visibleIntersectionPoint(
+  box: { x: number; y: number; width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  if (box.width <= 0 || box.height <= 0) return null;
+  const left = Math.max(0, box.x);
+  const top = Math.max(0, box.y);
+  const right = Math.min(viewport.width, box.x + box.width);
+  const bottom = Math.min(viewport.height, box.y + box.height);
+  if (right - left < 4 || bottom - top < 4) return null;
+  return { x: left + (right - left) / 2, y: top + (bottom - top) / 2 };
+}
+
+async function firstInViewport(page: Page, locators: Locator[]): Promise<ViewportTarget | null> {
+  const viewport = page.viewportSize() ?? await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+
+  for (const locator of locators) {
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < Math.min(count, 12); index += 1) {
+      const candidate = locator.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      const box = await candidate.boundingBox().catch(() => null);
+      const point = box ? visibleIntersectionPoint(box, viewport) : null;
+      if (point) return { locator: candidate, point };
+    }
+  }
+  return null;
+}
+
+async function waitForLinkedInComposer(page: Page, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const editor = await firstInViewport(page, [
+      page.locator('[role="dialog"] [contenteditable="true"]'),
+      page.locator('[role="dialog"] [role="textbox"]'),
+      page.locator('.share-creation-state__text-editor [contenteditable="true"]'),
+      page.locator('.ql-editor[contenteditable="true"]'),
+    ]);
+    if (editor) return editor.locator;
+    await page.waitForTimeout(250);
+  }
+  return null;
+}
+
 async function dismissCookiePrompt(page: Page) {
   const cookieButtons = [
     page.getByRole("button", { name: /Accept cookies/i }),
@@ -89,30 +141,40 @@ async function getLoginError(page: Page) {
 async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
 
-  const startPostButton = await firstVisible([
+  const startPostTarget = await firstInViewport(page, [
     page.getByRole("button", { name: /Start a post/i }),
     page.locator("button").filter({ hasText: /Start a post/i }),
-    page.getByText(/Start a post/i),
+    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
+    page.locator('[aria-label*="Start a post" i]'),
   ]);
 
-  if (!startPostButton) {
-    throw new Error("Could not find LinkedIn Start a post button.");
+  if (!startPostTarget) {
+    throw new Error("Could not find an on-screen LinkedIn Start a post button.");
   }
 
-  await startPostButton.scrollIntoViewIfNeeded();
-  await startPostButton.click({ force: true, timeout: 10000 });
-
-  try {
-    await page.getByText(/What do you want to talk about/i).first().waitFor({ state: "visible", timeout: 8000 });
-  } catch {
-    const startPostBox = await startPostButton.boundingBox().catch(() => null);
-    if (!startPostBox) throw new Error("LinkedIn post composer did not open.");
-
-    await page.mouse.click(startPostBox.x + startPostBox.width / 2, startPostBox.y + startPostBox.height / 2);
-    await page.getByText(/What do you want to talk about/i).first().waitFor({ state: "visible", timeout: 8000 });
+  await page.mouse.click(startPostTarget.point.x, startPostTarget.point.y);
+  if (await waitForLinkedInComposer(page, 8000)) {
+    await page.waitForTimeout(750);
+    console.log("LinkedIn post composer opened.");
+    return;
   }
 
-  await page.waitForTimeout(1000);
+  // LinkedIn occasionally ignores the first pointer action while its feed is
+  // hydrating. Retry the same on-screen control once, then require a real text
+  // editor rather than relying on placeholder copy that changes by locale/UI.
+  const retryTarget = await firstInViewport(page, [
+    page.getByRole("button", { name: /Start a post/i }),
+    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
+    page.locator('[aria-label*="Start a post" i]'),
+  ]);
+  if (!retryTarget) throw new Error("LinkedIn Start a post control moved outside the visible feed.");
+  await page.mouse.click(retryTarget.point.x, retryTarget.point.y);
+  if (!await waitForLinkedInComposer(page, 10000)) {
+    throw new Error("LinkedIn post composer did not open after clicking the on-screen Start a post control.");
+  }
+
+  await page.waitForTimeout(750);
+  console.log("LinkedIn post composer opened.");
 }
 
 async function typeLinkedInPostText(page: Page, text: string) {
