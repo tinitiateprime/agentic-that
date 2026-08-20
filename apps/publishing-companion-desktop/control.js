@@ -124,7 +124,7 @@ function createSessionTab(session) {
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
-  detail.textContent = `${session.purpose === "login" ? "Login" : "Publishing"} - ${session.engine === "external_browser" ? "External browser" : "Companion"} - ${stateLabel(session)}`;
+  detail.textContent = `${session.purpose === "login" ? "Login" : "Publishing"} - ${session.engine === "external_browser" ? (session.purpose === "login" ? "Chrome fallback" : "Companion-managed Chrome") : "Companion"} - ${stateLabel(session)}`;
   identity.append(name, detail);
 
   const state = document.createElement("i");
@@ -134,7 +134,7 @@ function createSessionTab(session) {
     focusedSessionId = session.id;
     liveLayoutMode = "focus";
     renderWorkspace();
-    if (session.engine === "external_browser") void api.focusExternalWindow(session.id);
+    if (session.engine === "external_browser" && session.purpose === "login") void api.focusExternalWindow(session.id);
   });
   return button;
 }
@@ -151,14 +151,14 @@ function createLiveCard(session) {
   const purpose = document.createElement("span");
   purpose.className = "live-purpose";
   purpose.textContent = session.engine === "external_browser"
-    ? session.purpose === "login" ? "External browser login" : "External browser publishing"
+    ? session.purpose === "login" ? "External browser login" : "Companion-managed Chrome publishing"
     : session.purpose === "login" ? "Companion login" : "Companion publishing";
   const name = document.createElement("strong");
   name.textContent = session.displayName || session.handle || platformLabel(session.platform);
   const detail = document.createElement("small");
   detail.textContent = session.activity?.detail
     || (session.engine === "external_browser"
-      ? "The dedicated Chrome or Edge window is active."
+      ? session.purpose === "login" ? "The dedicated Chrome or Edge login window is active." : "Companion is publishing through the provider-bound protected Chrome profile."
       : session.purpose === "login" ? "Complete login in this pane." : "Preparing the publishing page.");
   identity.append(purpose, name, detail);
 
@@ -187,6 +187,15 @@ function createLiveCard(session) {
   slot.className = "live-browser-slot";
   if (session.engine === "external_browser") {
     slot.classList.add("external-browser-slot");
+    if (session.purpose === "publish" && session.activity?.previewFrame) {
+      const preview = document.createElement("img");
+      preview.className = "managed-chrome-preview";
+      preview.alt = `Live ${platformLabel(session.platform)} publishing preview`;
+      preview.src = session.activity.previewFrame;
+      slot.append(preview);
+      card.append(header, progress, slot);
+      return card;
+    }
     const externalStatus = document.createElement("div");
     externalStatus.className = "external-browser-status";
     const layout = session.activity?.externalLayout;
@@ -202,19 +211,20 @@ function createLiveCard(session) {
       tileMap.append(tile);
     }
     const externalLabel = document.createElement("strong");
-    externalLabel.textContent = layout
-      ? `Window ${layout.index} of ${layout.total}`
-      : "Arranging browser window";
+    externalLabel.textContent = session.purpose === "publish"
+      ? "Starting secure live preview"
+      : layout ? `Window ${layout.index} of ${layout.total}` : "Arranging browser window";
     const externalDetail = document.createElement("small");
     externalDetail.textContent = layout
       ? `Row ${layout.row}, ${layout.centered ? "centered" : `column ${layout.column}`} - dedicated Chrome or Edge profile`
-      : "Preparing a dedicated Chrome or Edge profile.";
+      : session.purpose === "login" ? "Preparing a dedicated Chrome or Edge profile." : "Preparing the protected Companion-managed Chrome profile.";
     const focusWindow = document.createElement("button");
     focusWindow.type = "button";
     focusWindow.className = "external-focus-window";
     focusWindow.textContent = "Bring to front";
     focusWindow.addEventListener("click", () => void api.focusExternalWindow(session.id));
-    externalStatus.append(tileMap, externalLabel, externalDetail, focusWindow);
+    externalStatus.append(tileMap, externalLabel, externalDetail);
+    if (session.purpose === "login") externalStatus.append(focusWindow);
     slot.append(externalStatus);
   } else {
     slot.dataset.browserSession = session.id;
@@ -255,6 +265,7 @@ function renderWorkspace() {
   else if (previousActiveCount <= 1) liveLayoutMode = "split";
   previousActiveCount = active.length;
   const externalSessions = active.filter(session => session.engine === "external_browser");
+  const externalLoginSessions = externalSessions.filter(session => session.purpose === "login");
 
   const activityPanel = byId("activity-panel");
   activityPanel.classList.toggle("has-live", active.length > 0);
@@ -267,8 +278,10 @@ function renderWorkspace() {
     ? `${active.length} live ${active.length === 1 ? "browser" : "browsers"}`
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
-    ? externalSessions.length
+    ? externalLoginSessions.length
       ? "External Chrome or Edge windows are fitted into a two-column workspace while Companion keeps every account and status together."
+      : externalSessions.length
+        ? "Provider-bound publishing stays controlled by Companion and appears here as a secure local live preview."
       : "Every active Companion browser remains visible in the live workspace."
     : "Each account uses its selected Companion or External browser engine for login and publishing.";
   const singleSession = active.length === 1 ? active[0] : null;
@@ -280,7 +293,9 @@ function renderWorkspace() {
       ? "The dedicated external browser window is active."
       : singleSession.purpose === "login" ? "Complete login in the browser above." : "Visible publishing is active.")
     : externalSessions.length === active.length
-      ? `${externalSessions.length} external windows arranged two per row.`
+      ? externalLoginSessions.length === externalSessions.length
+        ? `${externalSessions.length} external login windows arranged two per row.`
+        : `${externalSessions.length} protected provider-bound publishing sessions shown inside Companion.`
       : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
       : "Publishing all scheduled accounts together in the visible grid.";
@@ -292,7 +307,7 @@ function renderWorkspace() {
   splitButton.classList.toggle("active", liveLayoutMode === "split");
   focusButton.disabled = canSplit;
   splitButton.disabled = !canSplit;
-  byId("arrange-external").hidden = externalSessions.length === 0;
+  byId("arrange-external").hidden = externalLoginSessions.length === 0;
 
   const switcher = byId("session-switcher");
   switcher.replaceChildren(...active.map(createSessionTab));

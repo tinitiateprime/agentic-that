@@ -58,12 +58,32 @@ const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
   youtube: "https://www.youtube.com/upload",
 };
 
+type BrowserStorageOrigin = {
+  origin: string;
+  localStorage: Array<{ name: string; value: string }>;
+  indexedDB?: unknown[];
+  sessionStorage?: Array<{ name: string; value: string }>;
+};
+
+type BrowserUserAgentMetadata = {
+  brands?: Array<{ brand: string; version: string }>;
+  fullVersionList?: Array<{ brand: string; version: string }>;
+  fullVersion?: string;
+  platform: string;
+  platformVersion: string;
+  architecture: string;
+  model: string;
+  mobile: boolean;
+  bitness?: string;
+  wow64?: boolean;
+};
+
 type BrowserStorageState = {
   cookies?: Parameters<BrowserContext["addCookies"]>[0];
-  origins?: Array<{
-    origin: string;
-    localStorage: Array<{ name: string; value: string }>;
-  }>;
+  origins?: BrowserStorageOrigin[];
+  userAgent?: string;
+  navigatorPlatform?: string;
+  userAgentMetadata?: BrowserUserAgentMetadata;
 };
 
 type EncryptedSessionState = {
@@ -74,8 +94,33 @@ type EncryptedSessionState = {
   ciphertext: string;
 };
 
-function accountEngine(_account: PublishingAccount): PublishingEngine {
-  return "companion";
+function managedChromeSessionPath(account: PublishingAccount) {
+  return path.join(externalBrowserProfilePath(account), "companion-managed-session.json");
+}
+
+function hasManagedChromeSession(account: PublishingAccount) {
+  try {
+    return fs.existsSync(managedChromeSessionPath(account));
+  } catch {
+    return false;
+  }
+}
+
+function markManagedChromeSession(account: PublishingAccount) {
+  const markerPath = managedChromeSessionPath(account);
+  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  fs.writeFileSync(markerPath, `${JSON.stringify({
+    version: 1,
+    platform: account.platform,
+    savedAt: new Date().toISOString(),
+  })}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+function accountEngine(account: PublishingAccount): PublishingEngine {
+  // Some providers bind a successful login to the Chrome profile that created
+  // it. Companion first tries its embedded partition; this protected profile is
+  // the reliable local fallback when the provider rejects a state transfer.
+  return hasManagedChromeSession(account) ? "external_browser" : "companion";
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
@@ -179,7 +224,7 @@ export function hasSavedAccountSession(account: PublishingAccount) {
   try {
     migrateLegacyAccountSessionState(account);
     const sessionPath = accountSessionStatePath(account);
-    return fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 2;
+    return hasManagedChromeSession(account) || (fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 2);
   } catch {
     return false;
   }
@@ -309,7 +354,61 @@ async function exportStandardBrowserSession(account: PublishingAccount, context:
   }
 
   fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
-  writeEncryptedSessionState(accountSessionStatePath(account), await context.storageState(), key);
+  const nativeState = await context.storageState({ indexedDB: true }) as BrowserStorageState;
+  const originByName = new Map((nativeState.origins ?? []).map(origin => [origin.origin, origin]));
+  for (const page of context.pages()) {
+    const pageStorage = await page.evaluate(() => ({
+      origin: window.location.origin,
+      sessionStorage: Object.keys(window.sessionStorage).map(name => ({ name, value: window.sessionStorage.getItem(name) ?? "" })),
+    })).catch(() => null);
+    if (!pageStorage || !/^https?:\/\//i.test(pageStorage.origin)) continue;
+    const existing = originByName.get(pageStorage.origin) ?? {
+      origin: pageStorage.origin,
+      localStorage: [],
+    };
+    existing.sessionStorage = pageStorage.sessionStorage;
+    originByName.set(pageStorage.origin, existing);
+  }
+  nativeState.origins = [...originByName.values()];
+
+  const identityPage = context.pages().find(page => /^https?:\/\//i.test(page.url())) ?? context.pages()[0];
+  if (identityPage) {
+    const identity = await identityPage.evaluate(async () => {
+      const navigatorWithData = navigator as Navigator & {
+        userAgentData?: {
+          brands?: Array<{ brand: string; version: string }>;
+          mobile?: boolean;
+          platform?: string;
+          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+        };
+      };
+      const data = navigatorWithData.userAgentData;
+      const highEntropy: Record<string, unknown> = data?.getHighEntropyValues
+        ? await data.getHighEntropyValues(["architecture", "bitness", "fullVersionList", "model", "platformVersion", "uaFullVersion", "wow64"]).catch(() => ({}))
+        : {};
+      return {
+        userAgent: navigator.userAgent,
+        navigatorPlatform: navigator.platform,
+        userAgentMetadata: data ? {
+          brands: data.brands,
+          fullVersionList: Array.isArray(highEntropy.fullVersionList) ? highEntropy.fullVersionList as Array<{ brand: string; version: string }> : undefined,
+          fullVersion: typeof highEntropy.uaFullVersion === "string" ? highEntropy.uaFullVersion : undefined,
+          platform: data.platform ?? "",
+          platformVersion: typeof highEntropy.platformVersion === "string" ? highEntropy.platformVersion : "",
+          architecture: typeof highEntropy.architecture === "string" ? highEntropy.architecture : "",
+          model: typeof highEntropy.model === "string" ? highEntropy.model : "",
+          mobile: Boolean(data.mobile),
+          bitness: typeof highEntropy.bitness === "string" ? highEntropy.bitness : undefined,
+          wow64: typeof highEntropy.wow64 === "boolean" ? highEntropy.wow64 : undefined,
+        } : undefined,
+      };
+    }).catch(() => null);
+    if (identity?.userAgent) nativeState.userAgent = identity.userAgent;
+    if (identity?.navigatorPlatform) nativeState.navigatorPlatform = identity.navigatorPlatform;
+    if (identity?.userAgentMetadata) nativeState.userAgentMetadata = identity.userAgentMetadata;
+  }
+
+  writeEncryptedSessionState(accountSessionStatePath(account), nativeState, key);
   console.log(`Saved protected ${account.platform} login session for ${account.handle}.`);
 }
 
@@ -326,19 +425,47 @@ async function restoreAccountSessionState(
     const key = sessionEncryptionKey();
     if (!key) return;
     const state = readEncryptedSessionState(statePath, key);
-    if (engine === "companion") await context.clearCookies();
-    if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-      await context.addCookies(state.cookies);
+    if (engine === "external_browser") {
+      // The encrypted export lives inside this same protected persistent Chrome
+      // profile. Avoid clearing device-bound browser data while reopening it.
+      fs.rmSync(statePath, { force: true });
+      console.log(`Reused protected external browser session for ${account.handle}.`);
+      return;
     }
-    if (Array.isArray(state.origins) && state.origins.length > 0) {
-      const localStorageByOrigin = Object.fromEntries(
-        state.origins.map(entry => [entry.origin, entry.localStorage]),
-      );
-      await context.addInitScript((storageByOrigin: Record<string, Array<{ name: string; value: string }>>) => {
-        for (const entry of storageByOrigin[window.location.origin] ?? []) {
-          window.localStorage.setItem(entry.name, entry.value);
-        }
-      }, localStorageByOrigin);
+
+    const origins = Array.isArray(state.origins) ? state.origins : [];
+    const nativeState = {
+      cookies: Array.isArray(state.cookies) ? state.cookies : [],
+      origins: origins.map(({ origin, localStorage, indexedDB }) => ({
+        origin,
+        localStorage: Array.isArray(localStorage) ? localStorage : [],
+        ...(Array.isArray(indexedDB) ? { indexedDB } : {}),
+      })),
+    };
+    await context.setStorageState(nativeState as Parameters<BrowserContext["setStorageState"]>[0]);
+
+    const sessionStorageByOrigin = Object.fromEntries(
+      origins.map(entry => [entry.origin, Array.isArray(entry.sessionStorage) ? entry.sessionStorage : []]),
+    );
+    await context.addInitScript((storageByOrigin: Record<string, Array<{ name: string; value: string }>>) => {
+      for (const entry of storageByOrigin[window.location.origin] ?? []) {
+        window.sessionStorage.setItem(entry.name, entry.value);
+      }
+    }, sessionStorageByOrigin);
+
+    const transferredUserAgent = state.userAgent;
+    if (transferredUserAgent) {
+      const applyBrowserIdentity = async (page: Page) => {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Network.setUserAgentOverride", {
+          userAgent: transferredUserAgent,
+          acceptLanguage: "en-US,en;q=0.9",
+          platform: state.navigatorPlatform || "Win32",
+          ...(state.userAgentMetadata ? { userAgentMetadata: state.userAgentMetadata } : {}),
+        });
+      };
+      await Promise.all(context.pages().map(page => applyBrowserIdentity(page).catch(() => undefined)));
+      context.on("page", page => { void applyBrowserIdentity(page).catch(() => undefined); });
     }
     fs.rmSync(statePath, { force: true });
     console.log(`Imported protected ${account.platform} login into ${engine === "companion" ? "Companion" : "the external browser"} for ${account.handle}.`);
@@ -359,7 +486,18 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     });
     await loginOnly(externalBrowser.page, account, { ignoreLoginErrors: true });
     await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
-    await exportStandardBrowserSession(account, externalBrowser.context);
+    try {
+      await exportStandardBrowserSession(account, externalBrowser.context);
+    } catch (error) {
+      clearSavedAccountSession(account);
+      markManagedChromeSession(account);
+      await externalBrowser.update({
+        state: "posted",
+        detail: "Login confirmed and saved in the protected Companion-managed Chrome profile.",
+      });
+      console.warn(`Could not create a transferable session for ${account.handle}; retained the protected managed Chrome profile:`, errorMessage(error));
+      return;
+    }
     await externalBrowser.update({
       state: "waiting",
       detail: "Login confirmed. Transferring the protected session into Companion for verification.",
@@ -372,20 +510,24 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   }
 
   if (!publishingDesktopHost()) {
-    const error = new Error("Keep Publishing Companion open while the Chrome or Edge login is transferred.");
-    await externalBrowser.update({ state: "failed", detail: error.message }).catch(() => undefined);
-    throw error;
+    clearSavedAccountSession(account);
+    markManagedChromeSession(account);
+    console.warn(`Companion was unavailable for embedded verification; retained the protected managed Chrome profile for ${account.handle}.`);
+    return;
   }
 
   let companionBrowser: PublishingBrowserSession;
   try {
     companionBrowser = await launchAccountBrowser(account, "login", "companion");
   } catch (error) {
+    clearSavedAccountSession(account);
+    markManagedChromeSession(account);
     await externalBrowser.update({
-      state: "failed",
-      detail: `Companion could not open to verify the transferred login: ${errorMessage(error)}`,
+      state: "posted",
+      detail: "The login was saved in the protected Companion-managed Chrome profile and is ready for publishing.",
     }).catch(() => undefined);
-    throw error;
+    console.warn(`Companion could not open embedded verification for ${account.handle}; retained the protected managed Chrome profile:`, errorMessage(error));
+    return;
   }
   try {
     await companionBrowser.update({
@@ -406,11 +548,17 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     });
     console.log(`${account.platform} login transferred and verified in Companion for ${account.handle}.`);
   } catch (error) {
+    clearSavedAccountSession(account);
+    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+    markManagedChromeSession(account);
     await companionBrowser.update({
-      state: "failed",
-      detail: `Companion could not verify the transferred login: ${errorMessage(error)}`,
+      state: "posted",
+      detail: "The provider kept this login bound to Chrome. Companion securely saved that protected local profile and will use it for publishing without asking you to sign in again.",
     }).catch(() => undefined);
-    throw error;
+    console.warn(
+      `${account.platform} rejected the embedded session transfer for ${account.handle}; using the protected Companion-managed Chrome profile:`,
+      errorMessage(error),
+    );
   } finally {
     await companionBrowser.close().catch(() => undefined);
   }
@@ -429,6 +577,7 @@ async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
     });
     await loginOnly(browser.page, account, { ignoreLoginErrors: true, embeddedLogin: true });
     await saveAccountSessionState(account, browser.context, "companion");
+    await removeExternalAccountProfile(account).catch(() => undefined);
     await browser.update({
       state: "posted",
       detail: "Login confirmed and the protected local session is ready.",
@@ -751,8 +900,13 @@ export async function startManualAccountSession(
       }
     })
     .catch(async error => {
-      await removeSavedAccountProfile(account).catch(() => clearSavedAccountSession(account));
-      await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
+      if (surface === "external") {
+        await removeSavedAccountProfile(account).catch(() => clearSavedAccountSession(account));
+      } else {
+        await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+        clearSavedAccountSession(account);
+      }
+      await updatePlatformAccountCredentialState(account.id, hasManagedChromeSession(account)).catch(() => undefined);
       console.error(
         `Manual session preparation failed for ${account.platform} account ${account.handle}:`,
         errorMessage(error),

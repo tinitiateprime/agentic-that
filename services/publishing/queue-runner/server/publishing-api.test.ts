@@ -93,10 +93,18 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     }),
   });
   assert.equal(accountResponse.status, 201);
-  const account = await accountResponse.json() as { id: string; executionEngine?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  const account = await accountResponse.json() as { id: string; workspaceId: string; executionEngine?: string; safetyMode?: string; twoFactorEnabled?: boolean };
   assert.equal(account.executionEngine, "companion");
   assert.equal(account.safetyMode, "protected");
   assert.equal(account.twoFactorEnabled, false);
+
+  const importedAccountResponse = await api("/api/companion/accounts/import", {
+    method: "POST",
+    body: JSON.stringify({ account: { ...account, platform: "facebook", companionId: "stale-central-companion", displayName: "Facebook test account", handle: "@agenticthat-test", loginIdentifier: "", credentialConfigured: false, enabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }),
+  });
+  assert.equal(importedAccountResponse.status, 201);
+  const importedAccount = await importedAccountResponse.json() as { companionId?: string };
+  assert.equal(importedAccount.companionId, health.companionInstanceId);
 
   const { bindPublishingAccountsToCompanion, getPlatformAccount, pausePlatformAccountForSafety, updatePlatformAccountCredentialState } = await import("./local-storage.js");
   await updatePlatformAccountCredentialState(account.id, true);
@@ -353,6 +361,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   });
   assert.equal(textPostResponse.status, 201);
   const textPosts = await textPostResponse.json() as Array<{
+    id: string;
     postFormat?: string;
     fileName: string;
     mimeType: string;

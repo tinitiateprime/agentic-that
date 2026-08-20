@@ -7,6 +7,15 @@ export type AccountLogin = {
   onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
+type SavedSessionVerificationOptions = {
+  page: Page;
+  platform: string;
+  isLoggedIn: () => Promise<boolean>;
+  beforeCheck?: () => Promise<void>;
+  timeoutMs?: number;
+  pollMs?: number;
+};
+
 type ManualLoginFallbackOptions = {
   page: Page;
   platform: string;
@@ -43,6 +52,34 @@ function closedLoginWindowError(platform: string) {
 function isClosedPageError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return /target page, context or browser has been closed|page has been closed|browser has been closed/i.test(message);
+}
+
+export async function waitForSavedSessionVerification({
+  page,
+  platform,
+  isLoggedIn,
+  beforeCheck,
+  timeoutMs = Number(process.env.SAVED_SESSION_VERIFY_TIMEOUT_MS ?? 45000),
+  pollMs = 500,
+}: SavedSessionVerificationOptions) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (page.isClosed()) throw closedLoginWindowError(platform);
+    await beforeCheck?.();
+    if (await isLoggedIn()) {
+      console.log(`${platform} saved session verified.`);
+      return;
+    }
+    try {
+      await page.waitForTimeout(pollMs);
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
+  }
+
+  throw new Error(`${platform} saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.`);
 }
 
 export async function waitForLoginWithManualFallback({

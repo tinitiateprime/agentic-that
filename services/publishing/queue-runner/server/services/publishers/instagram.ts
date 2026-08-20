@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 
@@ -592,7 +592,12 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
   if (await isLoggedIn(page)) {
     console.log("Instagram session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("Instagram saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "Instagram",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissPostLoginPrompts(page),
+    });
   } else {
     console.log("Complete the full Instagram login manually in the visible browser; Companion will save the session after the account opens.");
     await clickLoginInterstitialLink(page);
@@ -626,7 +631,7 @@ export async function postToInstagram(page: Page, upload: PlatformUpload, accoun
   await dismissInstagramReelsInfo(page);
   await selectOriginalAspectAndClickNext(page);
   await clickInstagramEditNext(page);
-  await fillInstagramCaption(page, upload.caption);
+  await fillInstagramCaption(page, upload.caption ?? "");
   await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
 
   const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);

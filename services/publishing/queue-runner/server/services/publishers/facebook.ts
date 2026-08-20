@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 
@@ -550,7 +550,12 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
   if (await isLoggedIn(page)) {
     console.log("Facebook session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("Facebook saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "Facebook",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissCookiePrompt(page),
+    });
   } else {
     console.log("Complete the full Facebook login manually in the visible browser; Companion will save the session after the account opens.");
     await page.goto(FACEBOOK_LOGIN_URL, { timeout: 60000 });
@@ -583,14 +588,15 @@ export async function postToFacebook(page: Page, upload: PlatformUpload, account
   const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
   if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`Facebook upload file not found: ${filePath}`);
 
-  if (!upload.caption?.trim()) {
+  const caption = upload.caption?.trim() ?? "";
+  if (isTextOnly && !caption) {
     throw new Error("Facebook caption is required.");
   }
 
   await loginToFacebook(page, upload, false, accountLogin);
   await clickWhatsOnYourMind(page);
   await waitForCreatePostComposerReady(page);
-  await typeFacebookCaption(page, upload.caption.trim());
+  await typeFacebookCaption(page, caption);
   if (!isTextOnly) await attachFacebookMedia(page, filePath);
   await clickFacebookPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForFacebookPostComplete(page);

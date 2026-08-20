@@ -47,6 +47,7 @@ export type DesktopBrowserActivity = {
   currentIndex?: number;
   totalItems?: number;
   externalLayout?: DesktopExternalBrowserLayout;
+  previewFrame?: string;
 };
 
 export type PublishingDesktopHost = {

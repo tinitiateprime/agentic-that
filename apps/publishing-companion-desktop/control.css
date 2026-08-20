@@ -468,6 +468,8 @@ h3 { margin: 4px 0 0; font-size: 15px; }
 #activity-panel.has-live .live-browser-slot,
 #activity-panel.has-live .live-card:only-child .live-browser-slot { height: auto; min-height: 0; }
 .external-browser-slot { display: grid; place-items: center; padding: 22px; background: #eef4f2; }
+.external-browser-slot:has(.managed-chrome-preview) { padding: 0; background: #ffffff; }
+.managed-chrome-preview { width: 100%; height: 100%; object-fit: contain; background: #ffffff; }
 .external-browser-status { width: min(100%, 360px); display: grid; justify-items: center; gap: 7px; color: #29463d; text-align: center; }
 .external-browser-status strong { font-size: 17px; }
 .external-browser-status small { color: #667b74; font-size: 11px; line-height: 1.5; }

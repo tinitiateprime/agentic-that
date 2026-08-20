@@ -23,6 +23,7 @@ const layoutSettleDelayMs = 120;
 type ManagedExternalWindow = {
   activityId?: string;
   purpose: DesktopBrowserPurpose;
+  visibleWindow: boolean;
   workspaceBounds: ExternalBrowserWorkspaceBounds;
   applyBounds?: (bounds: ExternalBrowserWorkspaceBounds) => Promise<void>;
   bringToFront?: () => Promise<void>;
@@ -122,12 +123,12 @@ function normalizedExternalWorkspace(candidate: ExternalBrowserWorkspaceBounds) 
 }
 
 function sharedExternalWorkspace(preferred?: ExternalBrowserWorkspaceBounds) {
-  const activeWorkspace = managedExternalWindows.values().next().value?.workspaceBounds;
+  const activeWorkspace = [...managedExternalWindows.values()].find(entry => entry.visibleWindow)?.workspaceBounds;
   return normalizedExternalWorkspace(activeWorkspace ?? preferred ?? fallbackWorkspaceBounds);
 }
 
 function currentExternalLayout() {
-  const entries = [...managedExternalWindows.values()];
+  const entries = [...managedExternalWindows.values()].filter(entry => entry.visibleWindow);
   const workspace = sharedExternalWorkspace(entries[0]?.workspaceBounds);
   return {
     entries,
@@ -231,6 +232,7 @@ export async function launchExternalBrowserEngine({
   const layoutEntry: ManagedExternalWindow = {
     activityId: activity?.id,
     purpose,
+    visibleWindow: purpose === "login",
     workspaceBounds: sharedExternalWorkspace(activity?.workspaceBounds),
     updateLayout: layout => activity
       ? Promise.resolve(desktopHost?.updateBrowser(activity.id, { externalLayout: layout }))
@@ -239,11 +241,15 @@ export async function launchExternalBrowserEngine({
   managedExternalWindows.set(layoutToken, layoutEntry);
   // Let simultaneous account launches reserve their slots before any window
   // appears, so the browsers open directly into the final grid.
-  await new Promise(resolve => setTimeout(resolve, layoutSettleDelayMs));
-  await arrangeExternalBrowserWindows();
+  if (layoutEntry.visibleWindow) {
+    await new Promise(resolve => setTimeout(resolve, layoutSettleDelayMs));
+    await arrangeExternalBrowserWindows();
+  }
   const initialLayout = currentExternalLayout();
-  const initialIndex = [...managedExternalWindows.keys()].indexOf(layoutToken);
-  const initialBounds = initialLayout.tiles[initialIndex]?.bounds ?? layoutEntry.workspaceBounds;
+  const initialIndex = initialLayout.entries.indexOf(layoutEntry);
+  const initialBounds = layoutEntry.visibleWindow
+    ? initialLayout.tiles[initialIndex]?.bounds ?? layoutEntry.workspaceBounds
+    : { x: -10_000, y: -10_000, width: 1280, height: 900 };
   let browserProcess: ChildProcess;
   try {
     browserProcess = spawn(executablePath, [
@@ -254,6 +260,8 @@ export async function launchExternalBrowserEngine({
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-mode",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
       `--window-position=${initialBounds.x},${initialBounds.y}`,
       `--window-size=${initialBounds.width},${initialBounds.height}`,
       "--new-window",
@@ -272,6 +280,8 @@ export async function launchExternalBrowserEngine({
   let spawnError: Error | null = null;
   browserProcess.once("error", error => { spawnError = error; });
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+  let previewTimer: NodeJS.Timeout | null = null;
+  let previewCaptureRunning = false;
   let closed = false;
 
   const close = async (reason?: string) => {
@@ -280,13 +290,18 @@ export async function launchExternalBrowserEngine({
     if (reason && activity) {
       await Promise.resolve(desktopHost?.updateBrowser(activity.id, { state: "stopped", detail: reason })).catch(() => undefined);
     }
+    if (previewTimer) clearInterval(previewTimer);
+    previewTimer = null;
     try {
       await Promise.race([
         browser?.close().catch(() => undefined),
         new Promise(resolve => setTimeout(resolve, 1500)),
       ]);
       const exited = await waitForProcessExit(browserProcess, 3000);
-      if (!exited && browserProcess.exitCode === null && !browserProcess.killed) browserProcess.kill();
+      if (!exited && browserProcess.exitCode === null && !browserProcess.killed) {
+        browserProcess.kill();
+        await waitForProcessExit(browserProcess, 2000);
+      }
       if (activity) await Promise.resolve(desktopHost?.closeBrowser(activity.id)).catch(() => undefined);
     } finally {
       managedExternalWindows.delete(layoutToken);
@@ -310,7 +325,7 @@ export async function launchExternalBrowserEngine({
       ?? await context.newPage();
     const cdpSession = await context.newCDPSession(page);
     const browserWindow = await cdpSession.send("Browser.getWindowForTarget") as { windowId?: number };
-    if (typeof browserWindow.windowId === "number") {
+    if (typeof browserWindow.windowId === "number" && layoutEntry.visibleWindow) {
       const windowId = browserWindow.windowId;
       layoutEntry.applyBounds = async bounds => {
         await cdpSession.send("Browser.setWindowBounds", {
@@ -327,13 +342,42 @@ export async function launchExternalBrowserEngine({
           },
         });
       };
+    } else if (typeof browserWindow.windowId === "number") {
+      await cdpSession.send("Browser.setWindowBounds", {
+        windowId: browserWindow.windowId,
+        bounds: { windowState: "normal" },
+      }).catch(() => undefined);
+      await cdpSession.send("Browser.setWindowBounds", {
+        windowId: browserWindow.windowId,
+        bounds: { left: -10_000, top: -10_000, width: 1280, height: 900 },
+      }).catch(() => undefined);
     }
-    layoutEntry.bringToFront = () => page.bringToFront();
+    if (layoutEntry.visibleWindow) layoutEntry.bringToFront = () => page.bringToFront();
     browser.on("disconnected", () => {
       if (!closed) void close();
     });
-    await arrangeExternalBrowserWindows();
-    await page.bringToFront().catch(() => undefined);
+    if (layoutEntry.visibleWindow) {
+      await arrangeExternalBrowserWindows();
+      await page.bringToFront().catch(() => undefined);
+    } else if (activity) {
+      const capturePreview = async () => {
+        if (previewCaptureRunning || page.isClosed()) return;
+        previewCaptureRunning = true;
+        try {
+          const screenshot = await page.screenshot({ type: "jpeg", quality: 65, timeout: 8000 });
+          await Promise.resolve(desktopHost?.updateBrowser(activity.id, {
+            previewFrame: `data:image/jpeg;base64,${screenshot.toString("base64")}`,
+          }));
+        } catch {
+          // A navigation can replace the frame while the screenshot is taken.
+        } finally {
+          previewCaptureRunning = false;
+        }
+      };
+      previewTimer = setInterval(() => { void capturePreview(); }, 1500);
+      previewTimer.unref();
+      void capturePreview();
+    }
     return {
       engine: "external_browser",
       context,

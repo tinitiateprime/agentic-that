@@ -294,6 +294,7 @@ function normalizeStore(value: unknown): Store {
   const uploads = Array.isArray(input.uploads)
     ? input.uploads.map(upload => ({
       ...upload,
+      caption: typeof upload.caption === "string" ? upload.caption : "",
       workspaceId: upload.workspaceId || accountWorkspaces.get(upload.accountId) || legacyWorkspaceId
     }))
     : [];
@@ -1834,6 +1835,7 @@ export async function upsertSyncedUpload(input: PlatformUpload) {
     const timestamp = nowIso();
     const normalized: PlatformUpload = {
       ...input,
+      caption: typeof input.caption === "string" ? input.caption : "",
       postFormat: input.postFormat || "text",
       extension: input.extension || path.extname(input.originalName || "").replace(".", ""),
       status: index >= 0 ? store.uploads[index].status : "queued",

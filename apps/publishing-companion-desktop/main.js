@@ -933,7 +933,7 @@ async function openExternalActivity(request) {
       state: "opening",
       detail: request.purpose === "login"
         ? "Opening the dedicated external login window in the browser grid."
-        : "Opening the dedicated external publishing window in the browser grid.",
+        : "Opening the protected Companion-managed Chrome publishing session.",
     },
     openedAt: new Date().toISOString(),
     closedAt: null,
@@ -1003,6 +1003,7 @@ async function closeManagedBrowser(sessionId, forcedState) {
       updatedAt: new Date().toISOString(),
     };
   }
+  session.activity.previewFrame = undefined;
   session.closedAt = new Date().toISOString();
   browserBounds.delete(sessionId);
   browserZoomFactors.delete(sessionId);

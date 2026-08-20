@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 
@@ -320,7 +320,12 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
   if (await isLoggedIn(page)) {
     console.log("X session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("X saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "X",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissCookiePrompt(page),
+    });
   } else {
     await page.goto(X_LOGIN_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);

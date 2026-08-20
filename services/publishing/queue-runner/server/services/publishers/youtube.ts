@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import path from "path";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
@@ -886,7 +886,12 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   if (await isYouTubeLoggedIn(page)) {
     console.log("YouTube session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("YouTube saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "YouTube",
+      isLoggedIn: () => isYouTubeLoggedIn(page),
+      beforeCheck: () => dismissChromeSignInPrompt(page),
+    });
   } else {
     console.log("Complete the full YouTube login manually in the visible browser; Companion will save the session after the account opens.");
     await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
@@ -906,7 +911,7 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
   await loginToYouTube(page, accountLogin);
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
-  await fillCommunityPostDescription(page, upload.caption);
+  await fillCommunityPostDescription(page, upload.caption ?? "");
   await attachCommunityPostImage(page, imagePath);
   await waitForCommunityImagePreview(page, 30000);
   await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
@@ -919,7 +924,7 @@ async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, ac
   await loginToYouTube(page, accountLogin);
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
-  await fillCommunityPostDescription(page, upload.caption);
+  await fillCommunityPostDescription(page, upload.caption ?? "");
   await clickCommunityPostWhenReady(page, false, accountLogin?.onFinalActionSubmitted);
   await waitForCommunityPostComplete(page);
   console.log("Step completed: YouTube Community text post published.");
@@ -1004,10 +1009,10 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await page.waitForTimeout(2000);
 
   console.log("Filling metadata...");
-  const videoTitle = upload.title || upload.caption;
+  const videoTitle = upload.title || upload.caption || upload.originalName;
 
   await fillEditable(page, page.locator("#title-textarea"), videoTitle);
-  await fillEditable(page, page.locator("#description-textarea"), upload.caption);
+  await fillEditable(page, page.locator("#description-textarea"), upload.caption ?? "");
   await page.waitForTimeout(1000);
 
   await selectMadeForKids(page);

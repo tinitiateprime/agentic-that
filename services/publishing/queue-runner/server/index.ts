@@ -1606,6 +1606,7 @@ app.post("/api/companion/accounts/import", requireRoles("operations_manager"), a
     const imported = await upsertSyncedPlatformAccount({
       ...account,
       platform: selectedPlatform,
+      companionId: publishingCompanionId(),
       credentialConfigured: Boolean(account.credentialConfigured),
       enabled: account.enabled !== false,
       executionEngine: "companion",
@@ -1892,7 +1893,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       message: started
         ? activeSurface === "embedded"
           ? "Secure login opened inside Companion. Complete sign-in there; Companion will detect success, protect the local account session, and close the login pane automatically."
-          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will transfer and verify the protected session inside Companion before marking the account ready."
+          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will transfer it into the embedded browser when the provider permits, or retain the protected Companion-managed Chrome profile when the provider binds the session to Chrome."
         : "Manual login is already running for this account.",
       started,
       surface: activeSurface,

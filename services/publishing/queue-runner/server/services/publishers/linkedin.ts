@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 
@@ -353,7 +353,12 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
   if (await isLoggedIn(page)) {
     console.log("LinkedIn session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("LinkedIn saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "LinkedIn",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissCookiePrompt(page),
+    });
   } else {
     console.log("Complete the full LinkedIn login manually in the visible browser; Companion will save the session after the account opens.");
     await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
