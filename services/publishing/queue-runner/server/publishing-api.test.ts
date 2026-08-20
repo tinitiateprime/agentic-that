@@ -17,7 +17,19 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   process.env.PUBLISH_QUEUE_SCHEDULER_ENABLED = "false";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
 
-  const { createPublishingHttpServer } = await import("./index.js");
+  const { centralDeliveryFailure, createPublishingHttpServer } = await import("./index.js");
+  assert.deepEqual(centralDeliveryFailure(undefined), {
+    message: "Companion could not find the local copy of this publishing job. It is safe to retry.",
+    retry: true,
+  });
+  assert.deepEqual(centralDeliveryFailure({
+    platform: "linkedin",
+    status: "processing",
+    publishActionState: "uncertain",
+  } as never), {
+    message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
+    retry: false,
+  });
   const server = createPublishingHttpServer({ host: "127.0.0.1", port: 0, startBackgroundServices: false });
   await new Promise<void>((resolve, reject) => {
     if (server.listening) return resolve();
@@ -374,7 +386,12 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   assert.equal(textPosts[0].mimeType, "text/plain");
   assert.equal(textPosts[0].url, "");
   assert.equal(textPosts[0].status, "queued");
-  const { requeueAccountSessionFailures, updateUploadStatus: setStoredUploadStatus } = await import("./local-storage.js");
+  const {
+    listUploads: listStoredUploads,
+    requeueAccountSessionFailures,
+    updateUploadStatus: setStoredUploadStatus,
+    upsertSyncedUpload,
+  } = await import("./local-storage.js");
   await setStoredUploadStatus(textPosts[0].id, "processing", "Testing a failed saved session");
   await setStoredUploadStatus(textPosts[0].id, "failed", "Facebook saved browser session is not active. Login is required.");
   assert.deepEqual(await requeueAccountSessionFailures(account.id), [textPosts[0].id]);
@@ -382,6 +399,19 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     .find(item => item.id === textPosts[0].id);
   assert.equal(recoveredTextPost?.status, "queued");
   assert.equal(recoveredTextPost?.failureReason, undefined);
+
+  await setStoredUploadStatus(textPosts[0].id, "failed", "Old LinkedIn viewport failure");
+  const locallyFailedPost = (await listStoredUploads()).find(item => item.id === textPosts[0].id);
+  assert.ok(locallyFailedPost);
+  await upsertSyncedUpload({
+    ...locallyFailedPost,
+    status: "processing",
+    failureReason: "The local publisher did not confirm delivery.",
+  });
+  const centrallyRetriedPost = (await listStoredUploads()).find(item => item.id === textPosts[0].id);
+  assert.equal(centrallyRetriedPost?.status, "queued");
+  assert.equal(centrallyRetriedPost?.failureReason, undefined);
+  assert.equal(centrallyRetriedPost?.publishActionState, "not_started");
 
   const instagramAccountResponse = await api("/api/platforms/instagram/accounts", {
     method: "POST",

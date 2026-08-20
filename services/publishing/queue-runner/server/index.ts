@@ -246,6 +246,31 @@ async function updateCentralJobStatus(pairing: CentralCompanionPairing, jobId: s
   });
 }
 
+export function centralDeliveryFailure(upload?: PlatformUpload) {
+  const recordedFailure = upload?.failureReason?.trim();
+  if (recordedFailure) return {
+    message: recordedFailure,
+    retry: upload?.publishActionState !== "submitted" && upload?.publishActionState !== "uncertain",
+  };
+  if (!upload) return {
+    message: "Companion could not find the local copy of this publishing job. It is safe to retry.",
+    retry: true,
+  };
+  if (upload.status === "queued") return {
+    message: upload.safetyReason || "Companion kept this post queued and did not submit it. It is safe to retry.",
+    retry: true,
+  };
+  const finalActionUncertain = upload.publishActionState === "submitted" || upload.publishActionState === "uncertain";
+  if (finalActionUncertain) return {
+    message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
+    retry: false,
+  };
+  return {
+    message: `Companion stopped before ${upload.platform} confirmed the post. No final publish action was recorded, so it is safe to retry.`,
+    retry: true,
+  };
+}
+
 async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
   let leaseHeartbeat: NodeJS.Timeout | null = null;
   try {
@@ -275,7 +300,8 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
       await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false);
       return;
     }
-    await updateCentralJobStatus(pairing, job.id, "failed", localUpload?.failureReason || "The local publisher did not confirm delivery.");
+    const failure = centralDeliveryFailure(localUpload);
+    await updateCentralJobStatus(pairing, job.id, "failed", failure.message, failure.retry);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);

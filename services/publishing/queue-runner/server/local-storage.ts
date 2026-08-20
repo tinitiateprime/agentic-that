@@ -1832,21 +1832,53 @@ export async function createUpload(
 export async function upsertSyncedUpload(input: PlatformUpload) {
   return mutateStore(store => {
     const index = store.uploads.findIndex(upload => upload.id === input.id && upload.workspaceId === input.workspaceId);
+    const existing = index >= 0 ? store.uploads[index] : null;
     const timestamp = nowIso();
+    const incomingPublishActionState = input.publishActionState === "submitted"
+      || input.publishActionState === "uncertain"
+      || input.publishActionState === "prepared"
+      || input.publishActionState === "confirmed"
+      ? input.publishActionState
+      : "not_started";
+    // A central retry arrives after its job has already been claimed, so its
+    // incoming status is "processing". Reset a prior local failure only when
+    // no final publish action was submitted. Posted and uncertain records must
+    // remain terminal locally to prevent duplicate social posts.
+    const centralRetryOfSafeFailure = existing?.status === "failed"
+      && (input.status === "queued" || input.status === "processing")
+      && existing.publishActionState !== "submitted"
+      && existing.publishActionState !== "uncertain"
+      && incomingPublishActionState !== "submitted"
+      && incomingPublishActionState !== "uncertain";
+    const status: UploadStatus = !existing
+      ? "queued"
+      : centralRetryOfSafeFailure
+        ? "queued"
+        : existing.status;
+    const publishActionState: PublishActionState = centralRetryOfSafeFailure
+      ? "not_started"
+      : existing?.status === "posted"
+        ? existing.publishActionState || "confirmed"
+        : existing?.publishActionState === "submitted" || existing?.publishActionState === "uncertain"
+          ? existing.publishActionState
+          : incomingPublishActionState;
     const normalized: PlatformUpload = {
       ...input,
       caption: typeof input.caption === "string" ? input.caption : "",
       postFormat: input.postFormat || "text",
       extension: input.extension || path.extname(input.originalName || "").replace(".", ""),
-      status: index >= 0 ? store.uploads[index].status : "queued",
-      publishActionState: input.publishActionState === "submitted" || input.publishActionState === "uncertain" || input.publishActionState === "prepared" || input.publishActionState === "confirmed"
-        ? input.publishActionState
-        : "not_started",
+      status,
+      failureReason: status === "queued" || status === "posted"
+        ? undefined
+        : input.failureReason || existing?.failureReason,
+      publishActionState,
+      safetyDeferredUntil: centralRetryOfSafeFailure ? undefined : input.safetyDeferredUntil ?? existing?.safetyDeferredUntil,
+      safetyReason: centralRetryOfSafeFailure ? undefined : input.safetyReason ?? existing?.safetyReason,
       uploadedAt: input.uploadedAt || timestamp,
       updatedAt: timestamp,
       automation: input.automation || createAutomation(input.platform, input.accountId, input.id, input.url),
     };
-    if (index >= 0) store.uploads[index] = { ...store.uploads[index], ...normalized, status: store.uploads[index].status };
+    if (index >= 0) store.uploads[index] = { ...store.uploads[index], ...normalized };
     else store.uploads.unshift(normalized);
     return index >= 0 ? store.uploads[index] : normalized;
   });
