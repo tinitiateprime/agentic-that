@@ -1401,7 +1401,7 @@ export function TelegramConsole({ integrated = false }) {
                     ),
                     h("input", {"id":"contact-name","type":"text","required":true}),
                     h("label", {"htmlFor":"contact-handle"},
-                      "Username"
+                      "Telegram username (optional)"
                     ),
                     h("input", {"id":"contact-handle","type":"text","placeholder":"@username"}),
                     h("label", {"htmlFor":"contact-phone"},

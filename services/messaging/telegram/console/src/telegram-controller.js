@@ -1,4 +1,9 @@
 import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
+import {
+  normalizeContactPhone as normalizeSavedContactPhone,
+  recipientFromGroupLine as normalizeTelegramRecipient,
+  savedContactRecipient
+} from "./recipient-utils.js";
 
 export function initTelegramConsole(options = {}) {
 let centralServiceToken = String(options.serviceToken || "");
@@ -388,13 +393,7 @@ function splitContactPhone(value) {
 }
 
 function normalizeContactPhone(rawPhone, countryCode = "+91") {
-  const text = String(rawPhone || "").trim();
-  const digits = text.replace(/\D/g, "");
-  if (!digits) return "";
-  if (text.startsWith("+")) return `+${digits}`;
-  const code = contactCountryCodes.includes(countryCode) ? countryCode : "+91";
-  const countryDigits = code.replace(/\D/g, "");
-  return digits.startsWith(countryDigits) && digits.length > countryDigits.length + 6 ? `+${digits}` : `${code}${digits}`;
+  return normalizeSavedContactPhone(rawPhone, countryCode, contactCountryCodes);
 }
 
 function loginPhoneFromForm() {
@@ -449,17 +448,7 @@ function renderChannels() {
 function selectedPostContactIds() { return $$('input[name="post-contact-target"]:checked').map((node) => node.value); }
 function selectedPostGroupIds() { return $$('input[name="post-group-target"]:checked').map((node) => node.value); }
 function recipientFromGroupLine(value) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  const username = text.match(/@[A-Za-z0-9_]{5,}/);
-  if (username) return username[0];
-  const phone = text.match(/\+\d[\d\s().-]{6,}\d/);
-  if (phone) return phone[0].replace(/[^\d+]/g, "");
-  if (/^[A-Za-z][A-Za-z0-9_]{4,}$/.test(text)) return `@${text}`;
-  const digits = text.replace(/\D/g, "");
-  if (/^\d{10}$/.test(digits)) return `+91${digits}`;
-  if (text.startsWith("+") && /^\d{8,15}$/.test(digits)) return `+${digits}`;
-  return text;
+  return normalizeTelegramRecipient(value);
 }
 function groupRecipients(group) {
   const seen = new Set();
@@ -471,10 +460,7 @@ function groupRecipients(group) {
   });
 }
 function contactRecipient(contact) {
-  const handle = recipientFromGroupLine(contact?.handle || "");
-  if (handle) return handle;
-  const rawPhone = String(contact?.phone || "").trim();
-  return normalizeContactPhone(rawPhone, contact?.countryCode || "+91") || recipientFromGroupLine(rawPhone);
+  return savedContactRecipient(contact, contactCountryCodes);
 }
 function postTargets(post) {
   const rows = [];
