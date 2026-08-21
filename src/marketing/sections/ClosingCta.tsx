@@ -4,8 +4,12 @@ import { motion } from "framer-motion";
 import { ArrowRight, Check } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { VIEWPORT_ONCE, fadeInUp, scaleIn } from "../motion-presets.ts";
+import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
 
-const ASSURANCES = ["No credit card required", "7-day free trial", "Cancel anytime"];
+const TESTING_FULL_ACCESS = teamTestingFullAccessEnabled();
+const ASSURANCES = TESTING_FULL_ACCESS
+  ? ["No credit card required", "All apps unlocked", "No testing usage quotas"]
+  : ["No credit card required", "7-day free trial", "Cancel anytime"];
 
 export function ClosingCta() {
   const [email, setEmail] = useState("");
@@ -72,7 +76,7 @@ export function ClosingCta() {
                       type="submit"
                       className="group inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 px-5 text-sm font-medium text-white shadow-[0_8px_24px_-8px_rgba(99,102,241,0.7)] transition-all duration-200 hover:from-indigo-400 hover:to-violet-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B0F17]"
                     >
-                      Start Free Trial
+                      {TESTING_FULL_ACCESS ? "Get Testing Access" : "Start Free Trial"}
                       <ArrowRight className="size-4 transition-transform duration-200 group-hover:translate-x-0.5" />
                     </button>
                   </form>

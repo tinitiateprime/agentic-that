@@ -5,8 +5,12 @@ import { ArrowRight, Check, Play, Zap } from "lucide-react";
 import { TerminalMockup } from "../components/TerminalMockup.tsx";
 import { GhostButton, PrimaryButton } from "../components/primitives.tsx";
 import { fadeInRight, fadeInUp, staggerContainer } from "../motion-presets.ts";
+import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
 
-const TRUST_BADGES = ["No credit card required", "7-day free trial"];
+const TESTING_FULL_ACCESS = teamTestingFullAccessEnabled();
+const TRUST_BADGES = TESTING_FULL_ACCESS
+  ? ["All apps unlocked", "No testing usage quotas"]
+  : ["No credit card required", "7-day free trial"];
 
 export function Hero() {
   return (
@@ -46,7 +50,7 @@ export function Hero() {
 
           <motion.div variants={fadeInUp} className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
             <PrimaryButton href="/signup" className="w-full sm:w-auto">
-              Start Free Trial
+              {TESTING_FULL_ACCESS ? "Get Full Testing Access" : "Start Free Trial"}
               <ArrowRight className="size-4 transition-transform duration-200 group-hover:translate-x-0.5" />
             </PrimaryButton>
             <GhostButton href="#pricing" className="w-full sm:w-auto">

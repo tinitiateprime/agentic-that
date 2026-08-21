@@ -19,6 +19,7 @@ import {
   refreshPlatformBillingState,
 } from "./auth-store.js";
 import { signServiceAccessToken } from "../../../lib/service-access-token.js";
+import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
 
 export class AccessDeniedError extends Error {
   constructor(status, code, message) {
@@ -53,7 +54,8 @@ function capabilitiesWithinAccess(capabilities, access) {
 
 async function activateTrialOnServiceUse(principal, serviceKey) {
   if (
-    !principal
+    teamTestingFullAccessEnabled()
+    || !principal
     || principal.billingStatus !== "trialing"
     || principal.trialStartsAt
     || !principal.workspaceId
@@ -65,18 +67,24 @@ async function activateTrialOnServiceUse(principal, serviceKey) {
 
 export async function getPrincipalForUser(inputUser) {
   if (!inputUser?.id) return null;
+  const testingFullAccess = teamTestingFullAccessEnabled();
 
   if (!process.env.DATABASE_URL?.trim() && !process.env.SUPABASE_DB_URL?.trim()) {
     const status = inputUser.status || "active";
     const isGlobalAdmin = Boolean(inputUser.isGlobalAdmin);
-    const billingStatus = resolveBillingStatus(inputUser.billingStatus, inputUser.trialEndsAt);
+    const testingAccessActive = testingFullAccess && activeStatus(status);
+    const billingStatus = testingAccessActive
+      ? "exempt"
+      : resolveBillingStatus(inputUser.billingStatus, inputUser.trialEndsAt);
     const roleGrants = selfServiceRoleGrants({
       selectedRoleIds: inputUser.selectedRoleIds,
       billingStatus: inputUser.billingStatus,
       trialEndsAt: inputUser.trialEndsAt,
     });
     const operationalRoleGrants = localOperationalRoleGrants(inputUser);
-    const access = evaluateAccess({ roleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
+    const access = testingAccessActive
+      ? fullAccessMap()
+      : evaluateAccess({ roleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
     const operationalCapabilities = evaluateCapabilities({ roleGrants: operationalRoleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
     return {
       userId: String(inputUser.id),
@@ -87,8 +95,8 @@ export async function getPrincipalForUser(inputUser) {
       status,
       isGlobalAdmin,
       billingStatus,
-      trialStartsAt: inputUser.trialStartsAt || null,
-      trialEndsAt: inputUser.trialEndsAt || null,
+      trialStartsAt: testingAccessActive ? null : inputUser.trialStartsAt || null,
+      trialEndsAt: testingAccessActive ? null : inputUser.trialEndsAt || null,
       access,
       capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
       roleIds: [...new Set(operationalRoleGrants.map((grant) => grant.roleId))],
@@ -135,7 +143,7 @@ export async function getPrincipalForUser(inputUser) {
               membership.created_at
      LIMIT 1` : [];
   const billingUserId = workspaceBillingCandidate?.id || workspaceOwner?.id || user.id;
-  await refreshPlatformBillingState(billingUserId);
+  if (!testingFullAccess) await refreshPlatformBillingState(billingUserId);
   const [workspaceBillingUser] = await sql`
     SELECT id, billing_status, trial_starts_at, trial_ends_at
       FROM platform_users
@@ -170,11 +178,14 @@ export async function getPrincipalForUser(inputUser) {
   const status = String(user.status || "active");
   const isGlobalAdmin = Boolean(user.is_global_admin);
   const billingUser = workspaceBillingUser || workspaceOwner || user;
-  const access = evaluateAccess({
-    roleGrants: moduleRoleGrants,
-    active: activeStatus(status),
-    globalAdmin: isGlobalAdmin,
-  });
+  const testingAccessActive = testingFullAccess && activeStatus(status);
+  const access = testingAccessActive
+    ? fullAccessMap()
+    : evaluateAccess({
+        roleGrants: moduleRoleGrants,
+        active: activeStatus(status),
+        globalAdmin: isGlobalAdmin,
+      });
   const operationalCapabilities = evaluateCapabilities({
     roleGrants: operationalRoleGrants,
     active: activeStatus(status),
@@ -188,9 +199,9 @@ export async function getPrincipalForUser(inputUser) {
     businessName: String(user.business_name || user.name || "Workspace"),
     status,
     isGlobalAdmin,
-    billingStatus: String(billingUser.billing_status || "active"),
-    trialStartsAt: billingUser.trial_starts_at || null,
-    trialEndsAt: billingUser.trial_ends_at || null,
+    billingStatus: testingAccessActive ? "exempt" : String(billingUser.billing_status || "active"),
+    trialStartsAt: testingAccessActive ? null : billingUser.trial_starts_at || null,
+    trialEndsAt: testingAccessActive ? null : billingUser.trial_ends_at || null,
     access,
     capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
     roleIds: [...new Set(operationalRoleGrants.map((grant) => String(grant.role_id)))],

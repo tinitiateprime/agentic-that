@@ -4,6 +4,7 @@ import path from "node:path";
 import { cookies } from "next/headers";
 import { getSql } from "@whatsapp/lib/db";
 import { OPERATIONAL_ROLE_CATALOG, SELF_SERVICE_ROLE_CATALOG } from "../access-catalog.js";
+import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
 
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
@@ -48,6 +49,7 @@ function publicUser(user) {
   if (!id) throw new Error("Platform user data is missing a valid ID.");
 
   const name = safeText(user.name);
+  const testingFullAccess = teamTestingFullAccessEnabled();
   return {
     id,
     workspaceId: safeText(user.workspaceId) || `workspace_${id}`,
@@ -56,9 +58,9 @@ function publicUser(user) {
     email: safeText(user.email),
     status: safeText(user.status) || "active",
     isGlobalAdmin: Boolean(user.isGlobalAdmin),
-    billingStatus: safeText(user.billingStatus) || "active",
-    trialStartsAt: user.trialStartsAt || null,
-    trialEndsAt: user.trialEndsAt || null,
+    billingStatus: testingFullAccess ? "exempt" : safeText(user.billingStatus) || "active",
+    trialStartsAt: testingFullAccess ? null : user.trialStartsAt || null,
+    trialEndsAt: testingFullAccess ? null : user.trialEndsAt || null,
     selectedRoleIds: Array.isArray(user.selectedRoleIds) ? user.selectedRoleIds.map(String) : [],
     assignedRoleIds: Array.isArray(user.assignedRoleIds) ? user.assignedRoleIds.map(String) : [],
     isWorkspaceOwner: user.isWorkspaceOwner !== false,
@@ -155,6 +157,7 @@ function getBlobStore() {
 
 function publicDatabaseUser(user) {
   if (!user?.id) throw new Error("Platform user data is missing a valid ID.");
+  const testingFullAccess = teamTestingFullAccessEnabled();
   return {
     id: String(user.id),
     workspaceId: user.workspace_id ? String(user.workspace_id) : null,
@@ -163,9 +166,9 @@ function publicDatabaseUser(user) {
     email: String(user.email || ""),
     status: String(user.status || "active"),
     isGlobalAdmin: Boolean(user.is_global_admin),
-    billingStatus: String(user.billing_status || "active"),
-    trialStartsAt: user.trial_starts_at || null,
-    trialEndsAt: user.trial_ends_at || null,
+    billingStatus: testingFullAccess ? "exempt" : String(user.billing_status || "active"),
+    trialStartsAt: testingFullAccess ? null : user.trial_starts_at || null,
+    trialEndsAt: testingFullAccess ? null : user.trial_ends_at || null,
   };
 }
 
@@ -180,6 +183,7 @@ function configuredGlobalAdminEmails() {
 
 export async function listSignupPlanOptions() {
   return {
+    testingFullAccess: teamTestingFullAccessEnabled(),
     trialDays: configuredFreeTrialDays(),
     plans: [
       { id: "free", status: "coming_soon" },

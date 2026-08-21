@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { teamTestingFullAccessEnabled } from "../../lib/team-testing-access.js";
+
+const TESTING_FULL_ACCESS = teamTestingFullAccessEnabled();
 
 const EMPTY_FORM = {
   name: "",
@@ -11,11 +14,17 @@ const EMPTY_FORM = {
   plan: "trial",
 };
 
-const SIGNUP_STEPS = [
-  { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
-  { id: 2, shortLabel: "Plan", eyebrow: "Step 2 of 3", title: "Choose your plan", description: "Start the Trial plan now. Free and Premium plans are coming later." },
-  { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available during your trial." },
-];
+const SIGNUP_STEPS = TESTING_FULL_ACCESS
+  ? [
+      { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
+      { id: 2, shortLabel: "Access", eyebrow: "Step 2 of 3", title: "Activate testing access", description: "Every AgenticThat app is unlocked for the current team-testing phase." },
+      { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available for testing." },
+    ]
+  : [
+      { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
+      { id: 2, shortLabel: "Plan", eyebrow: "Step 2 of 3", title: "Choose your plan", description: "Start the Trial plan now. Free and Premium plans are coming later." },
+      { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available during your trial." },
+    ];
 
 export default function AuthModal({ open, initialMode = "login", onClose, onAuthenticated }) {
   const firstInputRef = useRef(null);
@@ -71,7 +80,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   }, [open, initialMode]);
 
   useEffect(() => {
-    if (!open || mode !== "signup") return;
+    if (TESTING_FULL_ACCESS || !open || mode !== "signup") return;
     let active = true;
     fetch("/api/platform-auth/signup-options", { cache: "no-store" })
       .then(async (response) => {
@@ -288,33 +297,50 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
             {isSignup && signupStep === 2 && (
               <div className="auth-plan-step">
-                <div className="auth-plan-card disabled" aria-disabled="true">
-                  <div className="auth-plan-card-head">
-                    <span className="auth-plan-payment-icon" aria-hidden="true">F</span>
-                    <div><strong>Free plan</strong><small>Coming soon</small></div>
+                {!TESTING_FULL_ACCESS && (
+                  <div className="auth-plan-card disabled" aria-disabled="true">
+                    <div className="auth-plan-card-head">
+                      <span className="auth-plan-payment-icon" aria-hidden="true">F</span>
+                      <div><strong>Free plan</strong><small>Coming soon</small></div>
+                    </div>
+                    <p>A permanent limited plan will be added later.</p>
                   </div>
-                  <p>A permanent limited plan will be added later.</p>
-                </div>
+                )}
                 <div className="auth-plan-card selected">
                   <div className="auth-plan-card-head">
                     <span className="auth-plan-check">✓</span>
-                    <div><strong>{trialDays}-day Trial plan</strong><small>Available now · no card required</small></div>
+                    <div><strong>{TESTING_FULL_ACCESS ? "Team testing access" : `${trialDays}-day Trial plan`}</strong><small>Available now · no card required</small></div>
                   </div>
-                  <p>Includes every Messaging, Publishing, and Scraping service. The workspace clock starts only when someone first opens a service.</p>
-                  <ul className="auth-trial-limits">
-                    <li>Publishing uses built-in safe posting intervals.</li>
-                    <li>Scraping allows 2 runs per platform each hour.</li>
-                    <li>Telegram allows 20 messages per hour and 100 per day.</li>
-                  </ul>
+                  {TESTING_FULL_ACCESS ? (
+                    <>
+                      <p>Includes every Messaging, Publishing, and Scraping service with no trial clock or product usage quotas.</p>
+                      <ul className="auth-trial-limits">
+                        <li>All app modules are unlocked.</li>
+                        <li>Trial action limits are paused.</li>
+                        <li>Provider safety controls remain active.</li>
+                      </ul>
+                    </>
+                  ) : (
+                    <>
+                      <p>Includes every Messaging, Publishing, and Scraping service. The workspace clock starts only when someone first opens a service.</p>
+                      <ul className="auth-trial-limits">
+                        <li>Publishing uses built-in safe posting intervals.</li>
+                        <li>Scraping allows 2 runs per platform each hour.</li>
+                        <li>Telegram allows 20 messages per hour and 100 per day.</li>
+                      </ul>
+                    </>
+                  )}
                 </div>
-                <div className="auth-plan-card disabled" aria-disabled="true">
-                  <div className="auth-plan-card-head">
-                    <span className="auth-plan-payment-icon" aria-hidden="true">P</span>
-                    <div><strong>Premium plan</strong><small>Coming soon</small></div>
+                {!TESTING_FULL_ACCESS && (
+                  <div className="auth-plan-card disabled" aria-disabled="true">
+                    <div className="auth-plan-card-head">
+                      <span className="auth-plan-payment-icon" aria-hidden="true">P</span>
+                      <div><strong>Premium plan</strong><small>Coming soon</small></div>
+                    </div>
+                    <p>Higher limits and paid access will be enabled later.</p>
                   </div>
-                  <p>Higher limits and paid access will be enabled later.</p>
-                </div>
-                <p className="auth-plan-note"><span>✓</span> Trial limits are shared by the whole workspace.</p>
+                )}
+                <p className="auth-plan-note"><span>✓</span> {TESTING_FULL_ACCESS ? "Testing access is shared by the whole workspace." : "Trial limits are shared by the whole workspace."}</p>
               </div>
             )}
 
@@ -324,7 +350,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                   <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
                 </div>
                 <strong>Welcome, {completedUser?.name || form.name}.</strong>
-                <p>Every service is ready. Your {trialDays}-day trial clock starts when your workspace first uses any service.</p>
+                <p>{TESTING_FULL_ACCESS
+                  ? "Every service is ready with full testing access and no trial usage quotas."
+                  : `Every service is ready. Your ${trialDays}-day trial clock starts when your workspace first uses any service.`}</p>
                 <span>No payment method is required.</span>
               </div>
             )}
@@ -347,7 +375,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                     : signupStep === 1
                       ? "Continue to plans"
                       : signupStep === 2
-                        ? `Start ${trialDays}-day Trial plan`
+                        ? (TESTING_FULL_ACCESS ? "Activate full testing access" : `Start ${trialDays}-day Trial plan`)
                         : "Open my workspace"}</span>
                 {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
               </button>
