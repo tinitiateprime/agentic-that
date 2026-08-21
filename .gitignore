@@ -26,6 +26,7 @@ services/**/account_config/sessions/
 services/**/uploads/*
 !services/**/uploads/.gitkeep
 public/console/
+public/telegram-console-assets/
 /data/
 /artifacts/
 apps/publishing-companion-desktop/out/

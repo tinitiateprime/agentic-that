@@ -43,5 +43,5 @@ export default function TelegramConsoleClient({ serviceToken }) {
     );
   }
 
-  return <TelegramConsole />;
+  return <TelegramConsole integrated />;
 }

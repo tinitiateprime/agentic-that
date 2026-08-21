@@ -47,6 +47,17 @@ async function loadPublishingAccounts() {
   return jsonResponse(response);
 }
 
+async function loadTelegram(path) {
+  const headers = new Headers();
+  headers.set("authorization", "Bearer " + await getClientServiceToken("telegram"));
+  const response = await fetch("/api/telegram" + path, {
+    cache: "no-store",
+    headers,
+    credentials: "include",
+  });
+  return jsonResponse(response);
+}
+
 export function useProductStatus() {
   const [whatsapp, setWhatsapp] = useState({ state: "checking" });
   const [telegram, setTelegram] = useState({ state: "checking", accounts: 0 });
@@ -84,10 +95,8 @@ export function useProductStatus() {
       })
       .catch(() => setWhatsapp({ state: "setup" }));
 
-    void fetch("/api/telegram/me", { cache: "no-store", credentials: "include" })
-      .then(jsonResponse)
-      .then(() => fetch("/api/telegram/telegram/accounts", { cache: "no-store", credentials: "include" }))
-      .then(jsonResponse)
+    void loadTelegram("/me")
+      .then(() => loadTelegram("/telegram/accounts"))
       .then((data) => {
         const count = Array.isArray(data.accounts) ? data.accounts.length : 0;
         setTelegram({ state: count ? "connected" : "setup", accounts: count });

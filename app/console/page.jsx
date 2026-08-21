@@ -9,7 +9,7 @@ export default async function TelegramConsolePage() {
   const principal = await requireCapability("messaging.view", "/console");
   return (
     <>
-      <link rel="stylesheet" href="/console/styles.css" />
+      <link rel="stylesheet" href="/telegram-console-assets/styles.css" />
       <TelegramConsoleClient serviceToken={await createServiceIdentityToken(principal, "telegram")} />
     </>
   );

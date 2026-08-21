@@ -2,7 +2,7 @@ import React from "react";
 
 const h = React.createElement;
 
-export function TelegramConsole() {
+export function TelegramConsole({ integrated = false }) {
   return h(React.Fragment, null,
       h("main", null,
         h("section", {"id":"sign-in-view","className":"auth-shell","aria-labelledby":"sign-in-title"},
@@ -56,13 +56,21 @@ export function TelegramConsole() {
                 "Secure workspace"
               ),
               h("h1", {"id":"sign-in-title"},
-                "Welcome back"
+                integrated ? "Opening Telegram" : "Welcome back"
               ),
               h("p", {"className":"lede"},
-                "Use the same Telegram dashboard login configured in Connections."
+                integrated
+                  ? "Using your signed-in AgenticThat workspace. No extra dashboard login is required."
+                  : "Use the same Telegram dashboard login configured in Connections."
               )
             ),
-            h("form", {"id":"password-sign-in-form","className":"stack","noValidate":true},
+            integrated && h("div", {"className":"stack compact"},
+              h("p", null, "Your connected Telegram accounts are loading securely."),
+              h("button", {"className":"button primary","type":"button","onClick":() => window.location.reload()},
+                "Retry"
+              )
+            ),
+            h("form", {"id":"password-sign-in-form","className":"stack","noValidate":true,"hidden":integrated},
               h("label", {"htmlFor":"username"},
                 "Username"
               ),
@@ -84,7 +92,7 @@ export function TelegramConsole() {
                 )
               )
             ),
-            h("details", {"className":"token-panel"},
+            h("details", {"className":"token-panel","hidden":integrated},
               h("summary", null,
                 "Access token sign-in"
               ),
@@ -98,7 +106,9 @@ export function TelegramConsole() {
                 )
               )
             ),
-            h("p", {"id":"sign-in-status","className":"status","role":"status","aria-live":"polite"})
+            h("p", {"id":"sign-in-status","className":"status","role":"status","aria-live":"polite"},
+              integrated ? "Connecting securely…" : ""
+            )
           )
         ),
         h("section", {"id":"workspace","className":"app-shell","hidden":true},
