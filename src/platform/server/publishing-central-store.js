@@ -950,6 +950,15 @@ export async function claimCentralJobs(token, limit = 1) {
   });
 }
 
+function centralJobUpdateIsAllowed(job, companionId, state, timestamp = Date.now()) {
+  // A verified local retry can finish after the central job exhausted its
+  // attempts. Allow only that failed -> published reconciliation; every other
+  // update still requires the active lease that prevents duplicate posting.
+  if (job.state === "failed" && state === "published") return true;
+  if (TERMINAL_JOB_STATES.has(job.state)) return false;
+  return hasActiveJobLease(job, companionId, timestamp);
+}
+
 export async function updateCentralJob(token, jobId, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
@@ -959,13 +968,13 @@ export async function updateCentralJob(token, jobId, input = {}) {
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
     const job = findOwned(document, "jobs", companion.workspaceId, jobId, "Publishing job");
-    if (TERMINAL_JOB_STATES.has(job.state)) throw new Error("This publishing job is already complete.");
-    if (!hasActiveJobLease(job, companion.id)) {
+    const state = states.has(input.state) ? input.state : "failed";
+    if (!centralJobUpdateIsAllowed(job, companion.id, state)) {
+      if (TERMINAL_JOB_STATES.has(job.state)) throw new Error("This publishing job is already complete.");
       throw new Error("This Companion no longer holds the publishing job lease.");
     }
     const upload = findOwned(document, "uploads", companion.workspaceId, job.uploadId, "Post");
     const account = findOwned(document, "accounts", companion.workspaceId, job.accountId, "Account");
-    const state = states.has(input.state) ? input.state : "failed";
     const timestamp = now();
     companion.status = "online";
     companion.lastSeenAt = timestamp;
@@ -1020,6 +1029,7 @@ export function centralMediaFileName(originalName) {
 // without connecting a test run to a production document store.
 export const centralPublishingTestHelpers = {
   accountReadiness,
+  centralJobUpdateIsAllowed,
   companionPublishingEngine,
   hasActiveJobLease,
   resumeReconnectJobs,

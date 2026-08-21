@@ -40,6 +40,15 @@ test("central publishing reports account readiness and accepts only the active C
   assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1_000).toISOString() }, "companion_1", timestamp), false);
 });
 
+test("central publishing accepts a confirmed late success without reopening other failed work", () => {
+  const timestamp = Date.now();
+  const failedJob = { state: "failed", leaseOwner: null, leaseExpiresAt: null };
+
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "published", timestamp), true);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "publishing", timestamp), false);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed({ state: "published" }, "companion_1", "published", timestamp), false);
+});
+
 test("central publishing skips a disconnected account without starving later ready jobs", () => {
   const timestamp = Date.now();
   const document = {
