@@ -7,6 +7,16 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login/";
 
+export const FACEBOOK_COMPOSER_EDITOR_SELECTORS = [
+  '[role="dialog"] [contenteditable="true"][role="textbox"]',
+  '[role="dialog"] [contenteditable="true"][data-lexical-editor="true"]',
+  '[role="dialog"] [role="textbox"]',
+  '[role="dialog"] [contenteditable="true"]',
+  '[role="dialog"] textarea',
+  '[contenteditable="true"][role="textbox"][aria-label*="mind" i]',
+  '[contenteditable="true"][data-lexical-editor="true"]',
+] as const;
+
 function getLoginHoldMs() {
   return Number(process.env.FACEBOOK_LOGIN_HOLD_MS ?? 15000);
 }
@@ -128,6 +138,22 @@ async function isLoggedIn(page: Page) {
 
 function createPostDialog(page: Page) {
   return page.locator('[role="dialog"]').filter({ hasText: /Create post|What's on your mind/i }).last();
+}
+
+function facebookComposerEditorLocators(page: Page) {
+  return FACEBOOK_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
+}
+
+async function waitForFacebookComposerEditor(page: Page, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const editor = await firstVisible(facebookComposerEditorLocators(page));
+    if (editor) return editor;
+    await page.waitForTimeout(200);
+  }
+
+  return null;
 }
 
 function reviewAudienceDialog(page: Page) {
@@ -373,12 +399,9 @@ async function clickFacebookTextArea(page: Page) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
 
-  const editor = await firstVisible([
-    dialog.locator('[contenteditable="true"][role="textbox"]'),
-    dialog.locator('[role="textbox"]'),
-    dialog.locator('[contenteditable="true"]'),
-    dialog.locator("textarea"),
-  ]);
+  // Facebook can render the Lexical editor shortly after the surrounding
+  // dialog and may portal it outside the duplicate dialog selected above.
+  const editor = await waitForFacebookComposerEditor(page);
   if (!editor) throw new Error("Could not find Facebook's empty caption area.");
 
   console.log("Clicking Facebook empty caption area...");
@@ -391,32 +414,45 @@ async function clickFacebookTextArea(page: Page) {
     document.activeElement === element || Boolean(element.contains(document.activeElement))
   )).catch(() => false);
   if (!focused) await editor.focus();
+  return editor;
 }
 
 async function typeFacebookCaption(page: Page, caption: string) {
   const text = caption.trim();
   if (!text) return;
+  const expectedText = text.replace(/\s+/g, " ").trim();
 
   console.log("Entering Facebook caption...");
-  await clickFacebookTextArea(page);
-  await page.keyboard.press("Control+A");
-  await page.keyboard.press("Backspace");
-  await page.keyboard.insertText(text);
-  const dialog = createPostDialog(page);
-  const editor = await firstVisible([
-    dialog.locator('[contenteditable="true"][role="textbox"]'),
-    dialog.locator('[role="textbox"]'),
-    dialog.locator('[contenteditable="true"]'),
-    dialog.locator("textarea"),
-  ]);
-  const enteredText = await editor?.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
-    "value" in element ? element.value : element.innerText || element.textContent || ""
-  )).catch(() => "");
-  const normalizedEnteredText = enteredText?.replace(/\s+/g, " ").trim();
-  if (!normalizedEnteredText || !normalizedEnteredText.includes(text.replace(/\s+/g, " "))) {
-    throw new Error("Facebook caption was not entered into the empty post area.");
+  const editor = await clickFacebookTextArea(page);
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    // Playwright fill dispatches the input events expected by Facebook's
+    // current Lexical editor. Raw keyboard insertion can be ignored even when
+    // the contenteditable element reports focus.
+    await editor.fill(text, { timeout: 10000 }).catch(async () => {
+      await editor.focus();
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.insertText(text);
+    });
+    await page.waitForTimeout(500);
+
+    const enteredText = await editor.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
+      "value" in element ? element.value : element.innerText || element.textContent || ""
+    )).catch(() => "");
+    const normalizedEnteredText = enteredText.replace(/\s+/g, " ").trim();
+    if (normalizedEnteredText === expectedText) {
+      console.log("Facebook caption entered.");
+      return;
+    }
+
+    await editor.evaluate((element: HTMLElement) => {
+      element.click();
+      element.focus();
+    }).catch(() => undefined);
   }
-  console.log("Facebook caption entered.");
+
+  throw new Error("Facebook caption was not entered into the empty post area.");
 }
 
 async function waitForFacebookSubmissionStart(page: Page, timeout = 3500) {

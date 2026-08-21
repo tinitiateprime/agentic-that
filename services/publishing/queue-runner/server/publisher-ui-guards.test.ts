@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleIntersectionPoint } from "./services/publishers/linkedin.js";
+import { FACEBOOK_COMPOSER_EDITOR_SELECTORS } from "./services/publishers/facebook.js";
+import {
+  LINKEDIN_COMPOSER_EDITOR_SELECTORS,
+  visibleIntersectionPoint,
+} from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
 
 test("LinkedIn publishing ignores role-button duplicates outside the current viewport", () => {
@@ -12,6 +16,14 @@ test("LinkedIn publishing ignores role-button duplicates outside the current vie
     visibleIntersectionPoint({ x: 80, y: 120, width: 220, height: 52 }, viewport),
     { x: 190, y: 146 },
   );
+});
+
+test("LinkedIn publishing recognizes the current TipTap composer editor", () => {
+  assert.ok(LINKEDIN_COMPOSER_EDITOR_SELECTORS.includes('.tiptap.ProseMirror[contenteditable="true"]'));
+});
+
+test("Facebook publishing recognizes delayed Lexical composer editors", () => {
+  assert.ok(FACEBOOK_COMPOSER_EDITOR_SELECTORS.includes('[contenteditable="true"][data-lexical-editor="true"]'));
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {

@@ -7,6 +7,16 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
 
+export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
+  '[role="dialog"] [contenteditable="true"]',
+  '[role="dialog"] [role="textbox"]',
+  '[role="dialog"] textarea',
+  '.share-creation-state__text-editor [contenteditable="true"]',
+  '.ql-editor[contenteditable="true"]',
+  '.tiptap.ProseMirror[contenteditable="true"]',
+  '.ProseMirror[contenteditable="true"][role="textbox"]',
+] as const;
+
 function getLoginHoldMs() {
   return Number(process.env.LINKEDIN_LOGIN_HOLD_MS ?? 15000);
 }
@@ -87,19 +97,17 @@ async function firstInViewport(page: Page, locators: Locator[]): Promise<Viewpor
   return null;
 }
 
+function linkedInComposerEditorLocators(page: Page) {
+  return LINKEDIN_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
+}
+
 async function waitForLinkedInComposer(page: Page, timeout = 12000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     // Publishing browser views can be positioned outside the desktop while
-    // still having a valid rendered editor. Require a visible editor in the
-    // active dialog, but do not require desktop viewport intersection.
-    const editor = await firstVisible([
-      page.locator('[role="dialog"] [contenteditable="true"]'),
-      page.locator('[role="dialog"] [role="textbox"]'),
-      page.locator('[role="dialog"] textarea'),
-      page.locator('.share-creation-state__text-editor [contenteditable="true"]'),
-      page.locator('.ql-editor[contenteditable="true"]'),
-    ]);
+    // still having a valid rendered editor. LinkedIn's current TipTap editor
+    // may also be page-level instead of nested below role=dialog.
+    const editor = await firstVisible(linkedInComposerEditorLocators(page));
     if (editor) return editor;
     await page.waitForTimeout(250);
   }
@@ -150,6 +158,13 @@ async function getLoginError(page: Page) {
 
 async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
+
+  // LinkedIn's current UI navigates to /sharing/compose and renders a TipTap
+  // editor without placing it below the legacy role=dialog container.
+  if (/linkedin\.com\/sharing\/compose/i.test(page.url()) && await waitForLinkedInComposer(page, 1000)) {
+    console.log("LinkedIn post composer already open.");
+    return;
+  }
 
   const controls = () => [
     page.getByRole("button", { name: /Start a post/i }),
@@ -211,15 +226,7 @@ async function typeLinkedInPostText(page: Page, text: string) {
   const expectedText = text.replace(/\s+/g, " ").trim();
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const editor = await firstVisible([
-      page.locator('[role="dialog"] [contenteditable="true"][data-placeholder*="What" i]'),
-      page.locator('[role="dialog"] .ql-editor[contenteditable="true"]'),
-      page.locator('[role="dialog"] [contenteditable="true"]'),
-      page.locator('[role="dialog"] [role="textbox"]'),
-      page.locator('[role="dialog"] textarea'),
-      page.locator(".share-creation-state__text-editor [contenteditable='true']"),
-      page.locator(".ql-editor[contenteditable='true']"),
-    ]);
+    const editor = await waitForLinkedInComposer(page, 15000);
     if (!editor) throw new Error("Could not find LinkedIn's empty post text area.");
 
     console.log("Clicking LinkedIn empty post text area...");
@@ -260,23 +267,27 @@ async function typeLinkedInPostText(page: Page, text: string) {
 
 async function attachLinkedInMedia(page: Page, filePath: string) {
   console.log("Attaching LinkedIn media...");
-  const dialog = page.locator('[role="dialog"]').last();
-  await dialog.waitFor({ state: "visible", timeout: 15000 });
+  const editor = await waitForLinkedInComposer(page, 15000);
+  if (!editor) throw new Error("LinkedIn post editor closed before media could be attached.");
+  const editorDialog = page.locator('[role="dialog"]').filter({ has: editor });
+  const dialog = await firstVisible([editorDialog]);
+  const root = dialog ?? page;
 
-  const existingFileInputs = dialog.locator('input[type="file"]');
+  const existingFileInputs = root.locator('input[type="file"]');
   if ((await existingFileInputs.count()) > 0) {
     await existingFileInputs.last().setInputFiles(filePath);
   } else {
     const mediaButton = await firstVisible([
-      dialog.getByRole("button", { name: /Add media/i }),
-      dialog.getByRole("button", { name: /Media/i }),
-      dialog.getByRole("button", { name: /Photo/i }),
-      dialog.getByRole("button", { name: /Video/i }),
-      dialog.locator('button[aria-label*="Add media" i]'),
-      dialog.locator('button[aria-label*="Media" i]'),
+      root.getByRole("button", { name: /Add media/i }),
+      root.getByRole("button", { name: /Media/i }),
+      root.getByRole("button", { name: /Photo/i }),
+      root.getByRole("button", { name: /Video/i }),
+      root.locator('button[aria-label*="Add media" i]'),
+      root.locator('button[aria-label*="Media" i]'),
       page.locator('[role="dialog"] button[aria-label*="Add media" i]'),
       page.locator('[role="dialog"] button[aria-label*="Photo" i]'),
       page.locator('[role="dialog"] button[aria-label*="Video" i]'),
+      page.getByRole("button", { name: /Add media|Photo|Video/i }),
     ]);
 
     if (!mediaButton) {
@@ -292,7 +303,11 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
     } else {
       await page.keyboard.press("Escape").catch(() => undefined);
       await page.waitForTimeout(500);
-      await dialog.locator('input[type="file"]').last().setInputFiles(filePath);
+      const fallbackInputs = page.locator('input[type="file"]');
+      if (!await fallbackInputs.count()) {
+        throw new Error("LinkedIn media picker opened without exposing a file input.");
+      }
+      await fallbackInputs.last().setInputFiles(filePath);
     }
   }
 
