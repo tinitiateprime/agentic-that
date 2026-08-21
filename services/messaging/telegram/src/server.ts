@@ -602,12 +602,22 @@ function telegramLoginError(error: unknown) {
   }
   return new HttpError(502, message || "Telegram login failed. Please try again.");
 }
-function telegramSendError(error: unknown) {
+export function telegramSendError(error: unknown, recipient = "") {
   if (error instanceof HttpError) return error;
   const operational = operationalTelegramError(error);
   if (operational) return operational;
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toUpperCase();
+  const paidMessage = message.match(/ALLOW_PAYMENT_REQUIRED(?:_(\d+))?/i);
+  if (paidMessage) {
+    const target = recipient.trim() || "This recipient";
+    const requiredStars = Number(paidMessage[1] || 0);
+    const price = requiredStars > 0 ? ` requires ${requiredStars} Telegram Star${requiredStars === 1 ? "" : "s"} per message` : " only accepts paid Telegram messages";
+    return new HttpError(
+      402,
+      `${target}${price}. AgenticThat will not spend Stars automatically. Choose a recipient that accepts free messages, or ask this recipient to message/add the sending account first and then retry.`
+    );
+  }
   const floodWait = message.match(/wait (?:of )?(\d+) seconds|FLOOD_WAIT_(\d+)/i);
   if (normalized.includes("FLOOD") || floodWait) {
     const seconds = Number(floodWait?.[1] || floodWait?.[2] || 0);
@@ -923,7 +933,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         lastName: optionalString(body, "lastName", 120)
       });
     } catch (error) {
-      throw telegramSendError(error);
+      throw telegramSendError(error, recipient);
     }
     if (shouldRunBackgroundListeners()) void startTelegramListener(account);
     const message = await store.recordMessage({

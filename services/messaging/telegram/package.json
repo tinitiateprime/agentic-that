@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --import tsx --test src/store.test.ts",
+    "test": "node --import tsx --test src/store.test.ts src/server-errors.test.ts",
     "login": "tsx src/login.ts",
     "send": "tsx src/send-direct.ts",
     "issue-token": "tsx src/issue-token.ts",
