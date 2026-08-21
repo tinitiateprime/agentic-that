@@ -980,7 +980,9 @@ export async function handleRequestWithErrors(request: IncomingMessage, response
     const operational = operationalTelegramError(error);
     const known = error instanceof HttpError;
     const linkedElsewhere = error instanceof AccountAlreadyLinkedError;
-    if (!known && !linkedElsewhere && !operational) console.error("Request failed without logging request data.");
+    if (!known && !linkedElsewhere && !operational) {
+      console.error(`Request failed without logging request data: ${redactedErrorMessage(error)}`);
+    }
     sendJson(request, response, known ? error.status : linkedElsewhere ? 409 : operational ? operational.status : 500, {
       ok: false,
       error: known || linkedElsewhere ? error.message : operational ? operational.message : "Internal server error."

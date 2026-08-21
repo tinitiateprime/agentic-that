@@ -299,14 +299,31 @@ export class MultiUserStore {
     displayName: string,
     accessLevel: "view" | "operate" | "configure"
   ): Promise<AppUser> {
+    // Service-token authentication happens on every API request. Once a
+    // workspace has been linked, resolving that identity must be read-only;
+    // rewriting the shared Netlify Blob for every /me and /accounts request
+    // causes needless write contention and can make an otherwise healthy
+    // connected account appear unavailable.
+    const database = await this.readDatabase();
+    const linkedUser = database.appUsers.find((user) => user.platformWorkspaceId === workspaceId);
+    if (linkedUser) {
+      return {
+        id: linkedUser.id,
+        displayName: displayName || linkedUser.displayName,
+        platformUserId,
+        workspaceId,
+        accessLevel
+      };
+    }
+
     return this.updateDatabase((database) => {
+      // Recheck while holding the local mutation queue in case two first-time
+      // requests for the same workspace arrived together.
       const existing = database.appUsers.find((user) => user.platformWorkspaceId === workspaceId);
       if (existing) {
-        existing.displayName = displayName || existing.displayName;
-        existing.platformUserId = platformUserId;
         return {
           id: existing.id,
-          displayName: existing.displayName,
+          displayName: displayName || existing.displayName,
           platformUserId,
           workspaceId,
           accessLevel

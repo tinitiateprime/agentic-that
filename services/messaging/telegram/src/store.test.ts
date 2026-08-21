@@ -58,3 +58,40 @@ test("a freshly verified Telegram login can securely move an existing account", 
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("repeated platform authentication reuses the workspace identity", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-store-"));
+  const encryptionKey = randomBytes(32).toString("base64url");
+  const store = new MultiUserStore(dataDir, encryptionKey);
+
+  try {
+    await store.initialize();
+    const first = await store.findOrCreatePlatformWorkspaceUser(
+      "workspace-one",
+      "platform-user-one",
+      "First user",
+      "configure"
+    );
+    const repeated = await store.findOrCreatePlatformWorkspaceUser(
+      "workspace-one",
+      "platform-user-two",
+      "Second user",
+      "view"
+    );
+    const otherWorkspace = await store.findOrCreatePlatformWorkspaceUser(
+      "workspace-two",
+      "platform-user-one",
+      "First user",
+      "configure"
+    );
+
+    assert.equal(repeated.id, first.id);
+    assert.equal(repeated.platformUserId, "platform-user-two");
+    assert.equal(repeated.displayName, "Second user");
+    assert.equal(repeated.accessLevel, "view");
+    assert.notEqual(otherWorkspace.id, first.id);
+  } finally {
+    await store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
