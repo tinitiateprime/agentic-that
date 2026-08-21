@@ -1,5 +1,5 @@
 [build]
-  command = "npm run db:migrate:platform && npm run build"
+  command = "npm run db:migrate:platform && npm run db:migrate:whatsapp && npm run build"
   publish = ".next"
   functions = "netlify/functions"
 

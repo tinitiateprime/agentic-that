@@ -70,9 +70,21 @@ enables signature verification for incoming webhook requests.
 - Sender phone-number discovery
 - Groups and broadcasts
 - Inbound webhook recording
+- Inbound and outbound message reactions with live updates
 - Read/unread and replied/unreplied views
 - Self-serve workspace signup and encrypted tenant credentials
 - Meta Embedded Signup/coexistence onboarding
 - WhatsApp calling events and call settings
 - WATI onboarding and authenticated webhooks
+- Bounded WATI recovery sync while an operator has the CRM open
 - Optional read-only WhatsApp Web monitoring
+
+## Database Migration
+
+Reaction support adds two nullable columns and an index to the existing
+`messages` table. Netlify applies this automatically before each build. For a
+manual environment, run:
+
+```bash
+npm run db:migrate:whatsapp
+```

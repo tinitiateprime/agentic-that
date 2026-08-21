@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MessageBubble from "./MessageBubble";
+import EmojiPicker from "./EmojiPicker";
 import { useMounted } from "./useMounted";
 import { timeAgo, formatDayClock } from "@whatsapp/lib/format";
 
@@ -30,7 +31,7 @@ function buildPhoneMap(phoneNumbers) {
   return map;
 }
 
-export default function MessageCenter({ contacts, initialMessages, provider, phoneNumbers = [] }) {
+export default function MessageCenter({ contacts, initialMessages, provider, phoneNumbers = [], canOperate = false }) {
   const mounted = useMounted();
   const router = useRouter();
   const [view, setView] = useState("Split");
@@ -45,6 +46,7 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
   const [templates, setTemplates] = useState([]); // approved WhatsApp templates
 
   const lastIdRef = useRef(maxMessageId(initialMessages));
+  const reactionsSinceRef = useRef(new Date(0).toISOString());
 
   // Known contact ids, refreshed every render so appendMessages (called from
   // the poll) can spot messages from brand-new senders.
@@ -57,9 +59,14 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/messages/updates?afterId=${lastIdRef.current}`, { cache: "no-store" });
+        const res = await fetch(
+          `/api/messages/updates?afterId=${lastIdRef.current}&reactionsSince=${encodeURIComponent(reactionsSinceRef.current)}`,
+          { cache: "no-store" }
+        );
         const data = await res.json();
         if (data.messages?.length) appendMessages(data.messages);
+        if (data.reactions?.length) applyReactions(data.reactions);
+        if (data.reactionCursor) reactionsSinceRef.current = data.reactionCursor;
       } catch {
         // transient network error — next tick retries
       }
@@ -100,6 +107,21 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
     }
   }
 
+  function applyReactions(reactions) {
+    if (!reactions?.length) return;
+    const byId = new Map(reactions.map((reaction) => [Number(reaction.id), reaction]));
+    setMsgs((current) => {
+      const next = {};
+      for (const [contactId, list] of Object.entries(current)) {
+        next[contactId] = list.map((message) => {
+          const update = byId.get(Number(message.id));
+          return update ? { ...message, reaction: update.reaction || null } : message;
+        });
+      }
+      return next;
+    });
+  }
+
   async function refresh() {
     setRefreshing(true);
     try {
@@ -112,6 +134,7 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
         if (m.id > lastIdRef.current) lastIdRef.current = m.id;
       }
       setMsgs(rebuilt);
+      if (data.reactionCursor) reactionsSinceRef.current = data.reactionCursor;
     } catch {
       // keep current state on failure
     }
@@ -169,6 +192,43 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
     setBusy((b) => ({ ...b, [contactId]: false }));
   }
 
+  async function react(contactId, messageId, emoji) {
+    const reaction = emoji || null;
+    const previous = (msgs[contactId] || []).find(
+      (message) => Number(message.id) === Number(messageId)
+    )?.reaction || null;
+    setMsgs((current) => ({
+      ...current,
+      [contactId]: (current[contactId] || []).map((message) =>
+        Number(message.id) === Number(messageId) ? { ...message, reaction } : message
+      ),
+    }));
+    setErrors((current) => ({ ...current, [contactId]: "" }));
+    try {
+      const response = await fetch("/api/messages/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, emoji: emoji || "" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Reaction failed");
+      if (data.message) applyReactions([data.message]);
+    } catch (error) {
+      setMsgs((current) => ({
+        ...current,
+        [contactId]: (current[contactId] || []).map((message) =>
+          Number(message.id) === Number(messageId) && message.reaction === reaction
+            ? { ...message, reaction: previous }
+            : message
+        ),
+      }));
+      setErrors((current) => ({
+        ...current,
+        [contactId]: error.message || "Reaction failed",
+      }));
+    }
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return contacts;
@@ -206,6 +266,8 @@ export default function MessageCenter({ contacts, initialMessages, provider, pho
     error: errors[contact.id] || "",
     templates,
     onSendTemplate: (name, fromPhoneId) => sendTemplate(contact.id, name, fromPhoneId),
+    onReact: canOperate ? (messageId, emoji) => react(contact.id, messageId, emoji) : undefined,
+    reactionProvider: provider,
     phoneNumbers,
     phoneMap,
   });
@@ -348,13 +410,32 @@ function ChatPane({
   onBack,
   templates = [],
   onSendTemplate,
+  onReact,
+  reactionProvider,
   phoneNumbers = [],
   phoneMap = {},
 }) {
   const mounted = useMounted();
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
   const [tplName, setTplName] = useState("");
   const [fromPhoneId, setFromPhoneId] = useState(""); // "" = auto (follow conversation)
+
+  function insertEmoji(emoji) {
+    const input = inputRef.current;
+    if (!input) {
+      onDraft(draft + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? draft.length;
+    const end = input.selectionEnd ?? draft.length;
+    onDraft(draft.slice(0, start) + emoji + draft.slice(end));
+    requestAnimationFrame(() => {
+      input.focus();
+      const position = start + emoji.length;
+      input.setSelectionRange(position, position);
+    });
+  }
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -380,9 +461,9 @@ function ChatPane({
     null;
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl shadow-sm ring-1 ring-slate-200">
+    <div className="relative flex flex-col rounded-xl shadow-sm ring-1 ring-slate-200">
       {/* Header — classic WA green */}
-      <div className="flex items-center gap-3 bg-[var(--brand-dark)] px-3 py-2 text-white">
+      <div className="flex items-center gap-3 rounded-t-xl bg-[var(--brand-dark)] px-3 py-2 text-white">
         {onBack && (
           <button onClick={onBack} className="md:hidden" aria-label="Back to chats">
             ←
@@ -403,7 +484,15 @@ function ChatPane({
         {messages.length === 0 ? (
           <p className="m-auto rounded-full bg-white/80 px-3 py-1 text-xs text-slate-500">No messages yet.</p>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} m={m} phones={phoneMap} />)
+          messages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              m={m}
+              phones={phoneMap}
+              onReact={onReact}
+              fallbackProvider={reactionProvider}
+            />
+          ))
         )}
       </div>
 
@@ -448,7 +537,7 @@ function ChatPane({
           e.preventDefault();
           onSend(fromPhoneId);
         }}
-        className="flex items-center gap-2 bg-[#f0f2f5] p-2"
+        className="flex items-center gap-2 rounded-b-xl bg-[#f0f2f5] p-2"
       >
         {/* Sender-number picker — only when the business has several numbers.
             "Auto" follows the conversation (the number the customer wrote to). */}
@@ -467,7 +556,9 @@ function ChatPane({
             ))}
           </select>
         )}
+        <EmojiPicker onPick={insertEmoji} />
         <input
+          ref={inputRef}
           value={draft}
           onChange={(e) => onDraft(e.target.value)}
           placeholder={`Message ${contact.name}`}

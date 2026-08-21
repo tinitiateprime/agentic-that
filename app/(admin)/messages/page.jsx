@@ -1,4 +1,4 @@
-import { requireUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, requireUser } from "@whatsapp/lib/auth";
 import { getBusiness, listContactThreads, listMessages } from "@whatsapp/lib/data";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import MessageCenter from "@whatsapp/components/MessageCenter";
@@ -8,6 +8,7 @@ export const metadata = { title: "Messages — Tinitiate WA" };
 
 export default async function MessagesPage() {
   const user = await requireUser();
+  const operator = await getCurrentUser("operate");
   const creds = await credsForBusiness(user.business_id);
   const business = await getBusiness(user.business_id);
   const contacts = await listContactThreads(business.id);
@@ -34,6 +35,7 @@ export default async function MessagesPage() {
         initialMessages={initialMessages}
         provider={provider}
         phoneNumbers={phoneNumbers}
+        canOperate={Boolean(operator)}
       />
     </div>
   );

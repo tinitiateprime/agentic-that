@@ -19,6 +19,7 @@ export default function WatiConnectionCard({
   });
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => setOrigin(window.location.origin), []);
 
@@ -49,6 +50,18 @@ export default function WatiConnectionCard({
   }
 
   const connected = hasAccessToken && Boolean(apiUrl);
+  const callbackUrl = `${origin || "https://your-domain"}/api/webhooks/wati`;
+
+  async function copyCallback() {
+    if (!origin) return;
+    try {
+      await navigator.clipboard.writeText(callbackUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setResult({ ok: false, error: "Copy failed. Select the callback URL and copy it manually." });
+    }
+  }
   return (
     <section className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
@@ -61,7 +74,7 @@ export default function WatiConnectionCard({
         <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${
           connected ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"
         }`}>
-          {connected ? "Connected" : "Setup required"}
+          {connected ? "API connected" : "Setup required"}
         </span>
       </div>
 
@@ -103,12 +116,37 @@ export default function WatiConnectionCard({
         </div>
 
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-          <p className="font-medium text-slate-700">Webhook callback</p>
-          <p className="mt-1 break-all font-mono">{origin || "https://your-domain"}/api/webhooks/wati</p>
-          <p className="mt-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-medium text-slate-700">Live-message webhook</p>
+            <span className={`rounded-full px-2 py-0.5 font-medium ${
+              hasWebhookSecret ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-700"
+            }`}>
+              {hasWebhookSecret ? "Secured" : "Setup incomplete"}
+            </span>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <p className="min-w-0 flex-1 break-all font-mono">{callbackUrl}</p>
+            <button
+              type="button"
+              onClick={copyCallback}
+              disabled={!origin}
+              className="shrink-0 rounded-md border border-slate-300 bg-white px-2 py-1 disabled:opacity-50"
+            >
+              {copied ? "Copied" : "Copy URL"}
+            </button>
+          </div>
+          <p className="mt-2">
             {hasWebhookSecret || form.webhookSecret
               ? "Append ?token=<your webhook secret> when adding this URL in WATI."
               : "Choose a webhook secret before connecting so callbacks can be authenticated."}
+          </p>
+          <ol className="mt-2 list-decimal space-y-1 pl-4">
+            <li>In WATI, open Connectors → Webhooks and add the callback URL.</li>
+            <li>Append the secret token, enable received-message events, and save.</li>
+            <li>Send a test message and confirm WATI receives HTTP 200.</li>
+          </ol>
+          <p className="mt-2 text-slate-500">
+            The Customer CRM also performs a bounded recovery sync every 60 seconds while an operator has it open.
           </p>
         </div>
 

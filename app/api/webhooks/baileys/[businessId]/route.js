@@ -1,6 +1,6 @@
 import { getSql } from "@whatsapp/lib/db";
 import { recordInbound } from "@whatsapp/lib/wa/messaging";
-import { resolveOrCreateContact, recordCallEvent } from "@whatsapp/lib/data";
+import { applyReaction, resolveOrCreateContact, recordCallEvent } from "@whatsapp/lib/data";
 import { decryptSecret } from "@whatsapp/lib/crypto";
 
 // A Baileys connection service (see ../../baileys-wa-app) POSTs inbound
@@ -71,6 +71,16 @@ export async function POST(req, { params }) {
 
   if (payload.type === "call") {
     await handleCall(business, payload);
+    return Response.json({ ok: true });
+  }
+
+  if (payload.type === "reaction") {
+    await applyReaction({
+      businessId: business.id,
+      provider: "baileys",
+      providerId: payload.reactToId || payload.targetId || null,
+      emoji: typeof payload.text === "string" ? payload.text : null,
+    });
     return Response.json({ ok: true });
   }
 

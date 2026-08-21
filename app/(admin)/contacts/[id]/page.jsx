@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, requireUser } from "@whatsapp/lib/auth";
 import { getBusiness, getContact, listMessages, listTemplates } from "@whatsapp/lib/data";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import Chat from "./Chat";
@@ -13,6 +13,7 @@ export async function generateMetadata({ params }) {
 
 export default async function ContactChatPage({ params }) {
   const user = await requireUser();
+  const operator = await getCurrentUser("operate");
   const creds = await credsForBusiness(user.business_id);
   const { id } = await params;
   const contact = await getContact(user.business_id, id);
@@ -45,6 +46,7 @@ export default async function ContactChatPage({ params }) {
         currency={business.currency}
         provider={provider}
         phoneNumbers={phoneNumbers}
+        canOperate={Boolean(operator)}
       />
     </div>
   );

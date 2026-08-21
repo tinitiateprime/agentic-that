@@ -1,7 +1,7 @@
 import { getSql } from "../db.js";
 import { getProvider, normalizeWaNumber } from "./provider.js";
 import { credsForBusiness, credsForProvider } from "../tenant.js";
-import { lastInboundProvider } from "../data.js";
+import { lastInboundProvider, setReactionById } from "../data.js";
 
 // Contacts created before we knew their real name (e.g. via Quick Send, or a
 // cold broadcast) are stored with name = their own phone number as a
@@ -172,6 +172,53 @@ export async function sendButtonsToContact({ business, contact, body, buttons, p
     provider: provider.name,
   });
   return { ...row, error };
+}
+
+function normalizeReactionEmoji(value) {
+  if (value == null) return "";
+  if (typeof value !== "string") throw new Error("Reaction must be an emoji or an empty string.");
+  const emoji = value.trim();
+  if (Array.from(emoji).length > 16 || /[\r\n]/.test(emoji)) {
+    throw new Error("Choose one emoji for the reaction.");
+  }
+  return emoji;
+}
+
+// React through the same provider that delivered the target message. Using
+// the contact's latest provider here would be wrong when one customer has
+// history on both Meta and WATI.
+export async function reactToMessage({ business, contact, targetMessage, emoji }) {
+  if (targetMessage.direction !== "in") {
+    throw new Error("You can only react to a message received from the contact.");
+  }
+  if (!targetMessage.provider_id) {
+    throw new Error("This message was not received through a connected channel.");
+  }
+
+  const reaction = normalizeReactionEmoji(emoji);
+  const targetProvider = String(targetMessage.provider || "").trim().toLowerCase();
+  const creds = targetProvider
+    ? await credsForProvider(business.id, targetProvider)
+    : await credsForBusiness(business.id);
+  if (!creds) {
+    throw new Error(`The ${targetProvider || "saved"} channel is no longer connected.`);
+  }
+  const provider = getProvider(creds);
+  if (typeof provider.sendReaction !== "function") {
+    throw new Error(`Reactions are not supported on the ${provider.name} channel.`);
+  }
+
+  await provider.sendReaction({
+    to: contact.phone,
+    messageId: targetMessage.provider_id,
+    emoji: reaction,
+    phoneNumberId: targetMessage.phone_number_id || undefined,
+  });
+  return setReactionById({
+    businessId: business.id,
+    messageId: targetMessage.id,
+    emoji: reaction || null,
+  });
 }
 
 // Record an inbound message (from a provider webhook). When the customer tapped

@@ -57,6 +57,13 @@ const mock = {
   async sendButtons(args) {
     return this.sendText({ to: args.to, body: args.body });
   },
+  async sendReaction({ to, messageId, emoji }) {
+    return {
+      providerId: `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      status: "sent",
+      echo: { to, messageId, emoji },
+    };
+  },
 };
 
 // --- WATI (https://www.wati.io) -------------------------------------------
@@ -270,6 +277,21 @@ const meta = {
         to: normalizeWaNumber(to),
         type: "interactive",
         interactive,
+      },
+      phoneNumberId
+    );
+    return { providerId: data?.messages?.[0]?.id || null, status: "sent" };
+  },
+  // Meta models a reaction as a message whose payload points at the original
+  // WhatsApp message id. An empty emoji removes the existing reaction.
+  async sendReaction({ to, messageId, emoji, phoneNumberId }) {
+    const data = await this._post(
+      "/messages",
+      {
+        messaging_product: "whatsapp",
+        to: normalizeWaNumber(to),
+        type: "reaction",
+        reaction: { message_id: messageId, emoji: emoji || "" },
       },
       phoneNumberId
     );

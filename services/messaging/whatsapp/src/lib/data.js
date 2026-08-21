@@ -158,6 +158,26 @@ export async function listMessages(contactId) {
   return sql`SELECT * FROM messages WHERE contact_id = ${contactId} ORDER BY created_at ASC`;
 }
 
+// Resolve a reaction target by the application's id while keeping the lookup
+// inside the signed-in workspace.
+export async function getMessage(businessId, id) {
+  const sql = await getSql();
+  const [row] = await sql`
+    SELECT * FROM messages
+     WHERE business_id = ${businessId} AND id = ${id}`;
+  return row || null;
+}
+
+export async function setReactionById({ businessId, messageId, emoji }) {
+  const sql = await getSql();
+  const [row] = await sql`
+    UPDATE messages
+       SET reaction = ${emoji || null}, reaction_at = clock_timestamp()
+     WHERE business_id = ${businessId} AND id = ${messageId}
+    RETURNING id, contact_id, reaction, reaction_at`;
+  return row || null;
+}
+
 // For the chat window's polling — only rows newer than the last one it already
 // has, so an open chat picks up inbound webhook replies without a full reload.
 export async function listMessagesAfter(contactId, afterId) {
@@ -170,6 +190,58 @@ export async function listMessagesAfter(contactId, afterId) {
 export async function listBusinessMessagesAfter(businessId, afterId) {
   const sql = await getSql();
   return sql`SELECT * FROM messages WHERE business_id = ${businessId} AND id > ${afterId} ORDER BY id ASC`;
+}
+
+// Store an inbound provider reaction on the message it targets. The provider
+// is part of the lookup so an id from one channel cannot modify another.
+export async function applyReaction({ businessId, provider, providerId, emoji }) {
+  if (!providerId || !provider) return null;
+  const sql = await getSql();
+  const [row] = await sql`
+    UPDATE messages
+       SET reaction = ${emoji || null}, reaction_at = clock_timestamp()
+     WHERE business_id = ${businessId}
+       AND (provider = ${provider} OR (${provider} = 'meta' AND provider IS NULL))
+       AND provider_id = ${providerId}
+    RETURNING id, contact_id, reaction, reaction_at`;
+  if (row) {
+    await sql`
+      UPDATE contacts SET last_activity_at = CURRENT_TIMESTAMP
+       WHERE business_id = ${businessId} AND id = ${row.contact_id}`;
+  }
+  return row || null;
+}
+
+// Return a bounded reaction delta and a database-generated cursor. Capturing
+// the upper bound before querying prevents client/server clock skew and makes
+// reactions arriving during a poll eligible for the following poll.
+export async function listBusinessReactionUpdates(businessId, since) {
+  const sql = await getSql();
+  const [{ cursor }] = await sql`SELECT clock_timestamp() AS cursor`;
+  const reactions = await sql`
+    SELECT id, contact_id, reaction, reaction_at
+      FROM messages
+     WHERE business_id = ${businessId}
+       AND reaction_at IS NOT NULL
+       AND reaction_at > ${since}
+       AND reaction_at <= ${cursor}
+     ORDER BY reaction_at ASC, id ASC`;
+  return { reactions, cursor };
+}
+
+export async function listContactReactionUpdates(businessId, contactId, since) {
+  const sql = await getSql();
+  const [{ cursor }] = await sql`SELECT clock_timestamp() AS cursor`;
+  const reactions = await sql`
+    SELECT id, contact_id, reaction, reaction_at
+      FROM messages
+     WHERE business_id = ${businessId}
+       AND contact_id = ${contactId}
+       AND reaction_at IS NOT NULL
+       AND reaction_at > ${since}
+       AND reaction_at <= ${cursor}
+     ORDER BY reaction_at ASC, id ASC`;
+  return { reactions, cursor };
 }
 
 // The business sender number this contact last messaged — replies default to

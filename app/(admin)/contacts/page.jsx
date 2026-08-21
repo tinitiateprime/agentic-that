@@ -1,4 +1,4 @@
-import { requireUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, requireUser } from "@whatsapp/lib/auth";
 import { listContactThreads, listCalls, callStatusSummary } from "@whatsapp/lib/data";
 import { metaListPhoneNumbers, metaTemplatesConfigured, watiConfigured } from "@whatsapp/lib/wa/provider";
 import NotificationCenter from "./NotificationCenter";
@@ -8,6 +8,7 @@ export const metadata = { title: "Customer CRM — Tinitiate WA" };
 
 export default async function ContactsPage() {
   const user = await requireUser();
+  const operator = await getCurrentUser("operate");
   const creds = await credsForBusiness(user.business_id);
   const metaCreds = await credsForProvider(user.business_id, "meta");
   const watiCreds = await credsForProvider(user.business_id, "wati");
@@ -29,6 +30,7 @@ export default async function ContactsPage() {
       phoneNumbers={phoneNumbers}
       calls={calls}
       callSummary={callSummary}
+      canOperate={Boolean(operator)}
       connections={{
         meta: metaTemplatesConfigured(metaCreds),
         wati: watiConfigured(watiCreds),

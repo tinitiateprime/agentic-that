@@ -7,6 +7,7 @@ import { timeAgo } from "@whatsapp/lib/format";
 import SenderSelect from "@whatsapp/components/SenderSelect";
 import AllContactsCRM from "@whatsapp/components/AllContactsCRM";
 import WatiContactsBox from "@whatsapp/components/WatiContactsBox";
+import WatiMessageAutoSync from "@whatsapp/components/WatiMessageAutoSync";
 
 const DEFAULT_BUTTONS = ["Sales", "Support", "Catalog"];
 
@@ -16,6 +17,7 @@ export default function NotificationCenter({
   phoneNumbers = [],
   calls = [],
   callSummary = null,
+  canOperate = false,
   connections = { meta: false, wati: false },
 }) {
   const [tab, setTab] = useState("crm");
@@ -39,7 +41,10 @@ export default function NotificationCenter({
         <p className="text-sm text-slate-500">Meta Cloud API and WATI contacts in one workspace.</p>
       </div>
 
-      <ConnectionStatus connections={connections} />
+      <div className="flex flex-wrap items-center gap-2">
+        <ConnectionStatus connections={connections} />
+        {connections.wati && canOperate && <WatiMessageAutoSync />}
+      </div>
 
       <div className="grid grid-cols-4 rounded-lg bg-slate-100 p-1 text-sm">
         <button

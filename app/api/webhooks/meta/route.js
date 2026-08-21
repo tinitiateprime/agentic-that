@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { getSql } from "@whatsapp/lib/db";
 import { recordInbound } from "@whatsapp/lib/wa/messaging";
-import { recordCallEvent, resolveOrCreateContact } from "@whatsapp/lib/data";
+import { applyReaction, recordCallEvent, resolveOrCreateContact } from "@whatsapp/lib/data";
 import { resolveTenantByWabaId } from "@whatsapp/lib/tenant";
 
 // Meta WhatsApp Cloud API posts events here. Configure in Meta for Developers >
@@ -133,6 +133,16 @@ async function processEntry(sql, business, entry) {
     // ── Inbound messages (field: "messages") ──────────────────────────────
     // Inbound message objects are separate from the delivery receipts above.
     for (const msg of value.messages || []) {
+      if (msg.type === "reaction") {
+        await applyReaction({
+          businessId: business.id,
+          provider: "meta",
+          providerId: msg.reaction?.message_id,
+          emoji: msg.reaction?.emoji || null,
+        });
+        continue;
+      }
+
       const profileName = value.contacts?.find((c) => c.wa_id === msg.from)?.profile?.name;
       const contact = await resolveContact(msg.from, profileName);
       if (!contact) continue;

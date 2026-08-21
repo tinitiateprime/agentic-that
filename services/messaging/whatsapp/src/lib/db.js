@@ -58,7 +58,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v1";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v2-reactions";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -117,6 +117,15 @@ async function ensureSchema(sql) {
       VALUES (${WHATSAPP_SCHEMA_MIGRATION_KEY})
       ON CONFLICT (key) DO NOTHING`;
   });
+}
+
+// Deployment migrations intentionally run only DDL. Account bootstrapping and
+// environment credential imports belong to normal application startup and
+// must not be an incidental side effect of a build command.
+export async function migrateWhatsAppSchema() {
+  const sql = client();
+  await ensureSchema(sql);
+  return sql;
 }
 
 // Acquire the Supabase client, guaranteeing migrations have run. Use this in
@@ -397,6 +406,8 @@ async function migrate(sql) {
       buttons       TEXT,
       reply_to_id   INTEGER,
       phone_number_id TEXT,
+      reaction      TEXT,
+      reaction_at   TIMESTAMPTZ,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     // WhatsApp Business Calling API call log. One row per call, keyed by Meta's
@@ -432,6 +443,12 @@ async function migrate(sql) {
     // last messaged on, same idea as phone_number_id but across providers —
     // see lastInboundProvider() in lib/data.js.
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider TEXT`,
+    // Reactions update an existing message instead of creating a new row.
+    // reaction_at is the cursor used by open conversations to receive those
+    // in-place changes without reloading the full history.
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_reaction ON messages(business_id, reaction_at)`,
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_read_message_id INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_temp BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,

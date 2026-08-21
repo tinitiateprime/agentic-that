@@ -1,5 +1,5 @@
 import { recordInbound } from "@whatsapp/lib/wa/messaging";
-import { resolveOrCreateContact } from "@whatsapp/lib/data";
+import { applyReaction, resolveOrCreateContact } from "@whatsapp/lib/data";
 import { getSql } from "@whatsapp/lib/db";
 import { resolveTenantByWatiWebhookSecret } from "@whatsapp/lib/tenant";
 
@@ -26,8 +26,9 @@ export async function POST(req) {
 
   // Only process inbound customer messages. owner=true is the business's own echo.
   const eventType = payload.eventType || payload.type;
+  const isReaction = payload.type === "reaction" || eventType === "reaction" || Boolean(payload.reaction);
   if (payload.owner === true) return Response.json({ ok: true });
-  if (eventType && !["message", "button", "interactive"].includes(eventType)) {
+  if (eventType && !isReaction && !["message", "button", "interactive"].includes(eventType)) {
     return Response.json({ ok: true });
   }
 
@@ -43,6 +44,32 @@ export async function POST(req) {
     [business] = await sql`SELECT * FROM businesses ORDER BY id LIMIT 1`;
   }
   if (!business) return Response.json({ ok: true });
+
+  if (isReaction) {
+    const reaction = payload.reaction && typeof payload.reaction === "object"
+      ? payload.reaction
+      : null;
+    const providerId =
+      reaction?.messageId ||
+      reaction?.message_id ||
+      payload.reactionMessageId ||
+      payload.replyContextId ||
+      payload.whatsappMessageId ||
+      payload.id ||
+      null;
+    const rawEmoji = reaction
+      ? reaction.emoji
+      : typeof payload.reaction === "string"
+        ? payload.reaction
+        : payload.text;
+    await applyReaction({
+      businessId: business.id,
+      provider: "wati",
+      providerId,
+      emoji: typeof rawEmoji === "string" ? rawEmoji : null,
+    });
+    return Response.json({ ok: true });
+  }
 
   const contact = await resolveOrCreateContact(
     business.id,
