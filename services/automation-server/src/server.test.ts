@@ -326,6 +326,51 @@ test("private preview frames are token- and workspace-scoped", async () => {
   }
 });
 
+test("live publishing diagnostic frames are token- and workspace-scoped", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_EXECUTION_ENABLED: "true",
+    SERVER_INSTAGRAM_PUBLISHING_ENABLED: "true",
+  });
+  const screenshot = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const fakeStore = {
+    getPublishingJob(workspaceId: string, jobId: string) {
+      if (workspaceId !== "workspace_test" || jobId !== "job_uncertain") return null;
+      return { id: jobId, executionMode: "LIVE", state: "UNCERTAIN" };
+    },
+  } as unknown as AutomationJobStore;
+  const fakeFiles = {
+    async readPublishingPreview(jobId: string) {
+      assert.equal(jobId, "job_uncertain");
+      return screenshot;
+    },
+  } as AutomationFileStore;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: fakeStore,
+    loginManager: null,
+    files: fakeFiles,
+  }));
+  try {
+    const url = `${runtime.url}/v1/publishing/jobs/job_uncertain/diagnostic-frame?workspaceId=workspace_test`;
+    assert.equal((await fetch(url)).status, 401);
+    const response = await fetch(url, {
+      headers: { "x-agenticthat-internal-token": config.internalToken },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), screenshot);
+    const wrongWorkspace = await fetch(
+      `${runtime.url}/v1/publishing/jobs/job_uncertain/diagnostic-frame?workspaceId=other`,
+      { headers: { "x-agenticthat-internal-token": config.internalToken } },
+    );
+    assert.equal(wrongWorkspace.status, 404);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("dry-run media uploads require authorization and preserve a decoded display filename", async () => {
   const config = loadAutomationConfig({
     SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",

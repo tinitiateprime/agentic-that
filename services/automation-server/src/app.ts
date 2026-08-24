@@ -343,6 +343,34 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     }
   });
 
+  app.get("/v1/publishing/jobs/:jobId/diagnostic-frame", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.executionEnabled || !config.instagramPublishingEnabled || !files) {
+      res.status(409).json({ error: "Server publishing is disabled." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const job = await store!.getPublishingJob(workspaceId, String(req.params.jobId));
+    if (!job || job.executionMode !== "LIVE" || !["FAILED", "UNCERTAIN"].includes(job.state)) {
+      res.status(404).json({ error: "Publishing diagnostic not found." });
+      return;
+    }
+    try {
+      const screenshot = await files.readPublishingPreview(job.id);
+      res.set("cache-control", "no-store");
+      res.type("jpeg").send(screenshot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        res.status(404).json({ error: "Publishing diagnostic screenshot not found." });
+        return;
+      }
+      throw error;
+    }
+  });
+
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof ZodError) {
       res.status(400).json({ error: error.issues[0]?.message || "The automation request is invalid." });

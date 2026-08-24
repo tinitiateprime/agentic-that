@@ -12,6 +12,26 @@ import { AutomationJobStore } from "./job-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
+import { interpretInstagramPublishResponse } from "./instagram-live.ts";
+
+test("Instagram publish responses provide strong success and failure evidence", () => {
+  assert.deepEqual(interpretInstagramPublishResponse(200, {
+    status: "ok",
+    media: { pk: "123456", code: "ABC_123" },
+  }), {
+    state: "PUBLISHED",
+    platformPostId: "123456",
+    platformPostUrl: "https://www.instagram.com/p/ABC_123/",
+  });
+  assert.deepEqual(interpretInstagramPublishResponse(400, {
+    status: "fail",
+    message: "Please wait a few minutes before trying again.",
+  }), {
+    state: "FAILED",
+    message: "Please wait a few minutes before trying again.",
+  });
+  assert.equal(interpretInstagramPublishResponse(200, { status: "pending" }), null);
+});
 
 test("the live worker requires authorization and fences Instagram's final action", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-live-publishing-"));
@@ -114,6 +134,8 @@ test("the live Playwright executor has one exact guarded Share click", async () 
   const previewSource = await readFile(new URL("./instagram-preview.ts", import.meta.url), "utf8");
   assert.equal(liveSource.match(/share\.click\s*\(/g)?.length, 1);
   assert.match(liveSource, /exact Share-label guard/);
+  assert.doesNotMatch(liveSource, /share\.click\(\{\s*force:/);
+  assert.ok(liveSource.indexOf("waitForEnabledShare(page, share, signal)") < liveSource.indexOf("await onFinalActionStarting()"));
   assert.doesNotMatch(previewSource, /share\.click\s*\(/i);
   const originalCrop = previewSource.indexOf('page.getByText(/^Original$/i)');
   const cropNext = previewSource.indexOf("Instagram's crop Next control was not available.");

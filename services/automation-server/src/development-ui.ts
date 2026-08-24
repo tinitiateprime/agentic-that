@@ -110,8 +110,8 @@ export function developmentConnectPage(options: {
       </form>
       <p id="dry-run-status" role="status"></p>
       <div id="preview-result" hidden>
-        <strong>Private Instagram browser result</strong>
-        <p>This final or diagnostic screenshot is stored only in isolated local development data. The server never clicks Share.</p>
+        <strong id="preview-result-title">Private Instagram browser result</strong>
+        <p id="preview-result-description">This screenshot is stored only in isolated local development data. The server never clicks Share during a private preview.</p>
         <img id="preview-frame" alt="Instagram composer prepared without publishing" />
       </div>
     </section>
@@ -156,6 +156,8 @@ export function developmentConnectPage(options: {
     const liveButton = document.querySelector('#live-button');
     const dryRunStatus = document.querySelector('#dry-run-status');
     const previewResult = document.querySelector('#preview-result');
+    const previewResultTitle = document.querySelector('#preview-result-title');
+    const previewResultDescription = document.querySelector('#preview-result-description');
     const previewFrame = document.querySelector('#preview-frame');
     const scheduleAt = document.querySelector('#schedule-at');
     const scheduleButton = document.querySelector('#schedule-button');
@@ -408,19 +410,42 @@ export function developmentConnectPage(options: {
       return job;
     }
 
-    async function loadPreviewFrame(jobId) {
+    async function loadStoredFrame(jobId, path, title, description, alt) {
       const workspaceId = workspaceElement.value.trim();
       const response = await fetch(
-        '/v1/publishing/previews/' + encodeURIComponent(jobId) + '/frame?workspaceId=' + encodeURIComponent(workspaceId),
+        path + '?workspaceId=' + encodeURIComponent(workspaceId),
         { headers: { 'x-agenticthat-internal-token': bootstrap.internalToken }, cache: 'no-store' },
       );
-      if (!response.ok) throw new Error('The private Instagram preview screenshot could not be loaded.');
+      if (!response.ok) throw new Error('The private Instagram screenshot could not be loaded.');
       const nextUrl = URL.createObjectURL(await response.blob());
       if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
       previewObjectUrl = nextUrl;
+      previewResultTitle.textContent = title;
+      previewResultDescription.textContent = description;
+      previewFrame.alt = alt;
       previewFrame.src = nextUrl;
       previewResult.hidden = false;
       previewResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    async function loadPreviewFrame(jobId) {
+      return loadStoredFrame(
+        jobId,
+        '/v1/publishing/previews/' + encodeURIComponent(jobId) + '/frame',
+        'Private Instagram browser result',
+        'This screenshot is stored only in isolated local development data. The server never clicks Share during a private preview.',
+        'Instagram composer prepared without publishing',
+      );
+    }
+
+    async function loadPublishingDiagnostic(jobId) {
+      return loadStoredFrame(
+        jobId,
+        '/v1/publishing/jobs/' + encodeURIComponent(jobId) + '/diagnostic-frame',
+        'Instagram publishing diagnostic',
+        'This private screenshot shows what Instagram displayed after the single Share attempt. Check the account before retrying.',
+        'Instagram state after an unconfirmed Share attempt',
+      );
     }
 
     async function pollPreview(jobId, deadline = Date.now() + 210_000) {
@@ -460,7 +485,8 @@ export function developmentConnectPage(options: {
       if (job.state === 'PUBLISHED') {
         dryRunMessage('Instagram confirmed the post was published.', 'success');
       } else if (job.state === 'UNCERTAIN') {
-        dryRunMessage('Instagram may have received Share, but confirmation was unavailable. Check the account before any retry.', 'error');
+        await loadPublishingDiagnostic(jobId).catch(() => undefined);
+        dryRunMessage(job.errorMessage || 'Instagram may have received Share, but confirmation was unavailable. Check the account before any retry.', 'error');
       } else {
         dryRunMessage(job.errorMessage || ('Live publishing finished with status ' + job.state + '.'), 'error');
       }
