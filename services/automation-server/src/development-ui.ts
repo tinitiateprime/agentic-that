@@ -40,6 +40,10 @@ export function developmentConnectPage(options: {
     article span { margin-top: 4px; color: #73827d; font-size: 13px; }
     .status { display: inline-flex; width: fit-content; margin-top: 8px; padding: 4px 8px; border-radius: 999px; background: #edf2f0; color: #53645e; font-size: 11px; font-weight: 800; }
     .status.CONNECTED { background: #dcf7e9; color: #11643f; }
+    .status.SCHEDULED { background: #e6f0ff; color: #245a9f; }
+    .status.PUBLISHING, .status.VERIFYING { background: #fff1cc; color: #76540b; }
+    .status.PUBLISHED { background: #dcf7e9; color: #11643f; }
+    .status.FAILED, .status.LOGIN_REQUIRED, .status.UNCERTAIN { background: #fde5e5; color: #912c2c; }
     #message { min-height: 22px; margin: 14px 0 0; font-size: 14px; color: #51615b; }
     #message.error { color: #a23131; }
     #message.success { color: #11643f; }
@@ -60,7 +64,17 @@ export function developmentConnectPage(options: {
     #preview-result[hidden] { display: none; }
     #preview-result { margin-top: 16px; }
     #preview-frame { display: block; width: 100%; margin-top: 10px; border: 1px solid #c9d5d1; border-radius: 13px; }
+    .schedule-form { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 12px; align-items: end; margin-top: 18px; }
+    #schedule-status { min-height: 22px; margin: 14px 0 0; font-size: 14px; color: #51615b; }
+    #schedule-status.error { color: #a23131; }
+    #schedule-status.success { color: #11643f; }
+    #publishing-jobs { display: grid; gap: 10px; margin-top: 14px; }
+    #publishing-jobs article { align-items: flex-start; }
+    .job-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .job-actions { display: flex; gap: 8px; align-items: center; }
+    .empty-state { margin: 0; padding: 14px; border: 1px dashed #cbd8d3; border-radius: 11px; }
     @media (max-width: 700px) { form { grid-template-columns: 1fr; } article { align-items: flex-start; flex-wrap: wrap; } }
+    @media (max-width: 700px) { .schedule-form { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -101,6 +115,17 @@ export function developmentConnectPage(options: {
         <img id="preview-frame" alt="Instagram composer prepared without publishing" />
       </div>
     </section>
+    <section>
+      <h2>Scheduled Instagram publishing</h2>
+      <p>Choose the account, image, and caption above, then select a future time. The local server must remain running until the post finishes.</p>
+      <div class="schedule-form">
+        <label>Publish date and time<input id="schedule-at" type="datetime-local" required /></label>
+        <button id="schedule-button" class="danger" type="button">Schedule post</button>
+        <button id="refresh-jobs-button" class="secondary" type="button">Refresh jobs</button>
+      </div>
+      <p id="schedule-status" role="status"></p>
+      <div id="publishing-jobs"></div>
+    </section>
     <section id="browser-panel" hidden>
       <div class="browser-head">
         <div><h2>Instagram server browser</h2><p>Click the browser image, then type normally. AgenticThat forwards input without logging or saving it.</p></div>
@@ -132,6 +157,11 @@ export function developmentConnectPage(options: {
     const dryRunStatus = document.querySelector('#dry-run-status');
     const previewResult = document.querySelector('#preview-result');
     const previewFrame = document.querySelector('#preview-frame');
+    const scheduleAt = document.querySelector('#schedule-at');
+    const scheduleButton = document.querySelector('#schedule-button');
+    const refreshJobsButton = document.querySelector('#refresh-jobs-button');
+    const scheduleStatus = document.querySelector('#schedule-status');
+    const publishingJobs = document.querySelector('#publishing-jobs');
     const terminalStates = new Set(['CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED']);
     let polling = null;
     let framePolling = null;
@@ -139,6 +169,8 @@ export function developmentConnectPage(options: {
     let frameObjectUrl = null;
     let previewObjectUrl = null;
     let inputQueue = Promise.resolve();
+    let jobsRefreshTimer = null;
+    let accountNames = new Map();
 
     function message(value, tone = '') {
       messageElement.textContent = value;
@@ -148,6 +180,11 @@ export function developmentConnectPage(options: {
     function dryRunMessage(value, tone = '') {
       dryRunStatus.textContent = value;
       dryRunStatus.className = tone;
+    }
+
+    function scheduleMessage(value, tone = '') {
+      scheduleStatus.textContent = value;
+      scheduleStatus.className = tone;
     }
 
     async function api(path, options = {}) {
@@ -234,10 +271,86 @@ export function developmentConnectPage(options: {
       return article;
     }
 
+    function localDateTimeValue(date) {
+      return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    }
+
+    function resetScheduleTime(force = false) {
+      const minimum = new Date(Date.now() + 60_000);
+      scheduleAt.min = localDateTimeValue(minimum);
+      const selected = scheduleAt.value ? new Date(scheduleAt.value) : null;
+      if (force || !selected || !Number.isFinite(selected.getTime()) || selected.getTime() <= Date.now()) {
+        scheduleAt.value = localDateTimeValue(new Date(Date.now() + 10 * 60_000));
+      }
+    }
+
+    function publishingJobCard(job) {
+      const article = document.createElement('article');
+      const detail = document.createElement('div');
+      const title = document.createElement('strong');
+      const timing = document.createElement('span');
+      const caption = document.createElement('span');
+      const status = document.createElement('span');
+      const actions = document.createElement('div');
+      title.textContent = accountNames.get(job.accountId) || 'Instagram account';
+      timing.textContent = 'Scheduled for ' + new Date(job.scheduledAt).toLocaleString();
+      caption.textContent = (job.caption || '(image without caption)').replace(/\s+/g, ' ').trim();
+      caption.className = 'job-caption';
+      status.textContent = job.state.replaceAll('_', ' ');
+      status.className = 'status ' + job.state;
+      detail.append(title, timing, caption, status);
+      if (job.errorMessage && job.state !== 'CANCELLED') {
+        const error = document.createElement('span');
+        error.textContent = job.errorMessage;
+        detail.append(error);
+      }
+      actions.className = 'job-actions';
+      if (job.state === 'SCHEDULED') {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'secondary';
+        cancel.dataset.cancelPublishingJob = job.id;
+        cancel.textContent = 'Cancel';
+        actions.append(cancel);
+      }
+      article.append(detail, actions);
+      return article;
+    }
+
+    async function refreshPublishingJobs() {
+      clearTimeout(jobsRefreshTimer);
+      jobsRefreshTimer = null;
+      if (!bootstrap.publishingLiveEnabled) {
+        publishingJobs.replaceChildren();
+        scheduleMessage('Scheduled server publishing is disabled.', 'error');
+        return;
+      }
+      const workspaceId = workspaceElement.value.trim();
+      if (!workspaceId) return;
+      const body = await api('/v1/publishing/jobs?workspaceId=' + encodeURIComponent(workspaceId) + '&limit=30');
+      const jobs = body.jobs || [];
+      if (jobs.length) {
+        publishingJobs.replaceChildren(...jobs.map(publishingJobCard));
+      } else {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = 'No live publishing jobs yet.';
+        publishingJobs.replaceChildren(empty);
+      }
+      if (jobs.some(job => ['SCHEDULED', 'PUBLISHING', 'VERIFYING'].includes(job.state))) {
+        jobsRefreshTimer = setTimeout(() => {
+          if (workspaceElement.value.trim() === workspaceId) {
+            refreshPublishingJobs().catch(error => scheduleMessage(error.message, 'error'));
+          }
+        }, 2_000);
+      }
+    }
+
     async function refresh() {
       const workspaceId = workspaceElement.value.trim();
       if (!workspaceId) return;
       const body = await api('/v1/accounts?workspaceId=' + encodeURIComponent(workspaceId));
+      accountNames = new Map(body.accounts.map(account => [account.id, account.displayName]));
       accountsElement.replaceChildren(...body.accounts.map(accountCard));
       const selectedAccount = dryRunAccount.value;
       const connected = body.accounts.filter(account => account.enabled && account.status === 'CONNECTED');
@@ -251,11 +364,14 @@ export function developmentConnectPage(options: {
       dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || connected.length === 0;
       previewButton.disabled = !bootstrap.publishingPreviewEnabled || connected.length === 0;
       liveButton.disabled = !bootstrap.publishingLiveEnabled || connected.length === 0;
+      scheduleButton.disabled = !bootstrap.publishingLiveEnabled || connected.length === 0;
+      refreshJobsButton.disabled = !bootstrap.publishingLiveEnabled;
       if (!body.accounts.length) {
         const empty = document.createElement('p');
         empty.textContent = 'No isolated development accounts yet.';
         accountsElement.replaceChildren(empty);
       }
+      await refreshPublishingJobs();
     }
 
     async function uploadDryRunMedia(file) {
@@ -478,6 +594,7 @@ export function developmentConnectPage(options: {
       dryRunButton.disabled = true;
       previewButton.disabled = true;
       liveButton.disabled = true;
+      scheduleButton.disabled = true;
       try {
         dryRunMessage('Saving test media into isolated local storage...');
         const media = await uploadDryRunMedia(file);
@@ -513,6 +630,7 @@ export function developmentConnectPage(options: {
       dryRunButton.disabled = true;
       previewButton.disabled = true;
       liveButton.disabled = true;
+      scheduleButton.disabled = true;
       previewResult.hidden = true;
       try {
         dryRunMessage('Saving test media into isolated local storage...');
@@ -552,6 +670,7 @@ export function developmentConnectPage(options: {
       dryRunButton.disabled = true;
       previewButton.disabled = true;
       liveButton.disabled = true;
+      scheduleButton.disabled = true;
       previewResult.hidden = true;
       try {
         dryRunMessage('Saving authorized publishing media into isolated server storage...');
@@ -578,10 +697,94 @@ export function developmentConnectPage(options: {
       }
     });
 
+    scheduleButton.addEventListener('click', async () => {
+      const file = dryRunMedia.files?.[0];
+      if (!file || !dryRunAccount.value) {
+        scheduleMessage('Choose a connected account and one JPEG or PNG in the publishing section above.', 'error');
+        return;
+      }
+      const publishAt = scheduleAt.value ? new Date(scheduleAt.value) : null;
+      if (!publishAt || !Number.isFinite(publishAt.getTime()) || publishAt.getTime() < Date.now() + 30_000) {
+        scheduleMessage('Choose a publishing time at least 30 seconds in the future.', 'error');
+        resetScheduleTime();
+        return;
+      }
+      const confirmation = window.prompt(
+        'REAL SCHEDULED PUBLISHING: Instagram Share will be clicked at ' + publishAt.toLocaleString()
+        + '. The local server computer must stay running. Type PUBLISH to authorize it.',
+      );
+      if (confirmation !== 'PUBLISH') {
+        scheduleMessage('Scheduled publishing was not authorized. Nothing was queued.');
+        return;
+      }
+
+      dryRunButton.disabled = true;
+      previewButton.disabled = true;
+      liveButton.disabled = true;
+      scheduleButton.disabled = true;
+      try {
+        scheduleMessage('Saving authorized publishing media into isolated server storage...');
+        const media = await uploadDryRunMedia(file);
+        scheduleMessage('Creating the scheduled Instagram publishing job...');
+        const body = await api('/v1/publishing/jobs', {
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId: workspaceElement.value.trim(),
+            accountId: dryRunAccount.value,
+            scheduledAt: publishAt.toISOString(),
+            originalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+            caption: dryRunCaption.value,
+            media: [{ storageKey: media.storageKey, fileName: media.fileName, mimeType: media.mimeType }],
+            idempotencyKey: 'scheduled-live-' + crypto.randomUUID(),
+            liveConfirmation: confirmation,
+          }),
+        });
+        scheduleMessage('Post scheduled for ' + new Date(body.job.scheduledAt).toLocaleString() + '.', 'success');
+        resetScheduleTime(true);
+      } catch (error) {
+        scheduleMessage(error.message, 'error');
+      } finally {
+        await refresh().catch(error => scheduleMessage(error.message, 'error'));
+      }
+    });
+
+    publishingJobs.addEventListener('click', async event => {
+      const button = event.target.closest('[data-cancel-publishing-job]');
+      if (!button) return;
+      if (!window.confirm('Cancel this scheduled post? It can only be cancelled before publishing starts.')) return;
+      button.disabled = true;
+      try {
+        const workspaceId = workspaceElement.value.trim();
+        await api(
+          '/v1/publishing/jobs/' + encodeURIComponent(button.dataset.cancelPublishingJob)
+          + '?workspaceId=' + encodeURIComponent(workspaceId),
+          { method: 'DELETE' },
+        );
+        scheduleMessage('Scheduled post cancelled before publishing started.', 'success');
+        await refreshPublishingJobs();
+      } catch (error) {
+        scheduleMessage(error.message, 'error');
+        await refreshPublishingJobs().catch(() => undefined);
+      }
+    });
+
+    refreshJobsButton.addEventListener('click', async () => {
+      refreshJobsButton.disabled = true;
+      try {
+        await refreshPublishingJobs();
+        scheduleMessage('Publishing jobs refreshed.');
+      } catch (error) {
+        scheduleMessage(error.message, 'error');
+      } finally {
+        refreshJobsButton.disabled = !bootstrap.publishingLiveEnabled;
+      }
+    });
+
     workspaceElement.addEventListener('change', () => refresh().catch(error => message(error.message, 'error')));
     if (!bootstrap.loginEnabled) message('Server login is disabled in local configuration.', 'error');
     else if (!bootstrap.internalToken) message('The local internal token is not configured.', 'error');
     if (!bootstrap.publishingDryRunEnabled) dryRunMessage('Publishing dry-run validation is disabled.', 'error');
+    resetScheduleTime(true);
     refresh().catch(error => message(error.message, 'error'));
   </script>
 </body>

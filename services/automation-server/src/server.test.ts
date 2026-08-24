@@ -63,6 +63,9 @@ test("the local connection page contains a valid website-browser client and no p
   assert.match(html, /Instagram server browser/);
   assert.match(html, /REAL PUBLISHING/);
   assert.match(html, /Type PUBLISH to continue/);
+  assert.match(html, /Scheduled Instagram publishing/);
+  assert.match(html, /type="datetime-local"/);
+  assert.match(html, /Only a post that is still SCHEDULED can be cancelled|Cancel this scheduled post/);
   assert.doesNotMatch(html, /type=["']password["']/i);
 });
 
@@ -222,6 +225,58 @@ test("live publishing requires both feature gates and an exact final-action conf
     assert.equal(confirmed.status, 201);
     assert.equal(authorized, true);
     assert.equal((await confirmed.json()).job.liveAuthorized, true);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("scheduled publishing jobs can be listed and cancelled only while queued", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_EXECUTION_ENABLED: "true",
+    SERVER_INSTAGRAM_PUBLISHING_ENABLED: "true",
+  });
+  let listedWith: [string, number] | null = null;
+  let cancellationState: "CANCELLED" | "CONFLICT" = "CANCELLED";
+  const fakeStore = {
+    listPublishingJobs(workspaceId: string, limit: number) {
+      listedWith = [workspaceId, limit];
+      return [{ id: "job_scheduled", workspaceId, state: "SCHEDULED" }];
+    },
+    cancelScheduledPublishingJob(workspaceId: string, jobId: string) {
+      assert.deepEqual([workspaceId, jobId], ["workspace_test", "job_scheduled"]);
+      return cancellationState === "CANCELLED"
+        ? { status: "CANCELLED", job: { id: jobId, workspaceId, state: "CANCELLED" } }
+        : { status: "CONFLICT", job: { id: jobId, workspaceId, state: "PUBLISHING" } };
+    },
+  } as unknown as AutomationJobStore;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: fakeStore,
+    loginManager: null,
+  }));
+  try {
+    const headers = { "x-agenticthat-internal-token": config.internalToken };
+    const list = await fetch(`${runtime.url}/v1/publishing/jobs?workspaceId=workspace_test&limit=12`, { headers });
+    assert.equal(list.status, 200);
+    assert.deepEqual(listedWith, ["workspace_test", 12]);
+    assert.equal((await list.json()).jobs[0].state, "SCHEDULED");
+
+    const cancelled = await fetch(
+      `${runtime.url}/v1/publishing/jobs/job_scheduled?workspaceId=workspace_test`,
+      { method: "DELETE", headers },
+    );
+    assert.equal(cancelled.status, 200);
+    assert.equal((await cancelled.json()).job.state, "CANCELLED");
+
+    cancellationState = "CONFLICT";
+    const conflict = await fetch(
+      `${runtime.url}/v1/publishing/jobs/job_scheduled?workspaceId=workspace_test`,
+      { method: "DELETE", headers },
+    );
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json()).job.state, "PUBLISHING");
   } finally {
     await runtime.close();
   }

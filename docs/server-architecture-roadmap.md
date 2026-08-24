@@ -29,6 +29,8 @@
     saved-profile browser execution, private screenshot result, and no Share action.
 15. Double-gated Instagram live worker with explicit authorization, exact Share
     targeting, pre-action fencing, platform confirmation, and `UNCERTAIN` recovery.
+16. Local future-date scheduling with workspace-scoped job history, status
+    refresh, and atomic cancellation before a worker claims the post.
 
 ## Next development work
 
@@ -37,7 +39,7 @@
 3. Add short-lived login-stream authorization and strict origin checks.
 4. Add remote-server viewport resizing and reconnect handling.
 5. Expand `ServerPublishingExecutor` beyond the initial single-image Instagram
-   feed-post test to carousels, video, scheduling, and additional platforms.
+   feed-post and scheduling test to carousels, video, and additional platforms.
 6. Add the profile-version write guard to the future live executor.
 7. Connect only a test workspace through a per-account `server` engine flag.
 8. Add temporary-browser scraping workers.

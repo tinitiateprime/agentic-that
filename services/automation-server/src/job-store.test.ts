@@ -48,6 +48,20 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
       /idempotency key/,
     );
 
+    const futureJob = store.createPublishingJob({
+      ...request,
+      scheduledAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      idempotencyKey: "sqlite-future-schedule",
+    }, "LIVE", "LOCAL", true);
+    assert.equal(store.listPublishingJobs("test-workspace").some(item => item.id === futureJob.id), true);
+    assert.equal(store.listPublishingJobs("another-workspace").length, 0);
+    assert.equal(store.cancelScheduledPublishingJob("another-workspace", futureJob.id).status, "NOT_FOUND");
+    const cancellation = store.cancelScheduledPublishingJob("test-workspace", futureJob.id);
+    assert.equal(cancellation.status, "CANCELLED");
+    assert.equal(cancellation.job?.state, "CANCELLED");
+    assert.equal(cancellation.job?.errorCode, "USER_CANCELLED");
+    assert.equal(store.cancelScheduledPublishingJob("test-workspace", futureJob.id).status, "CONFLICT");
+
     database.prepare("UPDATE publishing_jobs SET live_authorized = 0 WHERE id = ?").run(job.id);
     assert.equal(store.claimDuePublishingJob("unauthorized-worker", 60), null);
     database.prepare("UPDATE publishing_jobs SET live_authorized = 1 WHERE id = ?").run(job.id);

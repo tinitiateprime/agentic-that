@@ -217,6 +217,79 @@ export class AutomationJobStore {
     return row ? publicJob(row) : null;
   }
 
+  listPublishingJobs(workspaceId: string, limit = 30) {
+    const normalizedWorkspaceId = workspaceId.trim();
+    if (!normalizedWorkspaceId) throw new Error("A workspace id is required to list publishing jobs.");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("Publishing job list limits must be between 1 and 100.");
+    }
+    const rows = this.database.prepare(`
+      SELECT job.*, account.platform AS platform
+      FROM publishing_jobs job
+      JOIN social_accounts account ON account.id = job.account_id
+      WHERE job.workspace_id = ?
+        AND job.execution_mode = 'LIVE'
+        AND job.validation_stage = 'LOCAL'
+      ORDER BY job.created_at DESC
+      LIMIT ?
+    `).all(normalizedWorkspaceId, limit) as unknown as PublishingJobRow[];
+    return rows.map(publicJob);
+  }
+
+  cancelScheduledPublishingJob(workspaceId: string, jobId: string) {
+    const normalizedWorkspaceId = workspaceId.trim();
+    const normalizedJobId = jobId.trim();
+    if (!normalizedWorkspaceId || !normalizedJobId) {
+      throw new Error("Workspace and job ids are required to cancel publishing.");
+    }
+    return withImmediateTransaction(this.database, () => {
+      const current = this.database.prepare(`
+        SELECT job.*, account.platform AS platform
+        FROM publishing_jobs job
+        JOIN social_accounts account ON account.id = job.account_id
+        WHERE job.id = ? AND job.workspace_id = ?
+          AND job.execution_mode = 'LIVE' AND job.validation_stage = 'LOCAL'
+      `).get(normalizedJobId, normalizedWorkspaceId) as PublishingJobRow | undefined;
+      if (!current) return { status: "NOT_FOUND" as const, job: null };
+      if (current.state !== "SCHEDULED") {
+        return { status: "CONFLICT" as const, job: publicJob(current) };
+      }
+
+      assertPublishingJobTransition(current.state, "CANCELLED");
+      const cancelledAt = now();
+      const update = this.database.prepare(`
+        UPDATE publishing_jobs
+        SET state = 'CANCELLED', error_code = 'USER_CANCELLED',
+            error_message = 'The scheduled post was cancelled before publishing started.',
+            progress_message = NULL, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND state = 'SCHEDULED'
+      `).run(cancelledAt, normalizedJobId, normalizedWorkspaceId);
+      if (update.changes !== 1) {
+        const changed = this.database.prepare("SELECT * FROM publishing_jobs WHERE id = ?")
+          .get(normalizedJobId) as PublishingJobRow;
+        return { status: "CONFLICT" as const, job: publicJob(changed) };
+      }
+      this.database.prepare(`
+        INSERT INTO job_events
+          (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'publishing', 'cancelled', ?, ?)
+      `).run(
+        automationId("event"),
+        normalizedWorkspaceId,
+        normalizedJobId,
+        JSON.stringify({ source: "website", finalShareClicked: false }),
+        cancelledAt,
+      );
+      const cancelled = this.database.prepare(`
+        SELECT job.*, account.platform AS platform
+        FROM publishing_jobs job
+        JOIN social_accounts account ON account.id = job.account_id
+        WHERE job.id = ?
+      `).get(normalizedJobId) as PublishingJobRow;
+      return { status: "CANCELLED" as const, job: publicJob(cancelled) };
+    });
+  }
+
   claimDuePublishingJob(
     workerId: string,
     leaseSeconds = 300,

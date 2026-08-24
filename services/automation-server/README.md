@@ -37,6 +37,8 @@ an isolated local SQLite file under `.server-data`.
   require two feature flags, an authorized database bit, exact `PUBLISH`
   confirmation, an owned account lease, and a fenced transition to `VERIFYING`
   before the executor can click Share.
+- Local date/time scheduling, workspace-scoped live-job history and statuses,
+  and cancellation that succeeds only while a job is still `SCHEDULED`.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
@@ -86,6 +88,10 @@ npm run server-architecture:dev
    `PUBLISH`. This performs the irreversible Instagram Share action. If the
    platform receives Share but its confirmation cannot be verified, the job is
    marked `UNCERTAIN` and must be checked manually before any retry.
+9. To schedule instead, choose a future local date/time and click **Schedule
+   post**, then type `PUBLISH`. The browser page can close, but this local server
+   computer must remain running. A queued post can be cancelled only while its
+   status is still `SCHEDULED`.
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter

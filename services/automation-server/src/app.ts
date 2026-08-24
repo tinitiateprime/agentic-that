@@ -190,6 +190,24 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     res.json({ session });
   });
 
+  app.get("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
+      res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    const limit = Number(req.query.limit || 30);
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      res.status(400).json({ error: "limit must be an integer between 1 and 100." });
+      return;
+    }
+    res.json({ jobs: store!.listPublishingJobs(workspaceId, limit) });
+  });
+
   app.post("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
     if (!config.executionEnabled || !config.instagramPublishingEnabled) {
       res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
@@ -227,8 +245,9 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     requireStore,
     express.raw({ type: () => true, limit: "25mb" }),
     async (req, res) => {
-      if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled) || !files) {
-        res.status(409).json({ error: "Publishing dry-run media storage is disabled." });
+      const livePublishingEnabled = config.executionEnabled && config.instagramPublishingEnabled;
+      if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled && !livePublishingEnabled) || !files) {
+        res.status(409).json({ error: "Publishing media storage is disabled." });
         return;
       }
       if (!Buffer.isBuffer(req.body)) {
@@ -266,6 +285,31 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     res.json({ job });
+  });
+
+  app.delete("/v1/publishing/jobs/:jobId", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
+      res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const result = store!.cancelScheduledPublishingJob(workspaceId, String(req.params.jobId));
+    if (result.status === "NOT_FOUND") {
+      res.status(404).json({ error: "Scheduled publishing job not found." });
+      return;
+    }
+    if (result.status === "CONFLICT") {
+      res.status(409).json({
+        error: "Only a post that is still SCHEDULED can be cancelled.",
+        job: result.job,
+      });
+      return;
+    }
+    res.json({ job: result.job });
   });
 
   app.get("/v1/publishing/previews/:jobId/frame", requireInternalToken, requireStore, async (req, res) => {
