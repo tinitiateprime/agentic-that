@@ -55,6 +55,9 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
       () => new AutomationLoginStore(database).createOrGetSession("test-workspace", account.id),
       /publishing worker/,
     );
+    assert.equal(store.recordPublishingProgress(job.id, "worker-b", claimed!.fencingToken!, "Wrong worker"), false);
+    assert.equal(store.recordPublishingProgress(job.id, "worker-a", claimed!.fencingToken!, "Opening test composer"), true);
+    assert.equal(store.getPublishingJob("test-workspace", job.id)?.progressMessage, "Opening test composer");
     assert.equal(store.heartbeatPublishingJob(job.id, "worker-a", claimed!.fencingToken!, 60), true);
 
     const finished = store.finishPublishingJob({

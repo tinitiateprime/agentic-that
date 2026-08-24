@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v5";
+const MIGRATION_KEY = "server-architecture-sqlite-v6";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -77,6 +77,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         platform_post_url TEXT,
         error_code        TEXT,
         error_message     TEXT,
+        progress_message  TEXT,
         created_at        TEXT NOT NULL,
         updated_at        TEXT NOT NULL,
         UNIQUE (workspace_id, idempotency_key)
@@ -156,6 +157,9 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         ADD COLUMN validation_stage TEXT NOT NULL DEFAULT 'LOCAL'
           CHECK (validation_stage IN ('LOCAL', 'INSTAGRAM_PREVIEW'))
       `);
+    }
+    if (!publishingColumns.some(column => column.name === "progress_message")) {
+      database.exec(`ALTER TABLE publishing_jobs ADD COLUMN progress_message TEXT`);
     }
     database.exec(`
       CREATE INDEX IF NOT EXISTS publishing_jobs_mode_due_idx

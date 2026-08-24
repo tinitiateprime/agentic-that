@@ -5,7 +5,7 @@ import type {
   PublishingDryRunValidator,
   PublishingPreviewExecutor,
 } from "./executor.ts";
-import { InstagramPreviewLoginRequiredError } from "./instagram-preview.ts";
+import { InstagramPreviewLoginRequiredError, InstagramPreviewPreparationError } from "./instagram-preview.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
@@ -91,12 +91,23 @@ export class AutomationPublishingPreviewWorker {
         issues.push(`No preview executor is registered for ${platform}.`);
       } else if (!issues.length && executor) {
         try {
-          const result = await executor.prepare(job, controller.signal);
+          this.store.recordPublishingProgress(
+            job.id,
+            this.workerId,
+            job.fencingToken,
+            "Local checks passed. Starting the private Instagram browser.",
+          );
+          const result = await executor.prepare(job, controller.signal, message => {
+            this.store.recordPublishingProgress(job.id, this.workerId, job.fencingToken, message);
+          });
           checks.push(...result.checks);
           screenshotKey = await this.files.storePublishingPreview(job.id, result.screenshot);
         } catch (error) {
           if (controller.signal.aborted) throw error;
           loginRequired = error instanceof InstagramPreviewLoginRequiredError;
+          if (error instanceof InstagramPreviewPreparationError && error.diagnosticScreenshot) {
+            screenshotKey = await this.files.storePublishingPreview(job.id, error.diagnosticScreenshot);
+          }
           const message = error instanceof Error ? error.message : "Unknown preview error.";
           issues.push(message.slice(0, 500));
         }

@@ -273,7 +273,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     const job = await store!.getPublishingJob(workspaceId, String(req.params.jobId));
-    if (!job || job.validationStage !== "INSTAGRAM_PREVIEW" || job.errorCode !== "PREVIEW_COMPLETE") {
+    if (!job || job.validationStage !== "INSTAGRAM_PREVIEW" || !job.errorCode?.startsWith("PREVIEW_")) {
       res.status(404).json({ error: "Publishing preview not found." });
       return;
     }

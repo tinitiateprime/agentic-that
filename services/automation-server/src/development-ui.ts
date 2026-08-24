@@ -93,8 +93,8 @@ export function developmentConnectPage(options: {
       </form>
       <p id="dry-run-status" role="status"></p>
       <div id="preview-result" hidden>
-        <strong>Private Instagram composer preview</strong>
-        <p>The server closed Instagram before Share. This screenshot is stored only in isolated local development data.</p>
+        <strong>Private Instagram browser result</strong>
+        <p>This final or diagnostic screenshot is stored only in isolated local development data. The server never clicks Share.</p>
         <img id="preview-frame" alt="Instagram composer prepared without publishing" />
       </div>
     </section>
@@ -308,9 +308,9 @@ export function developmentConnectPage(options: {
       const body = await api('/v1/publishing/jobs/' + encodeURIComponent(jobId) + '?workspaceId=' + encodeURIComponent(workspaceId));
       const job = body.job;
       if (job.state === 'SCHEDULED' || job.state === 'PUBLISHING') {
-        dryRunMessage(job.state === 'SCHEDULED'
+        dryRunMessage(job.progressMessage || (job.state === 'SCHEDULED'
           ? 'Waiting for the private Instagram preview worker...'
-          : 'Opening Instagram and preparing the composer. Share will not be clicked...');
+          : 'Opening Instagram and preparing the composer. Share will not be clicked...'));
         await new Promise(resolve => setTimeout(resolve, 750));
         return pollPreview(jobId, deadline);
       }
@@ -318,6 +318,7 @@ export function developmentConnectPage(options: {
         await loadPreviewFrame(jobId);
         dryRunMessage('Private composer preview prepared. Instagram was closed before Share; nothing was published.', 'success');
       } else {
+        await loadPreviewFrame(jobId).catch(() => undefined);
         dryRunMessage(job.errorMessage || ('Preview finished with status ' + job.state + '.'), 'error');
       }
       return job;

@@ -8,6 +8,7 @@ import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
 import type { PublishingPreviewExecutor } from "./executor.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
+import { InstagramPreviewPreparationError } from "./instagram-preview.ts";
 import { AutomationJobStore } from "./job-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
@@ -29,8 +30,16 @@ test("the Instagram preview worker is isolated from local dry-runs and can never
   let prepared = 0;
   const executor: PublishingPreviewExecutor = {
     platform: "instagram",
-    async prepare() {
+    async prepare(job, _signal, reportProgress) {
       prepared += 1;
+      reportProgress?.("Fake Instagram composer progress");
+      assert.equal(
+        store.getPublishingJob(job.workspaceId, job.id)?.progressMessage,
+        "Fake Instagram composer progress",
+      );
+      if (job.caption === "Diagnostic failure") {
+        throw new InstagramPreviewPreparationError("Fake Instagram stage failed.", screenshot);
+      }
       return { screenshot, checks: ["Fake final composer reached without a final action."] };
     },
   };
@@ -91,6 +100,21 @@ test("the Instagram preview worker is isolated from local dry-runs and can never
     assert.equal(detail.networkAccess, true);
     assert.equal(detail.finalShareClicked, false);
     assert.equal(detail.published, false);
+
+    const failedJob = store.createPublishingJob({
+      workspaceId: "preview-workspace",
+      accountId: account.id,
+      scheduledAt: new Date(Date.now() - 60_000).toISOString(),
+      originalTimezone: "UTC",
+      caption: "Diagnostic failure",
+      media: [{ storageKey, fileName: "preview.jpg", mimeType: "image/jpeg" }],
+      idempotencyKey: "instagram-preview-diagnostic-002",
+    }, "DRY_RUN", "INSTAGRAM_PREVIEW");
+    const failed = await previewWorker.runOnce();
+    assert.equal(failed?.id, failedJob.id);
+    assert.equal(failed?.errorCode, "PREVIEW_FAILED");
+    assert.match(failed?.errorMessage || "", /Fake Instagram stage failed/);
+    assert.deepEqual(await files.readPublishingPreview(failedJob.id), screenshot);
   } finally {
     await previewWorker.stop();
     await dryRunWorker.stop();
@@ -105,5 +129,6 @@ test("the Playwright preview implementation contains no Share click or publish c
   assert.doesNotMatch(source, /\.publish\s*\(/i);
   assert.equal(source.match(/\.click\s*\(/g)?.length, 1, "Every preview click must pass through safePreviewClick.");
   assert.match(source, /refused Instagram's Share control/);
+  assert.match(source, /150_000/);
   assert.match(source, /never clicks Share/i);
 });

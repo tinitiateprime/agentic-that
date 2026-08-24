@@ -5,7 +5,13 @@ import type { AutomationFileStore } from "./profile-store.ts";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 
-export class InstagramPreviewLoginRequiredError extends Error {}
+export class InstagramPreviewPreparationError extends Error {
+  constructor(message: string, readonly diagnosticScreenshot?: Buffer) {
+    super(message);
+  }
+}
+
+export class InstagramPreviewLoginRequiredError extends InstagramPreviewPreparationError {}
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) {
@@ -30,11 +36,12 @@ async function waitForVisible(page: Page, locators: Locator[], signal: AbortSign
 }
 
 async function safePreviewClick(locator: Locator, timeout: number) {
-  const label = [
-    await locator.getAttribute("aria-label").catch(() => null),
-    await locator.getAttribute("title").catch(() => null),
-    await locator.textContent().catch(() => null),
-  ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const attributes = await Promise.all([
+    locator.getAttribute("aria-label", { timeout: 750 }).catch(() => null),
+    locator.getAttribute("title", { timeout: 750 }).catch(() => null),
+    locator.textContent({ timeout: 750 }).catch(() => null),
+  ]);
+  const label = attributes.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   if (/\bshare\b/i.test(label)) {
     throw new Error("The preview safety guard refused Instagram's Share control.");
   }
@@ -188,18 +195,24 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     private readonly configuredExecutablePath: string,
   ) {}
 
-  async prepare(job: ClaimedPublishingJob, signal: AbortSignal) {
+  async prepare(
+    job: ClaimedPublishingJob,
+    signal: AbortSignal,
+    reportProgress: (message: string) => void = () => undefined,
+  ) {
     if (job.platform !== "instagram") throw new Error("The preview executor supports only Instagram.");
     if (job.media.length !== 1 || !["image/jpeg", "image/png"].includes(job.media[0]!.mimeType.toLowerCase())) {
       throw new Error("The Instagram preview currently requires exactly one JPEG or PNG image.");
     }
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for Instagram previews.");
+    reportProgress("Launching the isolated Instagram browser profile.");
     const context = await chromium.launchPersistentContext(this.files.profileDirectory(job.accountId), {
       executablePath,
       headless: true,
       viewport: { width: 1280, height: 900 },
       acceptDownloads: false,
+      timeout: 30_000,
       args: [
         "--no-first-run",
         "--no-default-browser-check",
@@ -207,16 +220,37 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
       ],
     });
+    let deadlineExpired = false;
+    let stage = "opening the saved Instagram session";
+    let page: Page | null = null;
+    const deadline = setTimeout(() => {
+      deadlineExpired = true;
+      reportProgress("Closing a preview that exceeded the 150-second browser limit.");
+      void context.close({ reason: "Instagram preview browser deadline exceeded." }).catch(() => undefined);
+    }, 150_000);
+    deadline.unref();
     try {
       signal.throwIfAborted();
-      const page = context.pages()[0] || await context.newPage();
+      page = context.pages()[0] || await context.newPage();
+      page.setDefaultTimeout(10_000);
+      reportProgress("Opening Instagram with the saved server session.");
       await page.goto(INSTAGRAM_HOME_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await dismissPrompts(page);
       await verifyAuthenticated(page, context, signal);
+      stage = "opening Instagram's post composer";
+      reportProgress("Saved Instagram session verified. Opening the post composer.");
       await openPostComposer(page, signal);
+      stage = "uploading the test image";
+      reportProgress("Uploading the test image into Instagram's private composer.");
       await uploadOneImage(page, this.files.mediaFilePath(job.media[0]!.storageKey), signal);
+      stage = "advancing through Instagram's crop and edit screens";
+      reportProgress("Image accepted. Advancing through crop and edit screens.");
       await advanceToShareScreen(page, signal);
+      stage = "filling Instagram's final composer";
+      reportProgress("Final composer reached. Adding the caption without clicking Share.");
       await fillCaptionAndConfirmShareIsVisible(page, job.caption, signal);
+      stage = "capturing the final composer screenshot";
+      reportProgress("Capturing the private final-composer screenshot.");
       const screenshot = await page.screenshot({
         type: "jpeg",
         quality: 82,
@@ -231,8 +265,29 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
           "The final composer was visible and closed without clicking Share.",
         ],
       };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const diagnosticScreenshot = page && !page.isClosed()
+        ? await page.screenshot({ type: "jpeg", quality: 72, animations: "disabled", timeout: 5_000 }).catch(() => undefined)
+        : undefined;
+      if (deadlineExpired) {
+        throw new InstagramPreviewPreparationError(
+          `Instagram did not finish ${stage} within the 150-second preview limit.`,
+          diagnosticScreenshot,
+        );
+      }
+      const message = error instanceof Error ? error.message : "Unknown Instagram preview error.";
+      if (error instanceof InstagramPreviewLoginRequiredError) {
+        throw new InstagramPreviewLoginRequiredError(message, diagnosticScreenshot);
+      }
+      throw new InstagramPreviewPreparationError(`Preview stopped while ${stage}: ${message}`, diagnosticScreenshot);
     } finally {
-      await context.close().catch(() => undefined);
+      clearTimeout(deadline);
+      reportProgress("Closing the private Instagram browser before Share.");
+      await Promise.race([
+        context.close({ reason: "Instagram private preview finished before Share." }).catch(() => undefined),
+        new Promise<void>(resolve => setTimeout(resolve, 5_000)),
+      ]);
     }
   }
 }

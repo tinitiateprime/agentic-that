@@ -47,7 +47,11 @@ export type PublishingPreviewResult = {
 // boundary deliberately exposes no publish/final-action method.
 export interface PublishingPreviewExecutor {
   readonly platform: SocialPlatform;
-  prepare(job: ClaimedPublishingJob, signal: AbortSignal): Promise<PublishingPreviewResult>;
+  prepare(
+    job: ClaimedPublishingJob,
+    signal: AbortSignal,
+    reportProgress?: (message: string) => void,
+  ): Promise<PublishingPreviewResult>;
 }
 
 // Platform browser implementations will be moved behind this boundary one at a

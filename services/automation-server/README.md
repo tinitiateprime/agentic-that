@@ -30,6 +30,9 @@ an isolated local SQLite file under `.server-data`.
 - Confirmation-gated Instagram composer previews open the saved profile,
   upload one test image, enter the caption, capture the final composer, and
   close before Share. The preview boundary has no publish method.
+- Preview browser work has a 150-second hard limit, visible stage progress,
+  safe interrupted-job recovery, and a private diagnostic screenshot when
+  Instagram stops at an unexpected screen.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local

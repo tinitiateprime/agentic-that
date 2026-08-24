@@ -43,6 +43,7 @@ type PublishingJobRow = {
   platform_post_url: string | null;
   error_code: string | null;
   error_message: string | null;
+  progress_message: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -96,6 +97,7 @@ function publicJob(row: PublishingJobRow) {
     platformPostUrl: row.platform_post_url,
     errorCode: row.error_code,
     errorMessage: row.error_message,
+    progressMessage: row.progress_message,
     createdAt: timestamp(row.created_at),
     updatedAt: timestamp(row.updated_at),
   };
@@ -321,6 +323,18 @@ export class AutomationJobStore {
     }
   }
 
+  recordPublishingProgress(jobId: string, workerId: string, fencingToken: number, message: string) {
+    const progress = message.replace(/\s+/g, " ").trim().slice(0, 500);
+    if (!progress) return false;
+    const updatedAt = now();
+    const update = this.database.prepare(`
+      UPDATE publishing_jobs
+      SET progress_message = ?, updated_at = ?
+      WHERE id = ? AND lease_owner = ? AND fencing_token = ? AND state = 'PUBLISHING'
+    `).run(progress, updatedAt, jobId, workerId, fencingToken);
+    return update.changes === 1;
+  }
+
   getPublishingProfileState(accountId: string) {
     const row = this.database.prepare(`
       SELECT version, last_saved_at FROM browser_profiles WHERE account_id = ?
@@ -364,7 +378,7 @@ export class AutomationJobStore {
       this.database.prepare(`
         UPDATE publishing_jobs
         SET state = 'CANCELLED', error_code = ?, error_message = ?,
-            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+            progress_message = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ?
       `).run(errorCode, errorMessage, completedAt, input.jobId);
       this.database.prepare(`
@@ -442,7 +456,7 @@ export class AutomationJobStore {
       this.database.prepare(`
         UPDATE publishing_jobs
         SET state = 'CANCELLED', error_code = ?, error_message = ?,
-            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+            progress_message = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ?
       `).run(errorCode, errorMessage, completedAt, input.jobId);
       this.database.prepare(`
@@ -515,7 +529,7 @@ export class AutomationJobStore {
       this.database.prepare(`
         UPDATE publishing_jobs
         SET state = ?, platform_post_id = ?, platform_post_url = ?, error_code = ?, error_message = ?,
-            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+            progress_message = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
         WHERE id = ?
       `).run(
         targetState,
@@ -582,7 +596,7 @@ export class AutomationJobStore {
         this.database.prepare(`
           UPDATE publishing_jobs
           SET state = ?, error_code = ?, error_message = ?,
-              lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+              progress_message = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
           WHERE id = ?
         `).run(finalState, errorCode, errorMessage, checkedAt, row.id);
         this.database.prepare(`
