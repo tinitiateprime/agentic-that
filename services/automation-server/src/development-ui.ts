@@ -377,6 +377,18 @@ export function developmentConnectPage(options: {
     }
 
     async function uploadDryRunMedia(file) {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const aspectRatio = bitmap.width / bitmap.height;
+        if (aspectRatio > 1.911) {
+          throw new Error(
+            'This image is ' + bitmap.width + '×' + bitmap.height + ' (' + aspectRatio.toFixed(2)
+            + ':1). Instagram requires landscape images no wider than 1.91:1. Crop or resize it, then choose the updated file.',
+          );
+        }
+      } finally {
+        bitmap.close();
+      }
       const response = await fetch('/v1/media', {
         method: 'POST',
         headers: {

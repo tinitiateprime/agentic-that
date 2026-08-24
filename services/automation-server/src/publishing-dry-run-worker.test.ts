@@ -64,6 +64,21 @@ test("the Instagram dry-run worker validates and cancels a job without publishin
     assert.equal(attempt.state, "DRY_RUN_COMPLETE");
     assert.deepEqual(JSON.parse(attempt.detail).published, false);
     assert.deepEqual(JSON.parse(attempt.detail).networkAccess, false);
+
+    const wideStorageKey = "media_too_wide_test.png";
+    await sharp({ create: { width: 1900, height: 867, channels: 3, background: "#167552" } })
+      .png()
+      .toFile(files.mediaFilePath(wideStorageKey));
+    store.createPublishingJob({
+      ...job,
+      id: undefined,
+      scheduledAt: new Date(Date.now() - 60_000).toISOString(),
+      media: [{ storageKey: wideStorageKey, fileName: "too-wide.png", mimeType: "image/png" }],
+      idempotencyKey: "dry-run-validation-too-wide-001",
+    }, "DRY_RUN");
+    const rejected = await worker.runOnce();
+    assert.equal(rejected?.errorCode, "DRY_RUN_VALIDATION_FAILED");
+    assert.match(rejected?.errorMessage || "", /1900x867 \(2\.19:1\).*1\.91:1 or narrower/);
   } finally {
     await worker.stop();
     database.close();
