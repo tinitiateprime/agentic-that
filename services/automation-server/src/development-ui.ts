@@ -35,6 +35,14 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     #message { min-height: 22px; margin: 14px 0 0; font-size: 14px; color: #51615b; }
     #message.error { color: #a23131; }
     #message.success { color: #11643f; }
+    #browser-panel[hidden] { display: none; }
+    .browser-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+    .browser-head > div { min-width: 0; flex: 1; }
+    .browser-head p { margin: 4px 0 0; font-size: 13px; }
+    .browser-viewport { position: relative; overflow: hidden; border: 1px solid #c9d5d1; border-radius: 13px; background: #17201d; aspect-ratio: 16 / 10; }
+    #browser-frame { display: block; width: 100%; height: 100%; object-fit: contain; outline: none; cursor: default; user-select: none; }
+    #browser-frame:focus { box-shadow: inset 0 0 0 3px #43a981; }
+    .browser-help { margin: 11px 0 0; font-size: 12px; }
     @media (max-width: 700px) { form { grid-template-columns: 1fr; } article { align-items: flex-start; flex-wrap: wrap; } }
   </style>
 </head>
@@ -44,7 +52,7 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       <span class="eyebrow">Isolated local development</span>
       <h1>Server login lab</h1>
       <p>Create a test Instagram connection. AgenticThat opens a dedicated persistent browser profile and detects the authenticated Instagram session without receiving your password.</p>
-      <div class="notice">This milestone opens a visible browser on this server computer. Streaming that browser inside the AgenticThat website is the next phase. Use only a test account.</div>
+      <div class="notice">The Instagram browser now runs on the local server and appears inside this page. Use only a test account.</div>
     </header>
     <section>
       <h2>Instagram accounts</h2>
@@ -56,6 +64,16 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       <p id="message" role="status"></p>
       <div id="accounts"></div>
     </section>
+    <section id="browser-panel" hidden>
+      <div class="browser-head">
+        <div><h2>Instagram server browser</h2><p>Click the browser image, then type normally. AgenticThat forwards input without logging or saving it.</p></div>
+        <button id="cancel-login" class="secondary" type="button">Cancel</button>
+      </div>
+      <div class="browser-viewport">
+        <img id="browser-frame" tabindex="0" draggable="false" alt="Live Instagram login browser" />
+      </div>
+      <p class="browser-help">For this local milestone, frames stay on this computer. Production will require TLS, short-lived authorization, and stricter stream controls.</p>
+    </section>
   </main>
   <script>
     const bootstrap = ${bootstrap};
@@ -64,8 +82,15 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     const workspaceElement = document.querySelector('#workspace');
     const displayNameElement = document.querySelector('#display-name');
     const messageElement = document.querySelector('#message');
+    const browserPanel = document.querySelector('#browser-panel');
+    const browserFrame = document.querySelector('#browser-frame');
+    const cancelLogin = document.querySelector('#cancel-login');
     const terminalStates = new Set(['CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED']);
     let polling = null;
+    let framePolling = null;
+    let activeSessionId = null;
+    let frameObjectUrl = null;
+    let inputQueue = Promise.resolve();
 
     function message(value, tone = '') {
       messageElement.textContent = value;
@@ -84,6 +109,56 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || 'The local server request failed.');
       return body;
+    }
+
+    function closeWebsiteBrowser() {
+      clearTimeout(framePolling);
+      framePolling = null;
+      activeSessionId = null;
+      browserPanel.hidden = true;
+      browserFrame.removeAttribute('src');
+      if (frameObjectUrl) URL.revokeObjectURL(frameObjectUrl);
+      frameObjectUrl = null;
+    }
+
+    async function pollFrame(sessionId) {
+      if (activeSessionId !== sessionId) return;
+      const workspaceId = workspaceElement.value.trim();
+      const response = await fetch(
+        '/v1/login-sessions/' + encodeURIComponent(sessionId) + '/frame?workspaceId=' + encodeURIComponent(workspaceId),
+        { headers: { 'x-agenticthat-internal-token': bootstrap.internalToken }, cache: 'no-store' },
+      );
+      if (response.ok) {
+        const nextUrl = URL.createObjectURL(await response.blob());
+        const previousUrl = frameObjectUrl;
+        frameObjectUrl = nextUrl;
+        browserFrame.src = nextUrl;
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+      }
+      if (activeSessionId === sessionId) {
+        framePolling = setTimeout(() => pollFrame(sessionId).catch(() => undefined), response.ok ? 350 : 600);
+      }
+    }
+
+    function openWebsiteBrowser(sessionId) {
+      if (activeSessionId === sessionId) return;
+      closeWebsiteBrowser();
+      activeSessionId = sessionId;
+      browserPanel.hidden = false;
+      browserPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      void pollFrame(sessionId);
+    }
+
+    function sendBrowserInput(input) {
+      if (!activeSessionId) return;
+      const sessionId = activeSessionId;
+      inputQueue = inputQueue
+        .catch(() => undefined)
+        .then(() => api('/v1/login-sessions/' + encodeURIComponent(sessionId) + '/input', {
+          method: 'POST',
+          body: JSON.stringify({ workspaceId: workspaceElement.value.trim(), input }),
+        }))
+        .catch(error => message(error.message, 'error'));
     }
 
     function accountCard(account) {
@@ -123,11 +198,16 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       const workspaceId = workspaceElement.value.trim();
       const body = await api('/v1/login-sessions/' + encodeURIComponent(sessionId) + '?workspaceId=' + encodeURIComponent(workspaceId));
       const session = body.session;
-      if (session.state === 'AWAITING_USER') message('Complete login in the visible Instagram browser. AgenticThat is waiting…');
+      if (session.state === 'AWAITING_USER' && session.surface === 'website') {
+        message('Complete login in the Instagram browser below. AgenticThat is waiting...');
+        openWebsiteBrowser(sessionId);
+      }
+      else if (session.state === 'AWAITING_USER') message('Complete login in the visible Instagram browser. AgenticThat is waiting...');
       else if (session.state === 'CONNECTED') message('Instagram session connected and saved. The browser profile is ready.', 'success');
       else if (session.errorMessage) message(session.errorMessage, 'error');
       else message('Login status: ' + session.state.replaceAll('_', ' '));
       if (terminalStates.has(session.state)) {
+        closeWebsiteBrowser();
         await refresh();
         return;
       }
@@ -162,16 +242,74 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       if (!button) return;
       button.disabled = true;
       try {
-        message('Starting a dedicated Instagram browser…');
+        message('Starting a dedicated Instagram browser inside this page...');
         const body = await api('/v1/accounts/' + encodeURIComponent(button.dataset.connectAccount) + '/login-sessions', {
           method: 'POST',
-          body: JSON.stringify({ workspaceId: workspaceElement.value.trim() }),
+          body: JSON.stringify({ workspaceId: workspaceElement.value.trim(), surface: 'website' }),
         });
         await pollSession(body.session.id);
       } catch (error) {
         message(error.message, 'error');
       } finally {
         button.disabled = false;
+      }
+    });
+
+    browserFrame.addEventListener('click', event => {
+      if (!browserFrame.naturalWidth || !browserFrame.naturalHeight) return;
+      const bounds = browserFrame.getBoundingClientRect();
+      const scale = Math.min(bounds.width / browserFrame.naturalWidth, bounds.height / browserFrame.naturalHeight);
+      const renderedWidth = browserFrame.naturalWidth * scale;
+      const renderedHeight = browserFrame.naturalHeight * scale;
+      const offsetX = (bounds.width - renderedWidth) / 2;
+      const offsetY = (bounds.height - renderedHeight) / 2;
+      const x = (event.clientX - bounds.left - offsetX) / scale;
+      const y = (event.clientY - bounds.top - offsetY) / scale;
+      if (x < 0 || y < 0 || x > browserFrame.naturalWidth || y > browserFrame.naturalHeight) return;
+      browserFrame.focus();
+      sendBrowserInput({ type: 'click', x, y, button: 'left' });
+    });
+
+    browserFrame.addEventListener('keydown', event => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const special = new Set(['Tab', 'Enter', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Space']);
+      if (event.key.length === 1) sendBrowserInput({ type: 'text', text: event.key });
+      else if (special.has(event.key)) sendBrowserInput({ type: 'key', key: event.key });
+      else return;
+      event.preventDefault();
+    });
+
+    browserFrame.addEventListener('paste', event => {
+      const text = event.clipboardData?.getData('text') || '';
+      if (!text) return;
+      event.preventDefault();
+      for (let offset = 0; offset < text.length; offset += 64) {
+        sendBrowserInput({ type: 'text', text: text.slice(offset, offset + 64) });
+      }
+    });
+
+    browserFrame.addEventListener('wheel', event => {
+      event.preventDefault();
+      sendBrowserInput({
+        type: 'wheel',
+        deltaX: Math.max(-2000, Math.min(2000, event.deltaX)),
+        deltaY: Math.max(-2000, Math.min(2000, event.deltaY)),
+      });
+    }, { passive: false });
+
+    cancelLogin.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      const sessionId = activeSessionId;
+      cancelLogin.disabled = true;
+      try {
+        await api('/v1/login-sessions/' + encodeURIComponent(sessionId) + '?workspaceId=' + encodeURIComponent(workspaceElement.value.trim()), { method: 'DELETE' });
+        closeWebsiteBrowser();
+        message('Instagram login cancelled.');
+        await refresh();
+      } catch (error) {
+        message(error.message, 'error');
+      } finally {
+        cancelLogin.disabled = false;
       }
     });
 

@@ -23,6 +23,32 @@ export const loginSessionStateSchema = z.enum([
 ]);
 export type LoginSessionState = z.infer<typeof loginSessionStateSchema>;
 
+export const loginSurfaceSchema = z.enum(["visible", "website"]);
+export type LoginSurface = z.infer<typeof loginSurfaceSchema>;
+
+export const loginBrowserInputSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("click"),
+    x: z.number().finite().min(0).max(4096),
+    y: z.number().finite().min(0).max(4096),
+    button: z.enum(["left", "middle", "right"]).default("left"),
+  }),
+  z.object({
+    type: z.literal("key"),
+    key: z.enum(["Tab", "Enter", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Space"]),
+  }),
+  z.object({
+    type: z.literal("text"),
+    text: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal("wheel"),
+    deltaX: z.number().finite().min(-2000).max(2000),
+    deltaY: z.number().finite().min(-2000).max(2000),
+  }),
+]);
+export type LoginBrowserInput = z.infer<typeof loginBrowserInputSchema>;
+
 export const publishingJobStateSchema = z.enum([
   "SCHEDULED",
   "PUBLISHING",

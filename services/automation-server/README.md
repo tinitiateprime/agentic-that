@@ -21,12 +21,14 @@ an isolated local SQLite file under `.server-data`.
 - Automatic connection detection from Instagram's authenticated session cookie;
   the password is never sent to or stored by AgenticThat.
 - Loopback-only development page for creating and connecting a test account.
+- Website browser frames plus bounded click, keyboard, paste, and scroll input
+  for local end-to-end login testing.
 - No Electron or Docker dependency.
 
-The local milestone opens Chrome/Edge on the automation-server computer. The
-actual browser stream inside the hosted AgenticThat website and the platform
-publishing executors are the next implementation phases. Committed feature
-flags remain false by default.
+The local milestone can run Chrome/Edge headlessly and show it inside the local
+connection page. Integrating that stream with the authenticated, hosted
+AgenticThat website and adding platform publishing executors are the next
+implementation phases. Committed feature flags remain false by default.
 
 ## Local setup
 
@@ -54,7 +56,9 @@ npm run server-architecture:dev
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter
-credentials only on the real Instagram page in the dedicated browser window.
+credentials only into the real Instagram page shown by the server browser. The
+local HTTP input relay does not log or persist keystrokes. Production requires
+TLS and short-lived stream authorization before any real customer login.
 
 The migration is intentionally absent from `netlify.toml` and the root build.
 The database safety check refuses to open a SQLite file outside the isolated

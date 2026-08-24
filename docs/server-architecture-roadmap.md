@@ -22,13 +22,14 @@
 9. Instagram login-session lifecycle and restart recovery.
 10. One isolated persistent Chrome/Edge profile per server account.
 11. Local connection page and automatic authenticated-session detection.
+12. Local website browser frames and bounded pointer/keyboard input relay.
 
 ## Next development work
 
-1. Stream the server browser into an authenticated AgenticThat website page.
-2. Forward keyboard, pointer, clipboard, and resize events safely to Chromium.
+1. Integrate the browser surface into an authenticated AgenticThat website page.
+2. Replace local frame polling with an efficient TLS/WSS streaming transport.
 3. Add short-lived login-stream authorization and strict origin checks.
-4. Verify one development-only Instagram profile with a test account.
+4. Add remote-server viewport resizing and reconnect handling.
 5. Move the Instagram publisher behind `ServerPublishingExecutor`.
 6. Add the publishing worker heartbeat and profile-version write guard.
 7. Connect only a test workspace through a per-account `server` engine flag.

@@ -35,8 +35,17 @@ test("migration creates the local SQLite schema", async () => {
   const database = createAutomationDatabase(config);
   try {
     assert.equal(automationSchemaReady(database), false);
+    database.exec(`
+      CREATE TABLE login_sessions (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, account_id TEXT NOT NULL,
+        platform TEXT NOT NULL, state TEXT NOT NULL, error_code TEXT, error_message TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+      )
+    `);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
+    const columns = database.prepare("PRAGMA table_info(login_sessions)").all() as Array<{ name: string }>;
+    assert.equal(columns.some(column => column.name === "surface"), true);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
   } finally {

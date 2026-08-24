@@ -5,6 +5,7 @@ import { createAutomationApp } from "./app.ts";
 import { loadAutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
+import { developmentConnectPage } from "./development-ui.ts";
 
 async function listen(app: ReturnType<typeof createAutomationApp>) {
   const server = await new Promise<Server>((resolve, reject) => {
@@ -37,6 +38,16 @@ test("health reports every new execution feature disabled by default", async () 
   } finally {
     await runtime.close();
   }
+});
+
+test("the local connection page contains a valid website-browser client and no password field", () => {
+  const html = developmentConnectPage({ internalToken: "local-test-token", loginEnabled: true });
+  const start = html.indexOf("<script>") + "<script>".length;
+  const end = html.lastIndexOf("</script>");
+  assert.ok(start >= "<script>".length && end > start);
+  assert.doesNotThrow(() => new Function(html.slice(start, end)));
+  assert.match(html, /Instagram server browser/);
+  assert.doesNotMatch(html, /type=["']password["']/i);
 });
 
 test("mutation routes require a token and stay disabled even with a database store", async () => {

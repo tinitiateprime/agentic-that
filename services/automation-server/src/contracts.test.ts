@@ -4,6 +4,7 @@ import {
   assertPublishingJobTransition,
   automationId,
   createPublishingJobSchema,
+  loginBrowserInputSchema,
   loginSessionStateSchema,
 } from "./contracts.ts";
 
@@ -41,4 +42,12 @@ test("automation ids are opaque and namespaced", () => {
 test("login sessions expose only known lifecycle states", () => {
   assert.equal(loginSessionStateSchema.parse("AWAITING_USER"), "AWAITING_USER");
   assert.throws(() => loginSessionStateSchema.parse("PASSWORD_RECEIVED"));
+});
+
+test("website browser input is bounded and does not accept arbitrary commands", () => {
+  const input = loginBrowserInputSchema.parse({ type: "text", text: "hello" });
+  assert.equal(input.type, "text");
+  if (input.type === "text") assert.equal(input.text, "hello");
+  assert.throws(() => loginBrowserInputSchema.parse({ type: "key", key: "Control+L" }));
+  assert.throws(() => loginBrowserInputSchema.parse({ type: "click", x: -1, y: 20 }));
 });

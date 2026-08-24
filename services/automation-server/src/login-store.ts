@@ -1,6 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
-import { automationId, type LoginSessionState } from "./contracts.ts";
+import { automationId, type LoginSessionState, type LoginSurface } from "./contracts.ts";
+export type { LoginSurface } from "./contracts.ts";
 
 export type LoginAccount = {
   id: string;
@@ -14,6 +15,7 @@ type LoginSessionRow = {
   workspace_id: string;
   account_id: string;
   platform: "instagram";
+  surface: LoginSurface;
   state: LoginSessionState;
   error_code: string | null;
   error_message: string | null;
@@ -28,6 +30,7 @@ function publicSession(row: LoginSessionRow) {
     workspaceId: row.workspace_id,
     accountId: row.account_id,
     platform: row.platform,
+    surface: row.surface,
     state: row.state,
     errorCode: row.error_code,
     errorMessage: row.error_message,
@@ -65,7 +68,7 @@ export class AutomationLoginStore {
     });
   }
 
-  createOrGetSession(workspaceId: string, accountId: string) {
+  createOrGetSession(workspaceId: string, accountId: string, surface: LoginSurface = "visible") {
     if (!workspaceId.trim()) throw new Error("workspaceId is required.");
     return withImmediateTransaction(this.database, () => {
       const accountRow = this.database.prepare(`
@@ -104,9 +107,9 @@ export class AutomationLoginStore {
       const createdAt = now;
       this.database.prepare(`
         INSERT INTO login_sessions
-          (id, workspace_id, account_id, platform, state, created_at, updated_at)
-        VALUES (?, ?, ?, 'instagram', 'STARTING', ?, ?)
-      `).run(id, workspaceId, accountId, createdAt, createdAt);
+          (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
+        VALUES (?, ?, ?, 'instagram', ?, 'STARTING', ?, ?)
+      `).run(id, workspaceId, accountId, surface, createdAt, createdAt);
       const row = this.database.prepare("SELECT * FROM login_sessions WHERE id = ?").get(id) as LoginSessionRow;
       return { session: publicSession(row), account, created: true };
     });

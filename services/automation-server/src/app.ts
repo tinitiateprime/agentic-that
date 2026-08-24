@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
+import { loginBrowserInputSchema, loginSurfaceSchema } from "./contracts.ts";
 import type { AutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
@@ -106,8 +107,43 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       res.status(400).json({ error: "workspaceId is required." });
       return;
     }
-    const session = loginManager.start(workspaceId, String(req.params.accountId));
+    const surface = loginSurfaceSchema.parse(req.body?.surface || "website");
+    const session = loginManager.start(workspaceId, String(req.params.accountId), surface);
     res.status(202).json({ session });
+  });
+
+  app.get("/v1/login-sessions/:sessionId/frame", requireInternalToken, requireStore, async (req, res) => {
+    if (!loginManager) {
+      res.status(503).json({ error: "The server login manager is unavailable." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const frame = await loginManager.captureFrame(workspaceId, String(req.params.sessionId));
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "no-store, private",
+      "Content-Length": String(frame.length),
+    });
+    res.send(frame);
+  });
+
+  app.post("/v1/login-sessions/:sessionId/input", requireInternalToken, requireStore, async (req, res) => {
+    if (!loginManager) {
+      res.status(503).json({ error: "The server login manager is unavailable." });
+      return;
+    }
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const input = loginBrowserInputSchema.parse(req.body?.input);
+    await loginManager.dispatchInput(workspaceId, String(req.params.sessionId), input);
+    res.status(204).end();
   });
 
   app.get("/v1/login-sessions/:sessionId", requireInternalToken, requireStore, async (req, res) => {

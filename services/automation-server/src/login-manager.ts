@@ -1,4 +1,5 @@
 import type { AutomationFileStore } from "./profile-store.ts";
+import type { LoginBrowserInput, LoginSurface } from "./contracts.ts";
 import {
   LoginBrowserClosedError,
   LoginBrowserExpiredError,
@@ -26,8 +27,8 @@ export class AutomationLoginManager {
     return this.store.recoverInterruptedSessions();
   }
 
-  start(workspaceId: string, accountId: string) {
-    const result = this.store.createOrGetSession(workspaceId, accountId);
+  start(workspaceId: string, accountId: string, surface: LoginSurface = "visible") {
+    const result = this.store.createOrGetSession(workspaceId, accountId, surface);
     if (!result.created || this.active.has(result.session.id)) return result.session;
 
     const controller = new AbortController();
@@ -39,6 +40,20 @@ export class AutomationLoginManager {
     this.active.set(result.session.id, active);
     active.task = this.run(result.session.id, result.account, active);
     return result.session;
+  }
+
+  async captureFrame(workspaceId: string, sessionId: string) {
+    this.requireWebsiteSession(workspaceId, sessionId);
+    const browser = this.active.get(sessionId)?.browser;
+    if (!browser) throw new Error("The website login browser is still starting.");
+    return browser.captureFrame();
+  }
+
+  async dispatchInput(workspaceId: string, sessionId: string, input: LoginBrowserInput) {
+    this.requireWebsiteSession(workspaceId, sessionId);
+    const browser = this.active.get(sessionId)?.browser;
+    if (!browser) throw new Error("The website login browser is still starting.");
+    await browser.dispatchInput(input);
   }
 
   get(workspaceId: string, sessionId: string) {
@@ -80,7 +95,9 @@ export class AutomationLoginManager {
     try {
       const profileDirectory = await this.files.ensureDevelopmentProfile(account.id);
       if (active.controller.signal.aborted) return;
-      active.browser = await this.launcher.launch(account, profileDirectory);
+      const session = this.store.getSessionForShutdown(sessionId);
+      if (!session) throw new Error("The login session was not found.");
+      active.browser = await this.launcher.launch(account, profileDirectory, session.surface);
       if (active.controller.signal.aborted) return;
       this.store.markAwaitingUser(sessionId);
       await active.browser.waitForAuthenticated(active.controller.signal);
@@ -101,5 +118,15 @@ export class AutomationLoginManager {
       await active.browser?.close();
       this.active.delete(sessionId);
     }
+  }
+
+  private requireWebsiteSession(workspaceId: string, sessionId: string) {
+    const session = this.store.getSession(workspaceId, sessionId);
+    if (!session) throw new Error("Login session not found.");
+    if (session.surface !== "website") throw new Error("This login session does not use the website browser.");
+    if (!["STARTING", "AWAITING_USER"].includes(session.state)) {
+      throw new Error("The website login browser is no longer active.");
+    }
+    return session;
   }
 }

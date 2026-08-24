@@ -1,18 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
+import type { LoginBrowserInput, LoginSurface } from "./contracts.ts";
 import type { LoginAccount } from "./login-store.ts";
 
 export class LoginBrowserClosedError extends Error {}
 export class LoginBrowserExpiredError extends Error {}
 
 export type PersistentLoginBrowser = {
+  readonly surface: LoginSurface;
   waitForAuthenticated(signal: AbortSignal): Promise<void>;
+  captureFrame(): Promise<Buffer>;
+  dispatchInput(input: LoginBrowserInput): Promise<void>;
   close(): Promise<void>;
 };
 
 export interface LoginBrowserLauncher {
-  launch(account: LoginAccount, profileDirectory: string): Promise<PersistentLoginBrowser>;
+  launch(account: LoginAccount, profileDirectory: string, surface: LoginSurface): Promise<PersistentLoginBrowser>;
 }
 
 function browserCandidates() {
@@ -89,7 +93,11 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     private readonly timeoutMs: number,
   ) {}
 
-  async launch(account: LoginAccount, profileDirectory: string): Promise<PersistentLoginBrowser> {
+  async launch(
+    account: LoginAccount,
+    profileDirectory: string,
+    surface: LoginSurface,
+  ): Promise<PersistentLoginBrowser> {
     if (account.platform !== "instagram") throw new Error("This login browser currently supports only Instagram.");
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) {
@@ -98,8 +106,8 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     prepareProfile(profileDirectory);
     const context = await chromium.launchPersistentContext(profileDirectory, {
       executablePath,
-      headless: false,
-      viewport: null,
+      headless: surface === "website",
+      viewport: surface === "website" ? { width: 1280, height: 800 } : null,
       acceptDownloads: false,
       args: [
         "--no-first-run",
@@ -117,6 +125,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     context.once("close", () => { closed = true; });
 
     return {
+      surface,
       waitForAuthenticated: async signal => {
         const deadline = Date.now() + this.timeoutMs;
         while (Date.now() < deadline) {
@@ -127,6 +136,23 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
           await wait(page, 750, signal);
         }
         throw new LoginBrowserExpiredError("Instagram login did not finish before the local login window expired.");
+      },
+      captureFrame: async () => {
+        if (closed || page.isClosed()) throw new LoginBrowserClosedError("The Instagram login browser is closed.");
+        return page.screenshot({ type: "jpeg", quality: 68, animations: "disabled", timeout: 8_000 });
+      },
+      dispatchInput: async input => {
+        if (closed || page.isClosed()) throw new LoginBrowserClosedError("The Instagram login browser is closed.");
+        await page.bringToFront();
+        if (input.type === "click") {
+          await page.mouse.click(input.x, input.y, { button: input.button });
+        } else if (input.type === "key") {
+          await page.keyboard.press(input.key);
+        } else if (input.type === "text") {
+          await page.keyboard.insertText(input.text);
+        } else {
+          await page.mouse.wheel(input.deltaX, input.deltaY);
+        }
       },
       close: async () => {
         if (!closed) await context.close().catch(() => undefined);

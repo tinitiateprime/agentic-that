@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v2";
+const MIGRATION_KEY = "server-architecture-sqlite-v3";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -41,6 +41,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         workspace_id  TEXT NOT NULL,
         account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
         platform      TEXT NOT NULL CHECK (platform IN ('instagram')),
+        surface       TEXT NOT NULL DEFAULT 'visible' CHECK (surface IN ('visible', 'website')),
         state         TEXT NOT NULL
                       CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
         error_code    TEXT,
@@ -130,6 +131,15 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
       CREATE INDEX IF NOT EXISTS job_events_job_idx
         ON job_events (job_id, created_at);
     `);
+
+    const loginColumns = database.prepare("PRAGMA table_info(login_sessions)").all() as Array<{ name: string }>;
+    if (!loginColumns.some(column => column.name === "surface")) {
+      database.exec(`
+        ALTER TABLE login_sessions
+        ADD COLUMN surface TEXT NOT NULL DEFAULT 'visible'
+          CHECK (surface IN ('visible', 'website'))
+      `);
+    }
 
     database.prepare(`
       INSERT OR IGNORE INTO schema_migrations (key, applied_at)

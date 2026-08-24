@@ -31,15 +31,19 @@ test("Instagram login uses one persistent account session and marks the profile 
   const accounts = new AutomationJobStore(database, files);
   const sessions = new AutomationLoginStore(database);
   let launchCount = 0;
+  let receivedInput: unknown = null;
   let confirmLogin = () => {};
   const authenticated = new Promise<void>(resolve => { confirmLogin = resolve; });
   const launcher: LoginBrowserLauncher = {
-    async launch() {
+    async launch(_account, _profileDirectory, surface) {
       launchCount += 1;
       return {
+        surface,
         waitForAuthenticated() {
           return authenticated;
         },
+        async captureFrame() { return Buffer.from("frame"); },
+        async dispatchInput(input) { receivedInput = input; },
         async close() {},
       };
     },
@@ -62,8 +66,11 @@ test("Instagram login uses one persistent account session and marks the profile 
       media: [],
       idempotencyKey: "login-lock-test",
     });
-    const started = manager.start("login-workspace", account.id);
+    const started = manager.start("login-workspace", account.id, "website");
     await until(() => manager.get("login-workspace", started.id)?.state === "AWAITING_USER");
+    assert.equal((await manager.captureFrame("login-workspace", started.id)).toString(), "frame");
+    await manager.dispatchInput("login-workspace", started.id, { type: "text", text: "safe test" });
+    assert.deepEqual(receivedInput, { type: "text", text: "safe test" });
     assert.equal(accounts.claimDuePublishingJob("worker-during-login", 60), null);
     const duplicate = manager.start("login-workspace", account.id);
     assert.equal(duplicate.id, started.id);
@@ -96,11 +103,14 @@ test("a user can cancel an active login without connecting the account", async (
   const launcher: LoginBrowserLauncher = {
     async launch() {
       return {
+        surface: "visible",
         waitForAuthenticated(signal) {
           return new Promise<void>((_resolve, reject) => {
             signal.addEventListener("abort", () => reject(signal.reason), { once: true });
           });
         },
+        async captureFrame() { return Buffer.from("frame"); },
+        async dispatchInput() {},
         async close() {},
       };
     },
