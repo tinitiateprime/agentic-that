@@ -135,6 +135,48 @@ async function uploadOneImage(page: Page, mediaPath: string, signal: AbortSignal
   await clickIfVisible(page.getByRole("button", { name: /^OK$/i }), 2_500);
 }
 
+async function findCropToggleByPosition(page: Page) {
+  const cropDialog = page.getByText(/^Crop$/i).first().locator("xpath=ancestor::*[@role='dialog'][1]");
+  const dialogBox = await cropDialog.boundingBox().catch(() => null);
+  if (!dialogBox) return null;
+
+  const controls = cropDialog.locator('button, [role="button"]');
+  const count = await controls.count().catch(() => 0);
+  for (let index = 0; index < Math.min(count, 30); index += 1) {
+    const control = controls.nth(index);
+    if (!await control.isVisible().catch(() => false)) continue;
+    const box = await control.boundingBox().catch(() => null);
+    if (!box) continue;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const nearBottomLeft = centerX <= dialogBox.x + 100 && centerY >= dialogBox.y + dialogBox.height - 100;
+    if (nearBottomLeft) return control;
+  }
+  return null;
+}
+
+async function selectOriginalAspect(page: Page, signal: AbortSignal) {
+  const cropScreen = await waitForVisible(page, [page.getByText(/^Crop$/i)], signal, 10_000);
+  if (!cropScreen) throw new Error("Instagram's crop screen was not available.");
+
+  const cropToggle = await firstVisible([
+    page.getByRole("button", { name: /Select crop|Crop|Original/i }),
+    page.locator('svg[aria-label*="Select crop" i]'),
+    page.locator('svg[aria-label*="Crop" i]'),
+  ]) || await findCropToggleByPosition(page);
+  if (!cropToggle) throw new Error("Instagram's crop selector was not available.");
+  await safePreviewClick(cropToggle, 10_000);
+
+  const originalOption = await waitForVisible(page, [
+    page.getByText(/^Original$/i),
+    page.getByRole("button", { name: /^Original$/i }),
+    page.locator('[role="button"]').filter({ hasText: /^Original$/i }),
+  ], signal, 10_000);
+  if (!originalOption) throw new Error("Instagram's Original crop option was not available.");
+  await safePreviewClick(originalOption, 10_000);
+  await page.waitForTimeout(250);
+}
+
 async function advanceToShareScreen(page: Page, signal: AbortSignal) {
   const cropNext = await waitForVisible(page, [
     page.getByRole("button", { name: /^Next$/i }),
@@ -207,8 +249,11 @@ export async function prepareInstagramFinalComposer(input: {
   setStage("uploading the test image");
   reportProgress("Uploading the test image into Instagram's composer.");
   await uploadOneImage(page, mediaPath, signal);
+  setStage("selecting Instagram's Original crop option");
+  reportProgress("Image accepted. Selecting Original to preserve its aspect ratio.");
+  await selectOriginalAspect(page, signal);
   setStage("advancing through Instagram's crop and edit screens");
-  reportProgress("Image accepted. Advancing through crop and edit screens.");
+  reportProgress("Original crop selected. Advancing through crop and edit screens.");
   await advanceToShareScreen(page, signal);
   setStage("filling Instagram's final composer");
   reportProgress("Final composer reached. Adding the caption.");

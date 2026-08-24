@@ -115,4 +115,8 @@ test("the live Playwright executor has one exact guarded Share click", async () 
   assert.equal(liveSource.match(/share\.click\s*\(/g)?.length, 1);
   assert.match(liveSource, /exact Share-label guard/);
   assert.doesNotMatch(previewSource, /share\.click\s*\(/i);
+  const originalCrop = previewSource.indexOf('page.getByText(/^Original$/i)');
+  const cropNext = previewSource.indexOf("Instagram's crop Next control was not available.");
+  assert.ok(originalCrop >= 0, "The shared Instagram flow must select Original crop.");
+  assert.ok(cropNext > originalCrop, "Original crop must be selected before the crop Next step.");
 });
