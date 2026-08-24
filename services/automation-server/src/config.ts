@@ -14,6 +14,8 @@ export type AutomationConfig = {
   executionEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
+  publishingDryRunEnabled: boolean;
+  workerPollMs: number;
   autoMigrate: boolean;
   allowPublicBind: boolean;
 };
@@ -34,6 +36,14 @@ function loginTimeout(value: string | undefined) {
   const parsed = Number(value || 600_000);
   if (!Number.isInteger(parsed) || parsed < 60_000 || parsed > 1_800_000) {
     throw new Error("SERVER_LOGIN_TIMEOUT_MS must be between 60000 and 1800000 milliseconds.");
+  }
+  return parsed;
+}
+
+function workerPoll(value: string | undefined) {
+  const parsed = Number(value || 2_000);
+  if (!Number.isInteger(parsed) || parsed < 250 || parsed > 60_000) {
+    throw new Error("SERVER_WORKER_POLL_MS must be between 250 and 60000 milliseconds.");
   }
   return parsed;
 }
@@ -66,6 +76,8 @@ export function loadAutomationConfig(
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
+    publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),
+    workerPollMs: workerPoll(env.SERVER_WORKER_POLL_MS),
     autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
     allowPublicBind,
   };

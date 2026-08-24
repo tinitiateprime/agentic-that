@@ -42,10 +42,18 @@ test("migration creates the local SQLite schema", async () => {
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
       )
     `);
+    database.exec(`
+      CREATE TABLE publishing_jobs (
+        id TEXT PRIMARY KEY, account_id TEXT NOT NULL, state TEXT NOT NULL,
+        scheduled_at TEXT NOT NULL, created_at TEXT NOT NULL
+      )
+    `);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
     const columns = database.prepare("PRAGMA table_info(login_sessions)").all() as Array<{ name: string }>;
     assert.equal(columns.some(column => column.name === "surface"), true);
+    const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;
+    assert.equal(publishingColumns.some(column => column.name === "execution_mode"), true);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
   } finally {

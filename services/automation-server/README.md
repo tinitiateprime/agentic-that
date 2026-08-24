@@ -23,12 +23,21 @@ an isolated local SQLite file under `.server-data`.
 - Loopback-only development page for creating and connecting a test account.
 - Website browser frames plus bounded click, keyboard, paste, and scroll input
   for local end-to-end login testing.
+- Dry-run publishing worker using the real due-job claim, heartbeat, fencing,
+  per-account lock, saved-profile check, media preflight, and audit trail.
+- Dry-run jobs finish as `CANCELLED` with `DRY_RUN_COMPLETE` or
+  `DRY_RUN_VALIDATION_FAILED`; they never become publishable live jobs.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
 connection page. Integrating that stream with the authenticated, hosted
 AgenticThat website and adding platform publishing executors are the next
 implementation phases. Committed feature flags remain false by default.
+
+`SERVER_PUBLISHING_DRY_RUN_ENABLED=true` enables only local preflight workers.
+It does not enable live publishing. The server refuses to start if
+`SERVER_EXECUTION_ENABLED=true` because the live executor has not been safely
+implemented yet.
 
 ## Local setup
 
@@ -53,6 +62,10 @@ npm run server-architecture:dev
 5. For local login testing, set `SERVER_LOGIN_ENABLED=true` and a long random
    `SERVER_ARCHITECTURE_INTERNAL_TOKEN` in `.env.local`, restart the service,
    then open `http://127.0.0.1:8800/development/connect`.
+6. To test the worker safely, also set
+   `SERVER_PUBLISHING_DRY_RUN_ENABLED=true`, select a connected test account,
+   choose a JPEG or PNG up to 25 MB, and click **Run safe check**. This validates
+   the queue and saved files without opening Instagram or publishing anything.
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter

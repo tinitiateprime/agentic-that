@@ -1,4 +1,8 @@
-export function developmentConnectPage(options: { internalToken: string; loginEnabled: boolean }) {
+export function developmentConnectPage(options: {
+  internalToken: string;
+  loginEnabled: boolean;
+  publishingDryRunEnabled: boolean;
+}) {
   const bootstrap = JSON.stringify(options).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en">
@@ -21,7 +25,8 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     section { margin-top: 18px; padding: 24px; }
     form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 18px; }
     label { display: grid; gap: 7px; color: #52625c; font-size: 13px; font-weight: 700; }
-    input { width: 100%; border: 1px solid #cbd8d3; border-radius: 10px; padding: 11px 12px; font: inherit; background: white; }
+    input, select, textarea { width: 100%; border: 1px solid #cbd8d3; border-radius: 10px; padding: 11px 12px; font: inherit; background: white; }
+    textarea { min-height: 84px; resize: vertical; }
     button { border: 0; border-radius: 10px; padding: 11px 16px; background: #167552; color: white; font: inherit; font-weight: 750; cursor: pointer; }
     button.secondary { background: white; color: #245344; border: 1px solid #cbd8d3; }
     button:disabled { cursor: wait; opacity: .55; }
@@ -43,6 +48,11 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     #browser-frame { display: block; width: 100%; height: 100%; object-fit: contain; outline: none; cursor: default; user-select: none; }
     #browser-frame:focus { box-shadow: inset 0 0 0 3px #43a981; }
     .browser-help { margin: 11px 0 0; font-size: 12px; }
+    #dry-run-form { grid-template-columns: 1fr 1fr auto; }
+    #dry-run-form .dry-caption { grid-column: 1 / -1; }
+    #dry-run-status { min-height: 22px; margin: 14px 0 0; font-size: 14px; color: #51615b; }
+    #dry-run-status.error { color: #a23131; }
+    #dry-run-status.success { color: #11643f; }
     @media (max-width: 700px) { form { grid-template-columns: 1fr; } article { align-items: flex-start; flex-wrap: wrap; } }
   </style>
 </head>
@@ -63,6 +73,17 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       </form>
       <p id="message" role="status"></p>
       <div id="accounts"></div>
+    </section>
+    <section>
+      <h2>Safe publishing worker check</h2>
+      <p>Upload one test image and validate the complete server queue path. This mode cannot open Instagram and cannot publish.</p>
+      <form id="dry-run-form">
+        <label>Connected account<select id="dry-run-account" required></select></label>
+        <label>Test image<input id="dry-run-media" type="file" accept="image/jpeg,image/png" required /></label>
+        <button id="dry-run-button" type="submit">Run safe check</button>
+        <label class="dry-caption">Test caption<textarea id="dry-run-caption" maxlength="2200">AgenticThat local publishing dry run</textarea></label>
+      </form>
+      <p id="dry-run-status" role="status"></p>
     </section>
     <section id="browser-panel" hidden>
       <div class="browser-head">
@@ -85,6 +106,12 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     const browserPanel = document.querySelector('#browser-panel');
     const browserFrame = document.querySelector('#browser-frame');
     const cancelLogin = document.querySelector('#cancel-login');
+    const dryRunForm = document.querySelector('#dry-run-form');
+    const dryRunAccount = document.querySelector('#dry-run-account');
+    const dryRunMedia = document.querySelector('#dry-run-media');
+    const dryRunCaption = document.querySelector('#dry-run-caption');
+    const dryRunButton = document.querySelector('#dry-run-button');
+    const dryRunStatus = document.querySelector('#dry-run-status');
     const terminalStates = new Set(['CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED']);
     let polling = null;
     let framePolling = null;
@@ -95,6 +122,11 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
     function message(value, tone = '') {
       messageElement.textContent = value;
       messageElement.className = tone;
+    }
+
+    function dryRunMessage(value, tone = '') {
+      dryRunStatus.textContent = value;
+      dryRunStatus.className = tone;
     }
 
     async function api(path, options = {}) {
@@ -186,11 +218,55 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       if (!workspaceId) return;
       const body = await api('/v1/accounts?workspaceId=' + encodeURIComponent(workspaceId));
       accountsElement.replaceChildren(...body.accounts.map(accountCard));
+      const selectedAccount = dryRunAccount.value;
+      const connected = body.accounts.filter(account => account.enabled && account.status === 'CONNECTED');
+      dryRunAccount.replaceChildren(...connected.map(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.displayName;
+        return option;
+      }));
+      if (connected.some(account => account.id === selectedAccount)) dryRunAccount.value = selectedAccount;
+      dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || connected.length === 0;
       if (!body.accounts.length) {
         const empty = document.createElement('p');
         empty.textContent = 'No isolated development accounts yet.';
         accountsElement.replaceChildren(empty);
       }
+    }
+
+    async function uploadDryRunMedia(file) {
+      const response = await fetch('/v1/media', {
+        method: 'POST',
+        headers: {
+          'content-type': file.type,
+          'x-agenticthat-internal-token': bootstrap.internalToken,
+          'x-agenticthat-workspace-id': workspaceElement.value.trim(),
+          'x-agenticthat-file-name': encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'The local media upload failed.');
+      return body.media;
+    }
+
+    async function pollDryRun(jobId, deadline = Date.now() + 30_000) {
+      if (Date.now() > deadline) throw new Error('The dry-run worker did not finish within 30 seconds.');
+      const workspaceId = workspaceElement.value.trim();
+      const body = await api('/v1/publishing/jobs/' + encodeURIComponent(jobId) + '?workspaceId=' + encodeURIComponent(workspaceId));
+      const job = body.job;
+      if (job.state === 'SCHEDULED' || job.state === 'PUBLISHING') {
+        dryRunMessage(job.state === 'SCHEDULED' ? 'Waiting for the local dry-run worker...' : 'Validating profile, lock, caption, and media...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return pollDryRun(jobId, deadline);
+      }
+      if (job.errorCode === 'DRY_RUN_COMPLETE') {
+        dryRunMessage('All safe worker checks passed. No website was opened and nothing was published.', 'success');
+      } else {
+        dryRunMessage(job.errorMessage || ('Dry-run finished with status ' + job.state + '.'), 'error');
+      }
+      return job;
     }
 
     async function pollSession(sessionId) {
@@ -313,9 +389,39 @@ export function developmentConnectPage(options: { internalToken: string; loginEn
       }
     });
 
+    dryRunForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const file = dryRunMedia.files?.[0];
+      if (!file || !dryRunAccount.value) return;
+      dryRunButton.disabled = true;
+      try {
+        dryRunMessage('Saving test media into isolated local storage...');
+        const media = await uploadDryRunMedia(file);
+        dryRunMessage('Creating a non-publishing validation job...');
+        const body = await api('/v1/publishing/dry-runs', {
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId: workspaceElement.value.trim(),
+            accountId: dryRunAccount.value,
+            scheduledAt: new Date(Date.now() - 1_000).toISOString(),
+            originalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+            caption: dryRunCaption.value,
+            media: [{ storageKey: media.storageKey, fileName: media.fileName, mimeType: media.mimeType }],
+            idempotencyKey: 'dry-run-' + crypto.randomUUID(),
+          }),
+        });
+        await pollDryRun(body.job.id);
+      } catch (error) {
+        dryRunMessage(error.message, 'error');
+      } finally {
+        dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || dryRunAccount.options.length === 0;
+      }
+    });
+
     workspaceElement.addEventListener('change', () => refresh().catch(error => message(error.message, 'error')));
     if (!bootstrap.loginEnabled) message('Server login is disabled in local configuration.', 'error');
     else if (!bootstrap.internalToken) message('The local internal token is not configured.', 'error');
+    if (!bootstrap.publishingDryRunEnabled) dryRunMessage('Publishing dry-run validation is disabled.', 'error');
     refresh().catch(error => message(error.message, 'error'));
   </script>
 </body>

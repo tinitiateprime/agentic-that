@@ -9,9 +9,14 @@ import { AutomationLoginManager } from "./login-manager.ts";
 import { AutomationLoginStore } from "./login-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
+import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
+import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
+  if (config.executionEnabled) {
+    throw new Error("Live server publishing is not implemented. Keep SERVER_EXECUTION_ENABLED=false.");
+  }
   const files = new AutomationFileStore(config.dataDirectory);
   await files.initialize();
 
@@ -28,15 +33,24 @@ export async function startAutomationServer() {
       )
     : null;
   loginManager?.recoverInterruptedSessions();
+  const publishingDryRunWorker = store && config.publishingDryRunEnabled
+    ? new AutomationPublishingDryRunWorker(
+        store,
+        new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
+        config.workerPollMs,
+      )
+    : null;
 
-  const app = createAutomationApp({ config, databaseReady, store, loginManager });
+  const app = createAutomationApp({ config, databaseReady, store, loginManager, files });
   const server = await new Promise<Server>((resolve, reject) => {
     const listener = app.listen(config.port, config.host, () => resolve(listener));
     listener.once("error", reject);
   });
+  publishingDryRunWorker?.start();
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
+    await publishingDryRunWorker?.stop();
     await loginManager?.shutdown();
     database.close();
   };

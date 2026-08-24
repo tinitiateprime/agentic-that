@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v3";
+const MIGRATION_KEY = "server-architecture-sqlite-v4";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -60,6 +60,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         id                TEXT PRIMARY KEY,
         workspace_id      TEXT NOT NULL,
         account_id        TEXT NOT NULL REFERENCES social_accounts(id),
+        execution_mode    TEXT NOT NULL DEFAULT 'LIVE' CHECK (execution_mode IN ('DRY_RUN', 'LIVE')),
         state             TEXT NOT NULL DEFAULT 'SCHEDULED'
                           CHECK (state IN ('SCHEDULED', 'PUBLISHING', 'VERIFYING', 'PUBLISHED', 'FAILED', 'LOGIN_REQUIRED', 'UNCERTAIN', 'CANCELLED')),
         scheduled_at      TEXT NOT NULL,
@@ -138,6 +139,14 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         ALTER TABLE login_sessions
         ADD COLUMN surface TEXT NOT NULL DEFAULT 'visible'
           CHECK (surface IN ('visible', 'website'))
+      `);
+    }
+    const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;
+    if (!publishingColumns.some(column => column.name === "execution_mode")) {
+      database.exec(`
+        ALTER TABLE publishing_jobs
+        ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'LIVE'
+          CHECK (execution_mode IN ('DRY_RUN', 'LIVE'))
       `);
     }
 

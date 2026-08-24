@@ -7,6 +7,7 @@ import {
   createPublishingJobSchema,
   publishingJobStateSchema,
   type PublishingJobState,
+  type SocialPlatform,
 } from "./contracts.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
@@ -25,6 +26,8 @@ type PublishingJobRow = {
   id: string;
   workspace_id: string;
   account_id: string;
+  execution_mode: "DRY_RUN" | "LIVE";
+  platform?: SocialPlatform;
   state: PublishingJobState;
   scheduled_at: string;
   original_timezone: string;
@@ -75,6 +78,8 @@ function publicJob(row: PublishingJobRow) {
     id: row.id,
     workspaceId: row.workspace_id,
     accountId: row.account_id,
+    executionMode: row.execution_mode,
+    platform: row.platform || null,
     state: row.state,
     scheduledAt: timestamp(row.scheduled_at),
     originalTimezone: row.original_timezone,
@@ -131,7 +136,7 @@ export class AutomationJobStore {
     return rows.map(publicAccount);
   }
 
-  createPublishingJob(input: unknown) {
+  createPublishingJob(input: unknown, executionMode: "DRY_RUN" | "LIVE" = "LIVE") {
     const value = createPublishingJobSchema.parse(input);
     const account = this.database.prepare(`
       SELECT * FROM social_accounts
@@ -146,6 +151,7 @@ export class AutomationJobStore {
     `).get(value.workspaceId, value.idempotencyKey) as PublishingJobRow | undefined;
     if (existing) {
       const sameRequest = existing.account_id === value.accountId
+        && existing.execution_mode === executionMode
         && existing.scheduled_at === scheduledAt
         && existing.original_timezone === value.originalTimezone
         && existing.caption === value.caption
@@ -160,13 +166,14 @@ export class AutomationJobStore {
     const createdAt = now();
     this.database.prepare(`
       INSERT INTO publishing_jobs
-        (id, workspace_id, account_id, scheduled_at, original_timezone, caption, media,
+        (id, workspace_id, account_id, execution_mode, scheduled_at, original_timezone, caption, media,
          idempotency_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       value.workspaceId,
       value.accountId,
+      executionMode,
       scheduledAt,
       value.originalTimezone,
       value.caption,
@@ -186,7 +193,7 @@ export class AutomationJobStore {
     return row ? publicJob(row) : null;
   }
 
-  claimDuePublishingJob(workerId: string, leaseSeconds = 300) {
+  claimDuePublishingJob(workerId: string, leaseSeconds = 300, executionMode: "DRY_RUN" | "LIVE" = "LIVE") {
     if (!workerId.trim()) throw new Error("A worker id is required to claim publishing work.");
     if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) {
       throw new Error("Publishing leases must be between 30 and 1800 seconds.");
@@ -196,11 +203,12 @@ export class AutomationJobStore {
       const claimedAt = now();
       const expiresAt = leaseExpiry(leaseSeconds);
       const candidate = this.database.prepare(`
-        SELECT job.*
+        SELECT job.*, account.platform AS platform
         FROM publishing_jobs job
         JOIN social_accounts account ON account.id = job.account_id
         LEFT JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
         WHERE job.state = 'SCHEDULED'
+          AND job.execution_mode = ?
           AND job.scheduled_at <= ?
           AND account.enabled = 1
           AND account.status = 'CONNECTED'
@@ -212,7 +220,7 @@ export class AutomationJobStore {
           )
         ORDER BY job.scheduled_at, job.created_at
         LIMIT 1
-      `).get(claimedAt, claimedAt) as PublishingJobRow | undefined;
+      `).get(executionMode, claimedAt, claimedAt) as PublishingJobRow | undefined;
       if (!candidate) return null;
 
       const existingLock = this.database.prepare(`
@@ -261,6 +269,7 @@ export class AutomationJobStore {
         claimedAt,
       );
       const claimed = this.database.prepare("SELECT * FROM publishing_jobs WHERE id = ?").get(candidate.id) as PublishingJobRow;
+      claimed.platform = candidate.platform;
       return publicJob(claimed);
     });
   }
@@ -293,6 +302,86 @@ export class AutomationJobStore {
       if (error instanceof PublishingLeaseLostError) return false;
       throw error;
     }
+  }
+
+  getPublishingProfileState(accountId: string) {
+    const row = this.database.prepare(`
+      SELECT version, last_saved_at FROM browser_profiles WHERE account_id = ?
+    `).get(accountId) as { version: number; last_saved_at: string | null } | undefined;
+    return row ? { version: row.version, lastSavedAt: row.last_saved_at } : null;
+  }
+
+  completePublishingDryRun(input: {
+    jobId: string;
+    workerId: string;
+    fencingToken: number;
+    valid: boolean;
+    checks: string[];
+    issues: string[];
+  }) {
+    return withImmediateTransaction(this.database, () => {
+      const completedAt = now();
+      const current = this.database.prepare(`
+        SELECT job.*
+        FROM publishing_jobs job
+        JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
+        WHERE job.id = ? AND job.execution_mode = 'DRY_RUN'
+          AND job.lease_owner = ? AND job.fencing_token = ?
+          AND account_lock.lease_owner = ? AND account_lock.fencing_token = ?
+          AND account_lock.lease_expires_at > ?
+      `).get(
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+        input.workerId,
+        input.fencingToken,
+        completedAt,
+      ) as PublishingJobRow | undefined;
+      if (!current) throw new Error("The dry-run publishing lease is no longer owned by this worker.");
+
+      const errorCode = input.valid ? "DRY_RUN_COMPLETE" : "DRY_RUN_VALIDATION_FAILED";
+      const errorMessage = input.valid
+        ? "Dry-run checks passed. No social platform was opened and no post was published."
+        : `Dry-run validation failed: ${input.issues.join(" ")}`;
+      this.database.prepare(`
+        UPDATE publishing_jobs
+        SET state = 'CANCELLED', error_code = ?, error_message = ?,
+            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(errorCode, errorMessage, completedAt, input.jobId);
+      this.database.prepare(`
+        UPDATE account_execution_locks
+        SET lease_owner = NULL, lease_expires_at = ?, updated_at = ?
+        WHERE account_id = ? AND lease_owner = ? AND fencing_token = ?
+      `).run(new Date(0).toISOString(), completedAt, current.account_id, input.workerId, input.fencingToken);
+      const detail = JSON.stringify({
+        dryRun: true,
+        valid: input.valid,
+        checks: input.checks,
+        issues: input.issues,
+        networkAccess: false,
+        published: false,
+      });
+      this.database.prepare(`
+        UPDATE publishing_attempts
+        SET state = ?, completed_at = ?, detail = ?
+        WHERE job_id = ? AND worker_id = ? AND fencing_token = ?
+      `).run(
+        input.valid ? "DRY_RUN_COMPLETE" : "DRY_RUN_VALIDATION_FAILED",
+        completedAt,
+        detail,
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+      );
+      this.database.prepare(`
+        INSERT INTO job_events
+          (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'publishing', 'dry_run_completed', ?, ?)
+      `).run(automationId("event"), current.workspace_id, current.id, detail, completedAt);
+      const row = this.database.prepare("SELECT * FROM publishing_jobs WHERE id = ?").get(input.jobId) as PublishingJobRow;
+      return publicJob(row);
+    });
   }
 
   finishPublishingJob(input: {

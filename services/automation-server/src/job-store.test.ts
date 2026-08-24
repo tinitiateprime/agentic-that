@@ -39,6 +39,7 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     };
     const job = store.createPublishingJob(request);
     assert.equal(store.createPublishingJob(request).id, job.id);
+    assert.throws(() => store.createPublishingJob(request, "DRY_RUN"), /idempotency key/);
 
     const claimed = store.claimDuePublishingJob("worker-a", 60);
     assert.equal(claimed?.id, job.id);

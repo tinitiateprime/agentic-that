@@ -23,6 +23,8 @@
 10. One isolated persistent Chrome/Edge profile per server account.
 11. Local connection page and automatic authenticated-session detection.
 12. Local website browser frames and bounded pointer/keyboard input relay.
+13. Non-networked Instagram publishing dry-run worker using production-shaped
+    queue leases, profile/media validation, and terminal audit records.
 
 ## Next development work
 
@@ -31,7 +33,7 @@
 3. Add short-lived login-stream authorization and strict origin checks.
 4. Add remote-server viewport resizing and reconnect handling.
 5. Move the Instagram publisher behind `ServerPublishingExecutor`.
-6. Add the publishing worker heartbeat and profile-version write guard.
+6. Add the profile-version write guard to the future live executor.
 7. Connect only a test workspace through a per-account `server` engine flag.
 8. Add temporary-browser scraping workers.
 

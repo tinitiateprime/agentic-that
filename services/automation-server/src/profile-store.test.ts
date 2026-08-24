@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -30,5 +30,25 @@ test("temporary scraping storage is removable without touching its root", async 
     await assert.rejects(() => store.removeTemporaryDirectory(store.temporaryRoot), /Refusing to remove/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("media storage keys cannot escape the isolated media directory", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-media-"));
+  try {
+    const store = new AutomationFileStore(directory);
+    await store.initialize();
+    assert.equal(store.mediaFilePath("media_test.jpg"), path.join(directory, "media", "media_test.jpg"));
+    assert.throws(() => store.mediaFilePath("../production.jpg"), /invalid/);
+    assert.throws(() => store.mediaFilePath("folder/file.jpg"), /invalid/);
+    const saved = await store.storeDevelopmentMedia(Buffer.from([0xff, 0xd8, 0xff]), "test.jpg", "image/jpeg");
+    assert.match(saved.storageKey, /^media_[a-f0-9]{32}[.]jpg$/);
+    assert.deepEqual(await readFile(store.mediaFilePath(saved.storageKey)), Buffer.from([0xff, 0xd8, 0xff]));
+    await assert.rejects(
+      () => store.storeDevelopmentMedia(Buffer.from("bad"), "bad.exe", "application/octet-stream"),
+      /not supported/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

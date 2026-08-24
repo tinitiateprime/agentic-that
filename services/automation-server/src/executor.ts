@@ -18,6 +18,26 @@ export type PublishingExecutionResult = {
   errorMessage?: string;
 };
 
+export type PublishingProfileState = {
+  version: number;
+  lastSavedAt: string | null;
+};
+
+export type PublishingDryRunResult = {
+  valid: boolean;
+  checks: string[];
+  issues: string[];
+};
+
+export interface PublishingDryRunValidator {
+  readonly platform: SocialPlatform;
+  validate(
+    job: ClaimedPublishingJob,
+    profile: PublishingProfileState | null,
+    signal: AbortSignal,
+  ): Promise<PublishingDryRunResult>;
+}
+
 // Platform browser implementations will be moved behind this boundary one at a
 // time. The current Companion publishers are deliberately not imported here,
 // so adding this service cannot change the production execution path.

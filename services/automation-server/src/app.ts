@@ -7,12 +7,14 @@ import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
 import { developmentConnectPage } from "./development-ui.ts";
 import { isLoopbackHost } from "./config.ts";
+import type { AutomationFileStore } from "./profile-store.ts";
 
 type AppDependencies = {
   config: AutomationConfig;
   databaseReady: boolean;
   store: AutomationJobStore | null;
   loginManager: AutomationLoginManager | null;
+  files?: AutomationFileStore;
 };
 
 function safeEqual(left: string, right: string) {
@@ -21,7 +23,7 @@ function safeEqual(left: string, right: string) {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-export function createAutomationApp({ config, databaseReady, store, loginManager }: AppDependencies) {
+export function createAutomationApp({ config, databaseReady, store, loginManager, files }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "128kb" }));
@@ -38,6 +40,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     res.type("html").send(developmentConnectPage({
       internalToken: config.internalToken,
       loginEnabled: config.loginEnabled,
+      publishingDryRunEnabled: config.publishingDryRunEnabled,
     }));
   });
 
@@ -52,6 +55,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       storage: "local-development-only",
       features: {
         publishing: config.executionEnabled,
+        publishingDryRun: config.publishingDryRunEnabled,
         login: config.loginEnabled,
         scraping: config.scrapingEnabled,
       },
@@ -190,6 +194,48 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     const job = await store!.createPublishingJob(req.body);
     res.status(201).json({ job });
   });
+
+  app.post("/v1/publishing/dry-runs", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.publishingDryRunEnabled) {
+      res.status(409).json({ error: "Publishing dry-run validation is disabled." });
+      return;
+    }
+    const job = await store!.createPublishingJob(req.body, "DRY_RUN");
+    res.status(201).json({ job });
+  });
+
+  app.post(
+    "/v1/media",
+    requireInternalToken,
+    requireStore,
+    express.raw({ type: () => true, limit: "25mb" }),
+    async (req, res) => {
+      if (!config.publishingDryRunEnabled || !files) {
+        res.status(409).json({ error: "Publishing dry-run media storage is disabled." });
+        return;
+      }
+      if (!Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: "A binary media body is required." });
+        return;
+      }
+      const workspaceId = String(req.headers["x-agenticthat-workspace-id"] || "").trim();
+      const encodedFileName = String(req.headers["x-agenticthat-file-name"] || "").trim();
+      let fileName = "";
+      try {
+        fileName = decodeURIComponent(encodedFileName);
+      } catch {
+        res.status(400).json({ error: "The media filename header is invalid." });
+        return;
+      }
+      const mimeType = String(req.headers["content-type"] || "").split(";", 1)[0]!.trim();
+      if (!workspaceId || !fileName) {
+        res.status(400).json({ error: "Workspace and filename headers are required." });
+        return;
+      }
+      const media = await files.storeDevelopmentMedia(req.body, fileName, mimeType);
+      res.status(201).json({ media });
+    },
+  );
 
   app.get("/v1/publishing/jobs/:jobId", requireInternalToken, requireStore, async (req, res) => {
     const workspaceId = String(req.query.workspaceId || "").trim();
