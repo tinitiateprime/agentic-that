@@ -31,6 +31,7 @@ test("health reports every new execution feature disabled by default", async () 
     const body = await response.json();
     assert.deepEqual(body.features, { publishing: false, login: false, scraping: false });
     assert.equal(body.databaseReady, false);
+    assert.equal(body.databaseEngine, "sqlite");
   } finally {
     await runtime.close();
   }

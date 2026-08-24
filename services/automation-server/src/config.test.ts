@@ -10,7 +10,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.loginEnabled, false);
   assert.equal(config.scrapingEnabled, false);
   assert.equal(config.autoMigrate, false);
-  assert.equal(config.databaseUrl, "");
+  assert.equal(config.databaseFile, "C:\\workspace\\.server-data\\automation.db");
 });
 
 test("a public bind requires an explicit safety override", () => {
@@ -25,10 +25,6 @@ test("a public bind requires an explicit safety override", () => {
   assert.equal(config.host, "0.0.0.0");
 });
 
-test("invalid ports and database purposes are rejected", () => {
+test("invalid ports are rejected", () => {
   assert.throws(() => loadAutomationConfig({ SERVER_ARCHITECTURE_PORT: "70000" }), /between 1 and 65535/);
-  assert.throws(
-    () => loadAutomationConfig({ SERVER_ARCHITECTURE_DATABASE_PURPOSE: "customer" }),
-    /development, staging, or production/,
-  );
 });

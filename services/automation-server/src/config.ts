@@ -7,16 +7,13 @@ export type AutomationConfig = {
   host: string;
   port: number;
   dataDirectory: string;
-  databaseUrl: string;
-  databasePurpose: "development" | "staging" | "production";
-  databaseNameConfirmation: string;
+  databaseFile: string;
   internalToken: string;
   executionEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
   autoMigrate: boolean;
   allowPublicBind: boolean;
-  allowRemoteDatabase: boolean;
 };
 
 function enabled(value: string | undefined) {
@@ -31,14 +28,6 @@ function port(value: string | undefined) {
   return parsed;
 }
 
-function purpose(value: string | undefined): AutomationConfig["databasePurpose"] {
-  const normalized = String(value || "development").trim().toLowerCase();
-  if (!["development", "staging", "production"].includes(normalized)) {
-    throw new Error("SERVER_ARCHITECTURE_DATABASE_PURPOSE must be development, staging, or production.");
-  }
-  return normalized as AutomationConfig["databasePurpose"];
-}
-
 export function loadAutomationConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
@@ -50,21 +39,23 @@ export function loadAutomationConfig(
       "Refusing a public automation-server bind. Set SERVER_ARCHITECTURE_ALLOW_PUBLIC_BIND=true only in an intentionally secured environment.",
     );
   }
+  const dataDirectory = path.resolve(cwd, env.SERVER_ARCHITECTURE_DATA_DIR?.trim() || ".server-data");
+  const databaseFile = path.resolve(
+    cwd,
+    env.SERVER_ARCHITECTURE_DATABASE_FILE?.trim() || path.join(dataDirectory, "automation.db"),
+  );
 
   return {
     host,
     port: port(env.SERVER_ARCHITECTURE_PORT),
-    dataDirectory: path.resolve(cwd, env.SERVER_ARCHITECTURE_DATA_DIR?.trim() || ".server-data"),
-    databaseUrl: env.SERVER_ARCHITECTURE_DATABASE_URL?.trim() || "",
-    databasePurpose: purpose(env.SERVER_ARCHITECTURE_DATABASE_PURPOSE),
-    databaseNameConfirmation: env.SERVER_ARCHITECTURE_CONFIRM_PRODUCTION_DATABASE?.trim() || "",
+    dataDirectory,
+    databaseFile,
     internalToken: env.SERVER_ARCHITECTURE_INTERNAL_TOKEN?.trim() || "",
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
     autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
     allowPublicBind,
-    allowRemoteDatabase: enabled(env.SERVER_ARCHITECTURE_ALLOW_REMOTE_DATABASE),
   };
 }
 

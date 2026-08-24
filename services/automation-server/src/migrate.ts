@@ -1,22 +1,22 @@
 import { pathToFileURL } from "node:url";
+import { mkdir } from "node:fs/promises";
 import { loadAutomationConfig } from "./config.ts";
-import { assertSafeAutomationDatabase, createAutomationSql } from "./database.ts";
+import { assertSafeAutomationDatabase, createAutomationDatabase } from "./database.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
 
 export async function runAutomationMigration() {
   const config = loadAutomationConfig();
   const target = assertSafeAutomationDatabase(config);
-  const sql = createAutomationSql(config);
+  await mkdir(config.dataDirectory, { recursive: true });
+  const database = createAutomationDatabase(config);
   try {
-    await migrateAutomationSchema(sql);
-    if (!(await automationSchemaReady(sql))) {
+    migrateAutomationSchema(database);
+    if (!automationSchemaReady(database)) {
       throw new Error("The isolated automation database migration did not create the publishing job table.");
     }
-    process.stdout.write(
-      `Automation staging schema ready in ${target.database} on ${target.host}:${target.port}.\n`,
-    );
+    process.stdout.write(`Local automation SQLite database ready at ${target.file}.\n`);
   } finally {
-    await sql.end();
+    database.close();
   }
 }
 

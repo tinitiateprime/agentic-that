@@ -3,13 +3,13 @@
 This service is the isolated starting point for website-only publishing and
 scraping. It does not replace or import the current Companion. Every execution
 feature is disabled by default, it binds to loopback by default, and it uses
-only `SERVER_ARCHITECTURE_DATABASE_URL`.
+an isolated local SQLite file under `.server-data`.
 
 ## Current capabilities
 
 - Local health API on `127.0.0.1:8800`.
 - Separate local media, browser-profile, result, and temporary directories.
-- Additive PostgreSQL schema for accounts, browser profiles, publishing jobs,
+- Local SQLite schema for accounts, browser profiles, publishing jobs,
   attempts, account locks, scraping jobs, and activity events.
 - Transactional due-job claiming with one active lease per social account.
 - Monotonic fencing tokens so an expired worker cannot complete a newer job.
@@ -23,27 +23,28 @@ implementation phase. Until those are complete, keep all feature flags false.
 
 ## Local setup
 
-1. Install PostgreSQL locally when database-backed testing begins.
-2. Create a database named `agenticthat_server_staging`.
-3. Copy `.env.example` to `.env.local` in this folder and replace the local
-   password and internal token.
-4. Run the migration manually:
+No database, Docker, or cloud account needs to be installed. Node.js creates
+the ignored `.server-data/automation.db` file directly.
+
+1. Optionally copy `.env.example` to `.env.local` in this folder and replace
+   the internal token before testing protected routes.
+2. Create or update the local database:
 
 ```text
 npm run server-architecture:db:migrate
 ```
 
-5. Start the local service:
+3. Start the local service:
 
 ```text
 npm run server-architecture:dev
 ```
 
-6. Open `http://127.0.0.1:8800/health`.
+4. Open `http://127.0.0.1:8800/health`.
 
 The migration is intentionally absent from `netlify.toml` and the root build.
-It refuses to use the URL from `DATABASE_URL`, `SUPABASE_DB_URL`, or
-`SUPABASE_DATABASE_URL`.
+The database safety check refuses to open a SQLite file outside the isolated
+server data directory.
 
 ## Checks
 
@@ -55,4 +56,6 @@ npm run build
 
 Local browser profiles are development-only and unencrypted. Do not put real
 customer sessions in `.server-data`. Production requires encrypted profile
-storage and a managed key service before any customer rollout.
+storage, a managed key service, and PostgreSQL before any customer rollout.
+SQLite is intentionally limited to development on this computer; it is not the
+future multi-server production database.

@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import type { Server } from "node:http";
 import { createAutomationApp } from "./app.ts";
 import { loadAutomationConfig } from "./config.ts";
-import { assertSafeAutomationDatabase, createAutomationSql, type AutomationSql } from "./database.ts";
+import { assertSafeAutomationDatabase, createAutomationDatabase } from "./database.ts";
 import { AutomationJobStore } from "./job-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
@@ -12,16 +12,11 @@ export async function startAutomationServer() {
   const files = new AutomationFileStore(config.dataDirectory);
   await files.initialize();
 
-  let sql: AutomationSql | null = null;
-  let databaseReady = false;
-  let store: AutomationJobStore | null = null;
-  if (config.databaseUrl) {
-    assertSafeAutomationDatabase(config);
-    sql = createAutomationSql(config);
-    if (config.autoMigrate) await migrateAutomationSchema(sql);
-    databaseReady = await automationSchemaReady(sql);
-    if (databaseReady) store = new AutomationJobStore(sql, files);
-  }
+  assertSafeAutomationDatabase(config);
+  const database = createAutomationDatabase(config);
+  if (config.autoMigrate) migrateAutomationSchema(database);
+  const databaseReady = automationSchemaReady(database);
+  const store = databaseReady ? new AutomationJobStore(database, files) : null;
 
   const app = createAutomationApp({ config, databaseReady, store });
   const server = await new Promise<Server>((resolve, reject) => {
@@ -31,7 +26,7 @@ export async function startAutomationServer() {
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
-    if (sql) await sql.end();
+    database.close();
   };
 
   process.stdout.write(

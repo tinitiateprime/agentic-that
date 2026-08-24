@@ -26,8 +26,9 @@ export function createAutomationApp({ config, databaseReady, store }: AppDepende
       ok: true,
       service: "agenticthat-automation-server",
       architectureVersion: 1,
-      databaseConfigured: Boolean(config.databaseUrl),
+      databaseConfigured: true,
       databaseReady,
+      databaseEngine: "sqlite",
       storage: "local-development-only",
       features: {
         publishing: config.executionEnabled,
