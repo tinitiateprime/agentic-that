@@ -3,11 +3,15 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { ZodError } from "zod";
 import type { AutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
+import type { AutomationLoginManager } from "./login-manager.ts";
+import { developmentConnectPage } from "./development-ui.ts";
+import { isLoopbackHost } from "./config.ts";
 
 type AppDependencies = {
   config: AutomationConfig;
   databaseReady: boolean;
   store: AutomationJobStore | null;
+  loginManager: AutomationLoginManager | null;
 };
 
 function safeEqual(left: string, right: string) {
@@ -16,10 +20,25 @@ function safeEqual(left: string, right: string) {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-export function createAutomationApp({ config, databaseReady, store }: AppDependencies) {
+export function createAutomationApp({ config, databaseReady, store, loginManager }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "128kb" }));
+
+  app.get("/", (_req, res) => {
+    res.redirect("/development/connect");
+  });
+
+  app.get("/development/connect", (_req, res) => {
+    if (!isLoopbackHost(config.host)) {
+      res.status(404).send("Not found");
+      return;
+    }
+    res.type("html").send(developmentConnectPage({
+      internalToken: config.internalToken,
+      loginEnabled: config.loginEnabled,
+    }));
+  });
 
   app.get("/health", (_req, res) => {
     res.json({
@@ -75,6 +94,56 @@ export function createAutomationApp({ config, databaseReady, store }: AppDepende
     }
     const account = await store!.createAccount(req.body);
     res.status(201).json({ account });
+  });
+
+  app.post("/v1/accounts/:accountId/login-sessions", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.loginEnabled || !loginManager) {
+      res.status(409).json({ error: "Server login is disabled. Current Companion behavior remains active." });
+      return;
+    }
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const session = loginManager.start(workspaceId, String(req.params.accountId));
+    res.status(202).json({ session });
+  });
+
+  app.get("/v1/login-sessions/:sessionId", requireInternalToken, requireStore, async (req, res) => {
+    if (!loginManager) {
+      res.status(503).json({ error: "The server login manager is unavailable." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const session = loginManager.get(workspaceId, String(req.params.sessionId));
+    if (!session) {
+      res.status(404).json({ error: "Login session not found." });
+      return;
+    }
+    res.json({ session });
+  });
+
+  app.delete("/v1/login-sessions/:sessionId", requireInternalToken, requireStore, async (req, res) => {
+    if (!loginManager) {
+      res.status(503).json({ error: "The server login manager is unavailable." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const session = await loginManager.cancel(workspaceId, String(req.params.sessionId));
+    if (!session) {
+      res.status(404).json({ error: "Login session not found." });
+      return;
+    }
+    res.json({ session });
   });
 
   app.post("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {

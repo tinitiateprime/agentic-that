@@ -205,6 +205,11 @@ export class AutomationJobStore {
           AND account.enabled = 1
           AND account.status = 'CONNECTED'
           AND (account_lock.account_id IS NULL OR account_lock.lease_expires_at <= ?)
+          AND NOT EXISTS (
+            SELECT 1 FROM login_sessions login
+            WHERE login.account_id = job.account_id
+              AND login.state IN ('STARTING', 'AWAITING_USER')
+          )
         ORDER BY job.scheduled_at, job.created_at
         LIMIT 1
       `).get(claimedAt, claimedAt) as PublishingJobRow | undefined;

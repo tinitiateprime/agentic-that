@@ -11,6 +11,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.scrapingEnabled, false);
   assert.equal(config.autoMigrate, false);
   assert.equal(config.databaseFile, "C:\\workspace\\.server-data\\automation.db");
+  assert.equal(config.loginTimeoutMs, 600_000);
 });
 
 test("a public bind requires an explicit safety override", () => {
@@ -27,4 +28,5 @@ test("a public bind requires an explicit safety override", () => {
 
 test("invalid ports are rejected", () => {
   assert.throws(() => loadAutomationConfig({ SERVER_ARCHITECTURE_PORT: "70000" }), /between 1 and 65535/);
+  assert.throws(() => loadAutomationConfig({ SERVER_LOGIN_TIMEOUT_MS: "1000" }), /between 60000 and 1800000/);
 });

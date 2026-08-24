@@ -4,6 +4,7 @@ import {
   assertPublishingJobTransition,
   automationId,
   createPublishingJobSchema,
+  loginSessionStateSchema,
 } from "./contracts.ts";
 
 test("publishing state machine permits safe progress and rejects terminal retries", () => {
@@ -35,4 +36,9 @@ test("a publishing job needs content and a timezone-aware schedule", () => {
 
 test("automation ids are opaque and namespaced", () => {
   assert.match(automationId("job"), /^job_[a-f0-9]{32}$/);
+});
+
+test("login sessions expose only known lifecycle states", () => {
+  assert.equal(loginSessionStateSchema.parse("AWAITING_USER"), "AWAITING_USER");
+  assert.throws(() => loginSessionStateSchema.parse("PASSWORD_RECEIVED"));
 });

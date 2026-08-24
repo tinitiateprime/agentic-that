@@ -4,6 +4,7 @@ import test from "node:test";
 import { createAutomationApp } from "./app.ts";
 import { loadAutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
+import type { AutomationLoginManager } from "./login-manager.ts";
 
 async function listen(app: ReturnType<typeof createAutomationApp>) {
   const server = await new Promise<Server>((resolve, reject) => {
@@ -24,6 +25,7 @@ test("health reports every new execution feature disabled by default", async () 
     config: loadAutomationConfig({}),
     databaseReady: false,
     store: null,
+    loginManager: null,
   }));
   try {
     const response = await fetch(`${runtime.url}/health`);
@@ -40,7 +42,7 @@ test("health reports every new execution feature disabled by default", async () 
 test("mutation routes require a token and stay disabled even with a database store", async () => {
   const config = loadAutomationConfig({ SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token" });
   const fakeStore = {} as AutomationJobStore;
-  const runtime = await listen(createAutomationApp({ config, databaseReady: true, store: fakeStore }));
+  const runtime = await listen(createAutomationApp({ config, databaseReady: true, store: fakeStore, loginManager: null }));
   try {
     const unauthorized = await fetch(`${runtime.url}/v1/publishing/jobs`, {
       method: "POST",
@@ -59,6 +61,42 @@ test("mutation routes require a token and stay disabled even with a database sto
     });
     assert.equal(disabled.status, 409);
     assert.match((await disabled.json()).error, /Current Companion behavior remains active/);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("enabled local login routes start a workspace-scoped session", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_LOGIN_ENABLED: "true",
+  });
+  const fakeStore = {} as AutomationJobStore;
+  let startedWith: string[] = [];
+  const fakeLoginManager = {
+    start(workspaceId: string, accountId: string) {
+      startedWith = [workspaceId, accountId];
+      return { id: "login_test", workspaceId, accountId, state: "STARTING" };
+    },
+  } as AutomationLoginManager;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: fakeStore,
+    loginManager: fakeLoginManager,
+  }));
+  try {
+    const response = await fetch(`${runtime.url}/v1/accounts/account_test/login-sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-agenticthat-internal-token": config.internalToken,
+      },
+      body: JSON.stringify({ workspaceId: "workspace_test" }),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(startedWith, ["workspace_test", "account_test"]);
+    assert.equal((await response.json()).session.state, "STARTING");
   } finally {
     await runtime.close();
   }

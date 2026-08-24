@@ -13,6 +13,16 @@ export const accountStatusSchema = z.enum([
 ]);
 export type AccountStatus = z.infer<typeof accountStatusSchema>;
 
+export const loginSessionStateSchema = z.enum([
+  "STARTING",
+  "AWAITING_USER",
+  "CONNECTED",
+  "FAILED",
+  "CANCELLED",
+  "EXPIRED",
+]);
+export type LoginSessionState = z.infer<typeof loginSessionStateSchema>;
+
 export const publishingJobStateSchema = z.enum([
   "SCHEDULED",
   "PUBLISHING",
@@ -66,6 +76,6 @@ export function assertPublishingJobTransition(from: PublishingJobState, to: Publ
   }
 }
 
-export function automationId(prefix: "account" | "job" | "attempt" | "scrape" | "event") {
+export function automationId(prefix: "account" | "login" | "job" | "attempt" | "scrape" | "event") {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }

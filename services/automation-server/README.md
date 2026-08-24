@@ -16,10 +16,17 @@ an isolated local SQLite file under `.server-data`.
 - Expired publishing work moves to `UNCERTAIN` for verification instead of
   being blindly retried.
 - Internal-token protection for non-health endpoints.
+- Instagram login-session lifecycle with one active login per account.
+- Dedicated persistent Chrome/Edge profiles with password saving disabled.
+- Automatic connection detection from Instagram's authenticated session cookie;
+  the password is never sent to or stored by AgenticThat.
+- Loopback-only development page for creating and connecting a test account.
 - No Electron or Docker dependency.
 
-The actual remote login stream and platform Playwright executors are the next
-implementation phase. Until those are complete, keep all feature flags false.
+The local milestone opens Chrome/Edge on the automation-server computer. The
+actual browser stream inside the hosted AgenticThat website and the platform
+publishing executors are the next implementation phases. Committed feature
+flags remain false by default.
 
 ## Local setup
 
@@ -40,7 +47,14 @@ npm run server-architecture:db:migrate
 npm run server-architecture:dev
 ```
 
-4. Open `http://127.0.0.1:8800/health`.
+4. Check `http://127.0.0.1:8800/health`.
+5. For local login testing, set `SERVER_LOGIN_ENABLED=true` and a long random
+   `SERVER_ARCHITECTURE_INTERNAL_TOKEN` in `.env.local`, restart the service,
+   then open `http://127.0.0.1:8800/development/connect`.
+
+Google Chrome or Microsoft Edge must already be installed on the local server
+computer. The development page never asks for a social-media password; enter
+credentials only on the real Instagram page in the dedicated browser window.
 
 The migration is intentionally absent from `netlify.toml` and the root build.
 The database safety check refuses to open a SQLite file outside the isolated

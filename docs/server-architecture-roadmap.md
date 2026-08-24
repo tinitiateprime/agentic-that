@@ -19,18 +19,20 @@
 6. Per-account leases and monotonic fencing tokens.
 7. Safe `UNCERTAIN` recovery state for interrupted publication.
 8. Tests proving all server execution features remain disabled by default.
+9. Instagram login-session lifecycle and restart recovery.
+10. One isolated persistent Chrome/Edge profile per server account.
+11. Local connection page and automatic authenticated-session detection.
 
 ## Next development work
 
-1. Initialize the local SQLite database with the included migration command.
-2. Add the login-session state machine.
-3. Start headed Playwright Chromium without Electron.
-4. Stream the login browser to a local website page.
-5. Save one development-only account profile.
-6. Move one platform publisher behind `ServerPublishingExecutor`.
-7. Add the publishing worker heartbeat and profile-version write guard.
-8. Connect only a test workspace through a per-account `server` engine flag.
-9. Add temporary-browser scraping workers.
+1. Stream the server browser into an authenticated AgenticThat website page.
+2. Forward keyboard, pointer, clipboard, and resize events safely to Chromium.
+3. Add short-lived login-stream authorization and strict origin checks.
+4. Verify one development-only Instagram profile with a test account.
+5. Move the Instagram publisher behind `ServerPublishingExecutor`.
+6. Add the publishing worker heartbeat and profile-version write guard.
+7. Connect only a test workspace through a per-account `server` engine flag.
+8. Add temporary-browser scraping workers.
 
 ## Requirements before live production
 

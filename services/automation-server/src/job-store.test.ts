@@ -6,6 +6,7 @@ import test from "node:test";
 import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
 import { AutomationJobStore } from "./job-store.ts";
+import { AutomationLoginStore } from "./login-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { migrateAutomationSchema } from "./schema.ts";
 
@@ -43,6 +44,10 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     assert.equal(claimed?.id, job.id);
     assert.equal(claimed?.state, "PUBLISHING");
     assert.equal(store.claimDuePublishingJob("worker-b", 60), null);
+    assert.throws(
+      () => new AutomationLoginStore(database).createOrGetSession("test-workspace", account.id),
+      /publishing worker/,
+    );
     assert.equal(store.heartbeatPublishingJob(job.id, "worker-a", claimed!.fencingToken!, 60), true);
 
     const finished = store.finishPublishingJob({

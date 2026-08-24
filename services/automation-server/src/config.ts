@@ -9,6 +9,8 @@ export type AutomationConfig = {
   dataDirectory: string;
   databaseFile: string;
   internalToken: string;
+  browserExecutablePath: string;
+  loginTimeoutMs: number;
   executionEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
@@ -24,6 +26,14 @@ function port(value: string | undefined) {
   const parsed = Number(value || 8800);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
     throw new Error("SERVER_ARCHITECTURE_PORT must be an integer between 1 and 65535.");
+  }
+  return parsed;
+}
+
+function loginTimeout(value: string | undefined) {
+  const parsed = Number(value || 600_000);
+  if (!Number.isInteger(parsed) || parsed < 60_000 || parsed > 1_800_000) {
+    throw new Error("SERVER_LOGIN_TIMEOUT_MS must be between 60000 and 1800000 milliseconds.");
   }
   return parsed;
 }
@@ -51,6 +61,8 @@ export function loadAutomationConfig(
     dataDirectory,
     databaseFile,
     internalToken: env.SERVER_ARCHITECTURE_INTERNAL_TOKEN?.trim() || "",
+    browserExecutablePath: env.SERVER_BROWSER_EXECUTABLE_PATH?.trim() || "",
+    loginTimeoutMs: loginTimeout(env.SERVER_LOGIN_TIMEOUT_MS),
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),

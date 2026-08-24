@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v1";
+const MIGRATION_KEY = "server-architecture-sqlite-v2";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -35,6 +35,25 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         created_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS login_sessions (
+        id            TEXT PRIMARY KEY,
+        workspace_id  TEXT NOT NULL,
+        account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
+        platform      TEXT NOT NULL CHECK (platform IN ('instagram')),
+        state         TEXT NOT NULL
+                      CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
+        error_code    TEXT,
+        error_message TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        completed_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS login_sessions_account_idx
+        ON login_sessions (account_id, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS login_sessions_one_active_account_idx
+        ON login_sessions (account_id)
+        WHERE state IN ('STARTING', 'AWAITING_USER');
 
       CREATE TABLE IF NOT EXISTS publishing_jobs (
         id                TEXT PRIMARY KEY,
