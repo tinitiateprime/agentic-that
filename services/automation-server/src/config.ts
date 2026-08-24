@@ -1,0 +1,73 @@
+import path from "node:path";
+
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+export type AutomationConfig = {
+  host: string;
+  port: number;
+  dataDirectory: string;
+  databaseUrl: string;
+  databasePurpose: "development" | "staging" | "production";
+  databaseNameConfirmation: string;
+  internalToken: string;
+  executionEnabled: boolean;
+  loginEnabled: boolean;
+  scrapingEnabled: boolean;
+  autoMigrate: boolean;
+  allowPublicBind: boolean;
+  allowRemoteDatabase: boolean;
+};
+
+function enabled(value: string | undefined) {
+  return TRUE_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function port(value: string | undefined) {
+  const parsed = Number(value || 8800);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error("SERVER_ARCHITECTURE_PORT must be an integer between 1 and 65535.");
+  }
+  return parsed;
+}
+
+function purpose(value: string | undefined): AutomationConfig["databasePurpose"] {
+  const normalized = String(value || "development").trim().toLowerCase();
+  if (!["development", "staging", "production"].includes(normalized)) {
+    throw new Error("SERVER_ARCHITECTURE_DATABASE_PURPOSE must be development, staging, or production.");
+  }
+  return normalized as AutomationConfig["databasePurpose"];
+}
+
+export function loadAutomationConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
+): AutomationConfig {
+  const allowPublicBind = enabled(env.SERVER_ARCHITECTURE_ALLOW_PUBLIC_BIND);
+  const host = String(env.SERVER_ARCHITECTURE_HOST || "127.0.0.1").trim();
+  if (!LOOPBACK_HOSTS.has(host) && !allowPublicBind) {
+    throw new Error(
+      "Refusing a public automation-server bind. Set SERVER_ARCHITECTURE_ALLOW_PUBLIC_BIND=true only in an intentionally secured environment.",
+    );
+  }
+
+  return {
+    host,
+    port: port(env.SERVER_ARCHITECTURE_PORT),
+    dataDirectory: path.resolve(cwd, env.SERVER_ARCHITECTURE_DATA_DIR?.trim() || ".server-data"),
+    databaseUrl: env.SERVER_ARCHITECTURE_DATABASE_URL?.trim() || "",
+    databasePurpose: purpose(env.SERVER_ARCHITECTURE_DATABASE_PURPOSE),
+    databaseNameConfirmation: env.SERVER_ARCHITECTURE_CONFIRM_PRODUCTION_DATABASE?.trim() || "",
+    internalToken: env.SERVER_ARCHITECTURE_INTERNAL_TOKEN?.trim() || "",
+    executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
+    loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
+    scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
+    autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
+    allowPublicBind,
+    allowRemoteDatabase: enabled(env.SERVER_ARCHITECTURE_ALLOW_REMOTE_DATABASE),
+  };
+}
+
+export function isLoopbackHost(host: string) {
+  return LOOPBACK_HOSTS.has(host.trim().toLowerCase());
+}

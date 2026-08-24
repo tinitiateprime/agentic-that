@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  assertPublishingJobTransition,
+  automationId,
+  createPublishingJobSchema,
+} from "./contracts.ts";
+
+test("publishing state machine permits safe progress and rejects terminal retries", () => {
+  assert.doesNotThrow(() => assertPublishingJobTransition("SCHEDULED", "PUBLISHING"));
+  assert.doesNotThrow(() => assertPublishingJobTransition("PUBLISHING", "UNCERTAIN"));
+  assert.doesNotThrow(() => assertPublishingJobTransition("UNCERTAIN", "VERIFYING"));
+  assert.throws(() => assertPublishingJobTransition("PUBLISHED", "SCHEDULED"), /cannot move/);
+  assert.throws(() => assertPublishingJobTransition("SCHEDULED", "PUBLISHED"), /cannot move/);
+});
+
+test("a publishing job needs content and a timezone-aware schedule", () => {
+  const valid = createPublishingJobSchema.parse({
+    workspaceId: "workspace_test",
+    accountId: "account_test",
+    scheduledAt: "2026-08-24T12:00:00+05:30",
+    originalTimezone: "Asia/Calcutta",
+    caption: "A safe staging post",
+    idempotencyKey: "staging-job-0001",
+  });
+  assert.equal(valid.media.length, 0);
+  assert.throws(() => createPublishingJobSchema.parse({
+    workspaceId: "workspace_test",
+    accountId: "account_test",
+    scheduledAt: "2026-08-24T12:00:00",
+    caption: "",
+    idempotencyKey: "staging-job-0002",
+  }));
+});
+
+test("automation ids are opaque and namespaced", () => {
+  assert.match(automationId("job"), /^job_[a-f0-9]{32}$/);
+});

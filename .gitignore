@@ -29,5 +29,6 @@ public/console/
 public/telegram-console-assets/
 /data/
 /artifacts/
+/.server-data/
 apps/publishing-companion-desktop/out/
 apps/publishing-companion-desktop/runtime/
