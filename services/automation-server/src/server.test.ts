@@ -36,6 +36,7 @@ test("health reports every new execution feature disabled by default", async () 
     assert.deepEqual(body.features, {
       publishing: false,
       publishingDryRun: false,
+      publishingPreview: false,
       login: false,
       scraping: false,
     });
@@ -51,6 +52,7 @@ test("the local connection page contains a valid website-browser client and no p
     internalToken: "local-test-token",
     loginEnabled: true,
     publishingDryRunEnabled: true,
+    publishingPreviewEnabled: true,
   });
   const start = html.indexOf("<script>") + "<script>".length;
   const end = html.lastIndexOf("</script>");
@@ -123,16 +125,17 @@ test("enabled local login routes start a workspace-scoped session", async () => 
   }
 });
 
-test("publishing dry-runs are isolated from the disabled live publishing route", async () => {
+test("publishing checks and previews are isolated from the disabled live publishing route", async () => {
   const config = loadAutomationConfig({
     SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
     SERVER_PUBLISHING_DRY_RUN_ENABLED: "true",
+    SERVER_PUBLISHING_PREVIEW_ENABLED: "true",
   });
-  let requestedMode = "";
+  const requests: Array<{ mode: string; stage: string }> = [];
   const fakeStore = {
-    createPublishingJob(_body: unknown, mode: string) {
-      requestedMode = mode;
-      return { id: "job_dry_run", executionMode: mode, state: "SCHEDULED" };
+    createPublishingJob(_body: unknown, mode: string, stage = "LOCAL") {
+      requests.push({ mode, stage });
+      return { id: `job_${stage.toLowerCase()}`, executionMode: mode, validationStage: stage, state: "SCHEDULED" };
     },
   } as unknown as AutomationJobStore;
   const runtime = await listen(createAutomationApp({
@@ -152,8 +155,17 @@ test("publishing dry-runs are isolated from the disabled live publishing route",
       body: "{}",
     });
     assert.equal(dryRun.status, 201);
-    assert.equal(requestedMode, "DRY_RUN");
+    assert.deepEqual(requests[0], { mode: "DRY_RUN", stage: "LOCAL" });
     assert.equal((await dryRun.json()).job.executionMode, "DRY_RUN");
+
+    const preview = await fetch(`${runtime.url}/v1/publishing/previews`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    assert.equal(preview.status, 201);
+    assert.deepEqual(requests[1], { mode: "DRY_RUN", stage: "INSTAGRAM_PREVIEW" });
+    assert.equal((await preview.json()).job.validationStage, "INSTAGRAM_PREVIEW");
 
     const live = await fetch(`${runtime.url}/v1/publishing/jobs`, {
       method: "POST",
@@ -161,6 +173,49 @@ test("publishing dry-runs are isolated from the disabled live publishing route",
       body: "{}",
     });
     assert.equal(live.status, 409);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("private preview frames are token- and workspace-scoped", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_PUBLISHING_PREVIEW_ENABLED: "true",
+  });
+  const screenshot = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const fakeStore = {
+    getPublishingJob(workspaceId: string, jobId: string) {
+      if (workspaceId !== "workspace_test" || jobId !== "job_preview") return null;
+      return {
+        id: jobId,
+        validationStage: "INSTAGRAM_PREVIEW",
+        errorCode: "PREVIEW_COMPLETE",
+      };
+    },
+  } as unknown as AutomationJobStore;
+  const fakeFiles = {
+    async readPublishingPreview(jobId: string) {
+      assert.equal(jobId, "job_preview");
+      return screenshot;
+    },
+  } as AutomationFileStore;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: fakeStore,
+    loginManager: null,
+    files: fakeFiles,
+  }));
+  try {
+    const unauthorized = await fetch(`${runtime.url}/v1/publishing/previews/job_preview/frame?workspaceId=workspace_test`);
+    assert.equal(unauthorized.status, 401);
+    const response = await fetch(`${runtime.url}/v1/publishing/previews/job_preview/frame?workspaceId=workspace_test`, {
+      headers: { "x-agenticthat-internal-token": config.internalToken },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), screenshot);
   } finally {
     await runtime.close();
   }

@@ -52,3 +52,18 @@ test("media storage keys cannot escape the isolated media directory", async () =
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("publishing preview screenshots use opaque job-scoped result paths", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-preview-files-"));
+  const files = new AutomationFileStore(directory);
+  try {
+    await files.initialize();
+    const screenshot = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const key = await files.storePublishingPreview("job_preview_test", screenshot);
+    assert.match(key, /^preview_[a-f0-9]{32}\.jpg$/);
+    assert.deepEqual(await files.readPublishingPreview("job_preview_test"), screenshot);
+    assert.equal(files.publishingPreviewPath("job_preview_test").startsWith(files.resultsRoot), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

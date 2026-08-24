@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export class AutomationFileStore {
@@ -74,6 +74,28 @@ export class AutomationFileStore {
     const storageKey = `media_${randomUUID().replaceAll("-", "")}${extension}`;
     await writeFile(this.mediaFilePath(storageKey), bytes, { flag: "wx", mode: 0o600 });
     return { storageKey, fileName, mimeType: mimeType.toLowerCase(), size: bytes.length };
+  }
+
+  publishingPreviewStorageKey(jobId: string) {
+    if (!jobId.trim()) throw new Error("A job id is required for preview storage.");
+    return `preview_${createHash("sha256").update(jobId).digest("hex").slice(0, 32)}.jpg`;
+  }
+
+  publishingPreviewPath(jobId: string) {
+    return this.inside(this.resultsRoot, this.publishingPreviewStorageKey(jobId));
+  }
+
+  async storePublishingPreview(jobId: string, screenshot: Buffer) {
+    if (!screenshot.length || screenshot.length > 10 * 1024 * 1024) {
+      throw new Error("The publishing preview screenshot must be between 1 byte and 10 MB.");
+    }
+    const storageKey = this.publishingPreviewStorageKey(jobId);
+    await writeFile(this.publishingPreviewPath(jobId), screenshot, { mode: 0o600 });
+    return storageKey;
+  }
+
+  async readPublishingPreview(jobId: string) {
+    return readFile(this.publishingPreviewPath(jobId));
   }
 
   async createTemporaryScrapingDirectory() {

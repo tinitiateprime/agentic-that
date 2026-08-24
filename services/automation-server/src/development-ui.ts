@@ -2,6 +2,7 @@ export function developmentConnectPage(options: {
   internalToken: string;
   loginEnabled: boolean;
   publishingDryRunEnabled: boolean;
+  publishingPreviewEnabled: boolean;
 }) {
   const bootstrap = JSON.stringify(options).replaceAll("<", "\\u003c");
   return `<!doctype html>
@@ -50,9 +51,13 @@ export function developmentConnectPage(options: {
     .browser-help { margin: 11px 0 0; font-size: 12px; }
     #dry-run-form { grid-template-columns: 1fr 1fr auto; }
     #dry-run-form .dry-caption { grid-column: 1 / -1; }
+    .dry-actions { display: flex; gap: 8px; align-items: center; }
     #dry-run-status { min-height: 22px; margin: 14px 0 0; font-size: 14px; color: #51615b; }
     #dry-run-status.error { color: #a23131; }
     #dry-run-status.success { color: #11643f; }
+    #preview-result[hidden] { display: none; }
+    #preview-result { margin-top: 16px; }
+    #preview-frame { display: block; width: 100%; margin-top: 10px; border: 1px solid #c9d5d1; border-radius: 13px; }
     @media (max-width: 700px) { form { grid-template-columns: 1fr; } article { align-items: flex-start; flex-wrap: wrap; } }
   </style>
 </head>
@@ -80,10 +85,18 @@ export function developmentConnectPage(options: {
       <form id="dry-run-form">
         <label>Connected account<select id="dry-run-account" required></select></label>
         <label>Test image<input id="dry-run-media" type="file" accept="image/jpeg,image/png" required /></label>
-        <button id="dry-run-button" type="submit">Run safe check</button>
+        <div class="dry-actions">
+          <button id="dry-run-button" type="submit">Run safe check</button>
+          <button id="preview-button" class="secondary" type="button">Prepare private preview</button>
+        </div>
         <label class="dry-caption">Test caption<textarea id="dry-run-caption" maxlength="2200">AgenticThat local publishing dry run</textarea></label>
       </form>
       <p id="dry-run-status" role="status"></p>
+      <div id="preview-result" hidden>
+        <strong>Private Instagram composer preview</strong>
+        <p>The server closed Instagram before Share. This screenshot is stored only in isolated local development data.</p>
+        <img id="preview-frame" alt="Instagram composer prepared without publishing" />
+      </div>
     </section>
     <section id="browser-panel" hidden>
       <div class="browser-head">
@@ -111,12 +124,16 @@ export function developmentConnectPage(options: {
     const dryRunMedia = document.querySelector('#dry-run-media');
     const dryRunCaption = document.querySelector('#dry-run-caption');
     const dryRunButton = document.querySelector('#dry-run-button');
+    const previewButton = document.querySelector('#preview-button');
     const dryRunStatus = document.querySelector('#dry-run-status');
+    const previewResult = document.querySelector('#preview-result');
+    const previewFrame = document.querySelector('#preview-frame');
     const terminalStates = new Set(['CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED']);
     let polling = null;
     let framePolling = null;
     let activeSessionId = null;
     let frameObjectUrl = null;
+    let previewObjectUrl = null;
     let inputQueue = Promise.resolve();
 
     function message(value, tone = '') {
@@ -228,6 +245,7 @@ export function developmentConnectPage(options: {
       }));
       if (connected.some(account => account.id === selectedAccount)) dryRunAccount.value = selectedAccount;
       dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || connected.length === 0;
+      previewButton.disabled = !bootstrap.publishingPreviewEnabled || connected.length === 0;
       if (!body.accounts.length) {
         const empty = document.createElement('p');
         empty.textContent = 'No isolated development accounts yet.';
@@ -265,6 +283,42 @@ export function developmentConnectPage(options: {
         dryRunMessage('All safe worker checks passed. No website was opened and nothing was published.', 'success');
       } else {
         dryRunMessage(job.errorMessage || ('Dry-run finished with status ' + job.state + '.'), 'error');
+      }
+      return job;
+    }
+
+    async function loadPreviewFrame(jobId) {
+      const workspaceId = workspaceElement.value.trim();
+      const response = await fetch(
+        '/v1/publishing/previews/' + encodeURIComponent(jobId) + '/frame?workspaceId=' + encodeURIComponent(workspaceId),
+        { headers: { 'x-agenticthat-internal-token': bootstrap.internalToken }, cache: 'no-store' },
+      );
+      if (!response.ok) throw new Error('The private Instagram preview screenshot could not be loaded.');
+      const nextUrl = URL.createObjectURL(await response.blob());
+      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = nextUrl;
+      previewFrame.src = nextUrl;
+      previewResult.hidden = false;
+      previewResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    async function pollPreview(jobId, deadline = Date.now() + 210_000) {
+      if (Date.now() > deadline) throw new Error('The Instagram preview worker did not finish within 3.5 minutes.');
+      const workspaceId = workspaceElement.value.trim();
+      const body = await api('/v1/publishing/jobs/' + encodeURIComponent(jobId) + '?workspaceId=' + encodeURIComponent(workspaceId));
+      const job = body.job;
+      if (job.state === 'SCHEDULED' || job.state === 'PUBLISHING') {
+        dryRunMessage(job.state === 'SCHEDULED'
+          ? 'Waiting for the private Instagram preview worker...'
+          : 'Opening Instagram and preparing the composer. Share will not be clicked...');
+        await new Promise(resolve => setTimeout(resolve, 750));
+        return pollPreview(jobId, deadline);
+      }
+      if (job.errorCode === 'PREVIEW_COMPLETE') {
+        await loadPreviewFrame(jobId);
+        dryRunMessage('Private composer preview prepared. Instagram was closed before Share; nothing was published.', 'success');
+      } else {
+        dryRunMessage(job.errorMessage || ('Preview finished with status ' + job.state + '.'), 'error');
       }
       return job;
     }
@@ -394,6 +448,7 @@ export function developmentConnectPage(options: {
       const file = dryRunMedia.files?.[0];
       if (!file || !dryRunAccount.value) return;
       dryRunButton.disabled = true;
+      previewButton.disabled = true;
       try {
         dryRunMessage('Saving test media into isolated local storage...');
         const media = await uploadDryRunMedia(file);
@@ -414,7 +469,42 @@ export function developmentConnectPage(options: {
       } catch (error) {
         dryRunMessage(error.message, 'error');
       } finally {
-        dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || dryRunAccount.options.length === 0;
+        await refresh().catch(() => undefined);
+      }
+    });
+
+    previewButton.addEventListener('click', async () => {
+      const file = dryRunMedia.files?.[0];
+      if (!file || !dryRunAccount.value) {
+        dryRunMessage('Choose a connected account and one JPEG or PNG first.', 'error');
+        return;
+      }
+      const confirmed = window.confirm('This will open Instagram on the server and upload the test image into its private composer. The server will stop before Share and close the browser. Continue?');
+      if (!confirmed) return;
+      dryRunButton.disabled = true;
+      previewButton.disabled = true;
+      previewResult.hidden = true;
+      try {
+        dryRunMessage('Saving test media into isolated local storage...');
+        const media = await uploadDryRunMedia(file);
+        dryRunMessage('Creating the non-publishing Instagram preview job...');
+        const body = await api('/v1/publishing/previews', {
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId: workspaceElement.value.trim(),
+            accountId: dryRunAccount.value,
+            scheduledAt: new Date(Date.now() - 1_000).toISOString(),
+            originalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+            caption: dryRunCaption.value,
+            media: [{ storageKey: media.storageKey, fileName: media.fileName, mimeType: media.mimeType }],
+            idempotencyKey: 'preview-' + crypto.randomUUID(),
+          }),
+        });
+        await pollPreview(body.job.id);
+      } catch (error) {
+        dryRunMessage(error.message, 'error');
+      } finally {
+        await refresh().catch(() => undefined);
       }
     });
 

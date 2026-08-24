@@ -38,6 +38,18 @@ export interface PublishingDryRunValidator {
   ): Promise<PublishingDryRunResult>;
 }
 
+export type PublishingPreviewResult = {
+  screenshot: Buffer;
+  checks: string[];
+};
+
+// Preview executors may open the platform and prepare a composer, but this
+// boundary deliberately exposes no publish/final-action method.
+export interface PublishingPreviewExecutor {
+  readonly platform: SocialPlatform;
+  prepare(job: ClaimedPublishingJob, signal: AbortSignal): Promise<PublishingPreviewResult>;
+}
+
 // Platform browser implementations will be moved behind this boundary one at a
 // time. The current Companion publishers are deliberately not imported here,
 // so adding this service cannot change the production execution path.

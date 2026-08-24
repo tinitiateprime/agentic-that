@@ -27,6 +27,7 @@ type PublishingJobRow = {
   workspace_id: string;
   account_id: string;
   execution_mode: "DRY_RUN" | "LIVE";
+  validation_stage: "LOCAL" | "INSTAGRAM_PREVIEW";
   platform?: SocialPlatform;
   state: PublishingJobState;
   scheduled_at: string;
@@ -79,6 +80,7 @@ function publicJob(row: PublishingJobRow) {
     workspaceId: row.workspace_id,
     accountId: row.account_id,
     executionMode: row.execution_mode,
+    validationStage: row.validation_stage,
     platform: row.platform || null,
     state: row.state,
     scheduledAt: timestamp(row.scheduled_at),
@@ -136,7 +138,14 @@ export class AutomationJobStore {
     return rows.map(publicAccount);
   }
 
-  createPublishingJob(input: unknown, executionMode: "DRY_RUN" | "LIVE" = "LIVE") {
+  createPublishingJob(
+    input: unknown,
+    executionMode: "DRY_RUN" | "LIVE" = "LIVE",
+    validationStage: "LOCAL" | "INSTAGRAM_PREVIEW" = "LOCAL",
+  ) {
+    if (executionMode === "LIVE" && validationStage !== "LOCAL") {
+      throw new Error("A publishing preview cannot be created as a live job.");
+    }
     const value = createPublishingJobSchema.parse(input);
     const account = this.database.prepare(`
       SELECT * FROM social_accounts
@@ -152,6 +161,7 @@ export class AutomationJobStore {
     if (existing) {
       const sameRequest = existing.account_id === value.accountId
         && existing.execution_mode === executionMode
+        && existing.validation_stage === validationStage
         && existing.scheduled_at === scheduledAt
         && existing.original_timezone === value.originalTimezone
         && existing.caption === value.caption
@@ -166,14 +176,15 @@ export class AutomationJobStore {
     const createdAt = now();
     this.database.prepare(`
       INSERT INTO publishing_jobs
-        (id, workspace_id, account_id, execution_mode, scheduled_at, original_timezone, caption, media,
+        (id, workspace_id, account_id, execution_mode, validation_stage, scheduled_at, original_timezone, caption, media,
          idempotency_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       value.workspaceId,
       value.accountId,
       executionMode,
+      validationStage,
       scheduledAt,
       value.originalTimezone,
       value.caption,
@@ -193,7 +204,12 @@ export class AutomationJobStore {
     return row ? publicJob(row) : null;
   }
 
-  claimDuePublishingJob(workerId: string, leaseSeconds = 300, executionMode: "DRY_RUN" | "LIVE" = "LIVE") {
+  claimDuePublishingJob(
+    workerId: string,
+    leaseSeconds = 300,
+    executionMode: "DRY_RUN" | "LIVE" = "LIVE",
+    validationStage: "LOCAL" | "INSTAGRAM_PREVIEW" = "LOCAL",
+  ) {
     if (!workerId.trim()) throw new Error("A worker id is required to claim publishing work.");
     if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) {
       throw new Error("Publishing leases must be between 30 and 1800 seconds.");
@@ -209,6 +225,7 @@ export class AutomationJobStore {
         LEFT JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
         WHERE job.state = 'SCHEDULED'
           AND job.execution_mode = ?
+          AND job.validation_stage = ?
           AND job.scheduled_at <= ?
           AND account.enabled = 1
           AND account.status = 'CONNECTED'
@@ -220,7 +237,7 @@ export class AutomationJobStore {
           )
         ORDER BY job.scheduled_at, job.created_at
         LIMIT 1
-      `).get(executionMode, claimedAt, claimedAt) as PublishingJobRow | undefined;
+      `).get(executionMode, validationStage, claimedAt, claimedAt) as PublishingJobRow | undefined;
       if (!candidate) return null;
 
       const existingLock = this.database.prepare(`
@@ -326,6 +343,7 @@ export class AutomationJobStore {
         FROM publishing_jobs job
         JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
         WHERE job.id = ? AND job.execution_mode = 'DRY_RUN'
+          AND job.validation_stage = 'LOCAL'
           AND job.lease_owner = ? AND job.fencing_token = ?
           AND account_lock.lease_owner = ? AND account_lock.fencing_token = ?
           AND account_lock.lease_expires_at > ?
@@ -378,6 +396,84 @@ export class AutomationJobStore {
         INSERT INTO job_events
           (id, workspace_id, job_id, job_type, event_type, detail, created_at)
         VALUES (?, ?, ?, 'publishing', 'dry_run_completed', ?, ?)
+      `).run(automationId("event"), current.workspace_id, current.id, detail, completedAt);
+      const row = this.database.prepare("SELECT * FROM publishing_jobs WHERE id = ?").get(input.jobId) as PublishingJobRow;
+      return publicJob(row);
+    });
+  }
+
+  completePublishingPreview(input: {
+    jobId: string;
+    workerId: string;
+    fencingToken: number;
+    valid: boolean;
+    checks: string[];
+    issues: string[];
+    screenshotKey?: string;
+    loginRequired?: boolean;
+  }) {
+    return withImmediateTransaction(this.database, () => {
+      const completedAt = now();
+      const current = this.database.prepare(`
+        SELECT job.*
+        FROM publishing_jobs job
+        JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
+        WHERE job.id = ? AND job.execution_mode = 'DRY_RUN'
+          AND job.validation_stage = 'INSTAGRAM_PREVIEW'
+          AND job.lease_owner = ? AND job.fencing_token = ?
+          AND account_lock.lease_owner = ? AND account_lock.fencing_token = ?
+          AND account_lock.lease_expires_at > ?
+      `).get(
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+        input.workerId,
+        input.fencingToken,
+        completedAt,
+      ) as PublishingJobRow | undefined;
+      if (!current) throw new Error("The preview publishing lease is no longer owned by this worker.");
+
+      const errorCode = input.valid
+        ? "PREVIEW_COMPLETE"
+        : input.loginRequired ? "PREVIEW_LOGIN_REQUIRED" : "PREVIEW_FAILED";
+      const errorMessage = input.valid
+        ? "Instagram composer preview prepared and closed before Share. Nothing was published."
+        : `Instagram preview failed: ${input.issues.join(" ")}`;
+      this.database.prepare(`
+        UPDATE publishing_jobs
+        SET state = 'CANCELLED', error_code = ?, error_message = ?,
+            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(errorCode, errorMessage, completedAt, input.jobId);
+      this.database.prepare(`
+        UPDATE account_execution_locks
+        SET lease_owner = NULL, lease_expires_at = ?, updated_at = ?
+        WHERE account_id = ? AND lease_owner = ? AND fencing_token = ?
+      `).run(new Date(0).toISOString(), completedAt, current.account_id, input.workerId, input.fencingToken);
+      if (input.loginRequired) {
+        this.database.prepare(`
+          UPDATE social_accounts SET status = 'LOGIN_REQUIRED', updated_at = ? WHERE id = ?
+        `).run(completedAt, current.account_id);
+      }
+      const detail = JSON.stringify({
+        preview: true,
+        valid: input.valid,
+        checks: input.checks,
+        issues: input.issues,
+        screenshotKey: input.screenshotKey || null,
+        networkAccess: true,
+        finalShareClicked: false,
+        published: false,
+      });
+      this.database.prepare(`
+        UPDATE publishing_attempts
+        SET state = ?, completed_at = ?, detail = ?
+        WHERE job_id = ? AND worker_id = ? AND fencing_token = ?
+      `).run(errorCode, completedAt, detail, input.jobId, input.workerId, input.fencingToken);
+      this.database.prepare(`
+        INSERT INTO job_events
+          (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'publishing', 'preview_completed', ?, ?)
       `).run(automationId("event"), current.workspace_id, current.id, detail, completedAt);
       const row = this.database.prepare("SELECT * FROM publishing_jobs WHERE id = ?").get(input.jobId) as PublishingJobRow;
       return publicJob(row);
@@ -477,13 +573,18 @@ export class AutomationJobStore {
         WHERE state IN ('PUBLISHING', 'VERIFYING') AND lease_expires_at <= ?
       `).all(checkedAt) as unknown as PublishingJobRow[];
       for (const row of rows) {
+        const nonPublishing = row.execution_mode === "DRY_RUN";
+        const finalState = nonPublishing ? "CANCELLED" : "UNCERTAIN";
+        const errorCode = nonPublishing ? "VALIDATION_LEASE_EXPIRED" : "WORKER_LEASE_EXPIRED";
+        const errorMessage = nonPublishing
+          ? "The non-publishing validation worker stopped. Nothing was published; run the check again."
+          : "The worker lease expired during publishing. Verify the platform before retrying.";
         this.database.prepare(`
           UPDATE publishing_jobs
-          SET state = 'UNCERTAIN', error_code = 'WORKER_LEASE_EXPIRED',
-              error_message = 'The worker lease expired during publishing. Verify the platform before retrying.',
+          SET state = ?, error_code = ?, error_message = ?,
               lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
           WHERE id = ?
-        `).run(checkedAt, row.id);
+        `).run(finalState, errorCode, errorMessage, checkedAt, row.id);
         this.database.prepare(`
           UPDATE account_execution_locks
           SET lease_owner = NULL, lease_expires_at = ?, updated_at = ?
@@ -491,11 +592,16 @@ export class AutomationJobStore {
         `).run(new Date(0).toISOString(), checkedAt, row.account_id, row.fencing_token);
         this.database.prepare(`
           UPDATE publishing_attempts
-          SET state = 'UNCERTAIN', completed_at = ?, detail = ?
+          SET state = ?, completed_at = ?, detail = ?
           WHERE job_id = ? AND fencing_token = ? AND completed_at IS NULL
         `).run(
+          finalState,
           checkedAt,
-          JSON.stringify({ errorCode: "WORKER_LEASE_EXPIRED" }),
+          JSON.stringify({
+            errorCode,
+            published: false,
+            finalShareClicked: nonPublishing ? false : null,
+          }),
           row.id,
           row.fencing_token,
         );
@@ -507,7 +613,7 @@ export class AutomationJobStore {
           automationId("event"),
           row.workspace_id,
           row.id,
-          JSON.stringify({ fencingToken: row.fencing_token }),
+          JSON.stringify({ fencingToken: row.fencing_token, errorCode }),
           checkedAt,
         );
       }

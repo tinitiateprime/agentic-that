@@ -40,6 +40,12 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     const job = store.createPublishingJob(request);
     assert.equal(store.createPublishingJob(request).id, job.id);
     assert.throws(() => store.createPublishingJob(request, "DRY_RUN"), /idempotency key/);
+    const validationRequest = { ...request, idempotencyKey: "sqlite-validation-request" };
+    store.createPublishingJob(validationRequest, "DRY_RUN", "LOCAL");
+    assert.throws(
+      () => store.createPublishingJob(validationRequest, "DRY_RUN", "INSTAGRAM_PREVIEW"),
+      /idempotency key/,
+    );
 
     const claimed = store.claimDuePublishingJob("worker-a", 60);
     assert.equal(claimed?.id, job.id);
@@ -60,6 +66,17 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     });
     assert.equal(finished.state, "PUBLISHED");
     assert.equal(store.heartbeatPublishingJob(job.id, "worker-a", claimed!.fencingToken!, 60), false);
+
+    const validationClaimed = store.claimDuePublishingJob("validation-worker", 60, "DRY_RUN", "LOCAL");
+    assert.equal(validationClaimed?.validationStage, "LOCAL");
+    const expiredAt = new Date(0).toISOString();
+    database.prepare("UPDATE publishing_jobs SET lease_expires_at = ? WHERE id = ?")
+      .run(expiredAt, validationClaimed!.id);
+    database.prepare("UPDATE account_execution_locks SET lease_expires_at = ? WHERE account_id = ?")
+      .run(expiredAt, account.id);
+    const [quarantined] = store.quarantineExpiredPublishingJobs();
+    assert.equal(quarantined?.state, "CANCELLED");
+    assert.equal(quarantined?.errorCode, "VALIDATION_LEASE_EXPIRED");
   } finally {
     database.close();
     await rm(directory, { recursive: true, force: true });

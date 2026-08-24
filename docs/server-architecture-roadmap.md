@@ -25,6 +25,8 @@
 12. Local website browser frames and bounded pointer/keyboard input relay.
 13. Non-networked Instagram publishing dry-run worker using production-shaped
     queue leases, profile/media validation, and terminal audit records.
+14. Confirmation-gated Instagram composer preview with a separate job stage,
+    saved-profile browser execution, private screenshot result, and no Share action.
 
 ## Next development work
 
@@ -32,7 +34,8 @@
 2. Replace local frame polling with an efficient TLS/WSS streaming transport.
 3. Add short-lived login-stream authorization and strict origin checks.
 4. Add remote-server viewport resizing and reconnect handling.
-5. Move the Instagram publisher behind `ServerPublishingExecutor`.
+5. Build the final Instagram publisher behind `ServerPublishingExecutor` after
+   the private composer preview is proven with a test account.
 6. Add the profile-version write guard to the future live executor.
 7. Connect only a test workspace through a per-account `server` engine flag.
 8. Add temporary-browser scraping workers.

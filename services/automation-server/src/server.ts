@@ -10,7 +10,9 @@ import { AutomationLoginStore } from "./login-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
+import { PlaywrightInstagramPreviewExecutor } from "./instagram-preview.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
+import { AutomationPublishingPreviewWorker } from "./publishing-preview-worker.ts";
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
@@ -40,6 +42,15 @@ export async function startAutomationServer() {
         config.workerPollMs,
       )
     : null;
+  const publishingPreviewWorker = store && config.publishingPreviewEnabled
+    ? new AutomationPublishingPreviewWorker(
+        store,
+        files,
+        new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
+        new Map([["instagram", new PlaywrightInstagramPreviewExecutor(files, config.browserExecutablePath)]]),
+        config.workerPollMs,
+      )
+    : null;
 
   const app = createAutomationApp({ config, databaseReady, store, loginManager, files });
   const server = await new Promise<Server>((resolve, reject) => {
@@ -47,10 +58,12 @@ export async function startAutomationServer() {
     listener.once("error", reject);
   });
   publishingDryRunWorker?.start();
+  publishingPreviewWorker?.start();
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await publishingDryRunWorker?.stop();
+    await publishingPreviewWorker?.stop();
     await loginManager?.shutdown();
     database.close();
   };

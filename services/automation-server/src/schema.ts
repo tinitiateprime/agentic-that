@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v4";
+const MIGRATION_KEY = "server-architecture-sqlite-v5";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -61,6 +61,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         workspace_id      TEXT NOT NULL,
         account_id        TEXT NOT NULL REFERENCES social_accounts(id),
         execution_mode    TEXT NOT NULL DEFAULT 'LIVE' CHECK (execution_mode IN ('DRY_RUN', 'LIVE')),
+        validation_stage  TEXT NOT NULL DEFAULT 'LOCAL' CHECK (validation_stage IN ('LOCAL', 'INSTAGRAM_PREVIEW')),
         state             TEXT NOT NULL DEFAULT 'SCHEDULED'
                           CHECK (state IN ('SCHEDULED', 'PUBLISHING', 'VERIFYING', 'PUBLISHED', 'FAILED', 'LOGIN_REQUIRED', 'UNCERTAIN', 'CANCELLED')),
         scheduled_at      TEXT NOT NULL,
@@ -149,6 +150,17 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
           CHECK (execution_mode IN ('DRY_RUN', 'LIVE'))
       `);
     }
+    if (!publishingColumns.some(column => column.name === "validation_stage")) {
+      database.exec(`
+        ALTER TABLE publishing_jobs
+        ADD COLUMN validation_stage TEXT NOT NULL DEFAULT 'LOCAL'
+          CHECK (validation_stage IN ('LOCAL', 'INSTAGRAM_PREVIEW'))
+      `);
+    }
+    database.exec(`
+      CREATE INDEX IF NOT EXISTS publishing_jobs_mode_due_idx
+      ON publishing_jobs (execution_mode, validation_stage, state, scheduled_at)
+    `);
 
     database.prepare(`
       INSERT OR IGNORE INTO schema_migrations (key, applied_at)

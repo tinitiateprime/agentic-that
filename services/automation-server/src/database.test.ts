@@ -54,6 +54,7 @@ test("migration creates the local SQLite schema", async () => {
     assert.equal(columns.some(column => column.name === "surface"), true);
     const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;
     assert.equal(publishingColumns.some(column => column.name === "execution_mode"), true);
+    assert.equal(publishingColumns.some(column => column.name === "validation_stage"), true);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
   } finally {

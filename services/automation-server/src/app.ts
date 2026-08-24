@@ -41,6 +41,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       internalToken: config.internalToken,
       loginEnabled: config.loginEnabled,
       publishingDryRunEnabled: config.publishingDryRunEnabled,
+      publishingPreviewEnabled: config.publishingPreviewEnabled,
     }));
   });
 
@@ -56,6 +57,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       features: {
         publishing: config.executionEnabled,
         publishingDryRun: config.publishingDryRunEnabled,
+        publishingPreview: config.publishingPreviewEnabled,
         login: config.loginEnabled,
         scraping: config.scrapingEnabled,
       },
@@ -204,13 +206,22 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     res.status(201).json({ job });
   });
 
+  app.post("/v1/publishing/previews", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.publishingPreviewEnabled) {
+      res.status(409).json({ error: "Instagram publishing previews are disabled." });
+      return;
+    }
+    const job = await store!.createPublishingJob(req.body, "DRY_RUN", "INSTAGRAM_PREVIEW");
+    res.status(201).json({ job });
+  });
+
   app.post(
     "/v1/media",
     requireInternalToken,
     requireStore,
     express.raw({ type: () => true, limit: "25mb" }),
     async (req, res) => {
-      if (!config.publishingDryRunEnabled || !files) {
+      if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled) || !files) {
         res.status(409).json({ error: "Publishing dry-run media storage is disabled." });
         return;
       }
@@ -249,6 +260,34 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     res.json({ job });
+  });
+
+  app.get("/v1/publishing/previews/:jobId/frame", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.publishingPreviewEnabled || !files) {
+      res.status(409).json({ error: "Instagram publishing previews are disabled." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    const job = await store!.getPublishingJob(workspaceId, String(req.params.jobId));
+    if (!job || job.validationStage !== "INSTAGRAM_PREVIEW" || job.errorCode !== "PREVIEW_COMPLETE") {
+      res.status(404).json({ error: "Publishing preview not found." });
+      return;
+    }
+    try {
+      const screenshot = await files.readPublishingPreview(job.id);
+      res.set("cache-control", "no-store");
+      res.type("jpeg").send(screenshot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        res.status(404).json({ error: "Publishing preview screenshot not found." });
+        return;
+      }
+      throw error;
+    }
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

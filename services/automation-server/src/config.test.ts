@@ -10,6 +10,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.loginEnabled, false);
   assert.equal(config.scrapingEnabled, false);
   assert.equal(config.publishingDryRunEnabled, false);
+  assert.equal(config.publishingPreviewEnabled, false);
   assert.equal(config.workerPollMs, 2_000);
   assert.equal(config.autoMigrate, false);
   assert.equal(config.databaseFile, "C:\\workspace\\.server-data\\automation.db");

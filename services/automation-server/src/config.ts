@@ -15,6 +15,7 @@ export type AutomationConfig = {
   loginEnabled: boolean;
   scrapingEnabled: boolean;
   publishingDryRunEnabled: boolean;
+  publishingPreviewEnabled: boolean;
   workerPollMs: number;
   autoMigrate: boolean;
   allowPublicBind: boolean;
@@ -77,6 +78,7 @@ export function loadAutomationConfig(
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
     publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),
+    publishingPreviewEnabled: enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED),
     workerPollMs: workerPoll(env.SERVER_WORKER_POLL_MS),
     autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
     allowPublicBind,

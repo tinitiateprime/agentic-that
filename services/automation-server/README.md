@@ -13,8 +13,8 @@ an isolated local SQLite file under `.server-data`.
   attempts, account locks, scraping jobs, and activity events.
 - Transactional due-job claiming with one active lease per social account.
 - Monotonic fencing tokens so an expired worker cannot complete a newer job.
-- Expired publishing work moves to `UNCERTAIN` for verification instead of
-  being blindly retried.
+- Expired live publishing work moves to `UNCERTAIN` for verification instead
+  of being blindly retried; expired non-publishing checks are safely cancelled.
 - Internal-token protection for non-health endpoints.
 - Instagram login-session lifecycle with one active login per account.
 - Dedicated persistent Chrome/Edge profiles with password saving disabled.
@@ -27,6 +27,9 @@ an isolated local SQLite file under `.server-data`.
   per-account lock, saved-profile check, media preflight, and audit trail.
 - Dry-run jobs finish as `CANCELLED` with `DRY_RUN_COMPLETE` or
   `DRY_RUN_VALIDATION_FAILED`; they never become publishable live jobs.
+- Confirmation-gated Instagram composer previews open the saved profile,
+  upload one test image, enter the caption, capture the final composer, and
+  close before Share. The preview boundary has no publish method.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
@@ -35,7 +38,8 @@ AgenticThat website and adding platform publishing executors are the next
 implementation phases. Committed feature flags remain false by default.
 
 `SERVER_PUBLISHING_DRY_RUN_ENABLED=true` enables only local preflight workers.
-It does not enable live publishing. The server refuses to start if
+`SERVER_PUBLISHING_PREVIEW_ENABLED=true` additionally enables the private,
+networked composer preview. Neither flag enables live publishing. The server refuses to start if
 `SERVER_EXECUTION_ENABLED=true` because the live executor has not been safely
 implemented yet.
 
@@ -66,6 +70,10 @@ npm run server-architecture:dev
    `SERVER_PUBLISHING_DRY_RUN_ENABLED=true`, select a connected test account,
    choose a JPEG or PNG up to 25 MB, and click **Run safe check**. This validates
    the queue and saved files without opening Instagram or publishing anything.
+7. To test the Instagram composer without publishing, also set
+   `SERVER_PUBLISHING_PREVIEW_ENABLED=true`, restart, choose the same test media,
+   and click **Prepare private preview**. After confirmation, this uploads the
+   image into Instagram, captures the final composer, and closes before Share.
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter
