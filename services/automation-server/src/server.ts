@@ -11,14 +11,13 @@ import { AutomationFileStore } from "./profile-store.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { PlaywrightInstagramPreviewExecutor } from "./instagram-preview.ts";
+import { PlaywrightInstagramPublishingExecutor } from "./instagram-live.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
 import { AutomationPublishingPreviewWorker } from "./publishing-preview-worker.ts";
+import { AutomationPublishingLiveWorker } from "./publishing-live-worker.ts";
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
-  if (config.executionEnabled) {
-    throw new Error("Live server publishing is not implemented. Keep SERVER_EXECUTION_ENABLED=false.");
-  }
   const files = new AutomationFileStore(config.dataDirectory);
   await files.initialize();
 
@@ -51,6 +50,14 @@ export async function startAutomationServer() {
         config.workerPollMs,
       )
     : null;
+  const publishingLiveWorker = store && config.executionEnabled && config.instagramPublishingEnabled
+    ? new AutomationPublishingLiveWorker(
+        store,
+        new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
+        new Map([["instagram", new PlaywrightInstagramPublishingExecutor(files, config.browserExecutablePath)]]),
+        config.workerPollMs,
+      )
+    : null;
 
   const app = createAutomationApp({ config, databaseReady, store, loginManager, files });
   const server = await new Promise<Server>((resolve, reject) => {
@@ -59,18 +66,20 @@ export async function startAutomationServer() {
   });
   publishingDryRunWorker?.start();
   publishingPreviewWorker?.start();
+  publishingLiveWorker?.start();
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await publishingDryRunWorker?.stop();
     await publishingPreviewWorker?.stop();
+    await publishingLiveWorker?.stop();
     await loginManager?.shutdown();
     database.close();
   };
 
   process.stdout.write(
     `AgenticThat automation server listening on http://${config.host}:${config.port} ` +
-      `(publishing ${config.executionEnabled ? "enabled" : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
+      `(publishing ${config.executionEnabled && config.instagramPublishingEnabled ? "enabled" : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
   );
   return { server, config, shutdown };
 }

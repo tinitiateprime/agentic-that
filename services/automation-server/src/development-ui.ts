@@ -3,6 +3,7 @@ export function developmentConnectPage(options: {
   loginEnabled: boolean;
   publishingDryRunEnabled: boolean;
   publishingPreviewEnabled: boolean;
+  publishingLiveEnabled: boolean;
 }) {
   const bootstrap = JSON.stringify(options).replaceAll("<", "\\u003c");
   return `<!doctype html>
@@ -30,6 +31,7 @@ export function developmentConnectPage(options: {
     textarea { min-height: 84px; resize: vertical; }
     button { border: 0; border-radius: 10px; padding: 11px 16px; background: #167552; color: white; font: inherit; font-weight: 750; cursor: pointer; }
     button.secondary { background: white; color: #245344; border: 1px solid #cbd8d3; }
+    button.danger { background: #9f2f2f; }
     button:disabled { cursor: wait; opacity: .55; }
     #accounts { display: grid; gap: 10px; margin-top: 16px; }
     article { display: flex; gap: 14px; align-items: center; padding: 15px; border: 1px solid #dce6e2; border-radius: 13px; }
@@ -88,6 +90,7 @@ export function developmentConnectPage(options: {
         <div class="dry-actions">
           <button id="dry-run-button" type="submit">Run safe check</button>
           <button id="preview-button" class="secondary" type="button">Prepare private preview</button>
+          <button id="live-button" class="danger" type="button">Publish test post</button>
         </div>
         <label class="dry-caption">Test caption<textarea id="dry-run-caption" maxlength="2200">AgenticThat local publishing dry run</textarea></label>
       </form>
@@ -125,6 +128,7 @@ export function developmentConnectPage(options: {
     const dryRunCaption = document.querySelector('#dry-run-caption');
     const dryRunButton = document.querySelector('#dry-run-button');
     const previewButton = document.querySelector('#preview-button');
+    const liveButton = document.querySelector('#live-button');
     const dryRunStatus = document.querySelector('#dry-run-status');
     const previewResult = document.querySelector('#preview-result');
     const previewFrame = document.querySelector('#preview-frame');
@@ -246,6 +250,7 @@ export function developmentConnectPage(options: {
       if (connected.some(account => account.id === selectedAccount)) dryRunAccount.value = selectedAccount;
       dryRunButton.disabled = !bootstrap.publishingDryRunEnabled || connected.length === 0;
       previewButton.disabled = !bootstrap.publishingPreviewEnabled || connected.length === 0;
+      liveButton.disabled = !bootstrap.publishingLiveEnabled || connected.length === 0;
       if (!body.accounts.length) {
         const empty = document.createElement('p');
         empty.textContent = 'No isolated development accounts yet.';
@@ -320,6 +325,28 @@ export function developmentConnectPage(options: {
       } else {
         await loadPreviewFrame(jobId).catch(() => undefined);
         dryRunMessage(job.errorMessage || ('Preview finished with status ' + job.state + '.'), 'error');
+      }
+      return job;
+    }
+
+    async function pollLivePublishing(jobId, deadline = Date.now() + 390_000) {
+      if (Date.now() > deadline) throw new Error('The live Instagram worker did not finish within 6.5 minutes. Check the job before retrying.');
+      const workspaceId = workspaceElement.value.trim();
+      const body = await api('/v1/publishing/jobs/' + encodeURIComponent(jobId) + '?workspaceId=' + encodeURIComponent(workspaceId));
+      const job = body.job;
+      if (job.state === 'SCHEDULED' || job.state === 'PUBLISHING' || job.state === 'VERIFYING') {
+        dryRunMessage(job.progressMessage || (job.state === 'VERIFYING'
+          ? 'Instagram Share was submitted. Waiting for confirmation; do not retry.'
+          : 'Preparing the authorized Instagram post...'));
+        await new Promise(resolve => setTimeout(resolve, 750));
+        return pollLivePublishing(jobId, deadline);
+      }
+      if (job.state === 'PUBLISHED') {
+        dryRunMessage('Instagram confirmed the post was published.', 'success');
+      } else if (job.state === 'UNCERTAIN') {
+        dryRunMessage('Instagram may have received Share, but confirmation was unavailable. Check the account before any retry.', 'error');
+      } else {
+        dryRunMessage(job.errorMessage || ('Live publishing finished with status ' + job.state + '.'), 'error');
       }
       return job;
     }
@@ -450,6 +477,7 @@ export function developmentConnectPage(options: {
       if (!file || !dryRunAccount.value) return;
       dryRunButton.disabled = true;
       previewButton.disabled = true;
+      liveButton.disabled = true;
       try {
         dryRunMessage('Saving test media into isolated local storage...');
         const media = await uploadDryRunMedia(file);
@@ -484,6 +512,7 @@ export function developmentConnectPage(options: {
       if (!confirmed) return;
       dryRunButton.disabled = true;
       previewButton.disabled = true;
+      liveButton.disabled = true;
       previewResult.hidden = true;
       try {
         dryRunMessage('Saving test media into isolated local storage...');
@@ -502,6 +531,46 @@ export function developmentConnectPage(options: {
           }),
         });
         await pollPreview(body.job.id);
+      } catch (error) {
+        dryRunMessage(error.message, 'error');
+      } finally {
+        await refresh().catch(() => undefined);
+      }
+    });
+
+    liveButton.addEventListener('click', async () => {
+      const file = dryRunMedia.files?.[0];
+      if (!file || !dryRunAccount.value) {
+        dryRunMessage('Choose a connected account and one JPEG or PNG first.', 'error');
+        return;
+      }
+      const confirmation = window.prompt('REAL PUBLISHING: this will click Instagram Share and make the post public. Type PUBLISH to continue.');
+      if (confirmation !== 'PUBLISH') {
+        dryRunMessage('Live publishing was not authorized. Nothing was published.');
+        return;
+      }
+      dryRunButton.disabled = true;
+      previewButton.disabled = true;
+      liveButton.disabled = true;
+      previewResult.hidden = true;
+      try {
+        dryRunMessage('Saving authorized publishing media into isolated server storage...');
+        const media = await uploadDryRunMedia(file);
+        dryRunMessage('Creating the explicitly authorized live Instagram job...');
+        const body = await api('/v1/publishing/jobs', {
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId: workspaceElement.value.trim(),
+            accountId: dryRunAccount.value,
+            scheduledAt: new Date(Date.now() - 1_000).toISOString(),
+            originalTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+            caption: dryRunCaption.value,
+            media: [{ storageKey: media.storageKey, fileName: media.fileName, mimeType: media.mimeType }],
+            idempotencyKey: 'live-' + crypto.randomUUID(),
+            liveConfirmation: confirmation,
+          }),
+        });
+        await pollLivePublishing(body.job.id);
       } catch (error) {
         dryRunMessage(error.message, 'error');
       } finally {

@@ -56,6 +56,7 @@ test("migration creates the local SQLite schema", async () => {
     assert.equal(publishingColumns.some(column => column.name === "execution_mode"), true);
     assert.equal(publishingColumns.some(column => column.name === "validation_stage"), true);
     assert.equal(publishingColumns.some(column => column.name === "progress_message"), true);
+    assert.equal(publishingColumns.some(column => column.name === "live_authorized"), true);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
   } finally {

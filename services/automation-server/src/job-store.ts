@@ -28,6 +28,7 @@ type PublishingJobRow = {
   account_id: string;
   execution_mode: "DRY_RUN" | "LIVE";
   validation_stage: "LOCAL" | "INSTAGRAM_PREVIEW";
+  live_authorized: number | boolean;
   platform?: SocialPlatform;
   state: PublishingJobState;
   scheduled_at: string;
@@ -82,6 +83,7 @@ function publicJob(row: PublishingJobRow) {
     accountId: row.account_id,
     executionMode: row.execution_mode,
     validationStage: row.validation_stage,
+    liveAuthorized: Boolean(row.live_authorized),
     platform: row.platform || null,
     state: row.state,
     scheduledAt: timestamp(row.scheduled_at),
@@ -144,9 +146,16 @@ export class AutomationJobStore {
     input: unknown,
     executionMode: "DRY_RUN" | "LIVE" = "LIVE",
     validationStage: "LOCAL" | "INSTAGRAM_PREVIEW" = "LOCAL",
+    liveAuthorized = false,
   ) {
     if (executionMode === "LIVE" && validationStage !== "LOCAL") {
       throw new Error("A publishing preview cannot be created as a live job.");
+    }
+    if (executionMode === "LIVE" && !liveAuthorized) {
+      throw new Error("A live publishing job requires explicit final-action authorization.");
+    }
+    if (executionMode !== "LIVE" && liveAuthorized) {
+      throw new Error("Only live publishing jobs can carry final-action authorization.");
     }
     const value = createPublishingJobSchema.parse(input);
     const account = this.database.prepare(`
@@ -164,6 +173,7 @@ export class AutomationJobStore {
       const sameRequest = existing.account_id === value.accountId
         && existing.execution_mode === executionMode
         && existing.validation_stage === validationStage
+        && Boolean(existing.live_authorized) === liveAuthorized
         && existing.scheduled_at === scheduledAt
         && existing.original_timezone === value.originalTimezone
         && existing.caption === value.caption
@@ -178,15 +188,16 @@ export class AutomationJobStore {
     const createdAt = now();
     this.database.prepare(`
       INSERT INTO publishing_jobs
-        (id, workspace_id, account_id, execution_mode, validation_stage, scheduled_at, original_timezone, caption, media,
+        (id, workspace_id, account_id, execution_mode, validation_stage, live_authorized, scheduled_at, original_timezone, caption, media,
          idempotency_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       value.workspaceId,
       value.accountId,
       executionMode,
       validationStage,
+      liveAuthorized ? 1 : 0,
       scheduledAt,
       value.originalTimezone,
       value.caption,
@@ -228,6 +239,7 @@ export class AutomationJobStore {
         WHERE job.state = 'SCHEDULED'
           AND job.execution_mode = ?
           AND job.validation_stage = ?
+          AND job.live_authorized = ?
           AND job.scheduled_at <= ?
           AND account.enabled = 1
           AND account.status = 'CONNECTED'
@@ -239,7 +251,13 @@ export class AutomationJobStore {
           )
         ORDER BY job.scheduled_at, job.created_at
         LIMIT 1
-      `).get(executionMode, validationStage, claimedAt, claimedAt) as PublishingJobRow | undefined;
+      `).get(
+        executionMode,
+        validationStage,
+        executionMode === "LIVE" ? 1 : 0,
+        claimedAt,
+        claimedAt,
+      ) as PublishingJobRow | undefined;
       if (!candidate) return null;
 
       const existingLock = this.database.prepare(`
@@ -330,9 +348,53 @@ export class AutomationJobStore {
     const update = this.database.prepare(`
       UPDATE publishing_jobs
       SET progress_message = ?, updated_at = ?
-      WHERE id = ? AND lease_owner = ? AND fencing_token = ? AND state = 'PUBLISHING'
+      WHERE id = ? AND lease_owner = ? AND fencing_token = ? AND state IN ('PUBLISHING', 'VERIFYING')
     `).run(progress, updatedAt, jobId, workerId, fencingToken);
     return update.changes === 1;
+  }
+
+  markPublishingFinalActionStarting(jobId: string, workerId: string, fencingToken: number) {
+    return withImmediateTransaction(this.database, () => {
+      const startedAt = now();
+      const current = this.database.prepare(`
+        SELECT job.id
+        FROM publishing_jobs job
+        JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
+        WHERE job.id = ? AND job.execution_mode = 'LIVE' AND job.live_authorized = 1
+          AND job.state = 'PUBLISHING' AND job.lease_owner = ? AND job.fencing_token = ?
+          AND job.lease_expires_at > ?
+          AND account_lock.lease_owner = ? AND account_lock.fencing_token = ?
+          AND account_lock.lease_expires_at > ?
+      `).get(
+        jobId,
+        workerId,
+        fencingToken,
+        startedAt,
+        workerId,
+        fencingToken,
+        startedAt,
+      ) as { id: string } | undefined;
+      if (!current) throw new Error("The live publishing lease was lost before the final action.");
+      const update = this.database.prepare(`
+        UPDATE publishing_jobs
+        SET state = 'VERIFYING', progress_message = 'Instagram Share submitted; waiting for confirmation.', updated_at = ?
+        WHERE id = ? AND execution_mode = 'LIVE' AND live_authorized = 1
+          AND state = 'PUBLISHING' AND lease_owner = ? AND fencing_token = ?
+      `).run(startedAt, jobId, workerId, fencingToken);
+      if (update.changes !== 1) throw new Error("The live publishing job changed before the final action.");
+      this.database.prepare(`
+        INSERT INTO job_events
+          (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        SELECT ?, workspace_id, id, 'publishing', 'final_action_starting', ?, ?
+        FROM publishing_jobs WHERE id = ?
+      `).run(
+        automationId("event"),
+        JSON.stringify({ workerId, fencingToken }),
+        startedAt,
+        jobId,
+      );
+      return true;
+    });
   }
 
   getPublishingProfileState(accountId: string) {
@@ -511,7 +573,7 @@ export class AutomationJobStore {
         SELECT job.*
         FROM publishing_jobs job
         JOIN account_execution_locks account_lock ON account_lock.account_id = job.account_id
-        WHERE job.id = ?
+        WHERE job.id = ? AND job.execution_mode = 'LIVE' AND job.live_authorized = 1
           AND job.lease_owner = ? AND job.fencing_token = ?
           AND account_lock.lease_owner = ? AND account_lock.fencing_token = ?
           AND account_lock.lease_expires_at > ?
@@ -545,6 +607,11 @@ export class AutomationJobStore {
         SET lease_owner = NULL, lease_expires_at = ?, updated_at = ?
         WHERE account_id = ? AND lease_owner = ? AND fencing_token = ?
       `).run(new Date(0).toISOString(), completedAt, current.account_id, input.workerId, input.fencingToken);
+      if (targetState === "LOGIN_REQUIRED") {
+        this.database.prepare(`
+          UPDATE social_accounts SET status = 'LOGIN_REQUIRED', updated_at = ? WHERE id = ?
+        `).run(completedAt, current.account_id);
+      }
       this.database.prepare(`
         UPDATE publishing_attempts
         SET state = ?, completed_at = ?, detail = ?

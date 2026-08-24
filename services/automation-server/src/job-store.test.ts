@@ -37,8 +37,9 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
       media: [],
       idempotencyKey: "sqlite-test-request",
     };
-    const job = store.createPublishingJob(request);
-    assert.equal(store.createPublishingJob(request).id, job.id);
+    assert.throws(() => store.createPublishingJob(request), /explicit final-action authorization/);
+    const job = store.createPublishingJob(request, "LIVE", "LOCAL", true);
+    assert.equal(store.createPublishingJob(request, "LIVE", "LOCAL", true).id, job.id);
     assert.throws(() => store.createPublishingJob(request, "DRY_RUN"), /idempotency key/);
     const validationRequest = { ...request, idempotencyKey: "sqlite-validation-request" };
     store.createPublishingJob(validationRequest, "DRY_RUN", "LOCAL");
@@ -47,6 +48,9 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
       /idempotency key/,
     );
 
+    database.prepare("UPDATE publishing_jobs SET live_authorized = 0 WHERE id = ?").run(job.id);
+    assert.equal(store.claimDuePublishingJob("unauthorized-worker", 60), null);
+    database.prepare("UPDATE publishing_jobs SET live_authorized = 1 WHERE id = ?").run(job.id);
     const claimed = store.claimDuePublishingJob("worker-a", 60);
     assert.equal(claimed?.id, job.id);
     assert.equal(claimed?.state, "PUBLISHING");
@@ -59,6 +63,12 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     assert.equal(store.recordPublishingProgress(job.id, "worker-a", claimed!.fencingToken!, "Opening test composer"), true);
     assert.equal(store.getPublishingJob("test-workspace", job.id)?.progressMessage, "Opening test composer");
     assert.equal(store.heartbeatPublishingJob(job.id, "worker-a", claimed!.fencingToken!, 60), true);
+    assert.throws(
+      () => store.markPublishingFinalActionStarting(job.id, "worker-b", claimed!.fencingToken!),
+      /lease was lost/,
+    );
+    assert.equal(store.markPublishingFinalActionStarting(job.id, "worker-a", claimed!.fencingToken!), true);
+    assert.equal(store.getPublishingJob("test-workspace", job.id)?.state, "VERIFYING");
 
     const finished = store.finishPublishingJob({
       jobId: job.id,

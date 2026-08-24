@@ -55,6 +55,8 @@ export class AutomationPublishingDryRunWorker {
         workspaceId: claimed.workspaceId,
         accountId: claimed.accountId,
         platform,
+        executionMode: claimed.executionMode,
+        validationStage: claimed.validationStage,
         caption: claimed.caption,
         media,
         fencingToken: claimed.fencingToken,

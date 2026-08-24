@@ -5,6 +5,8 @@ export type ClaimedPublishingJob = {
   workspaceId: string;
   accountId: string;
   platform: SocialPlatform;
+  executionMode: "DRY_RUN" | "LIVE";
+  validationStage: "LOCAL" | "INSTAGRAM_PREVIEW";
   caption: string;
   media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
   fencingToken: number;
@@ -59,5 +61,10 @@ export interface PublishingPreviewExecutor {
 // so adding this service cannot change the production execution path.
 export interface ServerPublishingExecutor {
   readonly platform: SocialPlatform;
-  publish(job: ClaimedPublishingJob, signal: AbortSignal): Promise<PublishingExecutionResult>;
+  publish(
+    job: ClaimedPublishingJob,
+    signal: AbortSignal,
+    onFinalActionStarting: () => Promise<void>,
+    reportProgress?: (message: string) => void,
+  ): Promise<PublishingExecutionResult>;
 }

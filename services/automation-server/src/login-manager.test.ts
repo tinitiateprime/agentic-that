@@ -65,7 +65,7 @@ test("Instagram login uses one persistent account session and marks the profile 
       caption: "Must wait for login",
       media: [],
       idempotencyKey: "login-lock-test",
-    });
+    }, "LIVE", "LOCAL", true);
     const started = manager.start("login-workspace", account.id, "website");
     await until(() => manager.get("login-workspace", started.id)?.state === "AWAITING_USER");
     assert.equal((await manager.captureFrame("login-workspace", started.id)).toString(), "frame");

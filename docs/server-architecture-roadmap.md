@@ -27,6 +27,8 @@
     queue leases, profile/media validation, and terminal audit records.
 14. Confirmation-gated Instagram composer preview with a separate job stage,
     saved-profile browser execution, private screenshot result, and no Share action.
+15. Double-gated Instagram live worker with explicit authorization, exact Share
+    targeting, pre-action fencing, platform confirmation, and `UNCERTAIN` recovery.
 
 ## Next development work
 
@@ -34,8 +36,8 @@
 2. Replace local frame polling with an efficient TLS/WSS streaming transport.
 3. Add short-lived login-stream authorization and strict origin checks.
 4. Add remote-server viewport resizing and reconnect handling.
-5. Build the final Instagram publisher behind `ServerPublishingExecutor` after
-   the private composer preview is proven with a test account.
+5. Expand `ServerPublishingExecutor` beyond the initial single-image Instagram
+   feed-post test to carousels, video, scheduling, and additional platforms.
 6. Add the profile-version write guard to the future live executor.
 7. Connect only a test workspace through a per-account `server` engine flag.
 8. Add temporary-browser scraping workers.

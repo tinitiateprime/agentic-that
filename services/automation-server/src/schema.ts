@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v6";
+const MIGRATION_KEY = "server-architecture-sqlite-v7";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -62,6 +62,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         account_id        TEXT NOT NULL REFERENCES social_accounts(id),
         execution_mode    TEXT NOT NULL DEFAULT 'LIVE' CHECK (execution_mode IN ('DRY_RUN', 'LIVE')),
         validation_stage  TEXT NOT NULL DEFAULT 'LOCAL' CHECK (validation_stage IN ('LOCAL', 'INSTAGRAM_PREVIEW')),
+        live_authorized   INTEGER NOT NULL DEFAULT 0 CHECK (live_authorized IN (0, 1)),
         state             TEXT NOT NULL DEFAULT 'SCHEDULED'
                           CHECK (state IN ('SCHEDULED', 'PUBLISHING', 'VERIFYING', 'PUBLISHED', 'FAILED', 'LOGIN_REQUIRED', 'UNCERTAIN', 'CANCELLED')),
         scheduled_at      TEXT NOT NULL,
@@ -160,6 +161,12 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
     }
     if (!publishingColumns.some(column => column.name === "progress_message")) {
       database.exec(`ALTER TABLE publishing_jobs ADD COLUMN progress_message TEXT`);
+    }
+    if (!publishingColumns.some(column => column.name === "live_authorized")) {
+      database.exec(`
+        ALTER TABLE publishing_jobs
+        ADD COLUMN live_authorized INTEGER NOT NULL DEFAULT 0 CHECK (live_authorized IN (0, 1))
+      `);
     }
     database.exec(`
       CREATE INDEX IF NOT EXISTS publishing_jobs_mode_due_idx

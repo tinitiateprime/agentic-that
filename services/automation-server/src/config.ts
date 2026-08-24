@@ -12,6 +12,7 @@ export type AutomationConfig = {
   browserExecutablePath: string;
   loginTimeoutMs: number;
   executionEnabled: boolean;
+  instagramPublishingEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
   publishingDryRunEnabled: boolean;
@@ -75,6 +76,7 @@ export function loadAutomationConfig(
     browserExecutablePath: env.SERVER_BROWSER_EXECUTABLE_PATH?.trim() || "",
     loginTimeoutMs: loginTimeout(env.SERVER_LOGIN_TIMEOUT_MS),
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
+    instagramPublishingEnabled: enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
     publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),

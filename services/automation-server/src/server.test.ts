@@ -35,6 +35,7 @@ test("health reports every new execution feature disabled by default", async () 
     const body = await response.json();
     assert.deepEqual(body.features, {
       publishing: false,
+      instagramPublishing: false,
       publishingDryRun: false,
       publishingPreview: false,
       login: false,
@@ -53,12 +54,15 @@ test("the local connection page contains a valid website-browser client and no p
     loginEnabled: true,
     publishingDryRunEnabled: true,
     publishingPreviewEnabled: true,
+    publishingLiveEnabled: true,
   });
   const start = html.indexOf("<script>") + "<script>".length;
   const end = html.lastIndexOf("</script>");
   assert.ok(start >= "<script>".length && end > start);
   assert.doesNotThrow(() => new Function(html.slice(start, end)));
   assert.match(html, /Instagram server browser/);
+  assert.match(html, /REAL PUBLISHING/);
+  assert.match(html, /Type PUBLISH to continue/);
   assert.doesNotMatch(html, /type=["']password["']/i);
 });
 
@@ -173,6 +177,51 @@ test("publishing checks and previews are isolated from the disabled live publish
       body: "{}",
     });
     assert.equal(live.status, 409);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("live publishing requires both feature gates and an exact final-action confirmation", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_EXECUTION_ENABLED: "true",
+    SERVER_INSTAGRAM_PUBLISHING_ENABLED: "true",
+  });
+  let authorized = false;
+  const fakeStore = {
+    createPublishingJob(_body: unknown, mode: string, stage: string, liveAuthorized: boolean) {
+      authorized = liveAuthorized;
+      return { id: "job_live", executionMode: mode, validationStage: stage, liveAuthorized, state: "SCHEDULED" };
+    },
+  } as unknown as AutomationJobStore;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: fakeStore,
+    loginManager: null,
+  }));
+  try {
+    const headers = {
+      "content-type": "application/json",
+      "x-agenticthat-internal-token": config.internalToken,
+    };
+    const unconfirmed = await fetch(`${runtime.url}/v1/publishing/jobs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ liveConfirmation: "yes" }),
+    });
+    assert.equal(unconfirmed.status, 400);
+    assert.equal(authorized, false);
+
+    const confirmed = await fetch(`${runtime.url}/v1/publishing/jobs`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ liveConfirmation: "PUBLISH" }),
+    });
+    assert.equal(confirmed.status, 201);
+    assert.equal(authorized, true);
+    assert.equal((await confirmed.json()).job.liveAuthorized, true);
   } finally {
     await runtime.close();
   }

@@ -42,6 +42,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       loginEnabled: config.loginEnabled,
       publishingDryRunEnabled: config.publishingDryRunEnabled,
       publishingPreviewEnabled: config.publishingPreviewEnabled,
+      publishingLiveEnabled: config.executionEnabled && config.instagramPublishingEnabled,
     }));
   });
 
@@ -55,7 +56,8 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       databaseEngine: "sqlite",
       storage: "local-development-only",
       features: {
-        publishing: config.executionEnabled,
+        publishing: config.executionEnabled && config.instagramPublishingEnabled,
+        instagramPublishing: config.instagramPublishingEnabled,
         publishingDryRun: config.publishingDryRunEnabled,
         publishingPreview: config.publishingPreviewEnabled,
         login: config.loginEnabled,
@@ -189,11 +191,15 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.post("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled) {
+    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
       res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
       return;
     }
-    const job = await store!.createPublishingJob(req.body);
+    if (req.body?.liveConfirmation !== "PUBLISH") {
+      res.status(400).json({ error: "Type PUBLISH to authorize Instagram's final Share action." });
+      return;
+    }
+    const job = await store!.createPublishingJob(req.body, "LIVE", "LOCAL", true);
     res.status(201).json({ job });
   });
 

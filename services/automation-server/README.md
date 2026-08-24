@@ -33,6 +33,10 @@ an isolated local SQLite file under `.server-data`.
 - Preview browser work has a 150-second hard limit, visible stage progress,
   safe interrupted-job recovery, and a private diagnostic screenshot when
   Instagram stops at an unexpected screen.
+- First guarded Instagram live worker for one JPEG/PNG feed post. Live jobs
+  require two feature flags, an authorized database bit, exact `PUBLISH`
+  confirmation, an owned account lease, and a fenced transition to `VERIFYING`
+  before the executor can click Share.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
@@ -42,9 +46,9 @@ implementation phases. Committed feature flags remain false by default.
 
 `SERVER_PUBLISHING_DRY_RUN_ENABLED=true` enables only local preflight workers.
 `SERVER_PUBLISHING_PREVIEW_ENABLED=true` additionally enables the private,
-networked composer preview. Neither flag enables live publishing. The server refuses to start if
-`SERVER_EXECUTION_ENABLED=true` because the live executor has not been safely
-implemented yet.
+networked composer preview. Neither flag enables live publishing. Live Instagram
+testing requires both `SERVER_EXECUTION_ENABLED=true` and
+`SERVER_INSTAGRAM_PUBLISHING_ENABLED=true`; committed defaults remain false.
 
 ## Local setup
 
@@ -77,6 +81,11 @@ npm run server-architecture:dev
    `SERVER_PUBLISHING_PREVIEW_ENABLED=true`, restart, choose the same test media,
    and click **Prepare private preview**. After confirmation, this uploads the
    image into Instagram, captures the final composer, and closes before Share.
+8. Only with a test account and content you intend to make public, enable both
+   live flags, restart, click **Publish test post**, and type the exact word
+   `PUBLISH`. This performs the irreversible Instagram Share action. If the
+   platform receives Share but its confirmation cannot be verified, the job is
+   marked `UNCERTAIN` and must be checked manually before any retry.
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter

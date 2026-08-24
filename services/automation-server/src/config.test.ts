@@ -7,6 +7,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 8800);
   assert.equal(config.executionEnabled, false);
+  assert.equal(config.instagramPublishingEnabled, false);
   assert.equal(config.loginEnabled, false);
   assert.equal(config.scrapingEnabled, false);
   assert.equal(config.publishingDryRunEnabled, false);

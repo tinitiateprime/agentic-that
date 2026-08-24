@@ -187,6 +187,34 @@ async function fillCaptionAndConfirmShareIsVisible(page: Page, caption: string, 
   // Safety boundary: visibility is the terminal step. This module never clicks Share.
 }
 
+export async function prepareInstagramFinalComposer(input: {
+  page: Page;
+  context: BrowserContext;
+  job: ClaimedPublishingJob;
+  mediaPath: string;
+  signal: AbortSignal;
+  reportProgress: (message: string) => void;
+  setStage: (stage: string) => void;
+}) {
+  const { page, context, job, mediaPath, signal, reportProgress, setStage } = input;
+  reportProgress("Opening Instagram with the saved server session.");
+  await page.goto(INSTAGRAM_HOME_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await dismissPrompts(page);
+  await verifyAuthenticated(page, context, signal);
+  setStage("opening Instagram's post composer");
+  reportProgress("Saved Instagram session verified. Opening the post composer.");
+  await openPostComposer(page, signal);
+  setStage("uploading the test image");
+  reportProgress("Uploading the test image into Instagram's composer.");
+  await uploadOneImage(page, mediaPath, signal);
+  setStage("advancing through Instagram's crop and edit screens");
+  reportProgress("Image accepted. Advancing through crop and edit screens.");
+  await advanceToShareScreen(page, signal);
+  setStage("filling Instagram's final composer");
+  reportProgress("Final composer reached. Adding the caption.");
+  await fillCaptionAndConfirmShareIsVisible(page, job.caption, signal);
+}
+
 export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExecutor {
   readonly platform = "instagram" as const;
 
@@ -201,6 +229,9 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     reportProgress: (message: string) => void = () => undefined,
   ) {
     if (job.platform !== "instagram") throw new Error("The preview executor supports only Instagram.");
+    if (job.executionMode !== "DRY_RUN" || job.validationStage !== "INSTAGRAM_PREVIEW") {
+      throw new Error("The preview executor refuses jobs outside the isolated preview stage.");
+    }
     if (job.media.length !== 1 || !["image/jpeg", "image/png"].includes(job.media[0]!.mimeType.toLowerCase())) {
       throw new Error("The Instagram preview currently requires exactly one JPEG or PNG image.");
     }
@@ -233,22 +264,15 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
       signal.throwIfAborted();
       page = context.pages()[0] || await context.newPage();
       page.setDefaultTimeout(10_000);
-      reportProgress("Opening Instagram with the saved server session.");
-      await page.goto(INSTAGRAM_HOME_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await dismissPrompts(page);
-      await verifyAuthenticated(page, context, signal);
-      stage = "opening Instagram's post composer";
-      reportProgress("Saved Instagram session verified. Opening the post composer.");
-      await openPostComposer(page, signal);
-      stage = "uploading the test image";
-      reportProgress("Uploading the test image into Instagram's private composer.");
-      await uploadOneImage(page, this.files.mediaFilePath(job.media[0]!.storageKey), signal);
-      stage = "advancing through Instagram's crop and edit screens";
-      reportProgress("Image accepted. Advancing through crop and edit screens.");
-      await advanceToShareScreen(page, signal);
-      stage = "filling Instagram's final composer";
-      reportProgress("Final composer reached. Adding the caption without clicking Share.");
-      await fillCaptionAndConfirmShareIsVisible(page, job.caption, signal);
+      await prepareInstagramFinalComposer({
+        page,
+        context,
+        job,
+        mediaPath: this.files.mediaFilePath(job.media[0]!.storageKey),
+        signal,
+        reportProgress,
+        setStage: value => { stage = value; },
+      });
       stage = "capturing the final composer screenshot";
       reportProgress("Capturing the private final-composer screenshot.");
       const screenshot = await page.screenshot({
