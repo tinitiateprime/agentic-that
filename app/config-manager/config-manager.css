@@ -1,16 +1,16 @@
 .config-manager-scope {
-  --cm-ink: #10231f;
-  --cm-muted: #65756f;
-  --cm-border: #dce5e1;
-  --cm-soft: #f3f7f5;
+  --cm-ink: #111827;
+  --cm-muted: #5b6574;
+  --cm-border: #e1e5ec;
+  --cm-soft: #f6f7fb;
   --cm-panel: #ffffff;
-  --cm-accent: #087461;
-  --cm-accent-dark: #055849;
+  --cm-accent: #5b5bd6;
+  --cm-accent-dark: #4545b8;
   min-height: 100vh;
   color: var(--cm-ink);
   background:
-    radial-gradient(circle at 8% 0%, rgba(25, 151, 123, 0.11), transparent 27rem),
-    linear-gradient(180deg, #f7faf8 0, #eef4f1 100%);
+    radial-gradient(circle at 8% 0%, rgba(91, 91, 214, 0.1), transparent 28rem),
+    linear-gradient(180deg, #fafbfe 0, #f3f5f9 100%);
   font-family: "Inter", sans-serif;
 }
 
@@ -33,8 +33,8 @@
 .config-shell {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 8% 0%, rgba(25, 151, 123, 0.09), transparent 27rem),
-    linear-gradient(180deg, #f7faf8 0, #eef4f1 100%);
+    radial-gradient(circle at 8% 0%, rgba(91, 91, 214, 0.08), transparent 28rem),
+    linear-gradient(180deg, #fafbfe 0, #f3f5f9 100%);
 }
 
 .config-topbar {
@@ -120,12 +120,12 @@
 }
 
 .config-workspace strong {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .config-workspace small {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .config-back {
@@ -170,7 +170,7 @@
   gap: 7px;
   margin: 0 0 13px;
   color: var(--cm-accent);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 850;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -179,7 +179,7 @@
 .config-hero h1 {
   max-width: 720px;
   margin: 0;
-  color: #0c211c;
+  color: var(--cm-ink);
   font-size: clamp(34px, 4vw, 55px);
   font-weight: 500;
   letter-spacing: -0.052em;
@@ -215,7 +215,7 @@
 
 .config-summary small {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .config-layout {
@@ -225,16 +225,16 @@
   grid-template-columns: 292px minmax(0, 1fr);
   margin: 0 auto 40px;
   overflow: hidden;
-  border: 1px solid #d5e0db;
+  border: 1px solid #dfe4ec;
   border-radius: 19px;
   background: var(--cm-panel);
-  box-shadow: 0 24px 70px rgba(23, 57, 48, 0.09);
+  box-shadow: 0 24px 70px rgba(31, 39, 69, 0.08);
 }
 
 .config-service-nav {
   padding: 24px 16px;
   border-right: 1px solid var(--cm-border);
-  background: #f7faf8;
+  background: #f7f8fb;
 }
 
 .config-nav-heading {
@@ -250,7 +250,7 @@
 
 .config-nav-heading small {
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .config-service-nav > button {
@@ -275,8 +275,8 @@
 }
 
 .config-service-nav > button.active {
-  border-color: #badacf;
-  background: #e8f5f0;
+  border-color: #d5d5ee;
+  background: #f0f0ff;
   box-shadow: inset 3px 0 var(--cm-accent);
 }
 
@@ -288,20 +288,20 @@
 
 .config-service-nav > button strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .config-service-nav > button small {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .config-service-nav > button > i {
   padding: 4px 6px;
   border-radius: 999px;
-  font-size: 8px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 900;
   letter-spacing: 0.05em;
@@ -324,7 +324,7 @@
   display: grid;
   place-items: center;
   color: var(--cm-accent);
-  border: 1px solid #dce7e3;
+  border: 1px solid #dfe3ec;
   border-radius: 11px;
   background: #fff;
 }
@@ -351,8 +351,8 @@
   gap: 10px;
   margin: 26px 6px 0;
   padding: 14px;
-  color: #426158;
-  border: 1px solid #dce8e4;
+  color: #465064;
+  border: 1px solid #e0e4ec;
   border-radius: 12px;
   background: #fff;
 }
@@ -368,12 +368,12 @@
 }
 
 .config-security-note strong {
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .config-security-note small {
   color: var(--cm-muted);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -411,27 +411,27 @@
 
 .config-service-title p {
   color: var(--cm-accent);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 850;
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
 .config-service-title h2 {
-  font-size: 22px;
+  font-size: 24px;
   letter-spacing: -0.025em;
 }
 
 .config-service-title > div > span {
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .config-refresh,
 .config-primary,
 .config-secondary,
 .config-tertiary {
-  min-height: 38px;
+  min-height: 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -439,7 +439,7 @@
   padding: 0 13px;
   border-radius: 9px;
   text-decoration: none;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
   cursor: pointer;
 }
@@ -461,15 +461,15 @@
 
 .config-secondary,
 .config-refresh {
-  color: #385048;
-  border: 1px solid #cedbd6;
+  color: #3f485b;
+  border: 1px solid #d4d9e2;
   background: #fff;
 }
 
 .config-secondary:hover,
 .config-refresh:hover {
   color: var(--cm-accent);
-  border-color: #9fc9bb;
+  border-color: #b8b4e6;
 }
 
 .config-tertiary {
@@ -491,7 +491,7 @@
   padding: 11px 13px;
   border: 1px solid;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .config-notice.success {
@@ -559,13 +559,13 @@
 }
 
 .config-integration-bar strong {
-  color: #193b32;
-  font-size: 11px;
+  color: var(--cm-ink);
+  font-size: 14px;
 }
 
 .config-integration-bar small {
-  color: #668078;
-  font-size: 9px;
+  color: var(--cm-muted);
+  font-size: 12px;
 }
 
 .config-integration-actions {
@@ -598,9 +598,9 @@
   display: grid;
   place-items: center;
   color: var(--cm-accent);
-  border: 1px solid #cfe4dd;
+  border: 1px solid #d9d9f1;
   border-radius: 9px;
-  background: #f0f9f5;
+  background: #f1f1ff;
 }
 
 .config-shared-companion strong,
@@ -611,15 +611,15 @@
 }
 
 .config-shared-companion strong {
-  color: #193b32;
-  font-size: 12px;
+  color: var(--cm-ink);
+  font-size: 14px;
 }
 
 .config-shared-companion small,
 .config-shared-companion label span,
 .config-shared-companion p {
   color: var(--cm-muted);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .config-shared-companion input {
@@ -631,12 +631,12 @@
   border-radius: 9px;
   outline: none;
   background: #fff;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .config-shared-companion input:focus {
   border-color: var(--cm-accent);
-  box-shadow: 0 0 0 3px rgba(8, 116, 97, 0.1);
+  box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.12);
 }
 
 .config-shared-companion-actions {
@@ -648,6 +648,98 @@
   grid-column: 1 / -1;
   margin: 0;
 }
+
+.config-companion-guide {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid #dddff0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(33, 39, 75, 0.07);
+}
+
+.config-companion-guide > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border-bottom: 1px solid #e5e6f1;
+  background: linear-gradient(115deg, #f0f0ff 0%, #fafaff 62%, #fffaf0 100%);
+}
+
+.config-companion-guide > header > span {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #d4d4f1;
+  border-radius: 13px;
+  color: var(--cm-accent);
+  background: #fff;
+}
+
+.config-companion-guide > header > div { display: grid; gap: 4px; }
+.config-companion-guide h3,
+.config-companion-guide header p { margin: 0; }
+.config-companion-guide header p { color: var(--cm-accent); font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.config-companion-guide h3 { color: var(--cm-ink); font-size: 20px; letter-spacing: -.02em; }
+.config-companion-guide header small { color: var(--cm-muted); font-size: 13px; line-height: 1.5; }
+
+.config-connection-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7ee;
+  background: #f7f8fb;
+  list-style: none;
+}
+
+.config-connection-steps li {
+  --step-accent: #5b5bd6;
+  --step-soft: #efefff;
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 82px;
+  padding: 15px;
+  border: 1px solid #e1e4eb;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(17, 24, 39, 0.035);
+}
+.config-connection-steps li:nth-child(2) { --step-accent: #2563eb; --step-soft: #eff6ff; }
+.config-connection-steps li:nth-child(3) { --step-accent: #a66b12; --step-soft: #fff7e6; }
+
+.config-connection-steps li > .config-step-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--step-accent) 26%, #e3e6ee);
+  border-radius: 12px;
+  color: var(--step-accent);
+  background: var(--step-soft);
+}
+
+.config-connection-steps li > div { min-width: 0; display: grid; gap: 4px; }
+.config-connection-steps strong { color: var(--cm-ink); font-size: 14px; letter-spacing: -.01em; }
+.config-connection-steps small { color: var(--cm-muted); font-size: 12px; line-height: 1.45; }
+.config-connection-steps li.active { border-color: color-mix(in srgb, var(--step-accent) 48%, #dfe2ea); box-shadow: 0 0 0 3px color-mix(in srgb, var(--step-accent) 10%, transparent), 0 8px 20px rgba(17, 24, 39, .05); }
+.config-connection-steps li.complete { border-color: #d7dbea; background: #fbfcff; }
+.config-step-complete { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 999px; color: #fff; background: #334155; font-style: normal; }
+
+.config-form-card > .config-connection-steps { margin: 0; }
+.config-form-card > .config-connection-steps + form { padding-top: 18px; }
+
+.config-companion-guide-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 17px 20px 0; }
+.config-companion-guide > p { margin: 11px 20px 18px; color: var(--cm-muted); font-size: 12px; line-height: 1.5; text-align: right; }
+.config-companion-guide > p strong { color: #303b52; }
 
 .config-form-card,
 .config-auth-card {
@@ -664,8 +756,8 @@
   align-items: center;
   gap: 11px;
   padding: 15px 17px;
-  border-bottom: 1px solid #e8eeeb;
-  background: #f7faf8;
+  border-bottom: 1px solid #e7e9ef;
+  background: #f7f8fb;
 }
 
 .config-form-card > header > span:first-child {
@@ -674,7 +766,7 @@
   display: grid;
   place-items: center;
   color: var(--cm-accent);
-  border: 1px solid #d5e7e0;
+  border: 1px solid #dcdcf0;
   border-radius: 10px;
   background: #fff;
 }
@@ -692,13 +784,13 @@
 
 .config-form-card header p {
   color: var(--cm-accent);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 850;
   text-transform: uppercase;
 }
 
 .config-form-card header h3 {
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .config-form-card > header > button {
@@ -732,8 +824,8 @@
 .config-form-grid label > span,
 .config-code-field > span,
 .config-auth-card form label > span {
-  color: #3c514a;
-  font-size: 10px;
+  color: #384152;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -752,8 +844,8 @@
 
 .config-engine-field legend {
   margin-bottom: 7px;
-  color: #3c514a;
-  font-size: 10px;
+  color: #384152;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -762,9 +854,9 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
   padding: 4px;
-  border: 1px solid #d8e3df;
+  border: 1px solid #dfe3eb;
   border-radius: 8px;
-  background: #f2f6f4;
+  background: #f5f6fa;
 }
 
 .config-engine-picker button {
@@ -784,16 +876,16 @@
 }
 
 .config-engine-picker button.active {
-  color: #075f4d;
-  border-color: #91c7b7;
+  color: #4d49b6;
+  border-color: #bbb7e7;
   background: #fff;
   box-shadow: 0 2px 8px rgba(26, 70, 58, 0.07);
 }
 
 .config-engine-picker button > span { min-width: 0; display: grid; gap: 3px; }
-.config-engine-picker strong { font-size: 11px; }
-.config-engine-picker small { overflow: hidden; color: #74857f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.config-engine-warning { display: flex; align-items: center; gap: 6px; margin: 0; color: #985016; font-size: 9px; font-weight: 700; }
+.config-engine-picker strong { font-size: 14px; }
+.config-engine-picker small { overflow: hidden; color: var(--cm-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.config-engine-warning { display: flex; align-items: center; gap: 6px; margin: 0; color: #985016; font-size: 12px; font-weight: 700; }
 
 .config-form-grid input,
 .config-code-field input,
@@ -806,14 +898,14 @@
   border-radius: 9px;
   outline: none;
   background: #fff;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .config-form-grid input:focus,
 .config-code-field input:focus,
 .config-auth-card input:focus {
   border-color: var(--cm-accent);
-  box-shadow: 0 0 0 3px rgba(8, 116, 97, 0.1);
+  box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.12);
 }
 
 .config-secret-input {
@@ -841,7 +933,7 @@
 .config-form-help {
   margin: 14px 0 0;
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -884,18 +976,18 @@
 
 .config-collection-head h3,
 .config-publishing-toolbar h3 {
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .config-collection-head p,
 .config-publishing-toolbar p {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .config-collection-head > span {
   color: var(--cm-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -955,13 +1047,13 @@
 .config-account-engine { display: inline-flex; align-items: center; gap: 6px; }
 
 .config-account-main strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .config-account-main small,
 .config-account-meta {
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .config-account-state {
@@ -972,7 +1064,7 @@
   color: #08634f;
   border-radius: 999px;
   background: #e5f5ef;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -1017,7 +1109,7 @@
   border-radius: 8px;
   background: #fff;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   flex: 0 0 auto;
 }
@@ -1075,7 +1167,7 @@
   background: transparent;
   color: var(--cm-muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -1101,21 +1193,21 @@
   display: grid;
   place-items: center;
   color: var(--cm-accent);
-  border: 1px solid #cfe3dc;
+  border: 1px solid #d8d9f0;
   border-radius: 17px;
-  background: #eff8f4;
+  background: #f1f1ff;
 }
 
 .config-empty h3 {
   margin: 15px 0 7px;
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .config-empty p {
   max-width: 510px;
   margin: 0 0 18px;
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
@@ -1147,7 +1239,7 @@
 .config-placeholder > p {
   margin: 18px 0 7px;
   color: #96835a;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1162,7 +1254,7 @@
   max-width: 560px;
   margin: 10px 0 17px;
   color: var(--cm-muted);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -1171,7 +1263,7 @@
   align-items: center;
   gap: 5px;
   color: #77847f;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .config-auth-card {
@@ -1183,8 +1275,8 @@
 .config-auth-copy {
   padding: 38px;
   background:
-    linear-gradient(135deg, rgba(8, 116, 97, 0.95), rgba(6, 66, 56, 0.98)),
-    #087461;
+    linear-gradient(135deg, rgba(79, 70, 229, 0.96), rgba(49, 46, 129, 0.99)),
+    #4f46e5;
   color: #fff;
 }
 
@@ -1200,8 +1292,8 @@
 
 .config-auth-copy p {
   margin: 25px 0 7px;
-  color: #9ce0d1;
-  font-size: 9px;
+  color: #d9ddff;
+  font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -1216,8 +1308,8 @@
 .config-auth-copy > div {
   max-width: 460px;
   margin-top: 12px;
-  color: #d1eee7;
-  font-size: 11px;
+  color: #e4e7ff;
+  font-size: 14px;
   line-height: 1.7;
 }
 
@@ -1227,7 +1319,7 @@
   gap: 6px;
   margin-top: 16px;
   color: #ffe2b5;
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .config-auth-card form {
@@ -1243,7 +1335,7 @@
   justify-content: center;
   gap: 5px;
   color: var(--cm-muted);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   text-decoration: none;
 }
@@ -1254,9 +1346,9 @@
   gap: 7px;
   margin-top: 22px;
   padding: 7px;
-  border: 1px solid #dfe7e4;
+  border: 1px solid #e0e4eb;
   border-radius: 12px;
-  background: #f5f8f7;
+  background: #f5f6fa;
 }
 
 .config-platform-tabs.messaging-tabs {
@@ -1296,7 +1388,7 @@
 
 .config-platform-tabs span {
   overflow: hidden;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   text-overflow: ellipsis;
 }
@@ -1309,7 +1401,7 @@
   color: var(--cm-muted);
   border-radius: 999px;
   background: #edf2f0;
-  font-size: 8px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 850;
 }
@@ -1351,12 +1443,12 @@
 }
 
 .config-toggle > span strong {
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .config-toggle > span small {
   color: var(--cm-muted);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -1504,6 +1596,12 @@
   }
 
   .config-engine-picker { grid-template-columns: 1fr; }
+
+  .config-connection-steps { grid-template-columns: 1fr; }
+
+  .config-companion-guide-actions { align-items: stretch; flex-direction: column; }
+
+  .config-companion-guide > p { text-align: left; }
 
   .config-auth-copy,
   .config-auth-card form {

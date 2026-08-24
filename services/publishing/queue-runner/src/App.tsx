@@ -1650,6 +1650,27 @@ function Workboard({
         </div>
       </section>
 
+      {!loading && accounts.length === 0 && (
+        <section className='publishing-context-guide' aria-labelledby='publishing-context-guide-title'>
+          <div className='publishing-context-heading'>
+            <span><MonitorCheck size={23} /></span>
+            <div>
+              <p className='section-kicker'>Before your first post</p>
+              <h2 id='publishing-context-guide-title'>{permissions.canManageAccounts ? 'Prepare your publishing workspace' : 'Publishing is waiting for an account'}</h2>
+              <small>{permissions.canManageAccounts ? 'This one-time setup makes the account available to your permitted teammates.' : 'A Publishing Manager completes this one-time setup. You can create content as soon as an account appears.'}</small>
+            </div>
+          </div>
+          <ol className='publishing-context-steps' aria-label='Publishing setup steps'>
+            <li><i><MonitorCheck size={19} /></i><strong>Pair Companion</strong><small>Manager computer only</small></li>
+            <li><i><KeyRound size={19} /></i><strong>Sign in once</strong><small>Use the account login</small></li>
+            <li><i><Send size={19} /></i><strong>Create a post</strong><small>Choose account and publish</small></li>
+          </ol>
+          {permissions.canManageAccounts
+            ? <a href='/config-manager?service=publishing'><Settings2 size={15} />Open Connections<ArrowRight size={15} /></a>
+            : <em>Manager setup required</em>}
+        </section>
+      )}
+
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
           {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={!permissions.canRunAutomation} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}

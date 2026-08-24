@@ -185,12 +185,20 @@ function InlineNotice({ notice, onClose }) {
   );
 }
 
-function EmptyState({ icon: Icon, title, copy, action }) {
+function EmptyState({ icon: Icon, title, copy, steps = [], action }) {
   return (
     <div className="content-empty">
       <span><Icon size={28} /></span>
       <h3>{title}</h3>
       <p>{copy}</p>
+      {steps.length > 0 && (
+        <ol className="content-guide-steps" aria-label="What to do next">
+          {steps.map((step) => {
+            const StepIcon = step.icon;
+            return <li key={step.title}><i><StepIcon size={19} strokeWidth={1.9} /></i><strong>{step.title}</strong><small>{step.copy}</small></li>;
+          })}
+        </ol>
+      )}
       {action}
     </div>
   );
@@ -554,6 +562,11 @@ function TelegramAccounts({ status, user, accounts, dashboardUrl, onReload }) {
         icon={LockKeyhole}
         title="Connect Telegram through Connections"
         copy="Sign in and add Telegram accounts in Connections. Content will update here automatically afterward."
+        steps={[
+          { icon: Settings2, title: "Open Connections", copy: "Choose Telegram." },
+          { icon: KeyRound, title: "Verify account", copy: "Use Telegram's newest code." },
+          { icon: RefreshCw, title: "Return here", copy: "Your account appears automatically." }
+        ]}
         action={
           <div className="content-empty-actions">
             <a className="content-primary" href="/config-manager?service=messaging&platform=telegram"><Settings2 size={15} />Open Connections</a>
@@ -585,6 +598,11 @@ function TelegramAccounts({ status, user, accounts, dashboardUrl, onReload }) {
           icon={UsersRound}
           title="No Telegram accounts connected"
           copy="Connect the first Telegram account in Config Manager and it will appear here immediately."
+          steps={[
+            { icon: Settings2, title: "Open Connections", copy: "Choose Telegram." },
+            { icon: KeyRound, title: "Connect securely", copy: "Verify the account once." },
+            { icon: MessageCircle, title: "Start messaging", copy: "Open it from this workspace." }
+          ]}
           action={<a className="content-primary" href="/config-manager?service=messaging&platform=telegram"><Settings2 size={15} />Open Config Manager</a>}
         />
       ) : (
@@ -732,6 +750,11 @@ function PublishingContent({
           icon={Plug}
           title={"No " + platformLabels[platform] + " accounts connected"}
           copy="Add accounts in Config Manager. They will appear here grouped under their publishing app."
+          steps={[
+            { icon: Settings2, title: "Open Connections", copy: "Choose the publishing app." },
+            { icon: KeyRound, title: "Complete Login", copy: "Sign in to the account once." },
+            { icon: Send, title: "Create content", copy: "Return here when it is ready." }
+          ]}
           action={<a className="content-primary" href={"/config-manager?service=publishing&platform=" + platform}><Settings2 size={15} />Open Config Manager</a>}
         />
       ) : (

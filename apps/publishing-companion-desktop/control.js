@@ -6,6 +6,24 @@ const views = {
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
+function createIcon(name, className = "icon") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  svg.setAttribute("class", className);
+  svg.setAttribute("aria-hidden", "true");
+  use.setAttribute("href", `#icon-${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function setButtonLabel(buttonOrId, label) {
+  const button = typeof buttonOrId === "string" ? byId(buttonOrId) : buttonOrId;
+  if (!button) return;
+  const labelElement = button.querySelector(".button-label");
+  if (labelElement) labelElement.textContent = label;
+  else button.textContent = label;
+}
+
 let activeView = "activity";
 let currentStatus = null;
 let currentWorkspace = { sessions: [] };
@@ -221,7 +239,7 @@ function createLiveCard(session) {
     const focusWindow = document.createElement("button");
     focusWindow.type = "button";
     focusWindow.className = "external-focus-window";
-    focusWindow.textContent = "Bring to front";
+    focusWindow.append(createIcon("focus"), document.createTextNode("Bring to front"));
     focusWindow.addEventListener("click", () => void api.focusExternalWindow(session.id));
     externalStatus.append(tileMap, externalLabel, externalDetail);
     if (session.purpose === "login") externalStatus.append(focusWindow);
@@ -238,7 +256,17 @@ function createTimelineItem(session) {
   item.className = "timeline-item";
 
   const dot = document.createElement("i");
-  dot.className = session.activity?.state || "opening";
+  const timelineState = session.activity?.state || "opening";
+  const timelineIcons = {
+    opening: "monitor",
+    waiting: "history",
+    publishing: "send",
+    posted: "check",
+    failed: "alert",
+    stopped: "x",
+  };
+  dot.className = `timeline-mark ${timelineState}`;
+  dot.append(createIcon(timelineIcons[timelineState] || "activity"));
 
   const content = document.createElement("div");
   const name = document.createElement("strong");
@@ -299,7 +327,7 @@ function renderWorkspace() {
       : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
       : "Publishing all scheduled accounts together in the visible grid.";
-  byId("live-stop").textContent = singleSession?.purpose === "login" ? "Close login" : "Stop publishing";
+  setButtonLabel("live-stop", singleSession?.purpose === "login" ? "Close login" : "Stop publishing");
 
   const focusButton = byId("layout-focus");
   const splitButton = byId("layout-split");
@@ -372,7 +400,8 @@ function createScrapeJobItem(job) {
 
   const mark = document.createElement("span");
   mark.className = "scrape-job-mark";
-  mark.textContent = job.status === "complete" ? "OK" : job.status === "failed" ? "!" : job.status === "cancelled" ? "X" : job.platform === "Facebook" ? "FB" : "IG";
+  const scrapeIcons = { complete: "check", failed: "alert", cancelled: "x", queued: "list", running: "scan" };
+  mark.append(createIcon(scrapeIcons[job.status] || "scan-search"));
 
   const content = document.createElement("div");
   const title = document.createElement("strong");
@@ -492,6 +521,19 @@ function renderStatus(status) {
     : status.error || "The local publishing service could not start.";
   byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
   byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
+  byId("companion-open-step").classList.toggle("complete", ready);
+  byId("companion-open-step").classList.toggle("active", !ready);
+  byId("companion-open-copy").textContent = ready
+    ? "The publishing service is running."
+    : "Keep Companion open while the publishing service starts.";
+  const paired = Boolean(status.paired);
+  byId("companion-pairing-step").classList.toggle("complete", paired);
+  byId("companion-pairing-step").classList.toggle("active", ready && !paired);
+  byId("companion-publishing-step").classList.toggle("active", paired);
+  byId("companion-pairing-copy").textContent = paired
+    ? "This computer is connected to your workspace."
+    : "Open Publishing Connections and select Pair this device.";
+  setButtonLabel("empty-open-connections", paired ? "Manage publishing accounts" : "Open Publishing Connections");
   byId("install-chrome").hidden = Boolean(status.chromeInstalled);
 }
 
@@ -544,7 +586,15 @@ document.querySelectorAll(".nav-item").forEach(button => {
 });
 
 byId("refresh-current").addEventListener("click", async () => {
-  await Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]);
+  const button = byId("refresh-current");
+  button.disabled = true;
+  button.classList.add("is-loading");
+  try {
+    await Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]);
+  } finally {
+    button.classList.remove("is-loading");
+    button.disabled = false;
+  }
 });
 byId("layout-focus").addEventListener("click", () => {
   liveLayoutMode = "focus";
@@ -558,17 +608,17 @@ byId("layout-split").addEventListener("click", () => {
 byId("arrange-external").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;
-  button.textContent = "Arranging...";
+  setButtonLabel(button, "Arranging...");
   await api.arrangeExternalWindows();
-  button.textContent = "Arrange windows";
+  setButtonLabel(button, "Arrange windows");
   button.disabled = false;
 });
 async function stopPublishing(event) {
   const button = event.currentTarget;
   button.disabled = true;
-  button.textContent = "Stopping…";
+  setButtonLabel(button, "Stopping…");
   await api.emergencyStop();
-  button.textContent = button.id === "live-stop" ? "Stop publishing" : "Emergency stop";
+  setButtonLabel(button, button.id === "live-stop" ? "Stop publishing" : "Emergency stop");
   await refreshWorkspace();
 }
 
@@ -577,12 +627,13 @@ byId("live-stop").addEventListener("click", stopPublishing);
 byId("stop-scraping").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;
-  button.textContent = "Stopping...";
+  setButtonLabel(button, "Stopping...");
   await api.stopScraping();
-  button.textContent = "Stop scraping";
+  setButtonLabel(button, "Stop scraping");
   await refreshScraping();
 });
 byId("empty-open-dashboard").addEventListener("click", () => api.openDashboard());
+byId("empty-open-connections").addEventListener("click", () => api.openConnections());
 byId("open-data").addEventListener("click", () => api.openData());
 byId("open-logs").addEventListener("click", () => api.openLogs());
 byId("install-chrome").addEventListener("click", () => api.installChrome());

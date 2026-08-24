@@ -9,10 +9,12 @@ import {
   ChevronRight,
   CircleAlert,
   Database,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
   KeyRound,
+  Link2,
   Loader2,
   LockKeyhole,
   MessageCircle,
@@ -24,6 +26,7 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Smartphone,
   Trash2,
   UsersRound,
   X,
@@ -186,6 +189,23 @@ function EmptyState({ icon: Icon, title, copy, action }) {
       <p>{copy}</p>
       {action}
     </div>
+  );
+}
+
+function ConnectionSteps({ steps, activeIndex = 0 }) {
+  return (
+    <ol className="config-connection-steps" aria-label="Connection steps">
+      {steps.map((step, index) => {
+        const StepIcon = step.icon;
+        return (
+        <li className={index < activeIndex ? "complete" : index === activeIndex ? "active" : ""} key={step.title}>
+          <span className="config-step-icon"><StepIcon size={20} strokeWidth={1.9} /></span>
+          <div><strong>{step.title}</strong><small>{step.copy}</small></div>
+          {index < activeIndex && <i className="config-step-complete" aria-label="Completed"><Check size={12} strokeWidth={2.5} /></i>}
+        </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -732,6 +752,15 @@ function TelegramManager({
             <button type="button" onClick={resetConnection} aria-label="Close form"><X size={18} /></button>
           </header>
 
+          <ConnectionSteps
+            activeIndex={stage === "phone" ? 0 : stage === "code" ? 1 : 2}
+            steps={[
+              { icon: Smartphone, title: "Phone number", copy: "Use the full country code." },
+              { icon: KeyRound, title: "Verification", copy: "Enter Telegram's newest code." },
+              { icon: ShieldCheck, title: "Secure finish", copy: "Use your 2-step password only if asked." }
+            ]}
+          />
+
           {stage === "phone" && (
             <form onSubmit={startConnection}>
               <div className="config-form-grid">
@@ -769,7 +798,8 @@ function TelegramManager({
         <EmptyState
           icon={UsersRound}
           title="No Telegram accounts connected"
-          copy="Use Connect Telegram account above to add the first account."
+          copy="Connect one Telegram number. It will be available to permitted teammates in the Telegram workspace."
+          action={<button className="config-primary" type="button" onClick={() => setConnecting(true)}><Plus size={16} />Connect first account</button>}
         />
       ) : (
         <div className="config-account-list">
@@ -1050,20 +1080,42 @@ function PublishingManager({
         </div>
       </div>
 
-      <section className="config-shared-companion">
-        <div>
-          <span><MonitorCheck size={18} /></span>
-          <div>
-            <strong>Workspace Companion</strong>
-            <small>{workspaceCompanion?.status === "online" ? "Online — it can publish for authorized workspace members." : workspaceCompanion ? "Offline — queued posts will continue when it reconnects." : "Pair the manager device once. Team members do not install or configure it."}</small>
+      {!workspaceCompanion ? (
+        <section className="config-companion-guide" aria-labelledby="companion-guide-title">
+          <header>
+            <span><MonitorCheck size={20} /></span>
+            <div><p>One-time manager setup</p><h3 id="companion-guide-title">Set up this publishing computer</h3><small>Only one Publishing Manager needs Companion. Everyone else works from the browser.</small></div>
+          </header>
+          <ConnectionSteps
+            activeIndex={0}
+            steps={[
+              { icon: Download, title: "Install and open", copy: "Download Companion on this computer." },
+              { icon: Link2, title: "Pair this device", copy: "Keep Companion open, then connect it here." },
+              { icon: Plug, title: "Connect accounts", copy: "Add a platform account and complete Login." }
+            ]}
+          />
+          <div className="config-companion-guide-actions">
+            <a className="config-secondary" href={publishingCompanionDownloadUrl}><ExternalLink size={15} />Download Companion</a>
+            <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Pair this device</button>
           </div>
-        </div>
-        <div className="config-shared-companion-actions">
-          <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}{workspaceCompanion ? "Re-pair this device" : "Pair this device"}</button>
-          {workspaceCompanion && <button className="config-secondary" type="button" onClick={() => void removeWorkspaceCompanion()} disabled={companionBusy}>Remove</button>}
-        </div>
-        <p>Team members can use their normal workspace on any device.</p>
-      </section>
+          <p>Already installed? Open Companion and select <strong>Pair this device</strong>.</p>
+        </section>
+      ) : (
+        <section className="config-shared-companion">
+          <div>
+            <span><MonitorCheck size={18} /></span>
+            <div>
+              <strong>Workspace Companion</strong>
+              <small>{workspaceCompanion.status === "online" ? "Online — ready for workspace publishing." : "Offline — queued posts will continue when it reconnects."}</small>
+            </div>
+          </div>
+          <div className="config-shared-companion-actions">
+            <button className="config-secondary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}Re-pair</button>
+            <button className="config-tertiary" type="button" onClick={() => void removeWorkspaceCompanion()} disabled={companionBusy}>Remove</button>
+          </div>
+          <p>Team members can use their normal workspace on any device.</p>
+        </section>
+      )}
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
         {allowedPlatforms.map(platform => {
@@ -1107,7 +1159,7 @@ function PublishingManager({
         <EmptyState
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
-          copy="Add the first account here. Publish Queue Runner will automatically display it as a selectable destination."
+          copy={workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair the manager computer above, then add your first publishing account."}
           action={<button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button>}
         />
       ) : !editing && (

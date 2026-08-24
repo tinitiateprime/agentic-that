@@ -8,6 +8,36 @@
     <link rel="stylesheet" href="control.css" />
   </head>
   <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-activity" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4m-2-9 5-3-5-3v6Z"/></symbol>
+      <symbol id="icon-scan-search" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2m10 0h2a2 2 0 0 1 2 2v2M3 17v2a2 2 0 0 0 2 2h2m10 0h2a2 2 0 0 0 2-2v-2"/><circle cx="11" cy="11" r="4"/><path d="m16 16-2.2-2.2"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6M9 8h6m2 8h6"/></symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5m-5 4a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></symbol>
+      <symbol id="icon-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9 9h6v6H9z"/></symbol>
+      <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="icon-focus" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
+      <symbol id="icon-grid" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/></symbol>
+      <symbol id="icon-arrange" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M9 21V9"/></symbol>
+      <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.8 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.8-1.7"/></symbol>
+      <symbol id="icon-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+      <symbol id="icon-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="icon-list" viewBox="0 0 24 24"><path d="m3 5 2 2 4-4M3 12l2 2 4-4M3 19l2 2 4-4M13 6h8m-8 7h8m-8 7h8"/></symbol>
+      <symbol id="icon-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+      <symbol id="icon-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2m10 0h2a2 2 0 0 1 2 2v2M3 17v2a2 2 0 0 0 2 2h2m10 0h2a2 2 0 0 0 2-2v-2M7 12h10"/></symbol>
+      <symbol id="icon-package" viewBox="0 0 24 24"><path d="m7.5 4.3 9 5.2m-13 2.3 9 5.2 9-5.2M12.5 22V17"/><path d="M21.5 16V8l-9-5-9 5v8l9 5 3-1.7"/><path d="m17 20 2 2 4-4"/></symbol>
+      <symbol id="icon-lock" viewBox="0 0 24 24"><rect width="18" height="12" x="3" y="10" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/></symbol>
+      <symbol id="icon-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+      <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><path d="M8 2v4m8-4v4M3 10h18"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M12 14v3l2 1"/></symbol>
+      <symbol id="icon-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
+      <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/></symbol>
+      <symbol id="icon-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><path d="M14 2v6h6M8 13h8m-8 4h6"/></symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5 5 5 5-5m-5 5V3"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4m0 4h.01"/></symbol>
+      <symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="icon-terminal" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m6 9 3 3-3 3m5 0h4"/></symbol>
+    </svg>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
@@ -18,22 +48,22 @@
         <nav aria-label="Companion navigation">
           <!-- Full AgenticThat dashboard navigation is paused pending product approval.
           <button class="nav-item" data-view="dashboard" type="button">
-            <span class="nav-icon">▦</span>
+            <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg></span>
             <span><strong>Publishing</strong><small>Dashboard workspace</small></span>
           </button>
           -->
           <button class="nav-item active" data-view="activity" type="button">
-            <span class="nav-icon">◉</span>
+            <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>
             <span><strong>Publishing activity</strong><small>Visible and managed</small></span>
             <b id="activity-badge" hidden>0</b>
           </button>
           <button class="nav-item" data-view="scraping" type="button">
-            <span class="nav-icon">S</span>
+            <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-scan-search"></use></svg></span>
             <span><strong>Social scraping</strong><small>Instagram and Facebook</small></span>
             <b id="scraping-badge" hidden>0</b>
           </button>
           <button class="nav-item" data-view="settings" type="button">
-            <span class="nav-icon">⚙</span>
+            <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg></span>
             <span><strong>Companion</strong><small>Status and settings</small></span>
           </button>
         </nav>
@@ -42,7 +72,7 @@
           <i id="sidebar-status-dot"></i>
           <div><strong id="sidebar-status-title">Starting</strong><small id="sidebar-status-detail">Preparing local services</small></div>
         </div>
-        <div class="version-line">Desktop version <span id="version">1.0.0</span></div>
+        <div class="version-line"><svg class="icon" aria-hidden="true"><use href="#icon-monitor"></use></svg><span>Desktop version <b id="version">1.0.0</b></span></div>
       </aside>
 
       <main class="workspace">
@@ -52,8 +82,8 @@
             <h1 id="view-title">Login and publishing activity</h1>
           </div>
           <div class="topbar-actions">
-            <button class="secondary" id="refresh-current" type="button">Refresh</button>
-            <button class="danger" id="global-stop" type="button" disabled>Emergency stop</button>
+            <button class="secondary" id="refresh-current" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg><span class="button-label">Refresh</span></button>
+            <button class="danger" id="global-stop" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-stop"></use></svg><span class="button-label">Emergency stop</span></button>
           </div>
         </header>
 
@@ -71,34 +101,50 @@
 
         <section class="view-panel active" id="activity-panel">
           <div class="activity-intro">
-            <div>
-              <span class="eyebrow">SECURE SIGN-IN, VISIBLE PUBLISHING</span>
-              <h2 id="live-heading">Login and publishing activity</h2>
-              <p id="live-description">Account sign-in and publishing open inside Companion. A Chrome or Edge fallback remains available for providers that block embedded sign-in.</p>
+            <div class="activity-intro-copy">
+              <span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>
+              <div>
+                <span class="eyebrow">SECURE SIGN-IN, VISIBLE PUBLISHING</span>
+                <h2 id="live-heading">Login and publishing activity</h2>
+                <p id="live-description">Account sign-in and publishing open inside Companion. A Chrome or Edge fallback remains available for providers that block embedded sign-in.</p>
+              </div>
             </div>
-            <div class="safety-note"><strong>Approve once when scheduling</strong><span>The Allow/Deny popup appears immediately, so scheduled publishing can run unattended later.</span></div>
+            <div class="safety-note">
+              <span class="safety-note-icon"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg></span>
+              <span><strong>Approve once when scheduling</strong><small>The Allow/Deny popup appears immediately, so scheduled publishing can run unattended later.</small></span>
+            </div>
           </div>
 
           <div class="live-command-bar" id="live-command-bar" hidden>
             <div class="live-run-summary"><i></i><span><strong id="live-run-title">Live browser active</strong><small id="live-run-detail">Choose an account below to focus its browser.</small></span></div>
             <div class="live-layout-controls" role="group" aria-label="Live browser layout">
-              <button class="active" id="layout-focus" type="button">Focus view</button>
-              <button id="layout-split" type="button">Grid view</button>
+              <button class="active" id="layout-focus" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-focus"></use></svg><span>Focus view</span></button>
+              <button id="layout-split" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg><span>Grid view</span></button>
             </div>
-            <button class="external-arrange" id="arrange-external" type="button" hidden>Arrange windows</button>
-            <button class="live-stop" id="live-stop" type="button">Stop publishing</button>
+            <button class="external-arrange" id="arrange-external" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-arrange"></use></svg><span class="button-label">Arrange windows</span></button>
+            <button class="live-stop" id="live-stop" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-stop"></use></svg><span class="button-label">Stop publishing</span></button>
           </div>
           <div class="session-switcher" id="session-switcher" aria-label="Open publishing sessions" hidden></div>
           <div class="live-grid" id="live-grid"></div>
           <div class="activity-empty" id="activity-empty">
-            <span class="empty-icon">◎</span>
-            <strong>No publishing browser is open</strong>
-            <p>Use AgenticThat in Chrome. Account sign-in uses a dedicated secure browser window; scheduled publishing appears here automatically.</p>
-            <button class="primary" id="empty-open-dashboard" type="button">Open AgenticThat Publishing</button>
+            <div class="companion-empty-heading">
+              <span class="empty-icon">AT</span>
+              <div><span class="eyebrow">GET STARTED</span><strong>Companion is ready when you are</strong><p>Set up this computer once, then manage posts from AgenticThat.</p></div>
+            </div>
+            <ol class="companion-quickstart" aria-label="Companion setup steps">
+              <li id="companion-open-step"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg></span><div><strong>Open Companion</strong><small id="companion-open-copy">The publishing service is starting.</small></div></li>
+              <li id="companion-pairing-step"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.8 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.8-1.7"/></svg></span><div><strong>Pair this computer</strong><small id="companion-pairing-copy">Open Publishing Connections and select Pair this device.</small></div></li>
+              <li id="companion-publishing-step"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span><div><strong>Publish from AgenticThat</strong><small>Login and publishing activity will appear here.</small></div></li>
+            </ol>
+            <div class="companion-empty-actions">
+              <button class="primary" id="empty-open-connections" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-link"></use></svg><span class="button-label">Open Publishing Connections</span></button>
+              <button class="secondary" id="empty-open-dashboard" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg><span>Open Publishing</span></button>
+            </div>
+            <small class="companion-waiting-note">You can leave Companion running in the background. Offline posts remain safely queued.</small>
           </div>
 
           <section class="recent-activity">
-            <div class="section-heading"><div><span class="eyebrow">RECENT ACTIONS</span><h3>Platform timeline</h3></div><span id="activity-summary">Waiting for activity</span></div>
+            <div class="section-heading"><div class="section-heading-copy"><span class="section-heading-icon"><svg class="icon" aria-hidden="true"><use href="#icon-history"></use></svg></span><div><span class="eyebrow">RECENT ACTIONS</span><h3>Platform timeline</h3></div></div><span id="activity-summary">Waiting for activity</span></div>
             <div class="timeline" id="activity-timeline"></div>
           </section>
         </section>
@@ -124,25 +170,25 @@
                 </div>
                 <div class="scrape-progress-track" id="scrape-progress-track"><i id="scrape-progress-fill"></i></div>
                 <div class="scrape-steps" id="scrape-steps">
-                  <div data-stage="queued"><i></i><span><strong>Queued</strong><small>Request accepted</small></span></div>
-                  <div data-stage="opening_browser"><i></i><span><strong>Browser</strong><small>Private session</small></span></div>
-                  <div data-stage="scraping"><i></i><span><strong>Collecting</strong><small>Live public data</small></span></div>
-                  <div data-stage="preparing_results"><i></i><span><strong>Preparing</strong><small>Checking results</small></span></div>
+                  <div data-stage="queued"><i><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg></i><span><strong>Queued</strong><small>Request accepted</small></span></div>
+                  <div data-stage="opening_browser"><i><svg class="icon" aria-hidden="true"><use href="#icon-monitor"></use></svg></i><span><strong>Browser</strong><small>Private session</small></span></div>
+                  <div data-stage="scraping"><i><svg class="icon" aria-hidden="true"><use href="#icon-scan"></use></svg></i><span><strong>Collecting</strong><small>Live public data</small></span></div>
+                  <div data-stage="preparing_results"><i><svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg></i><span><strong>Preparing</strong><small>Checking results</small></span></div>
                 </div>
                 <div class="scrape-stage-actions">
-                  <div class="scrape-isolation-note"><i></i><span><strong>Publishing remains independent</strong><small>Facebook can securely reuse this workspace's connected local session; other scraping sessions remain isolated.</small></span></div>
-                  <button class="danger" id="stop-scraping" type="button" hidden>Stop scraping</button>
+                  <div class="scrape-isolation-note"><i><svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg></i><span><strong>Publishing remains independent</strong><small>Facebook can securely reuse this workspace's connected local session; other scraping sessions remain isolated.</small></span></div>
+                  <button class="danger" id="stop-scraping" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-stop"></use></svg><span class="button-label">Stop scraping</span></button>
                 </div>
               </div>
             </section>
 
             <div class="scrape-lists">
               <section class="scrape-list-card">
-                <div class="section-heading"><div><span class="eyebrow">UP NEXT</span><h3>Scraping queue</h3></div><span id="scrape-queue-summary">No requests waiting</span></div>
+                <div class="section-heading"><div class="section-heading-copy"><span class="section-heading-icon"><svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg></span><div><span class="eyebrow">UP NEXT</span><h3>Scraping queue</h3></div></div><span id="scrape-queue-summary">No requests waiting</span></div>
                 <div class="scrape-job-list" id="scrape-queue-list"><span class="timeline-empty">New requests will appear here.</span></div>
               </section>
               <section class="scrape-list-card">
-                <div class="section-heading"><div><span class="eyebrow">COMPLETED LOCALLY</span><h3>Recent scraping</h3></div><span id="scrape-history-summary">No recent jobs</span></div>
+                <div class="section-heading"><div class="section-heading-copy"><span class="section-heading-icon"><svg class="icon" aria-hidden="true"><use href="#icon-history"></use></svg></span><div><span class="eyebrow">COMPLETED LOCALLY</span><h3>Recent scraping</h3></div></div><span id="scrape-history-summary">No recent jobs</span></div>
                 <div class="scrape-job-list" id="scrape-history-list"><span class="timeline-empty">Completed and failed requests will appear here.</span></div>
               </section>
             </div>
@@ -152,26 +198,24 @@
         <section class="view-panel settings-view" id="settings-panel">
           <div class="settings-grid">
             <section class="settings-card service-card">
-              <div class="card-heading"><div><span class="eyebrow">LOCAL SERVICE</span><h2 id="status-title">Starting Companion…</h2></div><i id="status-dot"></i></div>
+              <div class="card-heading"><div class="settings-title"><span class="section-icon tone-blue"><svg class="icon" aria-hidden="true"><use href="#icon-server"></use></svg></span><div><span class="eyebrow">LOCAL SERVICE</span><h2 id="status-title">Starting Companion…</h2></div></div><i id="status-dot"></i></div>
               <p id="status-detail">Preparing the scheduler, secure account login, and live publishing browser.</p>
               <div class="checks">
-                <div><span>Local service</span><strong id="service-check">Checking</strong></div>
-                <div><span>Browser security</span><strong id="browser-check">Checking</strong></div>
-                <div><span>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
+                <div><span><svg class="icon" aria-hidden="true"><use href="#icon-server"></use></svg>Local service</span><strong id="service-check">Checking</strong></div>
+                <div><span><svg class="icon" aria-hidden="true"><use href="#icon-globe"></use></svg>Browser security</span><strong id="browser-check">Checking</strong></div>
+                <div><span><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
               </div>
             </section>
 
             <section class="settings-card">
-              <span class="eyebrow">SAFETY</span>
-              <h2>Scheduled publishing permission</h2>
+              <div class="settings-title"><span class="section-icon tone-amber"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg></span><div><span class="eyebrow">SAFETY</span><h2>Scheduled publishing permission</h2></div></div>
               <p>The first scheduling action shows a clear Allow/Deny popup immediately. Allow lets Companion publish while you are away; every live browser stays fully visible and unobstructed.</p>
-              <div class="permission-mode"><strong id="permission-state">Permission not granted</strong><small id="permission-detail">Scheduling will ask before saving the first unattended post.</small></div>
-              <button class="secondary compact" id="revoke-consent" type="button" hidden>Revoke publishing permission</button>
+              <div class="permission-mode"><span><svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg></span><div><strong id="permission-state">Permission not granted</strong><small id="permission-detail">Scheduling will ask before saving the first unattended post.</small></div></div>
+              <button class="secondary compact" id="revoke-consent" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Revoke publishing permission</span></button>
             </section>
 
             <section class="settings-card">
-              <span class="eyebrow">STARTUP</span>
-              <h2>Scheduled publishing</h2>
+              <div class="settings-title"><span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg></span><div><span class="eyebrow">STARTUP</span><h2>Scheduled publishing</h2></div></div>
               <p>Keep Companion available after Windows starts so scheduled posts can publish at the selected time.</p>
               <label class="setting-toggle">
                 <input id="auto-start" type="checkbox" />
@@ -180,19 +224,18 @@
             </section>
 
             <section class="settings-card">
-              <span class="eyebrow">SUPPORT</span>
-              <h2>Local files and diagnostics</h2>
+              <div class="settings-title"><span class="section-icon tone-blue"><svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg></span><div><span class="eyebrow">SUPPORT</span><h2>Local files and diagnostics</h2></div></div>
               <p>Account sessions and publishing files remain in the Companion data folder on this computer.</p>
               <div class="support-actions">
-                <button class="secondary" id="open-logs" type="button">View logs</button>
-                <button class="secondary" id="open-data" type="button">Open local data</button>
-                <button class="secondary" id="install-chrome" type="button">Install Chrome fallback</button>
+                <button class="secondary" id="open-logs" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-file"></use></svg><span>View logs</span></button>
+                <button class="secondary" id="open-data" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg><span>Open local data</span></button>
+                <button class="secondary" id="install-chrome" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span>Install Chrome fallback</span></button>
               </div>
             </section>
           </div>
 
           <section class="log-card">
-            <div class="section-heading"><div><span class="eyebrow">SESSION LOG</span><h3>Latest Companion messages</h3></div><button class="secondary compact" id="clear-log" type="button">Clear view</button></div>
+            <div class="section-heading"><div class="section-heading-copy"><span class="section-heading-icon"><svg class="icon" aria-hidden="true"><use href="#icon-terminal"></use></svg></span><div><span class="eyebrow">SESSION LOG</span><h3>Latest Companion messages</h3></div></div><button class="secondary compact" id="clear-log" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Clear view</span></button></div>
             <div class="log-list" id="log-list"><span>Companion messages will appear here.</span></div>
           </section>
         </section>

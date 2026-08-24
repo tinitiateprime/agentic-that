@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 
 const DASHBOARD_URL = "https://agentic-that.netlify.app/publishing";
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
+const PUBLISHING_CONNECTIONS_URL = `${DASHBOARD_ORIGIN}/config-manager?service=publishing`;
 const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
   || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
 // Temporarily keep the complete AgenticThat workspace out of Companion until
@@ -1085,7 +1086,7 @@ function createWindow() {
     show: false,
     title: "AgenticThat Publishing Companion",
     icon: path.join(app.getAppPath(), "assets", "app-icon.ico"),
-    backgroundColor: "#07142c",
+    backgroundColor: "#f4f6f9",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1240,6 +1241,10 @@ function registerIpc() {
   ipcMain.handle("companion:open-dashboard", () => {
     if (EMBED_FULL_PUBLISHING_WORKSPACE) showCompanion("dashboard");
     else void shell.openExternal(DASHBOARD_URL);
+    return true;
+  });
+  ipcMain.handle("companion:open-connections", () => {
+    void shell.openExternal(PUBLISHING_CONNECTIONS_URL);
     return true;
   });
   ipcMain.handle("companion:reload-dashboard", () => {

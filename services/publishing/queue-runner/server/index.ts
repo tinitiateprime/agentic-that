@@ -1216,6 +1216,7 @@ app.get("/api/health", async (_req, res) => {
     const storage = await localStorageHealth();
     const serverless = process.env.SERVERLESS === "true" || process.env.NETLIFY === "true";
     const browser = publishingBrowserRuntimeHealth();
+    const centralPairing = serverless ? null : await readCentralPairing();
     res.json({
       ok: true,
       service: "agenticthat-publish-queue-runner",
@@ -1226,6 +1227,7 @@ app.get("/api/health", async (_req, res) => {
       embeddedBrowser: browser.embeddedBrowser,
       engines: browser.engines,
       companionInstanceId: publishingCompanionId(),
+      paired: Boolean(centralPairing),
       extensionBridge: true,
       capabilities: {
         publishing: true,

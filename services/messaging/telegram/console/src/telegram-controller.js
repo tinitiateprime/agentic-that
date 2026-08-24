@@ -261,11 +261,11 @@ function moveAccountSetupToConfigManager() {
   panel.innerHTML = [
     '<div class="external-config-panel">',
     '<span class="external-config-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.37a1.7 1.7 0 0 0-1 .63 1.7 1.7 0 0 0-.37 1.08V21h-4v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.23 15a1.7 1.7 0 0 0-.63-1A1.7 1.7 0 0 0 2.52 13.63H2v-4h.52A1.7 1.7 0 0 0 4.23 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.6 4.63a1.7 1.7 0 0 0 1-.63A1.7 1.7 0 0 0 9.97 3H14v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9c.15.4.4.74.74 1 .3.22.66.34 1.03.34H22v4h-.86A1.7 1.7 0 0 0 19.4 15Z"/></svg></span>',
-    '<span class="eyebrow">Central account configuration</span>',
-    '<h2>Telegram accounts are connected in Config Manager</h2>',
-    '<p>Account creation and verification now happen outside this service. Every connected account will continue to appear in the selectors and connected-account views here.</p>',
-    '<a id="open-config-manager" class="button primary" href="' + fallbackOrigin + '/config-manager?service=messaging&platform=telegram">Open Config Manager</a>',
-    '<small>Your current Telegram workspace session is reused securely.</small>',
+    '<span class="eyebrow">Telegram connections</span>',
+    '<h2>Connect accounts in Connections</h2>',
+    '<p>Add a phone number, enter Telegram\'s verification code, and return here. The connected profile will appear automatically.</p>',
+    '<a id="open-config-manager" class="button primary" href="' + fallbackOrigin + '/config-manager?service=messaging&platform=telegram">Open Telegram Connections</a>',
+    '<small>Publishing Companion is not required for Telegram.</small>',
     '</div>'
   ].join("");
   void api("/v1/health").then((health) => {

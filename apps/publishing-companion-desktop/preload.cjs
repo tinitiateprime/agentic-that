@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   scrapingState: () => ipcRenderer.invoke("companion:scraping-state"),
   setLayout: layout => ipcRenderer.invoke("companion:set-layout", layout),
   openDashboard: () => ipcRenderer.invoke("companion:open-dashboard"),
+  openConnections: () => ipcRenderer.invoke("companion:open-connections"),
   reloadDashboard: () => ipcRenderer.invoke("companion:reload-dashboard"),
   installChrome: () => ipcRenderer.invoke("companion:install-chrome"),
   openData: () => ipcRenderer.invoke("companion:open-data"),

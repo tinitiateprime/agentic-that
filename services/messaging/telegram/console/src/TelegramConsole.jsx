@@ -138,6 +138,22 @@ export function TelegramConsole({ integrated = false }) {
               h("symbol", {"id":"nav-connect","viewBox":"0 0 24 24"},
                 h("path", {"d":"M15 7h2a4 4 0 0 1 0 8h-2m-6 0H7a4 4 0 0 1 0-8h2m-2 5h10M12 3v5m-2-2h4"})
               ),
+              h("symbol", {"id":"guide-phone","viewBox":"0 0 24 24"},
+                h("rect", {"x":"5","y":"2","width":"14","height":"20","rx":"2"}),
+                h("path", {"d":"M12 18h.01"})
+              ),
+              h("symbol", {"id":"guide-code","viewBox":"0 0 24 24"},
+                h("circle", {"cx":"7.5","cy":"15.5","r":"5.5"}),
+                h("path", {"d":"m21 2-9.6 9.6M15.5 7.5l3 3L21 8l-3-3"})
+              ),
+              h("symbol", {"id":"guide-shield","viewBox":"0 0 24 24"},
+                h("path", {"d":"M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"}),
+                h("path", {"d":"m9 12 2 2 4-4"})
+              ),
+              h("symbol", {"id":"guide-book","viewBox":"0 0 24 24"},
+                h("path", {"d":"M4 19.5A2.5 2.5 0 0 1 6.5 17H20"}),
+                h("path", {"d":"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"})
+              ),
               h("symbol", {"id":"nav-accounts","viewBox":"0 0 24 24"},
                 h("rect", {"x":"3","y":"4","width":"18","height":"16","rx":"3"}),
                 h("path", {"d":"M8 9h8M8 13h5"})
@@ -461,7 +477,8 @@ export function TelegramConsole({ integrated = false }) {
                   ),
                   h("div", {"className":"connect-heading-actions"},
                     h("button", {"className":"guide-button","type":"button","data-guide-open":"","aria-controls":"telegram-guide-panel","aria-expanded":"false"},
-                      "Help guide"
+                      h("svg", {"className":"guide-help-icon","aria-hidden":"true"}, h("use", {"href":"#guide-book"})),
+                      "Connection steps"
                     )
                   )
                 ),
@@ -2693,7 +2710,7 @@ export function TelegramConsole({ integrated = false }) {
           h("div", {"className":"guide-dialog-header"},
             h("div", null,
               h("p", {"className":"eyebrow"},
-                "Help guide"
+                "Account connection"
               ),
               h("h2", {"id":"telegram-user-guide-title"},
                 "Connect your Telegram account"
@@ -2704,40 +2721,40 @@ export function TelegramConsole({ integrated = false }) {
             )
           ),
           h("p", {"className":"guide-intro"},
-            "Three quick steps connect an account. AgenticThat keeps the app credentials on the server."
+            "Use the phone number attached to the Telegram account you want to add."
           ),
           h("ol", {"className":"guide-steps"},
             h("li", null,
               h("span", null,
-                "1"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-phone"}))
               ),
-              h("p", null,
-                "Enter your Telegram phone number with its country code, then request a verification code."
+              h("div", null,
+                h("strong", null, "Enter the phone number"),
+                h("p", null, "Include its country code, then request a verification code.")
               )
             ),
             h("li", null,
               h("span", null,
-                "2"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-code"}))
               ),
               h("div", null,
-                h("p", null,
-                  "Enter the newest verification code sent to your Telegram app or by SMS."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-confirmation-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-confirmation-redacted.png","width":"1523","height":"667","alt":"Telegram confirmation-code screen with a safe example phone number","loading":"lazy","decoding":"async"})
-                )
+                h("strong", null, "Verify the account"),
+                h("p", null, "Enter the newest code sent to your Telegram app or by SMS.")
               )
             ),
             h("li", null,
               h("span", null,
-                "3"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-shield"}))
               ),
               h("div", null,
-                h("p", null,
-                  "If this account uses Telegram two-step verification, enter its password to finish connecting."
-                )
+                h("strong", null, "Finish securely"),
+                h("p", null, "If Telegram asks, enter the account's two-step verification password.")
               )
             )
+          ),
+          h("div", {"className":"guide-next"},
+            h("strong", null, "After connection"),
+            h("p", null, "Choose the sending profile, enter a recipient, and write your message. Companion is not required for Telegram.")
           )
         )
       )
