@@ -55,6 +55,9 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       databaseReady,
       databaseEngine: "sqlite",
       storage: "local-development-only",
+      livePublishingWorkerCount: config.executionEnabled && config.instagramPublishingEnabled
+        ? config.liveWorkerCount
+        : 0,
       features: {
         publishing: config.executionEnabled && config.instagramPublishingEnabled,
         instagramPublishing: config.instagramPublishingEnabled,

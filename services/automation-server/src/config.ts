@@ -18,6 +18,7 @@ export type AutomationConfig = {
   publishingDryRunEnabled: boolean;
   publishingPreviewEnabled: boolean;
   workerPollMs: number;
+  liveWorkerCount: number;
   autoMigrate: boolean;
   allowPublicBind: boolean;
 };
@@ -46,6 +47,14 @@ function workerPoll(value: string | undefined) {
   const parsed = Number(value || 2_000);
   if (!Number.isInteger(parsed) || parsed < 250 || parsed > 60_000) {
     throw new Error("SERVER_WORKER_POLL_MS must be between 250 and 60000 milliseconds.");
+  }
+  return parsed;
+}
+
+function liveWorkerCount(value: string | undefined) {
+  const parsed = Number(value || 1);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
+    throw new Error("SERVER_LIVE_WORKER_COUNT must be an integer between 1 and 8.");
   }
   return parsed;
 }
@@ -82,6 +91,7 @@ export function loadAutomationConfig(
     publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),
     publishingPreviewEnabled: enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED),
     workerPollMs: workerPoll(env.SERVER_WORKER_POLL_MS),
+    liveWorkerCount: liveWorkerCount(env.SERVER_LIVE_WORKER_COUNT),
     autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
     allowPublicBind,
   };

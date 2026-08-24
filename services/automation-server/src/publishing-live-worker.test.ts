@@ -6,11 +6,11 @@ import test from "node:test";
 import sharp from "sharp";
 import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
-import type { ServerPublishingExecutor } from "./executor.ts";
+import type { PublishingDryRunValidator, ServerPublishingExecutor } from "./executor.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { AutomationJobStore } from "./job-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
-import { AutomationPublishingLiveWorker } from "./publishing-live-worker.ts";
+import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
 
 test("the live worker requires authorization and fences Instagram's final action", async () => {
@@ -119,4 +119,108 @@ test("the live Playwright executor has one exact guarded Share click", async () 
   const cropNext = previewSource.indexOf("Instagram's crop Next control was not available.");
   assert.ok(originalCrop >= 0, "The shared Instagram flow must select Original crop.");
   assert.ok(cropNext > originalCrop, "Original crop must be selected before the crop Next step.");
+});
+
+test("the live worker pool runs different accounts concurrently but serializes each account", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-live-pool-"));
+  const config = loadAutomationConfig({ SERVER_ARCHITECTURE_DATA_DIR: directory }, directory);
+  const files = new AutomationFileStore(config.dataDirectory);
+  await files.initialize();
+  const database = createAutomationDatabase(config);
+  migrateAutomationSchema(database);
+  const store = new AutomationJobStore(database, files);
+  let releaseExecutions: () => void = () => undefined;
+  let run: Promise<unknown[]> | null = null;
+
+  try {
+    const accountA = await store.createAccount({
+      workspaceId: "pool-workspace",
+      platform: "instagram",
+      displayName: "Pool account A",
+    });
+    const accountB = await store.createAccount({
+      workspaceId: "pool-workspace",
+      platform: "instagram",
+      displayName: "Pool account B",
+    });
+    database.prepare("UPDATE social_accounts SET status = 'CONNECTED' WHERE id IN (?, ?)")
+      .run(accountA.id, accountB.id);
+    const scheduledAt = new Date(Date.now() - 60_000).toISOString();
+    const createJob = (accountId: string, caption: string, idempotencyKey: string) => store.createPublishingJob({
+      workspaceId: "pool-workspace",
+      accountId,
+      scheduledAt,
+      originalTimezone: "UTC",
+      caption,
+      media: [],
+      idempotencyKey,
+    }, "LIVE", "LOCAL", true);
+    createJob(accountA.id, "Account A first", "pool-account-a-first");
+    createJob(accountA.id, "Account A second", "pool-account-a-second");
+    createJob(accountB.id, "Account B first", "pool-account-b-first");
+
+    const validator: PublishingDryRunValidator = {
+      platform: "instagram",
+      async validate() {
+        return { valid: true, checks: ["fake pool preflight"], issues: [] };
+      },
+    };
+    let activeExecutions = 0;
+    let maximumActiveExecutions = 0;
+    const activeByAccount = new Map<string, number>();
+    const maximumByAccount = new Map<string, number>();
+    const enteredAccounts = new Set<string>();
+    let signalBothStarted: () => void = () => undefined;
+    const bothStarted = new Promise<void>(resolve => { signalBothStarted = resolve; });
+    const executionRelease = new Promise<void>(resolve => { releaseExecutions = resolve; });
+    const executor: ServerPublishingExecutor = {
+      platform: "instagram",
+      async publish(job, _signal, onFinalActionStarting) {
+        await onFinalActionStarting();
+        activeExecutions += 1;
+        maximumActiveExecutions = Math.max(maximumActiveExecutions, activeExecutions);
+        const accountActive = (activeByAccount.get(job.accountId) || 0) + 1;
+        activeByAccount.set(job.accountId, accountActive);
+        maximumByAccount.set(job.accountId, Math.max(maximumByAccount.get(job.accountId) || 0, accountActive));
+        enteredAccounts.add(job.accountId);
+        if (enteredAccounts.size === 2) signalBothStarted();
+        await executionRelease;
+        activeExecutions -= 1;
+        activeByAccount.set(job.accountId, accountActive - 1);
+        return { state: "PUBLISHED" };
+      },
+    };
+    const pool = new AutomationPublishingLiveWorkerPool(
+      store,
+      new Map([["instagram", validator]]),
+      new Map([["instagram", executor]]),
+      1_000,
+      3,
+    );
+    assert.equal(pool.size, 3);
+    run = pool.runOnce();
+    await Promise.race([
+      bothStarted,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("Two accounts did not start concurrently.")), 2_000)),
+    ]);
+    assert.deepEqual(enteredAccounts, new Set([accountA.id, accountB.id]));
+    assert.equal(maximumActiveExecutions, 2);
+    assert.equal(maximumByAccount.get(accountA.id), 1);
+    assert.equal(maximumByAccount.get(accountB.id), 1);
+    assert.equal(
+      store.listPublishingJobs("pool-workspace").filter(job => job.accountId === accountA.id && job.state === "SCHEDULED").length,
+      1,
+    );
+
+    releaseExecutions();
+    const results = await run;
+    assert.equal(results.filter(result => (result as { state?: string } | null)?.state === "PUBLISHED").length, 2);
+    assert.equal(results.filter(result => result === null).length, 1);
+    await pool.stop();
+  } finally {
+    releaseExecutions();
+    await run?.catch(() => undefined);
+    database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

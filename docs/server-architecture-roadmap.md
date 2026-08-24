@@ -31,6 +31,8 @@
     targeting, pre-action fencing, platform confirmation, and `UNCERTAIN` recovery.
 16. Local future-date scheduling with workspace-scoped job history, status
     refresh, and atomic cancellation before a worker claims the post.
+17. Configurable 1-8 worker live-publishing pool with tests proving concurrent
+    execution across accounts and strict serialization within one account.
 
 ## Next development work
 

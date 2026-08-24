@@ -43,6 +43,7 @@ test("health reports every new execution feature disabled by default", async () 
     });
     assert.equal(body.databaseReady, false);
     assert.equal(body.databaseEngine, "sqlite");
+    assert.equal(body.livePublishingWorkerCount, 0);
   } finally {
     await runtime.close();
   }

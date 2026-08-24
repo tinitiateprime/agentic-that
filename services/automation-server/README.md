@@ -39,6 +39,8 @@ an isolated local SQLite file under `.server-data`.
   before the executor can click Share.
 - Local date/time scheduling, workspace-scoped live-job history and statuses,
   and cancellation that succeeds only while a job is still `SCHEDULED`.
+- A bounded live-publishing pool can run different accounts concurrently while
+  the database lease prevents two workers from using one account profile.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
@@ -51,6 +53,9 @@ implementation phases. Committed feature flags remain false by default.
 networked composer preview. Neither flag enables live publishing. Live Instagram
 testing requires both `SERVER_EXECUTION_ENABLED=true` and
 `SERVER_INSTAGRAM_PUBLISHING_ENABLED=true`; committed defaults remain false.
+`SERVER_LIVE_WORKER_COUNT` controls live publishing concurrency from 1 through
+8 and defaults to 1. Increase it gradually because each active job can launch
+its own Chromium process.
 
 ## Local setup
 

@@ -14,7 +14,7 @@ import { PlaywrightInstagramPreviewExecutor } from "./instagram-preview.ts";
 import { PlaywrightInstagramPublishingExecutor } from "./instagram-live.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
 import { AutomationPublishingPreviewWorker } from "./publishing-preview-worker.ts";
-import { AutomationPublishingLiveWorker } from "./publishing-live-worker.ts";
+import { AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
@@ -50,12 +50,13 @@ export async function startAutomationServer() {
         config.workerPollMs,
       )
     : null;
-  const publishingLiveWorker = store && config.executionEnabled && config.instagramPublishingEnabled
-    ? new AutomationPublishingLiveWorker(
+  const publishingLiveWorkerPool = store && config.executionEnabled && config.instagramPublishingEnabled
+    ? new AutomationPublishingLiveWorkerPool(
         store,
         new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
         new Map([["instagram", new PlaywrightInstagramPublishingExecutor(files, config.browserExecutablePath)]]),
         config.workerPollMs,
+        config.liveWorkerCount,
       )
     : null;
 
@@ -66,20 +67,20 @@ export async function startAutomationServer() {
   });
   publishingDryRunWorker?.start();
   publishingPreviewWorker?.start();
-  publishingLiveWorker?.start();
+  publishingLiveWorkerPool?.start();
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await publishingDryRunWorker?.stop();
     await publishingPreviewWorker?.stop();
-    await publishingLiveWorker?.stop();
+    await publishingLiveWorkerPool?.stop();
     await loginManager?.shutdown();
     database.close();
   };
 
   process.stdout.write(
     `AgenticThat automation server listening on http://${config.host}:${config.port} ` +
-      `(publishing ${config.executionEnabled && config.instagramPublishingEnabled ? "enabled" : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
+      `(publishing ${config.executionEnabled && config.instagramPublishingEnabled ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
   );
   return { server, config, shutdown };
 }

@@ -13,6 +13,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.publishingDryRunEnabled, false);
   assert.equal(config.publishingPreviewEnabled, false);
   assert.equal(config.workerPollMs, 2_000);
+  assert.equal(config.liveWorkerCount, 1);
   assert.equal(config.autoMigrate, false);
   assert.equal(config.databaseFile, "C:\\workspace\\.server-data\\automation.db");
   assert.equal(config.loginTimeoutMs, 600_000);
@@ -34,4 +35,7 @@ test("invalid ports are rejected", () => {
   assert.throws(() => loadAutomationConfig({ SERVER_ARCHITECTURE_PORT: "70000" }), /between 1 and 65535/);
   assert.throws(() => loadAutomationConfig({ SERVER_LOGIN_TIMEOUT_MS: "1000" }), /between 60000 and 1800000/);
   assert.throws(() => loadAutomationConfig({ SERVER_WORKER_POLL_MS: "10" }), /between 250 and 60000/);
+  assert.throws(() => loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "0" }), /between 1 and 8/);
+  assert.throws(() => loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "9" }), /between 1 and 8/);
+  assert.equal(loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "4" }).liveWorkerCount, 4);
 });

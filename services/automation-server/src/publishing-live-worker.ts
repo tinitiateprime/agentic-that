@@ -196,3 +196,43 @@ export class AutomationPublishingLiveWorker {
     }
   }
 }
+
+export class AutomationPublishingLiveWorkerPool {
+  readonly workers: readonly AutomationPublishingLiveWorker[];
+
+  constructor(
+    store: AutomationJobStore,
+    validators: ReadonlyMap<string, PublishingDryRunValidator>,
+    executors: ReadonlyMap<string, ServerPublishingExecutor>,
+    pollMs: number,
+    workerCount: number,
+  ) {
+    if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 8) {
+      throw new Error("The live publishing worker pool must contain between 1 and 8 workers.");
+    }
+    const poolId = `live_pool_${process.pid}_${randomUUID().replaceAll("-", "")}`;
+    this.workers = Array.from({ length: workerCount }, (_, index) => new AutomationPublishingLiveWorker(
+      store,
+      validators,
+      executors,
+      pollMs,
+      `${poolId}_${index + 1}`,
+    ));
+  }
+
+  get size() {
+    return this.workers.length;
+  }
+
+  start() {
+    for (const worker of this.workers) worker.start();
+  }
+
+  async stop() {
+    await Promise.all(this.workers.map(worker => worker.stop()));
+  }
+
+  async runOnce() {
+    return Promise.all(this.workers.map(worker => worker.runOnce()));
+  }
+}
