@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { chmodSync } from "node:fs";
 import path from "node:path";
 import type { AutomationConfig } from "./config.ts";
 
@@ -24,6 +25,7 @@ export function assertSafeAutomationDatabase(config: AutomationConfig) {
 export function createAutomationDatabase(config: AutomationConfig) {
   const target = assertSafeAutomationDatabase(config);
   const database = new DatabaseSync(target.file);
+  chmodSync(target.file, 0o600);
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");

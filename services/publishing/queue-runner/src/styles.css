@@ -5019,13 +5019,15 @@
   background: linear-gradient(135deg, #F2FAF6, #FFFFFF 58%);
   box-shadow: 0 8px 24px rgba(19, 67, 49, .05);
 }
-.publish-queue-runner .server-worker-panel > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; }
+.publish-queue-runner .server-worker-panel > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 11px; }
 .publish-queue-runner .server-worker-panel > header > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: #DDF4E9; color: #0D704A; }
 .publish-queue-runner .server-worker-panel > header > div { display: grid; gap: 2px; }
 .publish-queue-runner .server-worker-panel > header h2 { margin: 0; color: #183B2D; font-size: 17px; }
 .publish-queue-runner .server-worker-panel > header small { color: #688078; font-size: 10px; }
 .publish-queue-runner .server-worker-panel > header > i { padding: 5px 8px; border-radius: 999px; background: #FBE7E5; color: #9D3934; font-size: 9px; font-style: normal; font-weight: 900; letter-spacing: .06em; }
 .publish-queue-runner .server-worker-panel > header > i.online { background: #DDF5E8; color: #087443; }
+.publish-queue-runner .server-worker-manage-link { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border: 1px solid #C9D9D2; border-radius: 7px; background: #FFF; color: #176B4E; font-size: 10px; font-weight: 850; text-decoration: none; }
+.publish-queue-runner .server-worker-manage-link:hover { border-color: #7DB49F; background: #F2FAF6; }
 .publish-queue-runner .server-worker-panel > form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding-top: 11px; border-top: 1px solid #DFEAE5; }
 .publish-queue-runner .server-worker-panel > form label { display: grid; gap: 5px; color: #526C62; font-size: 10px; font-weight: 800; }
 .publish-queue-runner .server-worker-panel input { min-height: 38px; padding: 8px 10px; border: 1px solid #C9D9D2; border-radius: 7px; background: #FFF; color: #203D32; font: inherit; }
@@ -5068,15 +5070,19 @@
 .publish-queue-runner .server-login-panel > header strong { color: #17382B; font-size: 17px; }
 .publish-queue-runner .server-login-panel > header em { color: #667B72; font-size: 10px; font-style: normal; }
 .publish-queue-runner .server-login-state { display: inline-flex; width: fit-content; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: #E8F5EF; color: #166847; font-size: 9px; font-weight: 850; }
+.publish-queue-runner .server-login-frame-shell { position: relative; border-radius: 9px; overflow: hidden; background: #17201D; }
 .publish-queue-runner .server-login-frame { width: 100%; display: block; border: 1px solid #BDD2C9; border-radius: 9px; background: #17201D; outline: none; cursor: default; user-select: none; }
 .publish-queue-runner .server-login-frame:focus { box-shadow: 0 0 0 3px rgba(24, 137, 94, .24); }
+.publish-queue-runner .server-login-click-feedback { position: absolute; z-index: 2; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 3px solid #0B8A63; border-radius: 50%; background: rgba(255, 255, 255, .6); pointer-events: none; animation: server-login-click-pulse .55s ease-out forwards; }
+@keyframes server-login-click-pulse { from { opacity: 1; transform: scale(.35); } to { opacity: 0; transform: scale(1.55); } }
 .publish-queue-runner .server-login-loading { min-height: 420px; display: grid; place-items: center; align-content: center; gap: 10px; border-radius: 9px; background: #EFF5F2; color: #60776D; font-size: 11px; }
 
 @media (max-width: 680px) {
   .publish-queue-runner .server-worker-panel > form,
 .publish-queue-runner .server-worker-account-list article { grid-template-columns: 1fr; }
   .publish-queue-runner .server-worker-panel > header { grid-template-columns: auto minmax(0, 1fr); }
-  .publish-queue-runner .server-worker-panel > header > i { grid-column: 1 / -1; justify-self: start; }
+  .publish-queue-runner .server-worker-manage-link,
+.publish-queue-runner .server-worker-panel > header > i { grid-column: 1 / -1; justify-self: start; }
   .publish-queue-runner .server-worker-jobs article { grid-template-columns: minmax(0, 1fr) auto; }
   .publish-queue-runner .server-worker-jobs article > button { grid-column: 1 / -1; }
 }

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { accessErrorResponse, authorizeApiCapability, principalHasAccess } from "@platform/server/access-control";
+import { accessErrorResponse, authorizeApiCapabilityForRequest, principalHasAccess } from "@platform/server/access-control";
 import {
   advanceCentralStagedUpload,
   authenticateCentralCompanion,
@@ -71,8 +71,8 @@ async function companion(request) {
   return { token, companion: await authenticateCentralCompanion(token) };
 }
 
-async function principal(capability) {
-  return authorizeApiCapability(capability);
+async function principal(request, capability) {
+  return authorizeApiCapabilityForRequest(request, capability, "publishing");
 }
 
 function assertPlatformAccess(principalValue, platform, level = "view") {
@@ -176,7 +176,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
     mimeType: stage.mimeType,
     size: stage.size,
     extension: path.extname(stage.originalName),
-    url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
+    url: `/api/central-publishing/media/${encodeURIComponent(stage.fileName)}`,
   };
 }
 
@@ -211,7 +211,7 @@ export async function GET(request, context) {
       const token = companionToken(request);
       if (token) workspaceId = (await companion(request)).companion.workspaceId;
       else {
-        webPrincipal = await principal("publishing.view");
+        webPrincipal = await principal(request, "publishing.view");
         workspaceId = webPrincipal.workspaceId;
       }
       const upload = (await listCentralUploads(workspaceId)).find((item) => item.fileName === parts[1]);
@@ -229,7 +229,7 @@ export async function GET(request, context) {
       const bytes = await readPublishingMedia(parts[1], workspaceId);
       return new Response(bytes, { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "private, max-age=300" } });
     }
-    const user = await principal("publishing.view");
+    const user = await principal(request, "publishing.view");
     const query = new URL(request.url).searchParams;
     if (parts[0] === "health") {
       const dashboard = await publishingDashboard(user.workspaceId);
@@ -298,11 +298,11 @@ export async function POST(request, context) {
       return Response.json(await updateCentralJob(token, parts[2], await requestJson(request)));
     }
     if (parts[0] === "companion" && parts[1] === "pair") {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       return Response.json(await createCompanionPairing(user, await requestJson(request)));
     }
     if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "chunks") {
-      const user = await principal("publishing.content.create");
+      const user = await principal(request, "publishing.content.create");
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       const offset = Number(request.headers.get("x-upload-offset"));
       if (!Number.isInteger(offset) || offset !== stage.offset) throw new Error("The media upload offset does not match the upload session.");
@@ -315,63 +315,63 @@ export async function POST(request, context) {
     }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {
-      const user = await principal("publishing.content.create");
+      const user = await principal(request, "publishing.content.create");
       return Response.json(await createCentralStagedUpload(user, body), { status: 201 });
     }
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "text") {
       // Direct posts enter the executable queue immediately. Keep that path
       // limited to a Publishing Manager; uploaders use submissions instead.
-      const user = await principal("publishing.execute");
+      const user = await principal(request, "publishing.execute");
       return Response.json(await createPosts(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "staged") {
-      const user = await principal("publishing.execute");
+      const user = await principal(request, "publishing.execute");
       const media = await finishStagedMedia(user, body.stagedUploadId);
       return Response.json(await createPosts(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "text") {
-      const user = await principal("publishing.content.create");
+      const user = await principal(request, "publishing.content.create");
       await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
       return Response.json(await createCentralSubmission(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "staged") {
-      const user = await principal("publishing.content.create");
+      const user = await principal(request, "publishing.content.create");
       await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
       const media = await finishStagedMedia(user, body.stagedUploadId);
       return Response.json(await createCentralSubmission(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[2] === "schedule") {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal(request, "publishing.schedule.manage");
       await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
       return Response.json(await scheduleCentralSubmission(user, parts[1], body.destinations || []));
     }
     if (parts[0] === "platforms" && parts[2] === "accounts") {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       assertPlatformAccess(user, parts[1], "configure");
       return Response.json(await createCentralAccount(user, parts[1], body), { status: 201 });
     }
     if (parts[0] === "schedules") {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal(request, "publishing.schedule.manage");
       return Response.json(await createCentralSchedule(user, body), { status: 201 });
     }
     if (parts[0] === "automation" && parts[1] === "consent") {
-      await principal("publishing.execute");
+      await principal(request, "publishing.execute");
       return Response.json({ granted: true, message: "Publishing jobs are authorized for the workspace Companion." });
     }
     if (parts[0] === "publishing-safety" && parts[1] === "assess") {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal(request, "publishing.schedule.manage");
       await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
       return Response.json({ allowed: true, issues: [], assessments: [] });
     }
     if (parts[0] === "automation" && parts[1] === "run") {
-      const user = await principal("publishing.execute");
+      const user = await principal(request, "publishing.execute");
       await Promise.all((body.uploadIds || []).map((uploadId) => centralUploadForPrincipal(user, uploadId, "operate")));
       const jobs = await queueCentralUploads(user, body.uploadIds);
       return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: jobs.map((job) => job.uploadId) });
     }
     if (parts[0] === "automation" && parts[1] === "stop") return Response.json({ stopped: false, message: "Queued work remains safe until the workspace Companion is online." });
     if (parts[0] === "accounts" && parts[2] === "manual-login") {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       await centralAccountForPrincipal(user, parts[1], "configure");
       return Response.json({ started: false, message: "Open the paired Workspace Companion on the manager device to sign in.", requiresCompanion: true });
     }
@@ -389,23 +389,23 @@ export async function PATCH(request, context) {
     }
     const body = await requestJson(request);
     if (parts[0] === "accounts" && parts[1]) {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       await centralAccountForPrincipal(user, parts[1], "configure");
       return Response.json(await updateCentralAccount(user, parts[1], body));
     }
     if (parts[0] === "uploads" && parts[2] === "status") {
-      const user = await principal("publishing.execute");
+      const user = await principal(request, "publishing.execute");
       await centralUploadForPrincipal(user, parts[1], "operate");
       return Response.json(await updateCentralUploadStatus(user, parts[1], body.status, body.failureReason));
     }
     if (parts[0] === "uploads" && parts[1]) {
       const scheduleOnly = Object.keys(body).length > 0 && Object.keys(body).every((key) => key === "scheduledAt" || key === "scheduleId");
-      const user = await principal(scheduleOnly ? "publishing.schedule.manage" : "publishing.content.edit");
+      const user = await principal(request, scheduleOnly ? "publishing.schedule.manage" : "publishing.content.edit");
       await centralUploadForPrincipal(user, parts[1], "operate");
       return Response.json(await updateCentralUpload(user, parts[1], body));
     }
     if (parts[0] === "schedules" && parts[1]) {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal(request, "publishing.schedule.manage");
       return Response.json(await updateCentralSchedule(user, parts[1], body));
     }
     return Response.json({ message: "Publishing endpoint was not found." }, { status: 404 });
@@ -418,28 +418,28 @@ export async function DELETE(request, context) {
   try {
     const parts = await segments(context);
     if (parts[0] === "companion") {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       return Response.json(await removeCentralCompanion(user));
     }
     if (parts[0] === "staged-uploads" && parts[1]) {
-      const user = await principal("publishing.content.create");
+      const user = await principal(request, "publishing.content.create");
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       await deleteCentralStagedUpload(user, parts[1]);
       await removeStageBytes(stage);
       return new Response(null, { status: 204 });
     }
     if (parts[0] === "accounts" && parts[1]) {
-      const user = await principal("publishing.accounts.configure");
+      const user = await principal(request, "publishing.accounts.configure");
       await centralAccountForPrincipal(user, parts[1], "configure");
       return Response.json(await deleteCentralAccount(user, parts[1]));
     }
     if (parts[0] === "uploads" && parts[1]) {
-      const user = await principal("publishing.content.edit");
+      const user = await principal(request, "publishing.content.edit");
       await centralUploadForPrincipal(user, parts[1], "operate");
       return Response.json(await deleteCentralUpload(user, parts[1]));
     }
     if (parts[0] === "schedules" && parts[1]) {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal(request, "publishing.schedule.manage");
       return Response.json(await deleteCentralSchedule(user, parts[1]));
     }
     return Response.json({ message: "Publishing endpoint was not found." }, { status: 404 });

@@ -142,7 +142,7 @@ async function publishingRequest(path, token, init = {}) {
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
   const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
-  const response = await fetch("/api/publishing" + normalized, {
+  const response = await fetch("/api/central-publishing" + normalized, {
     ...init,
     headers,
     credentials: "include"

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export class AutomationFileStore {
@@ -18,11 +18,19 @@ export class AutomationFileStore {
   }
 
   async initialize() {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
     await Promise.all([
-      mkdir(this.mediaRoot, { recursive: true }),
-      mkdir(this.profilesRoot, { recursive: true }),
-      mkdir(this.resultsRoot, { recursive: true }),
-      mkdir(this.temporaryRoot, { recursive: true }),
+      mkdir(this.mediaRoot, { recursive: true, mode: 0o700 }),
+      mkdir(this.profilesRoot, { recursive: true, mode: 0o700 }),
+      mkdir(this.resultsRoot, { recursive: true, mode: 0o700 }),
+      mkdir(this.temporaryRoot, { recursive: true, mode: 0o700 }),
+    ]);
+    await Promise.all([
+      chmod(this.root, 0o700),
+      chmod(this.mediaRoot, 0o700),
+      chmod(this.profilesRoot, 0o700),
+      chmod(this.resultsRoot, 0o700),
+      chmod(this.temporaryRoot, 0o700),
     ]);
   }
 
@@ -37,8 +45,15 @@ export class AutomationFileStore {
 
   async ensureDevelopmentProfile(accountId: string) {
     const directory = this.profileDirectory(accountId);
-    await mkdir(directory, { recursive: true });
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
     return directory;
+  }
+
+  async removeDevelopmentProfile(accountId: string) {
+    const directory = this.profileDirectory(accountId);
+    if (directory === this.profilesRoot) throw new Error("Refusing to remove the profiles root.");
+    await rm(directory, { recursive: true, force: true });
   }
 
   mediaFilePath(storageKey: string) {

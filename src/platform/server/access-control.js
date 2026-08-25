@@ -18,7 +18,7 @@ import {
   activateWorkspaceTrial,
   refreshPlatformBillingState,
 } from "./auth-store.js";
-import { signServiceAccessToken } from "../../../lib/service-access-token.js";
+import { signServiceAccessToken, verifyServiceAccessToken } from "../../../lib/service-access-token.js";
 import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
 
 export class AccessDeniedError extends Error {
@@ -344,6 +344,54 @@ export async function requireCapability(capability, returnTo = "/apps") {
 
 export async function authorizeApiCapability(capability) {
   return assertPrincipalCapability(await getCurrentPrincipal(), capability);
+}
+
+function requestBearerToken(request) {
+  const authorization = String(request?.headers?.get?.("authorization") || "").trim();
+  if (!authorization) return null;
+  const match = /^Bearer\s+([^\s]+)$/i.exec(authorization);
+  if (!match) {
+    throw new AccessDeniedError(401, "INVALID_SERVICE_TOKEN", "The website service access token is invalid.");
+  }
+  return match[1];
+}
+
+export function servicePrincipalFromRequest(request, audience) {
+  const token = requestBearerToken(request);
+  if (!token) return null;
+  const payload = verifyServiceAccessToken(token, audience);
+  if (!payload) {
+    throw new AccessDeniedError(401, "INVALID_SERVICE_TOKEN", "The website service access token expired or is invalid. Refresh the page and try again.");
+  }
+  const access = payload.grants && typeof payload.grants === "object" ? { ...payload.grants } : {};
+  const audienceResources = SERVICE_AUDIENCE_RESOURCES[audience] || [];
+  const moduleKey = accessCategory(audienceResources[0]);
+  if (moduleKey) {
+    access[moduleKey] = audienceResources.reduce(
+      (highest, resource) => accessSatisfies(access[resource] || "none", highest) ? access[resource] : highest,
+      "none",
+    );
+  }
+  return {
+    userId: String(payload.sub),
+    workspaceId: String(payload.workspaceId),
+    name: String(payload.name || payload.email || "Workspace user"),
+    email: String(payload.email || ""),
+    businessName: String(payload.name || payload.email || "Workspace"),
+    status: "active",
+    isGlobalAdmin: false,
+    billingStatus: String(payload.billingStatus || "active"),
+    trialStartsAt: payload.trialStartsAt || null,
+    trialEndsAt: payload.trialEndsAt || null,
+    access,
+    capabilities: Array.isArray(payload.capabilities) ? payload.capabilities.map(String) : [],
+    roleIds: [],
+  };
+}
+
+export async function authorizeApiCapabilityForRequest(request, capability, audience) {
+  const servicePrincipal = servicePrincipalFromRequest(request, audience);
+  return assertPrincipalCapability(servicePrincipal || await getCurrentPrincipal(), capability);
 }
 
 export async function issueServiceToken(principal, audience) {

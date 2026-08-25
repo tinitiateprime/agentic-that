@@ -49,9 +49,10 @@ an isolated local SQLite file under `.server-data`.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
-connection page. Integrating that stream with the authenticated, hosted
-AgenticThat website and adding platform publishing executors are the next
-implementation phases. Committed feature flags remain false by default.
+connection page. The authenticated AgenticThat website now uses the same
+bounded browser-input protocol through its server bridge, and Server Worker
+account setup lives in Config Manager. Committed feature flags remain false by
+default.
 
 `SERVER_PUBLISHING_DRY_RUN_ENABLED=true` enables only local preflight workers.
 `SERVER_PUBLISHING_PREVIEW_ENABLED=true` additionally enables the private,
@@ -82,6 +83,8 @@ npm run server-architecture:dev
 ```
 
 4. Check `http://127.0.0.1:8800/health`.
+   `http://127.0.0.1:8800/ready` returns 200 only when the database, internal
+   token, and any required browser executable are ready.
 5. For local login testing, set `SERVER_LOGIN_ENABLED=true` and a long random
    `SERVER_ARCHITECTURE_INTERNAL_TOKEN` in `.env.local`, restart the service,
    then open `http://127.0.0.1:8800/development/connect`.
@@ -120,6 +123,23 @@ TLS and short-lived stream authorization before any real customer login.
 The migration is intentionally absent from `netlify.toml` and the root build.
 The database safety check refuses to open a SQLite file outside the isolated
 server data directory.
+
+## Ubuntu staging foundation
+
+Run `npm run server-architecture:preflight` before starting the worker. The
+provider-neutral systemd, Nginx, environment, and rollout templates are in
+`deploy/ubuntu`.
+
+`SERVER_ARCHITECTURE_DEPLOYMENT=staging` adds fail-closed checks: the service
+must bind to loopback behind HTTPS, use a strong internal token, use absolute
+persistent paths, enable automatic migrations, and use an absolute browser
+path when browser features are enabled. Staging also removes the local
+`/development/connect` page so its development-only embedded token cannot be
+exposed through the reverse proxy.
+
+`SERVER_ARCHITECTURE_DEPLOYMENT=production` is intentionally rejected for now.
+Customer production must not start until managed PostgreSQL and encrypted
+browser-profile storage replace the single-server staging stores.
 
 ## Checks
 

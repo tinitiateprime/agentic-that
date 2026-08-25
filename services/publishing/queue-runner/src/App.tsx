@@ -237,7 +237,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
             username: '',
             workspaceId: '',
             message: upgradeRequired
-              ? 'This computer is running an older Publishing Companion that cannot verify AgenticThat access tokens.'
+              ? 'Your AgenticThat website session could not be verified. Refresh this page and sign in again if needed.'
               : rawMessage,
             upgradeRequired,
             connectionHelpRequired,
@@ -1576,6 +1576,12 @@ function UnifiedComposer({
   );
 }
 
+type ServerBrowserInput =
+  | { type: 'click'; x: number; y: number; button: 'left' | 'middle' | 'right' }
+  | { type: 'key'; key: string }
+  | { type: 'text'; text: string }
+  | { type: 'wheel'; deltaX: number; deltaY: number };
+
 function ServerLoginBrowser({
   initialSession,
   accountName,
@@ -1590,7 +1596,11 @@ function ServerLoginBrowser({
   const [session, setSession] = useState(initialSession);
   const [frameUrl, setFrameUrl] = useState('');
   const [error, setError] = useState('');
+  const [clickFeedback, setClickFeedback] = useState<{ id: number; left: number; top: number } | null>(null);
   const inputQueue = useRef(Promise.resolve());
+  const inputBuffer = useRef<ServerBrowserInput[]>([]);
+  const inputTimer = useRef<number | undefined>(undefined);
+  const clickTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -1630,7 +1640,7 @@ function ServerLoginBrowser({
       } catch {
         // The browser can be between frames while starting or closing.
       }
-      if (active) timer = window.setTimeout(pollFrame, 500);
+      if (active) timer = window.setTimeout(pollFrame, 250);
     };
     void pollFrame();
     return () => {
@@ -1640,11 +1650,39 @@ function ServerLoginBrowser({
     };
   }, [initialSession.id, session.state]);
 
-  const sendInput = (input: unknown) => {
+  const enqueueInputBatch = useCallback((inputs: ServerBrowserInput[]) => {
+    if (!inputs.length) return;
     inputQueue.current = inputQueue.current
-      .then(() => api.sendServerAutomationLoginInput(initialSession.id, input))
+      .then(() => api.sendServerAutomationLoginInputs(initialSession.id, inputs))
       .catch(inputError => setError(inputError instanceof Error ? inputError.message : 'Browser input could not be forwarded.'));
-  };
+  }, [initialSession.id]);
+
+  const flushInputBuffer = useCallback(() => {
+    if (inputTimer.current) window.clearTimeout(inputTimer.current);
+    inputTimer.current = undefined;
+    const inputs = inputBuffer.current.splice(0, 32);
+    enqueueInputBatch(inputs);
+    if (inputBuffer.current.length) inputTimer.current = window.setTimeout(flushInputBuffer, 0);
+  }, [enqueueInputBatch]);
+
+  const sendInput = useCallback((input: ServerBrowserInput, flushNow = false) => {
+    const last = inputBuffer.current.at(-1);
+    if (input.type === 'text' && last?.type === 'text' && last.text.length + input.text.length <= 64) {
+      last.text += input.text;
+    } else {
+      inputBuffer.current.push(input);
+    }
+    if (flushNow || inputBuffer.current.length >= 24) {
+      flushInputBuffer();
+    } else if (!inputTimer.current) {
+      inputTimer.current = window.setTimeout(flushInputBuffer, 120);
+    }
+  }, [flushInputBuffer]);
+
+  useEffect(() => () => {
+    if (inputTimer.current) window.clearTimeout(inputTimer.current);
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+  }, []);
 
   const cancel = async () => {
     await api.cancelServerAutomationLogin(initialSession.id).catch(() => undefined);
@@ -1655,7 +1693,7 @@ function ServerLoginBrowser({
     <section className='server-login-panel'>
       <header><span><small>Private server browser</small><strong id='server-login-title'>Connect {accountName}</strong><em>Type directly in the browser image. AgenticThat forwards input without storing the password.</em></span><button type='button' onClick={() => void cancel()}><X size={17} />Cancel</button></header>
       <div className='server-login-state'><CircleDashed className={['STARTING', 'AWAITING_USER'].includes(session.state) ? 'spin' : ''} size={15} />{session.state.replaceAll('_', ' ')}</div>
-      {frameUrl ? <img
+      {frameUrl ? <div className='server-login-frame-shell'><img
         className='server-login-frame'
         src={frameUrl}
         alt='Interactive Instagram login browser running on the server'
@@ -1664,13 +1702,19 @@ function ServerLoginBrowser({
         onClick={event => {
           const image = event.currentTarget;
           const box = image.getBoundingClientRect();
+          const left = ((event.clientX - box.left) / box.width) * 100;
+          const top = ((event.clientY - box.top) / box.height) * 100;
+          const id = Date.now();
           image.focus();
+          setClickFeedback({ id, left, top });
+          if (clickTimer.current) window.clearTimeout(clickTimer.current);
+          clickTimer.current = window.setTimeout(() => setClickFeedback(current => current?.id === id ? null : current), 550);
           sendInput({
             type: 'click',
-            x: ((event.clientX - box.left) / box.width) * image.naturalWidth,
-            y: ((event.clientY - box.top) / box.height) * image.naturalHeight,
+            x: (left / 100) * image.naturalWidth,
+            y: (top / 100) * image.naturalHeight,
             button: 'left',
-          });
+          }, true);
         }}
         onContextMenu={event => event.preventDefault()}
         onKeyDown={event => {
@@ -1681,7 +1725,7 @@ function ServerLoginBrowser({
           };
           if (special[event.key]) {
             event.preventDefault();
-            sendInput({ type: 'key', key: special[event.key] });
+            sendInput({ type: 'key', key: special[event.key] }, true);
           } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
             event.preventDefault();
             sendInput({ type: 'text', text: event.key });
@@ -1690,13 +1734,14 @@ function ServerLoginBrowser({
         onPaste={event => {
           event.preventDefault();
           const value = event.clipboardData.getData('text');
-          for (let offset = 0; offset < value.length; offset += 64) sendInput({ type: 'text', text: value.slice(offset, offset + 64) });
+          const chunks = Array.from({ length: Math.ceil(value.length / 64) }, (_, index) => value.slice(index * 64, (index + 1) * 64));
+          chunks.forEach((text, index) => sendInput({ type: 'text', text }, index === chunks.length - 1));
         }}
         onWheel={event => {
           event.preventDefault();
           sendInput({ type: 'wheel', deltaX: event.deltaX, deltaY: event.deltaY });
         }}
-      /> : <div className='server-login-loading'><Loader2 className='spin' size={24} /><span>Starting the isolated Instagram browser…</span></div>}
+      />{clickFeedback && <span className='server-login-click-feedback' style={{ left: `${clickFeedback.left}%`, top: `${clickFeedback.top}%` }} aria-hidden='true' />}</div> : <div className='server-login-loading'><Loader2 className='spin' size={24} /><span>Starting the isolated Instagram browser…</span></div>}
       {(error || session.errorMessage) && <p className='server-worker-error' role='alert'>{error || session.errorMessage}</p>}
     </section>
   </div>;
@@ -1705,51 +1750,16 @@ function ServerLoginBrowser({
 function ServerWorkerPanel({
   overview,
   error,
-  canManage,
   onChanged,
 }: {
   overview: ServerAutomationOverview | null;
   error: string | null;
-  canManage: boolean;
   onChanged: () => void;
 }) {
-  const [displayName, setDisplayName] = useState('');
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
-  const [login, setLogin] = useState<{ session: ServerAutomationLoginSession; accountName: string } | null>(null);
   const accounts = overview?.accounts ?? [];
   const accountNames = useMemo(() => new Map(accounts.map(account => [account.id, account.displayName])), [accounts]);
-
-  const addAccount = async () => {
-    if (!displayName.trim()) return;
-    setBusy('add');
-    setNotice('');
-    try {
-      const result = await api.createServerAutomationAccount(displayName.trim());
-      setDisplayName('');
-      setNotice('Account profile created. Connect it to sign in.');
-      onChanged();
-      const loginResult = await api.startServerAutomationLogin(result.account.id);
-      setLogin({ session: loginResult.session, accountName: result.account.displayName });
-    } catch (actionError) {
-      setNotice(actionError instanceof Error ? actionError.message : 'The server account could not be created.');
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const connect = async (account: ServerAutomationAccount) => {
-    setBusy(account.id);
-    setNotice('');
-    try {
-      const result = await api.startServerAutomationLogin(account.id);
-      setLogin({ session: result.session, accountName: account.displayName });
-    } catch (actionError) {
-      setNotice(actionError instanceof Error ? actionError.message : 'The server login could not start.');
-    } finally {
-      setBusy('');
-    }
-  };
 
   const cancelJob = async (jobId: string) => {
     setBusy(jobId);
@@ -1768,24 +1778,13 @@ function ServerWorkerPanel({
   return <section className='server-worker-panel' aria-labelledby='server-worker-heading'>
     <header>
       <span><MonitorCheck size={21} /></span>
-      <div><p className='section-kicker'>Website-only publishing beta</p><h2 id='server-worker-heading'>Server Instagram worker</h2><small>{overview ? `${overview.health.livePublishingWorkerCount} workers online · Companion not required for these accounts` : 'Worker connection unavailable'}</small></div>
+      <div><p className='section-kicker'>Website-only publishing beta</p><h2 id='server-worker-heading'>Server Instagram worker</h2><small>{overview ? `${overview.health.livePublishingWorkerCount} workers online · ${accounts.filter(account => account.status === 'CONNECTED').length} connected accounts` : 'Worker connection unavailable'}</small></div>
+      <a className='server-worker-manage-link' href='/config-manager?service=publishing&platform=instagram'><Settings2 size={14} />Manage accounts</a>
       <i className={overview?.health.features.publishing ? 'online' : 'offline'}>{overview?.health.features.publishing ? 'ONLINE' : 'OFFLINE'}</i>
     </header>
     {error && <p className='server-worker-error' role='alert'>{error}</p>}
     {overview && <>
-      {canManage && <form onSubmit={event => { event.preventDefault(); void addAccount(); }}>
-        <label><span>Instagram account label</span><input value={displayName} maxLength={200} onChange={event => setDisplayName(event.target.value)} placeholder='Example: Brand Instagram' /></label>
-        <button type='submit' disabled={busy === 'add' || !displayName.trim()}>{busy === 'add' ? <Loader2 className='spin' size={16} /> : <KeyRound size={16} />}Add and connect</button>
-      </form>}
       {notice && <p className='server-worker-notice' role='status'>{notice}</p>}
-      <div className='server-worker-account-list'>
-        {accounts.length ? accounts.map(account => <article key={account.id}>
-          <CustomIcon platform='instagram' size={22} />
-          <span><strong>{account.displayName}</strong><small>Persistent isolated server profile</small></span>
-          <em className={account.status === 'CONNECTED' ? 'connected' : ''}>{account.status.replaceAll('_', ' ')}</em>
-          {canManage && <button type='button' disabled={busy === account.id} onClick={() => void connect(account)}>{busy === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}{account.status === 'CONNECTED' ? 'Reconnect' : 'Connect'}</button>}
-        </article>) : <p className='server-worker-empty'>No server-managed Instagram account in this workspace yet.</p>}
-      </div>
       <div className='server-worker-jobs'>
         <strong>Recent server jobs</strong>
         {overview.jobs.length ? overview.jobs.slice(0, 8).map(job => <article key={job.id}>
@@ -1795,12 +1794,6 @@ function ServerWorkerPanel({
         </article>) : <p className='server-worker-empty'>No server publishing jobs yet. Connected accounts appear in the composer below.</p>}
       </div>
     </>}
-    {login && <ServerLoginBrowser
-      initialSession={login.session}
-      accountName={login.accountName}
-      onClose={() => setLogin(null)}
-      onConnected={() => { setLogin(null); setNotice('Instagram connected. It is ready in the composer.'); onChanged(); }}
-    />}
   </section>;
 }
 
@@ -2006,7 +1999,6 @@ function Workboard({
       {(serverAutomation || serverAutomationError) && <ServerWorkerPanel
         overview={serverAutomation}
         error={serverAutomationError}
-        canManage={permissions.canManageAccounts}
         onChanged={onServerAutomationChanged}
       />}
 

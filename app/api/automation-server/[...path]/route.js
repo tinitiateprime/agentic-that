@@ -1,4 +1,4 @@
-import { accessErrorResponse, authorizeApiCapability } from "@platform/server/access-control";
+import { accessErrorResponse, authorizeApiCapabilityForRequest } from "@platform/server/access-control";
 import {
   automationServerBridgeConfig,
   automationServerRequest,
@@ -45,21 +45,21 @@ function workspaceQuery(workspaceId, values = {}) {
   return query.toString();
 }
 
-export async function GET(_request, context) {
+export async function GET(request, context) {
   try {
     const config = automationServerBridgeConfig();
     if (!config) return unavailable();
     const route = await parts(context);
-    const principal = await authorizeApiCapability("publishing.view");
+    const principal = await authorizeApiCapabilityForRequest(request, "publishing.view", "publishing");
     let endpoint;
     if (route.length === 1 && route[0] === "health") endpoint = "/health";
     else if (route.length === 1 && route[0] === "accounts") endpoint = `/v1/accounts?${workspaceQuery(principal.workspaceId)}`;
     else if (route.length === 1 && route[0] === "jobs") endpoint = `/v1/publishing/jobs?${workspaceQuery(principal.workspaceId, { limit: "50" })}`;
     else if (route.length === 2 && route[0] === "sessions") {
-      await authorizeApiCapability("publishing.accounts.configure");
+      await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`;
     } else if (route.length === 3 && route[0] === "sessions" && route[2] === "frame") {
-      await authorizeApiCapability("publishing.accounts.configure");
+      await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}/frame?${workspaceQuery(principal.workspaceId)}`;
     } else if (route.length === 3 && route[0] === "jobs" && route[2] === "diagnostic-frame") {
       endpoint = `/v1/publishing/jobs/${encodeURIComponent(route[1])}/diagnostic-frame?${workspaceQuery(principal.workspaceId)}`;
@@ -76,7 +76,7 @@ export async function POST(request, context) {
     if (!config) return unavailable();
     const route = await parts(context);
     if (route.length === 1 && route[0] === "accounts") {
-      const principal = await authorizeApiCapability("publishing.accounts.configure");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       const body = await jsonBody(request);
       return upstreamResponse(await automationServerRequest(config, "/v1/accounts", {
         method: "POST",
@@ -85,7 +85,7 @@ export async function POST(request, context) {
       }));
     }
     if (route.length === 3 && route[0] === "accounts" && route[2] === "login") {
-      const principal = await authorizeApiCapability("publishing.accounts.configure");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       return upstreamResponse(await automationServerRequest(config, `/v1/accounts/${encodeURIComponent(route[1])}/login-sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -93,16 +93,18 @@ export async function POST(request, context) {
       }));
     }
     if (route.length === 3 && route[0] === "sessions" && route[2] === "input") {
-      const principal = await authorizeApiCapability("publishing.accounts.configure");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       const body = await jsonBody(request);
+      const inputs = Array.isArray(body.inputs) ? body.inputs : [body.input];
+      if (!inputs.length || inputs.length > 32) throw new Error("Browser input batches must contain between 1 and 32 actions.");
       return upstreamResponse(await automationServerRequest(config, `/v1/login-sessions/${encodeURIComponent(route[1])}/input`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspaceId: principal.workspaceId, input: body.input }),
+        body: JSON.stringify({ workspaceId: principal.workspaceId, inputs }),
       }));
     }
     if (route.length === 1 && route[0] === "media") {
-      const principal = await authorizeApiCapability("publishing.content.create");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
       const contentLength = Number(request.headers.get("content-length") || 0);
       if (contentLength > MAX_MEDIA_BYTES) throw new Error("Server publishing images must be 25 MB or smaller.");
       const bytes = Buffer.from(await request.arrayBuffer());
@@ -121,7 +123,7 @@ export async function POST(request, context) {
       }));
     }
     if (route.length === 1 && route[0] === "jobs") {
-      const principal = await authorizeApiCapability("publishing.execute");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.execute", "publishing");
       const body = await jsonBody(request);
       if (body.liveConfirmation !== "PUBLISH") throw new Error("Explicit PUBLISH confirmation is required.");
       return upstreamResponse(await automationServerRequest(config, "/v1/publishing/jobs", {
@@ -145,13 +147,41 @@ export async function POST(request, context) {
   }
 }
 
-export async function DELETE(_request, context) {
+export async function PATCH(request, context) {
   try {
     const config = automationServerBridgeConfig();
     if (!config) return unavailable();
     const route = await parts(context);
+    if (route.length === 2 && route[0] === "accounts") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
+      const body = await jsonBody(request);
+      return upstreamResponse(await automationServerRequest(config, `/v1/accounts/${encodeURIComponent(route[1])}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: principal.workspaceId, displayName: body.displayName, enabled: body.enabled }),
+      }));
+    }
+    return unavailable();
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function DELETE(request, context) {
+  try {
+    const config = automationServerBridgeConfig();
+    if (!config) return unavailable();
+    const route = await parts(context);
+    if (route.length === 2 && route[0] === "accounts") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
+      return upstreamResponse(await automationServerRequest(
+        config,
+        `/v1/accounts/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`,
+        { method: "DELETE" },
+      ));
+    }
     if (route.length === 2 && route[0] === "sessions") {
-      const principal = await authorizeApiCapability("publishing.accounts.configure");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       return upstreamResponse(await automationServerRequest(
         config,
         `/v1/login-sessions/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`,
@@ -159,7 +189,7 @@ export async function DELETE(_request, context) {
       ));
     }
     if (route.length === 2 && route[0] === "jobs") {
-      const principal = await authorizeApiCapability("publishing.schedule.manage");
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.schedule.manage", "publishing");
       return upstreamResponse(await automationServerRequest(
         config,
         `/v1/publishing/jobs/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`,

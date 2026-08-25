@@ -39,7 +39,7 @@ function summarizePublishingAccounts(accounts) {
 async function loadPublishingAccounts() {
   const headers = new Headers();
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing"));
-  const response = await fetch("/api/publishing/accounts", {
+  const response = await fetch("/api/central-publishing/accounts", {
     cache: "no-store",
     headers,
     credentials: "include",

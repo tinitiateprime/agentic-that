@@ -1,12 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
-import { loginBrowserInputSchema, loginSurfaceSchema } from "./contracts.ts";
+import { loginBrowserInputBatchSchema, loginSurfaceSchema } from "./contracts.ts";
 import type { AutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
 import { developmentConnectPage } from "./development-ui.ts";
 import { isLoopbackHost } from "./config.ts";
+import { detectServerBrowserExecutable } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
 type AppDependencies = {
@@ -26,14 +27,48 @@ function safeEqual(left: string, right: string) {
 export function createAutomationApp({ config, databaseReady, store, loginManager, files }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
+  app.use((_req, res, next) => {
+    res.set({
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    });
+    next();
+  });
   app.use(express.json({ limit: "128kb" }));
 
+  const browserRequired = config.loginEnabled
+    || config.publishingPreviewEnabled
+    || (config.executionEnabled && config.instagramPublishingEnabled);
+  let browserReady = !browserRequired;
+  let browserReadinessError = "";
+  if (browserRequired) {
+    try {
+      browserReady = Boolean(detectServerBrowserExecutable(config.browserExecutablePath));
+      if (!browserReady) browserReadinessError = "A supported Chromium browser is not installed.";
+    } catch (error) {
+      browserReadinessError = error instanceof Error ? error.message : "The browser configuration is invalid.";
+    }
+  }
+
+  const readiness = () => {
+    const issues: string[] = [];
+    if (!databaseReady || !store) issues.push("database");
+    if (!config.internalToken) issues.push("internal-token");
+    if (!browserReady) issues.push("browser");
+    return { ready: issues.length === 0, issues };
+  };
+
   app.get("/", (_req, res) => {
-    res.redirect("/development/connect");
+    if (config.deploymentMode === "development") {
+      res.redirect("/development/connect");
+      return;
+    }
+    res.status(404).json({ error: "Not found." });
   });
 
   app.get("/development/connect", (_req, res) => {
-    if (!isLoopbackHost(config.host)) {
+    if (config.deploymentMode !== "development" || !isLoopbackHost(config.host)) {
       res.status(404).send("Not found");
       return;
     }
@@ -51,10 +86,12 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       ok: true,
       service: "agenticthat-automation-server",
       architectureVersion: 1,
+      deploymentMode: config.deploymentMode,
       databaseConfigured: true,
       databaseReady,
       databaseEngine: "sqlite",
-      storage: "local-development-only",
+      storage: config.deploymentMode === "development" ? "local-development-only" : "local-single-server-staging",
+      browserReady,
       livePublishingWorkerCount: config.executionEnabled && config.instagramPublishingEnabled
         ? config.liveWorkerCount
         : 0,
@@ -66,6 +103,22 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
         login: config.loginEnabled,
         scraping: config.scrapingEnabled,
       },
+    });
+  });
+
+  app.get("/ready", (_req, res) => {
+    const state = readiness();
+    res.status(state.ready ? 200 : 503).json({
+      ok: state.ready,
+      service: "agenticthat-automation-server",
+      deploymentMode: config.deploymentMode,
+      checks: {
+        database: databaseReady && Boolean(store),
+        internalToken: Boolean(config.internalToken),
+        browser: browserReady,
+      },
+      issues: state.issues,
+      ...(browserReadinessError ? { browserError: browserReadinessError } : {}),
     });
   });
 
@@ -106,6 +159,20 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     }
     const account = await store!.createAccount(req.body);
     res.status(201).json({ account });
+  });
+
+  app.patch("/v1/accounts/:accountId", requireInternalToken, requireStore, async (req, res) => {
+    const account = store!.updateAccount(String(req.params.accountId), req.body);
+    res.json({ account });
+  });
+
+  app.delete("/v1/accounts/:accountId", requireInternalToken, requireStore, async (req, res) => {
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    res.json(await store!.removeAccount(workspaceId, String(req.params.accountId)));
   });
 
   app.post("/v1/accounts/:accountId/login-sessions", requireInternalToken, requireStore, async (req, res) => {
@@ -152,8 +219,12 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       res.status(400).json({ error: "workspaceId is required." });
       return;
     }
-    const input = loginBrowserInputSchema.parse(req.body?.input);
-    await loginManager.dispatchInput(workspaceId, String(req.params.sessionId), input);
+    const inputs = loginBrowserInputBatchSchema.parse(
+      Array.isArray(req.body?.inputs) ? req.body.inputs : [req.body?.input],
+    );
+    for (const input of inputs) {
+      await loginManager.dispatchInput(workspaceId, String(req.params.sessionId), input);
+    }
     res.status(204).end();
   });
 

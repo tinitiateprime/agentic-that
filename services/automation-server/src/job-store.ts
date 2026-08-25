@@ -6,6 +6,7 @@ import {
   createAccountSchema,
   createPublishingJobSchema,
   publishingJobStateSchema,
+  updateAccountSchema,
   type PublishingJobState,
   type SocialPlatform,
 } from "./contracts.ts";
@@ -136,10 +137,61 @@ export class AutomationJobStore {
   listAccounts(workspaceId: string) {
     const rows = this.database.prepare(`
       SELECT * FROM social_accounts
-      WHERE workspace_id = ?
+      WHERE workspace_id = ? AND status <> 'DISABLED'
       ORDER BY created_at DESC
     `).all(workspaceId) as unknown as AccountRow[];
     return rows.map(publicAccount);
+  }
+
+  updateAccount(accountId: string, input: unknown) {
+    const value = updateAccountSchema.parse(input);
+    return withImmediateTransaction(this.database, () => {
+      const existing = this.database.prepare(`
+        SELECT * FROM social_accounts WHERE id = ? AND workspace_id = ? AND status <> 'DISABLED'
+      `).get(accountId, value.workspaceId) as AccountRow | undefined;
+      if (!existing) throw new Error("Server publishing account not found.");
+      const displayName = value.displayName ?? existing.display_name;
+      const enabled = value.enabled ?? Boolean(existing.enabled);
+      this.database.prepare(`
+        UPDATE social_accounts SET display_name = ?, enabled = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ?
+      `).run(displayName, enabled ? 1 : 0, now(), accountId, value.workspaceId);
+      const row = this.database.prepare("SELECT * FROM social_accounts WHERE id = ?").get(accountId) as AccountRow;
+      return publicAccount(row);
+    });
+  }
+
+  async removeAccount(workspaceId: string, accountId: string) {
+    const result = withImmediateTransaction(this.database, () => {
+      const account = this.database.prepare(`
+        SELECT * FROM social_accounts WHERE id = ? AND workspace_id = ? AND status <> 'DISABLED'
+      `).get(accountId, workspaceId) as AccountRow | undefined;
+      if (!account) throw new Error("Server publishing account not found.");
+      const activeLogin = this.database.prepare(`
+        SELECT 1 FROM login_sessions
+        WHERE account_id = ? AND state IN ('STARTING', 'AWAITING_USER') LIMIT 1
+      `).get(accountId);
+      if (activeLogin) throw new Error("Cancel the active account login before removing this account.");
+      const activeJob = this.database.prepare(`
+        SELECT 1 FROM publishing_jobs
+        WHERE account_id = ? AND state IN ('SCHEDULED', 'PUBLISHING', 'VERIFYING') LIMIT 1
+      `).get(accountId);
+      if (activeJob) throw new Error("Cancel or finish this account's active publishing jobs before removing it.");
+      const history = Number((this.database.prepare(`
+        SELECT COUNT(*) AS count FROM publishing_jobs WHERE account_id = ?
+      `).get(accountId) as { count: number }).count);
+      if (history) {
+        this.database.prepare("DELETE FROM browser_profiles WHERE account_id = ?").run(accountId);
+        this.database.prepare(`
+          UPDATE social_accounts SET status = 'DISABLED', enabled = 0, updated_at = ? WHERE id = ?
+        `).run(now(), accountId);
+      } else {
+        this.database.prepare("DELETE FROM social_accounts WHERE id = ? AND workspace_id = ?").run(accountId, workspaceId);
+      }
+      return { ok: true, archived: history > 0 };
+    });
+    await this.files.removeDevelopmentProfile(accountId);
+    return result;
   }
 
   createPublishingJob(

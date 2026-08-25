@@ -5,6 +5,7 @@ import {
   automationId,
   createPublishingJobSchema,
   loginBrowserInputSchema,
+  loginBrowserInputBatchSchema,
   loginSessionStateSchema,
 } from "./contracts.ts";
 
@@ -50,4 +51,10 @@ test("website browser input is bounded and does not accept arbitrary commands", 
   if (input.type === "text") assert.equal(input.text, "hello");
   assert.throws(() => loginBrowserInputSchema.parse({ type: "key", key: "Control+L" }));
   assert.throws(() => loginBrowserInputSchema.parse({ type: "click", x: -1, y: 20 }));
+  assert.equal(loginBrowserInputBatchSchema.parse([
+    { type: "click", x: 10, y: 20, button: "left" },
+    { type: "text", text: "batched typing" },
+  ]).length, 2);
+  assert.throws(() => loginBrowserInputBatchSchema.parse([]));
+  assert.throws(() => loginBrowserInputBatchSchema.parse(Array.from({ length: 33 }, () => ({ type: "key", key: "Tab" }))));
 });

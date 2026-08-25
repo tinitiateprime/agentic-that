@@ -43,7 +43,40 @@ test("health reports every new execution feature disabled by default", async () 
     });
     assert.equal(body.databaseReady, false);
     assert.equal(body.databaseEngine, "sqlite");
+    assert.equal(body.deploymentMode, "development");
+    assert.equal(body.browserReady, true);
     assert.equal(body.livePublishingWorkerCount, 0);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("readiness fails closed and staging never exposes the development token page", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_DEPLOYMENT: "staging",
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a".repeat(32),
+    SERVER_ARCHITECTURE_DATA_DIR: process.platform === "win32" ? "C:\\agenticthat-data" : "/var/lib/agenticthat-automation",
+    SERVER_ARCHITECTURE_DATABASE_FILE: process.platform === "win32" ? "C:\\agenticthat-data\\automation.db" : "/var/lib/agenticthat-automation/automation.db",
+    SERVER_ARCHITECTURE_AUTO_MIGRATE: "true",
+  });
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: false,
+    store: null,
+    loginManager: null,
+  }));
+  try {
+    const root = await fetch(`${runtime.url}/`, { redirect: "manual" });
+    assert.equal(root.status, 404);
+    const development = await fetch(`${runtime.url}/development/connect`);
+    assert.equal(development.status, 404);
+    assert.doesNotMatch(await development.text(), new RegExp(config.internalToken));
+    const readiness = await fetch(`${runtime.url}/ready`);
+    assert.equal(readiness.status, 503);
+    const body = await readiness.json();
+    assert.equal(body.ok, false);
+    assert.deepEqual(body.issues, ["database"]);
+    assert.equal(readiness.headers.get("x-content-type-options"), "nosniff");
   } finally {
     await runtime.close();
   }

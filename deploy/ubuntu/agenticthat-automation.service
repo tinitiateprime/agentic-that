@@ -1,0 +1,34 @@
+[Unit]
+Description=AgenticThat staging automation worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agenticthat
+Group=agenticthat
+WorkingDirectory=/opt/agenticthat
+EnvironmentFile=/etc/agenticthat/automation.env
+Environment=HOME=/var/lib/agenticthat-automation
+ExecStartPre=/usr/bin/node --import tsx services/automation-server/src/preflight.ts
+ExecStart=/usr/bin/node --import tsx services/automation-server/src/server.ts
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=300s
+UMask=0077
+StateDirectory=agenticthat-automation
+RuntimeDirectory=agenticthat-automation
+ReadWritePaths=/var/lib/agenticthat-automation
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

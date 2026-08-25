@@ -2,8 +2,12 @@ import path from "node:path";
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const DEPLOYMENT_MODES = new Set(["development", "staging", "production"]);
+
+export type AutomationDeploymentMode = "development" | "staging" | "production";
 
 export type AutomationConfig = {
+  deploymentMode: AutomationDeploymentMode;
   host: string;
   port: number;
   dataDirectory: string;
@@ -25,6 +29,14 @@ export type AutomationConfig = {
 
 function enabled(value: string | undefined) {
   return TRUE_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function deploymentMode(value: string | undefined): AutomationDeploymentMode {
+  const normalized = String(value || "development").trim().toLowerCase();
+  if (!DEPLOYMENT_MODES.has(normalized)) {
+    throw new Error("SERVER_ARCHITECTURE_DEPLOYMENT must be development, staging, or production.");
+  }
+  return normalized as AutomationDeploymentMode;
 }
 
 function port(value: string | undefined) {
@@ -63,6 +75,7 @@ export function loadAutomationConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ): AutomationConfig {
+  const runtimeDeployment = deploymentMode(env.SERVER_ARCHITECTURE_DEPLOYMENT);
   const allowPublicBind = enabled(env.SERVER_ARCHITECTURE_ALLOW_PUBLIC_BIND);
   const host = String(env.SERVER_ARCHITECTURE_HOST || "127.0.0.1").trim();
   if (!LOOPBACK_HOSTS.has(host) && !allowPublicBind) {
@@ -75,14 +88,47 @@ export function loadAutomationConfig(
     cwd,
     env.SERVER_ARCHITECTURE_DATABASE_FILE?.trim() || path.join(dataDirectory, "automation.db"),
   );
+  const internalToken = env.SERVER_ARCHITECTURE_INTERNAL_TOKEN?.trim() || "";
+  const browserExecutablePath = env.SERVER_BROWSER_EXECUTABLE_PATH?.trim() || "";
+  const autoMigrate = enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE);
+
+  if (runtimeDeployment === "production") {
+    throw new Error(
+      "Customer production mode is intentionally blocked until PostgreSQL and encrypted browser-profile storage are implemented. Use staging with test accounts only.",
+    );
+  }
+  if (runtimeDeployment === "staging") {
+    if (!LOOPBACK_HOSTS.has(host) || allowPublicBind) {
+      throw new Error("Staging must bind to loopback behind an HTTPS reverse proxy.");
+    }
+    if (internalToken.length < 32) {
+      throw new Error("Staging requires SERVER_ARCHITECTURE_INTERNAL_TOKEN with at least 32 characters.");
+    }
+    if (!env.SERVER_ARCHITECTURE_DATA_DIR?.trim() || !path.isAbsolute(env.SERVER_ARCHITECTURE_DATA_DIR.trim())) {
+      throw new Error("Staging requires an absolute SERVER_ARCHITECTURE_DATA_DIR.");
+    }
+    if (!env.SERVER_ARCHITECTURE_DATABASE_FILE?.trim() || !path.isAbsolute(env.SERVER_ARCHITECTURE_DATABASE_FILE.trim())) {
+      throw new Error("Staging requires an absolute SERVER_ARCHITECTURE_DATABASE_FILE.");
+    }
+    if (!autoMigrate) {
+      throw new Error("Staging requires SERVER_ARCHITECTURE_AUTO_MIGRATE=true.");
+    }
+    const browserFeaturesEnabled = enabled(env.SERVER_LOGIN_ENABLED)
+      || enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED)
+      || (enabled(env.SERVER_EXECUTION_ENABLED) && enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED));
+    if (browserFeaturesEnabled && (!browserExecutablePath || !path.isAbsolute(browserExecutablePath))) {
+      throw new Error("Staging browser features require an absolute SERVER_BROWSER_EXECUTABLE_PATH.");
+    }
+  }
 
   return {
+    deploymentMode: runtimeDeployment,
     host,
     port: port(env.SERVER_ARCHITECTURE_PORT),
     dataDirectory,
     databaseFile,
-    internalToken: env.SERVER_ARCHITECTURE_INTERNAL_TOKEN?.trim() || "",
-    browserExecutablePath: env.SERVER_BROWSER_EXECUTABLE_PATH?.trim() || "",
+    internalToken,
+    browserExecutablePath,
     loginTimeoutMs: loginTimeout(env.SERVER_LOGIN_TIMEOUT_MS),
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
     instagramPublishingEnabled: enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED),
@@ -92,7 +138,7 @@ export function loadAutomationConfig(
     publishingPreviewEnabled: enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED),
     workerPollMs: workerPoll(env.SERVER_WORKER_POLL_MS),
     liveWorkerCount: liveWorkerCount(env.SERVER_LIVE_WORKER_COUNT),
-    autoMigrate: enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE),
+    autoMigrate,
     allowPublicBind,
   };
 }

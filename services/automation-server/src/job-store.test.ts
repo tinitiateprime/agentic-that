@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -104,6 +104,18 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     const [quarantined] = store.quarantineExpiredPublishingJobs();
     assert.equal(quarantined?.state, "CANCELLED");
     assert.equal(quarantined?.errorCode, "VALIDATION_LEASE_EXPIRED");
+
+    const updated = store.updateAccount(account.id, {
+      workspaceId: "test-workspace",
+      displayName: "Renamed server account",
+      enabled: false,
+    });
+    assert.equal(updated.displayName, "Renamed server account");
+    assert.equal(updated.enabled, false);
+    const removed = await store.removeAccount("test-workspace", account.id);
+    assert.equal(removed.archived, true);
+    assert.equal(store.listAccounts("test-workspace").length, 0);
+    await assert.rejects(access(files.profileDirectory(account.id)));
   } finally {
     database.close();
     await rm(directory, { recursive: true, force: true });

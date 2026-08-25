@@ -48,6 +48,7 @@ export const loginBrowserInputSchema = z.discriminatedUnion("type", [
   }),
 ]);
 export type LoginBrowserInput = z.infer<typeof loginBrowserInputSchema>;
+export const loginBrowserInputBatchSchema = z.array(loginBrowserInputSchema).min(1).max(32);
 
 export const publishingJobStateSchema = z.enum([
   "SCHEDULED",
@@ -65,6 +66,14 @@ export const createAccountSchema = z.object({
   workspaceId: z.string().trim().min(1).max(160),
   platform: socialPlatformSchema,
   displayName: z.string().trim().min(1).max(200),
+});
+
+export const updateAccountSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(160),
+  displayName: z.string().trim().min(1).max(200).optional(),
+  enabled: z.boolean().optional(),
+}).refine(value => value.displayName !== undefined || value.enabled !== undefined, {
+  message: "Enter an account change.",
 });
 
 export const mediaReferenceSchema = z.object({

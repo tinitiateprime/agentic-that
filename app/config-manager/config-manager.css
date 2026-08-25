@@ -574,6 +574,26 @@
   gap: 5px;
 }
 
+.config-server-worker-bar {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid #dce5e1;
+  border-radius: 11px;
+  background: #f7f9f8;
+}
+.config-server-worker-bar > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #e8f6f0; color: #08745a; }
+.config-server-worker-bar > div { min-width: 0; display: grid; gap: 3px; }
+.config-server-worker-bar strong { color: var(--cm-ink); font-size: 14px; }
+.config-server-worker-bar small { overflow: hidden; color: var(--cm-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.config-server-worker-bar > i { padding: 5px 8px; border-radius: 999px; background: #e3f6ed; color: #087052; font-size: 10px; font-style: normal; font-weight: 900; }
+.config-server-worker-bar.offline > span { background: #f2f2f2; color: #777; }
+.config-server-worker-bar.offline > i { background: #f0f0f0; color: #777; }
+
 .config-shared-companion {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.3fr) auto;
@@ -851,7 +871,7 @@
 
 .config-engine-picker {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 5px;
   padding: 4px;
   border: 1px solid #dfe3eb;
@@ -881,6 +901,7 @@
   background: #fff;
   box-shadow: 0 2px 8px rgba(26, 70, 58, 0.07);
 }
+.config-engine-picker button:disabled:not(.active) { opacity: .46; cursor: not-allowed; }
 
 .config-engine-picker button > span { min-width: 0; display: grid; gap: 3px; }
 .config-engine-picker strong { font-size: 14px; }
@@ -1149,6 +1170,23 @@
   gap: 6px;
   white-space: nowrap;
 }
+
+.config-server-login-overlay { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(12, 28, 22, .72); }
+.config-server-login-panel { width: min(1280px, 100%); max-height: calc(100vh - 36px); overflow: auto; display: grid; gap: 11px; padding: 16px; border-radius: 14px; background: #fff; box-shadow: 0 25px 80px rgba(0, 0, 0, .3); }
+.config-server-login-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.config-server-login-panel > header > span { display: grid; gap: 3px; }
+.config-server-login-panel > header small { color: #14805a; font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.config-server-login-panel > header strong { color: #17382b; font-size: 19px; }
+.config-server-login-panel > header em { color: #667b72; font-size: 12px; font-style: normal; }
+.config-server-login-panel > header button { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid #cbd9d3; border-radius: 9px; background: #fff; color: #285044; cursor: pointer; font-weight: 800; }
+.config-server-login-state { display: inline-flex; width: fit-content; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: #e8f5ef; color: #166847; font-size: 10px; font-weight: 850; }
+.config-server-login-frame-shell { position: relative; overflow: hidden; border-radius: 9px; background: #17201d; }
+.config-server-login-frame { width: 100%; display: block; border: 1px solid #bdd2c9; border-radius: 9px; background: #17201d; outline: none; cursor: default; user-select: none; }
+.config-server-login-frame:focus { box-shadow: inset 0 0 0 3px rgba(24, 137, 94, .45); }
+.config-server-login-click { position: absolute; z-index: 2; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 3px solid #0b8a63; border-radius: 50%; background: rgba(255, 255, 255, .6); pointer-events: none; animation: config-server-login-click-pulse .55s ease-out forwards; }
+@keyframes config-server-login-click-pulse { from { opacity: 1; transform: scale(.35); } to { opacity: 0; transform: scale(1.55); } }
+.config-server-login-loading { min-height: 420px; display: grid; place-items: center; align-content: center; gap: 10px; border-radius: 9px; background: #eff5f2; color: #60776d; font-size: 12px; }
+.config-server-login-error { margin: 0; padding: 9px 11px; border-radius: 8px; background: #fff0ef; color: #a53c34; font-size: 12px; }
 
 .config-auth-mode {
   display: grid;

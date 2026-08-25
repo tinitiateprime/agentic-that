@@ -32,7 +32,7 @@ import {
   X,
   Zap
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
@@ -58,7 +58,8 @@ const platformLogos = {
 };
 const publishingEngineLabels = {
   companion: "Companion",
-  external_browser: "External browser"
+  external_browser: "External browser",
+  server_worker: "Server worker"
 };
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
@@ -145,7 +146,7 @@ async function publishingRequest(path, token, init = {}) {
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
   const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
-  const response = await fetch("/api/publishing" + normalized, {
+  const response = await fetch("/api/central-publishing" + normalized, {
     ...init,
     headers,
     credentials: "include"
@@ -162,6 +163,32 @@ async function localCompanionRequest(path, token, init = {}) {
     cache: "no-store", headers, mode: "cors", targetAddressSpace: "loopback"
   });
   return responsePayload(response);
+}
+
+async function serverAutomationRequest(path, identityToken, init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", identityToken));
+  const response = await fetch("/api/automation-server" + path, {
+    ...init,
+    headers,
+    cache: "no-store",
+    credentials: "include"
+  });
+  return responsePayload(response);
+}
+
+async function serverAutomationFrame(sessionId, identityToken) {
+  const headers = new Headers({
+    authorization: "Bearer " + await getClientServiceToken("publishing", identityToken)
+  });
+  const response = await fetch("/api/automation-server/sessions/" + encodeURIComponent(sessionId) + "/frame", {
+    headers,
+    cache: "no-store",
+    credentials: "include"
+  });
+  if (!response.ok) await responsePayload(response);
+  return response.blob();
 }
 
 function ServiceMark({ service }) {
@@ -232,6 +259,8 @@ export default function ConfigManager({
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
   const [workspaceCompanion, setWorkspaceCompanion] = useState(null);
+  const [serverAutomation, setServerAutomation] = useState(null);
+  const [serverAutomationError, setServerAutomationError] = useState("");
   const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
   const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
   const visibleServices = services.filter((service) => (
@@ -321,16 +350,31 @@ export default function ConfigManager({
     }
   }, [publishingIdentityToken]);
 
+  const loadServerAutomation = useCallback(async () => {
+    if (!publishingIdentityToken) return;
+    try {
+      const [health, accountData] = await Promise.all([
+        serverAutomationRequest("/health", publishingIdentityToken),
+        serverAutomationRequest("/accounts", publishingIdentityToken)
+      ]);
+      setServerAutomation({ health, accounts: accountData.accounts || [] });
+      setServerAutomationError("");
+    } catch (error) {
+      setServerAutomation(null);
+      setServerAutomationError(error.status === 404 ? "" : error.message || "Server worker unavailable.");
+    }
+  }, [publishingIdentityToken]);
+
   useEffect(() => {
-    void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion()]);
-  }, [connectPublishing, loadTelegram, loadWorkspaceCompanion]);
+    void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion(), loadServerAutomation()]);
+  }, [connectPublishing, loadServerAutomation, loadTelegram, loadWorkspaceCompanion]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void loadWorkspaceCompanion(), 10_000);
     return () => window.clearInterval(timer);
   }, [loadWorkspaceCompanion]);
 
-  const connectedCount = telegramAccounts.length + publishingAccounts.length;
+  const connectedCount = telegramAccounts.length + publishingAccounts.length + (serverAutomation?.accounts.length || 0);
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
@@ -403,7 +447,7 @@ export default function ConfigManager({
               <button
                 type="button"
                 className="config-refresh"
-                onClick={() => activeService === "messaging" ? void loadTelegram() : void connectPublishing()}
+                onClick={() => activeService === "messaging" ? void loadTelegram() : void Promise.all([connectPublishing(), loadServerAutomation()])}
               >
                 <RefreshCw size={16} />Refresh
               </button>
@@ -438,6 +482,8 @@ export default function ConfigManager({
               publishingIdentityToken={publishingIdentityToken}
               allowedPlatforms={allowedPublishingPlatforms}
               workspaceCompanion={workspaceCompanion}
+              serverAutomation={serverAutomation}
+              serverAutomationError={serverAutomationError}
               managerStatus={publishingManagerStatus}
               accountEmail={user.email}
               onSession={session => {
@@ -445,6 +491,7 @@ export default function ConfigManager({
                 void loadPublishing(session);
               }}
               onReload={() => loadPublishing(publishingSession)}
+              onReloadServer={loadServerAutomation}
               onReconnect={connectPublishing}
               onCompanionSaved={setWorkspaceCompanion}
               setNotice={setNotice}
@@ -830,6 +877,18 @@ function AccountCollectionHeader({ count, title, copy }) {
   );
 }
 
+function serverAccountForConfig(account) {
+  const connected = account.status === "CONNECTED";
+  return {
+    ...account,
+    handle: connected ? "Persistent isolated server profile" : "Website login required",
+    loginIdentifier: "",
+    credentialConfigured: connected,
+    executionEngine: "server_worker",
+    serverManaged: true
+  };
+}
+
 function PublishingManager({
   status,
   session,
@@ -839,10 +898,13 @@ function PublishingManager({
   publishingIdentityToken,
   allowedPlatforms,
   workspaceCompanion,
+  serverAutomation,
+  serverAutomationError,
   managerStatus,
   accountEmail,
   onSession,
   onReload,
+  onReloadServer,
   onReconnect,
   onCompanionSaved,
   setNotice
@@ -855,10 +917,16 @@ function PublishingManager({
   const [loginAccountId, setLoginAccountId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [companionBusy, setCompanionBusy] = useState(false);
+  const [serverLogin, setServerLogin] = useState(null);
+
+  const combinedAccounts = useMemo(
+    () => [...accounts, ...(serverAutomation?.accounts || []).map(serverAccountForConfig)],
+    [accounts, serverAutomation]
+  );
 
   const platformAccounts = useMemo(
-    () => accounts.filter(account => account.platform === selectedPlatform),
-    [accounts, selectedPlatform]
+    () => combinedAccounts.filter(account => account.platform === selectedPlatform),
+    [combinedAccounts, selectedPlatform]
   );
 
   const signIn = async (event) => {
@@ -898,6 +966,34 @@ function PublishingManager({
   const saveAccount = async (form) => {
     setBusy(true);
     try {
+      if (form.executionEngine === "server_worker") {
+        if (selectedPlatform !== "instagram") throw new Error("The Server Worker currently supports Instagram accounts only.");
+        if (form.id && !form.serverManaged) throw new Error("Add this account as a new Server Worker connection instead of converting the existing Companion record.");
+        const result = form.id
+          ? await serverAutomationRequest("/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
+              method: "PATCH",
+              body: JSON.stringify({ displayName: form.displayName.trim(), enabled: form.enabled })
+            })
+          : await serverAutomationRequest("/accounts", publishingIdentityToken, {
+              method: "POST",
+              body: JSON.stringify({ displayName: form.displayName.trim() })
+            });
+        const account = result.account;
+        setEditing(null);
+        await onReloadServer();
+        if (!form.id) {
+          const loginResult = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
+            method: "POST",
+            body: "{}"
+          });
+          setServerLogin({ session: loginResult.session, accountName: account.displayName });
+          setNotice({ tone: "success", message: account.displayName + " was created. Complete Instagram login in the private server browser." });
+        } else {
+          setNotice({ tone: "success", message: account.displayName + " server settings were updated." });
+        }
+        return;
+      }
+      if (form.serverManaged) throw new Error("Create a new connection to change between Server Worker and Companion.");
       const body = JSON.stringify({
         displayName: form.displayName.trim(),
         handle: form.handle.trim(),
@@ -922,9 +1018,14 @@ function PublishingManager({
     if (!window.confirm("Delete " + account.displayName + "? Existing post history may prevent deletion.")) return;
     setBusy(true);
     try {
-      await publishingRequest("/api/accounts/" + encodeURIComponent(account.id), session.token, { method: "DELETE" });
+      if (account.serverManaged) {
+        await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id), publishingIdentityToken, { method: "DELETE" });
+        await onReloadServer();
+      } else {
+        await publishingRequest("/api/accounts/" + encodeURIComponent(account.id), session.token, { method: "DELETE" });
+        await onReload();
+      }
       setNotice({ tone: "success", message: account.displayName + " was removed." });
-      await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -933,6 +1034,21 @@ function PublishingManager({
   };
 
   const startLogin = async (account, surface = "engine") => {
+    if (account.serverManaged) {
+      setLoginAccountId(account.id);
+      try {
+        const result = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
+          method: "POST",
+          body: "{}"
+        });
+        setServerLogin({ session: result.session, accountName: account.displayName });
+      } catch (error) {
+        setNotice({ tone: "error", message: error.message });
+      } finally {
+        setLoginAccountId("");
+      }
+      return;
+    }
     if (!workspaceCompanion) {
       setNotice({ tone: "error", message: "Pair this manager device as the Workspace Companion before signing in to a social account." });
       return;
@@ -1016,12 +1132,11 @@ function PublishingManager({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Companion is not ready on this device"
-        copy="Install and open AgenticThat Companion on this computer, then try again. Team members do not need to do this."
+        title="Publishing services are temporarily unavailable"
+        copy="The website could not reach the central publishing service. Server Worker and Companion account management will return when it reconnects."
         action={
           <div className="config-empty-actions">
-            <a className="config-primary" href={publishingCompanionDownloadUrl}>Install Companion<ExternalLink size={15} /></a>
-            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+            <button className="config-primary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
           </div>
         }
       />
@@ -1032,12 +1147,11 @@ function PublishingManager({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Update the Publishing Companion"
-        copy="This computer is running an older Companion that does not support account-owned Operations Manager passwords. Close it, install the latest version, and try again."
+        title="Publishing access needs to be refreshed"
+        copy="The website could not verify this publishing access token. Refresh the page or sign in to AgenticThat again."
         action={
           <div className="config-empty-actions">
-            <a className="config-primary" href={publishingCompanionDownloadUrl}>Download latest Companion<ExternalLink size={15} /></a>
-            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+            <button className="config-primary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
           </div>
         }
       />
@@ -1080,11 +1194,22 @@ function PublishingManager({
         </div>
       </div>
 
+      <section className={"config-server-worker-bar " + (serverAutomation?.health?.features?.publishing ? "online" : "offline")}>
+        <span><Database size={19} /></span>
+        <div>
+          <strong>Server Worker</strong>
+          <small>{serverAutomation?.health?.features?.publishing
+            ? serverAutomation.health.livePublishingWorkerCount + " workers online — users do not need Companion."
+            : serverAutomationError || "Server Worker is not enabled for this environment."}</small>
+        </div>
+        <i>{serverAutomation?.health?.features?.publishing ? "ONLINE" : "OFFLINE"}</i>
+      </section>
+
       {!workspaceCompanion ? (
         <section className="config-companion-guide" aria-labelledby="companion-guide-title">
           <header>
             <span><MonitorCheck size={20} /></span>
-            <div><p>One-time manager setup</p><h3 id="companion-guide-title">Set up this publishing computer</h3><small>Only one Publishing Manager needs Companion. Everyone else works from the browser.</small></div>
+            <div><p>Optional legacy engine</p><h3 id="companion-guide-title">Set up a Companion computer</h3><small>Required only for accounts using the Companion engine. Server Worker accounts need no installation.</small></div>
           </header>
           <ConnectionSteps
             activeIndex={0}
@@ -1119,7 +1244,7 @@ function PublishingManager({
 
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
         {allowedPlatforms.map(platform => {
-          const count = accounts.filter(account => account.platform === platform).length;
+          const count = combinedAccounts.filter(account => account.platform === platform).length;
           return (
             <button
               type="button"
@@ -1150,6 +1275,7 @@ function PublishingManager({
           platform={selectedPlatform}
           account={editing.id ? editing : null}
           busy={busy}
+          serverAvailable={Boolean(serverAutomation?.health?.features?.publishing)}
           onCancel={() => setEditing(null)}
           onSave={saveAccount}
         />
@@ -1159,7 +1285,9 @@ function PublishingManager({
         <EmptyState
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
-          copy={workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair the manager computer above, then add your first publishing account."}
+          copy={selectedPlatform === "instagram" && serverAutomation?.health?.features?.publishing
+            ? "Add a Server Worker account and complete login entirely through the website."
+            : workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair a Companion computer before adding a Companion account."}
           action={<button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button>}
         />
       ) : !editing && (
@@ -1168,41 +1296,198 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : "Reconnect required"}</span>
-              <span className="config-account-meta config-account-engine">{(account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.serverManaged ? account.credentialConfigured ? "Ready" : "Reconnect required" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : "Reconnect required"}</span>
+              <span className="config-account-meta config-account-engine">{account.serverManaged ? <Database size={14} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
                 <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
                 <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the selected engine session" : "Sign in with the selected engine"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={15} /> : <KeyRound size={15} />}Login</button>
-                {(account.executionEngine || "companion") === "companion" && <button className="icon-only" type="button" onClick={() => void startLogin(account, "external")} disabled={!account.enabled || Boolean(loginAccountId)} title="Open Chrome or Edge login fallback" aria-label={"Open " + account.displayName + " login in Chrome or Edge"}><ExternalLink size={15} /></button>}
+                {!account.serverManaged && (account.executionEngine || "companion") === "companion" && <button className="icon-only" type="button" onClick={() => void startLogin(account, "external")} disabled={!account.enabled || Boolean(loginAccountId)} title="Open Chrome or Edge login fallback" aria-label={"Open " + account.displayName + " login in Chrome or Edge"}><ExternalLink size={15} /></button>}
                 <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} />Delete</button>
               </div>
             </article>
           ))}
         </div>
       )}
+      {serverLogin && <ConfigServerLoginBrowser
+        initialSession={serverLogin.session}
+        accountName={serverLogin.accountName}
+        publishingIdentityToken={publishingIdentityToken}
+        onClose={() => setServerLogin(null)}
+        onConnected={() => {
+          setServerLogin(null);
+          setNotice({ tone: "success", message: "Instagram connected to Server Worker and is ready in the publishing composer." });
+          void onReloadServer();
+        }}
+      />}
     </div>
   );
 }
 
-function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
+function ConfigServerLoginBrowser({ initialSession, accountName, publishingIdentityToken, onClose, onConnected }) {
+  const [session, setSession] = useState(initialSession);
+  const [frameUrl, setFrameUrl] = useState("");
+  const [error, setError] = useState("");
+  const [clickFeedback, setClickFeedback] = useState(null);
+  const inputQueue = useRef(Promise.resolve());
+  const inputBuffer = useRef([]);
+  const inputTimer = useRef();
+  const clickTimer = useRef();
+
+  useEffect(() => {
+    let active = true;
+    let timer;
+    const poll = async () => {
+      try {
+        const result = await serverAutomationRequest("/sessions/" + encodeURIComponent(initialSession.id), publishingIdentityToken);
+        if (!active) return;
+        setSession(result.session);
+        if (result.session.state === "CONNECTED") {
+          onConnected();
+          return;
+        }
+        if (["FAILED", "CANCELLED", "EXPIRED"].includes(result.session.state)) return;
+        timer = window.setTimeout(poll, 750);
+      } catch (pollError) {
+        if (active) setError(pollError.message || "Login status could not be loaded.");
+      }
+    };
+    void poll();
+    return () => { active = false; if (timer) window.clearTimeout(timer); };
+  }, [initialSession.id, onConnected, publishingIdentityToken]);
+
+  useEffect(() => {
+    if (!["STARTING", "AWAITING_USER"].includes(session.state)) return;
+    let active = true;
+    let timer;
+    let objectUrl = "";
+    const pollFrame = async () => {
+      try {
+        const blob = await serverAutomationFrame(initialSession.id, publishingIdentityToken);
+        if (!active) return;
+        const nextUrl = URL.createObjectURL(blob);
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = nextUrl;
+        setFrameUrl(nextUrl);
+      } catch {
+        // The isolated browser can be between frames while starting or closing.
+      }
+      if (active) timer = window.setTimeout(pollFrame, 250);
+    };
+    void pollFrame();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [initialSession.id, publishingIdentityToken, session.state]);
+
+  const enqueueInputBatch = useCallback((inputs) => {
+    if (!inputs.length) return;
+    inputQueue.current = inputQueue.current
+      .then(() => serverAutomationRequest("/sessions/" + encodeURIComponent(initialSession.id) + "/input", publishingIdentityToken, {
+        method: "POST",
+        body: JSON.stringify({ inputs })
+      }))
+      .catch(inputError => setError(inputError.message || "Browser input could not be forwarded."));
+  }, [initialSession.id, publishingIdentityToken]);
+
+  const flushInputBuffer = useCallback(() => {
+    if (inputTimer.current) window.clearTimeout(inputTimer.current);
+    inputTimer.current = undefined;
+    const inputs = inputBuffer.current.splice(0, 32);
+    enqueueInputBatch(inputs);
+    if (inputBuffer.current.length) inputTimer.current = window.setTimeout(flushInputBuffer, 0);
+  }, [enqueueInputBatch]);
+
+  const sendInput = useCallback((input, flushNow = false) => {
+    const last = inputBuffer.current.at(-1);
+    if (input.type === "text" && last?.type === "text" && last.text.length + input.text.length <= 64) last.text += input.text;
+    else inputBuffer.current.push(input);
+    if (flushNow || inputBuffer.current.length >= 24) flushInputBuffer();
+    else if (!inputTimer.current) inputTimer.current = window.setTimeout(flushInputBuffer, 120);
+  }, [flushInputBuffer]);
+
+  useEffect(() => () => {
+    if (inputTimer.current) window.clearTimeout(inputTimer.current);
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+  }, []);
+
+  const cancel = async () => {
+    await serverAutomationRequest("/sessions/" + encodeURIComponent(initialSession.id), publishingIdentityToken, { method: "DELETE" }).catch(() => undefined);
+    onClose();
+  };
+
+  return <div className="config-server-login-overlay" role="dialog" aria-modal="true" aria-labelledby="config-server-login-title">
+    <section className="config-server-login-panel">
+      <header><span><small>Private Server Worker browser</small><strong id="config-server-login-title">Connect {accountName}</strong><em>Type directly in the browser image. AgenticThat forwards input without storing the password.</em></span><button type="button" onClick={() => void cancel()}><X size={17} />Cancel</button></header>
+      <div className="config-server-login-state"><Loader2 className={["STARTING", "AWAITING_USER"].includes(session.state) ? "spin" : ""} size={15} />{session.state.replaceAll("_", " ")}</div>
+      {frameUrl ? <div className="config-server-login-frame-shell"><img
+        className="config-server-login-frame"
+        src={frameUrl}
+        alt="Interactive Instagram login browser running on Server Worker"
+        tabIndex={0}
+        draggable={false}
+        onClick={event => {
+          const image = event.currentTarget;
+          const box = image.getBoundingClientRect();
+          const left = ((event.clientX - box.left) / box.width) * 100;
+          const top = ((event.clientY - box.top) / box.height) * 100;
+          const id = Date.now();
+          image.focus();
+          setClickFeedback({ id, left, top });
+          if (clickTimer.current) window.clearTimeout(clickTimer.current);
+          clickTimer.current = window.setTimeout(() => setClickFeedback(current => current?.id === id ? null : current), 550);
+          sendInput({ type: "click", x: (left / 100) * image.naturalWidth, y: (top / 100) * image.naturalHeight, button: "left" }, true);
+        }}
+        onContextMenu={event => event.preventDefault()}
+        onKeyDown={event => {
+          const special = {
+            Tab: "Tab", Enter: "Enter", Escape: "Escape", Backspace: "Backspace", Delete: "Delete",
+            ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
+            Home: "Home", End: "End", " ": "Space"
+          };
+          if (special[event.key]) {
+            event.preventDefault();
+            sendInput({ type: "key", key: special[event.key] }, true);
+          } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+            sendInput({ type: "text", text: event.key });
+          }
+        }}
+        onPaste={event => {
+          event.preventDefault();
+          const value = event.clipboardData.getData("text");
+          const chunks = Array.from({ length: Math.ceil(value.length / 64) }, (_, index) => value.slice(index * 64, (index + 1) * 64));
+          chunks.forEach((text, index) => sendInput({ type: "text", text }, index === chunks.length - 1));
+        }}
+        onWheel={event => {
+          event.preventDefault();
+          sendInput({ type: "wheel", deltaX: event.deltaX, deltaY: event.deltaY });
+        }}
+      />{clickFeedback && <span className="config-server-login-click" style={{ left: clickFeedback.left + "%", top: clickFeedback.top + "%" }} aria-hidden="true" />}</div> : <div className="config-server-login-loading"><Loader2 className="spin" size={24} /><span>Starting the isolated Instagram browser…</span></div>}
+      {(error || session.errorMessage) && <p className="config-server-login-error" role="alert">{error || session.errorMessage}</p>}
+    </section>
+  </div>;
+}
+
+function PublishingAccountForm({ platform, account, busy, serverAvailable, onCancel, onSave }) {
   const [displayName, setDisplayName] = useState(account?.displayName || "");
   const [handle, setHandle] = useState(account?.handle || "");
   const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
-  const [executionEngine, setExecutionEngine] = useState(account?.executionEngine || "companion");
-  const engineChanged = Boolean(account && executionEngine !== (account.executionEngine || "companion"));
+  const [executionEngine, setExecutionEngine] = useState(account?.executionEngine || (platform === "instagram" && serverAvailable ? "server_worker" : "companion"));
 
   const submit = (event) => {
     event.preventDefault();
-    if (engineChanged && account.credentialConfigured && !window.confirm("Changing the publishing engine signs this account out. Continue and log in again?")) return;
     void onSave({
       id: account?.id,
       displayName,
       handle,
       loginIdentifier,
       enabled,
-      executionEngine
+      executionEngine,
+      serverManaged: Boolean(account?.serverManaged)
     });
   };
 
@@ -1216,15 +1501,16 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
       <form onSubmit={submit}>
         <div className="config-form-grid">
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
-          <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
-          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; credentials stay on the provider sign-in page" /></label>
+          {executionEngine !== "server_worker" && <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>}
+          {executionEngine !== "server_worker" && <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; credentials stay on the provider sign-in page" /></label>}
           <fieldset className="config-engine-field wide">
             <legend>Publishing engine</legend>
             <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
-              <button type="button" className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Runs in the background and opens only when attention is needed</small></span></button>
-              <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button>
+              {platform === "instagram" && <button type="button" disabled={Boolean(account) || !serverAvailable} className={executionEngine === "server_worker" ? "active" : ""} aria-pressed={executionEngine === "server_worker"} onClick={() => setExecutionEngine("server_worker")}><Database size={18} /><span><strong>Server Worker</strong><small>{serverAvailable ? "Website-only login and publishing; no Companion required" : "Not available in this environment"}</small></span></button>}
+              <button type="button" disabled={Boolean(account)} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Runs in the background and opens only when attention is needed</small></span></button>
+              <button type="button" disabled={Boolean(account)} className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome or Edge profile</small></span></button>
             </div>
-            {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
+            {account && <p className="config-engine-warning"><CircleAlert size={14} />Engine is fixed for an existing connection. Add a new account connection to use another engine.</p>}
           </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>

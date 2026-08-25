@@ -145,7 +145,7 @@ export function setCentralAuthToken(token: string | null) {
 
 function centralPublishingPath(path: string) {
   const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
-  return `/api/publishing${normalized}`;
+  return `/api/central-publishing${normalized}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -215,7 +215,7 @@ async function mediaBlob(fileName: string) {
   const headers = new Headers();
   if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
   const response = centralIdentitySeed
-    ? await fetch(`/api/publishing/media/${encodeURIComponent(fileName)}`, { headers, credentials: "same-origin" })
+    ? await fetch(`/api/central-publishing/media/${encodeURIComponent(fileName)}`, { headers, credentials: "same-origin" })
     : await publishingFetch(`/api/media/${encodeURIComponent(fileName)}`, { headers });
   if (!response.ok) throw new Error(response.status === 404 ? "Publishing media is unavailable." : "Unable to load publishing media.");
   return response.blob();
@@ -225,6 +225,9 @@ async function serverAutomationRequest<T>(path: string, init?: RequestInit): Pro
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof Blob) && !(init?.body instanceof ArrayBuffer) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (centralIdentitySeed) {
+    headers.set("authorization", `Bearer ${await getClientServiceToken("publishing", centralIdentitySeed)}`);
   }
   const response = await fetch(`/api/automation-server${path}`, {
     ...init,
@@ -241,7 +244,11 @@ async function serverAutomationRequest<T>(path: string, init?: RequestInit): Pro
 }
 
 async function serverAutomationFrame(path: string) {
-  const response = await fetch(`/api/automation-server${path}`, { credentials: "same-origin", cache: "no-store" });
+  const headers = new Headers();
+  if (centralIdentitySeed) {
+    headers.set("authorization", `Bearer ${await getClientServiceToken("publishing", centralIdentitySeed)}`);
+  }
+  const response = await fetch(`/api/automation-server${path}`, { headers, credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw new Error("The private server browser frame could not be loaded.");
   return response.blob();
 }
@@ -609,19 +616,23 @@ export const api = {
   serverAutomationLoginFrame: (sessionId: string) =>
     serverAutomationFrame(`/sessions/${encodeURIComponent(sessionId)}/frame`),
 
-  sendServerAutomationLoginInput: (sessionId: string, input: unknown) =>
+  sendServerAutomationLoginInputs: (sessionId: string, inputs: unknown[]) =>
     serverAutomationRequest<void>(`/sessions/${encodeURIComponent(sessionId)}/input`, {
       method: "POST",
-      body: JSON.stringify({ input }),
+      body: JSON.stringify({ inputs }),
     }),
 
   cancelServerAutomationLogin: (sessionId: string) =>
     serverAutomationRequest<{ session: ServerAutomationLoginSession }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
 
   uploadServerAutomationMedia: async (file: File) => {
+    const headers = new Headers({ "content-type": file.type, "x-file-name": file.name });
+    if (centralIdentitySeed) {
+      headers.set("authorization", `Bearer ${await getClientServiceToken("publishing", centralIdentitySeed)}`);
+    }
     const response = await fetch("/api/automation-server/media", {
       method: "POST",
-      headers: { "content-type": file.type, "x-file-name": file.name },
+      headers,
       body: file,
       credentials: "same-origin",
     });
