@@ -4,7 +4,8 @@ import test from "node:test";
 import { loadAutomationConfig } from "./config.ts";
 
 test("server architecture is disabled and loopback-only by default", () => {
-  const config = loadAutomationConfig({}, "C:\\workspace");
+  const workspace = path.resolve("test-workspace");
+  const config = loadAutomationConfig({}, workspace);
   assert.equal(config.deploymentMode, "development");
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 8800);
@@ -17,7 +18,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.workerPollMs, 2_000);
   assert.equal(config.liveWorkerCount, 1);
   assert.equal(config.autoMigrate, false);
-  assert.equal(config.databaseFile, "C:\\workspace\\.server-data\\automation.db");
+  assert.equal(config.databaseFile, path.join(workspace, ".server-data", "automation.db"));
   assert.equal(config.loginTimeoutMs, 600_000);
 });
 

@@ -108,6 +108,7 @@ const services = [
       PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
       NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: "/console",
+      ...(publishingOnly ? { SERVER_AUTOMATION_DASHBOARD_ENABLED: "true" } : {}),
     },
   },
   {

@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { centralPublishingTestHelpers } from "./publishing-central-store.js";
+import { centralPublishingTestHelpers, listCentralAccounts } from "./publishing-central-store.js";
+
+test("central publishing initializes persistent local development state without a database URL", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-central-publishing-"));
+  const previousPath = process.env.PLATFORM_DOCUMENT_DATA_PATH;
+  process.env.PLATFORM_DOCUMENT_DATA_PATH = path.join(directory, "documents.json");
+  try {
+    assert.deepEqual(await listCentralAccounts("workspace_local"), []);
+    assert.deepEqual(await listCentralAccounts("workspace_local"), []);
+  } finally {
+    if (previousPath === undefined) delete process.env.PLATFORM_DOCUMENT_DATA_PATH;
+    else process.env.PLATFORM_DOCUMENT_DATA_PATH = previousPath;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("central publishing resumes reconnect-required jobs only after the paired Companion is online", () => {
   const timestamp = Date.now();
