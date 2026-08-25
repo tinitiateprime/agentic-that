@@ -7,7 +7,6 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "rootDir": "src",
     "types": [
       "node"
     ],
@@ -19,4 +18,3 @@
     "src/**/*.ts"
   ]
 }
-

@@ -145,6 +145,7 @@ export async function POST(request, context) {
           originalTimezone: body.originalTimezone,
           caption: body.caption,
           media: body.media,
+          platformOptions: body.platformOptions,
           idempotencyKey: body.idempotencyKey,
           liveConfirmation: "PUBLISH",
         }),

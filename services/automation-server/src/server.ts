@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import type { Server } from "node:http";
 import { createAutomationApp } from "./app.ts";
-import { loadAutomationConfig } from "./config.ts";
+import { livePublishingEnabled, loadAutomationConfig } from "./config.ts";
 import { assertSafeAutomationDatabase, createAutomationDatabase } from "./database.ts";
 import { AutomationJobStore } from "./job-store.ts";
 import { PlaywrightLoginBrowserLauncher } from "./login-browser.ts";
@@ -16,6 +16,10 @@ import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
 import { PlaywrightFacebookPublishingExecutor } from "./facebook-live.ts";
 import { XPublishingDryRunValidator } from "./x-dry-run.ts";
 import { PlaywrightXPublishingExecutor } from "./x-live.ts";
+import { LinkedInPublishingDryRunValidator } from "./linkedin-dry-run.ts";
+import { PlaywrightLinkedInPublishingExecutor } from "./linkedin-live.ts";
+import { YouTubePublishingDryRunValidator } from "./youtube-dry-run.ts";
+import { PlaywrightYouTubePublishingExecutor } from "./youtube-live.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
 import { AutomationPublishingPreviewWorker } from "./publishing-preview-worker.ts";
 import { AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
@@ -46,6 +50,8 @@ export async function startAutomationServer() {
           ["instagram", new InstagramPublishingDryRunValidator(files)],
           ["facebook", new FacebookPublishingDryRunValidator(files)],
           ["x", new XPublishingDryRunValidator(files)],
+          ["linkedin", new LinkedInPublishingDryRunValidator(files)],
+          ["youtube", new YouTubePublishingDryRunValidator(files)],
         ]),
         config.workerPollMs,
       )
@@ -59,18 +65,22 @@ export async function startAutomationServer() {
         config.workerPollMs,
       )
     : null;
-  const publishingLiveWorkerPool = store && config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled)
+  const publishingLiveWorkerPool = store && livePublishingEnabled(config)
     ? new AutomationPublishingLiveWorkerPool(
         store,
         new Map<string, PublishingDryRunValidator>([
           ["instagram", new InstagramPublishingDryRunValidator(files)],
           ["facebook", new FacebookPublishingDryRunValidator(files)],
           ["x", new XPublishingDryRunValidator(files)],
+          ["linkedin", new LinkedInPublishingDryRunValidator(files)],
+          ["youtube", new YouTubePublishingDryRunValidator(files)],
         ]),
         new Map<string, ServerPublishingExecutor>([
           ...(config.instagramPublishingEnabled ? [["instagram", new PlaywrightInstagramPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
           ...(config.facebookPublishingEnabled ? [["facebook", new PlaywrightFacebookPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
           ...(config.xPublishingEnabled ? [["x", new PlaywrightXPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
+          ...(config.linkedinPublishingEnabled ? [["linkedin", new PlaywrightLinkedInPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
+          ...(config.youtubePublishingEnabled ? [["youtube", new PlaywrightYouTubePublishingExecutor(files, config.browserExecutablePath)] as const] : []),
         ]),
         config.workerPollMs,
         config.liveWorkerCount,
@@ -97,7 +107,7 @@ export async function startAutomationServer() {
 
   process.stdout.write(
     `AgenticThat automation server listening on http://${config.host}:${config.port} ` +
-      `(publishing ${config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled) ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
+      `(publishing ${livePublishingEnabled(config) ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
   );
   return { server, config, shutdown };
 }

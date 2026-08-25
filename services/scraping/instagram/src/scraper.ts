@@ -4600,6 +4600,6 @@ export async function runInstagramScrape(input: InstagramScrapeInput) {
 
 export const instagramServiceInfo = {
   serviceRoot,
-  dataDir: path.join(serviceRoot, "data"),
+  dataDir: path.resolve(process.env.INSTAGRAM_DATA_DIR?.trim() || path.join(serviceRoot, "data")),
   platform: `${os.platform()}-${os.arch()}`
 };

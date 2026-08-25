@@ -36,6 +36,7 @@ type PublishingJobRow = {
   original_timezone: string;
   caption: string;
   media: string;
+  platform_options: string;
   idempotency_key: string;
   lease_owner: string | null;
   lease_expires_at: string | null;
@@ -91,6 +92,7 @@ function publicJob(row: PublishingJobRow) {
     originalTimezone: row.original_timezone,
     caption: row.caption,
     media: JSON.parse(row.media) as unknown,
+    platformOptions: JSON.parse(row.platform_options) as unknown,
     idempotencyKey: row.idempotency_key,
     leaseOwner: row.lease_owner,
     leaseExpiresAt: timestamp(row.lease_expires_at),
@@ -218,6 +220,7 @@ export class AutomationJobStore {
 
     const scheduledAt = new Date(value.scheduledAt).toISOString();
     const media = JSON.stringify(value.media);
+    const platformOptions = JSON.stringify(value.platformOptions);
     const existing = this.database.prepare(`
       SELECT * FROM publishing_jobs WHERE workspace_id = ? AND idempotency_key = ?
     `).get(value.workspaceId, value.idempotencyKey) as PublishingJobRow | undefined;
@@ -229,7 +232,8 @@ export class AutomationJobStore {
         && existing.scheduled_at === scheduledAt
         && existing.original_timezone === value.originalTimezone
         && existing.caption === value.caption
-        && existing.media === media;
+        && existing.media === media
+        && existing.platform_options === platformOptions;
       if (!sameRequest) {
         throw new Error("The idempotency key is already used by a different publishing request.");
       }
@@ -241,8 +245,8 @@ export class AutomationJobStore {
     this.database.prepare(`
       INSERT INTO publishing_jobs
         (id, workspace_id, account_id, execution_mode, validation_stage, live_authorized, scheduled_at, original_timezone, caption, media,
-         idempotency_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         platform_options, idempotency_key, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       value.workspaceId,
@@ -254,6 +258,7 @@ export class AutomationJobStore {
       value.originalTimezone,
       value.caption,
       media,
+      platformOptions,
       value.idempotencyKey,
       createdAt,
       createdAt,
@@ -502,7 +507,7 @@ export class AutomationJobStore {
       if (!current) throw new Error("The live publishing lease was lost before the final action.");
       const update = this.database.prepare(`
         UPDATE publishing_jobs
-        SET state = 'VERIFYING', progress_message = 'Instagram Share submitted; waiting for confirmation.', updated_at = ?
+        SET state = 'VERIFYING', progress_message = 'Final publish action submitted; waiting for confirmation.', updated_at = ?
         WHERE id = ? AND execution_mode = 'LIVE' AND live_authorized = 1
           AND state = 'PUBLISHING' AND lease_owner = ? AND fencing_token = ?
       `).run(startedAt, jobId, workerId, fencingToken);

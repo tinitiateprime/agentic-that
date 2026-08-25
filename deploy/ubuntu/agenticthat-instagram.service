@@ -1,5 +1,5 @@
 [Unit]
-Description=AgenticThat browser automation worker
+Description=AgenticThat Instagram scraping worker
 After=network-online.target
 Wants=network-online.target
 
@@ -8,18 +8,15 @@ Type=simple
 User=agenticthat
 Group=agenticthat
 WorkingDirectory=/opt/agenticthat
-EnvironmentFile=/etc/agenticthat/automation.env
-Environment=HOME=/var/lib/agenticthat-automation
-ExecStartPre=/usr/bin/node --import tsx services/automation-server/src/preflight.ts
-ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /usr/bin/node --import tsx services/automation-server/src/server.ts
+EnvironmentFile=/etc/agenticthat/services.env
+ExecStart=/usr/bin/node --import tsx services/scraping/instagram/src/server.ts
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGTERM
 TimeoutStopSec=300s
 UMask=0077
-StateDirectory=agenticthat-automation
-RuntimeDirectory=agenticthat-automation
-ReadWritePaths=/var/lib/agenticthat-automation
+StateDirectory=agenticthat-instagram
+ReadWritePaths=/var/lib/agenticthat-instagram
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict

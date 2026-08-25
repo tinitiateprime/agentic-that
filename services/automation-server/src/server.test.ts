@@ -38,6 +38,8 @@ test("health reports every new execution feature disabled by default", async () 
       instagramPublishing: false,
       facebookPublishing: false,
       xPublishing: false,
+      linkedinPublishing: false,
+      youtubePublishing: false,
       publishingDryRun: false,
       publishingPreview: false,
       login: false,
@@ -127,7 +129,7 @@ test("mutation routes require a token and stay disabled even with a database sto
       body: "{}",
     });
     assert.equal(disabled.status, 409);
-    assert.match((await disabled.json()).error, /Current Companion behavior remains active/);
+    assert.match((await disabled.json()).error, /Server publishing is disabled/);
   } finally {
     await runtime.close();
   }

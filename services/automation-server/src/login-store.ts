@@ -6,7 +6,7 @@ export type { LoginSurface } from "./contracts.ts";
 export type LoginAccount = {
   id: string;
   workspaceId: string;
-  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x">;
+  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x" | "linkedin" | "youtube">;
   displayName: string;
 };
 
@@ -14,7 +14,7 @@ type LoginSessionRow = {
   id: string;
   workspace_id: string;
   account_id: string;
-  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x">;
+  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x" | "linkedin" | "youtube">;
   surface: LoginSurface;
   state: LoginSessionState;
   error_code: string | null;
@@ -79,7 +79,7 @@ export class AutomationLoginStore {
         | { id: string; workspace_id: string; platform: string; display_name: string }
         | undefined;
       if (!accountRow) throw new Error("The selected server login account is unavailable.");
-      if (!["instagram", "facebook", "x"].includes(accountRow.platform)) {
+      if (!["instagram", "facebook", "x", "linkedin", "youtube"].includes(accountRow.platform)) {
         throw new Error("Server login is not enabled for this platform yet.");
       }
       const now = new Date().toISOString();

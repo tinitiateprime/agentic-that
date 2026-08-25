@@ -23,8 +23,9 @@ export function resolveAutomationServerBridgeConfig(environment = {}, developmen
   if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
     throw new Error("SERVER_AUTOMATION_ORIGIN must be a plain HTTP(S) origin without credentials or a path.");
   }
-  if (production && origin.protocol !== "https:") {
-    throw new Error("Production server automation requires an HTTPS origin.");
+  const loopbackOrigin = ["127.0.0.1", "::1", "localhost"].includes(origin.hostname.toLowerCase());
+  if (production && origin.protocol !== "https:" && !(origin.protocol === "http:" && loopbackOrigin)) {
+    throw new Error("Production server automation requires HTTPS or a private loopback HTTP origin.");
   }
   const internalToken = value("SERVER_AUTOMATION_INTERNAL_TOKEN") || value("SERVER_ARCHITECTURE_INTERNAL_TOKEN");
   if (internalToken.length < 24) {

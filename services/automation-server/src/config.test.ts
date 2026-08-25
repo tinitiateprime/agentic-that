@@ -13,6 +13,8 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.instagramPublishingEnabled, false);
   assert.equal(config.facebookPublishingEnabled, false);
   assert.equal(config.xPublishingEnabled, false);
+  assert.equal(config.linkedinPublishingEnabled, false);
+  assert.equal(config.youtubePublishingEnabled, false);
   assert.equal(config.loginEnabled, false);
   assert.equal(config.scrapingEnabled, false);
   assert.equal(config.publishingDryRunEnabled, false);
@@ -20,6 +22,9 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.workerPollMs, 2_000);
   assert.equal(config.liveWorkerCount, 1);
   assert.equal(config.autoMigrate, false);
+  assert.equal(config.profileStorageEncrypted, false);
+  assert.equal(config.backupsConfigured, false);
+  assert.equal(config.singleHostAcknowledged, false);
   assert.equal(config.databaseFile, path.join(workspace, ".server-data", "automation.db"));
   assert.equal(config.loginTimeoutMs, 600_000);
 });
@@ -56,11 +61,29 @@ test("staging requires loopback, strong secrets, absolute storage, and automatic
   );
 });
 
-test("customer production remains blocked until durable encrypted storage exists", () => {
+test("single-host production requires explicit encrypted storage and backup safeguards", () => {
+  const dataDirectory = path.resolve(".test-automation-production");
+  const base = {
+    SERVER_ARCHITECTURE_DEPLOYMENT: "production",
+    SERVER_ARCHITECTURE_HOST: "127.0.0.1",
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a".repeat(32),
+    SERVER_ARCHITECTURE_DATA_DIR: dataDirectory,
+    SERVER_ARCHITECTURE_DATABASE_FILE: path.join(dataDirectory, "automation.db"),
+    SERVER_ARCHITECTURE_AUTO_MIGRATE: "true",
+    SERVER_SINGLE_HOST_ACKNOWLEDGED: "true",
+    SERVER_PROFILE_STORAGE_ENCRYPTED: "true",
+    SERVER_BACKUPS_CONFIGURED: "true",
+  };
   assert.throws(
-    () => loadAutomationConfig({ SERVER_ARCHITECTURE_DEPLOYMENT: "production" }),
-    /PostgreSQL and encrypted browser-profile storage/,
+    () => loadAutomationConfig({ ...base, SERVER_PROFILE_STORAGE_ENCRYPTED: "false" }),
+    /encrypted-at-rest profile storage/,
   );
+  assert.throws(() => loadAutomationConfig({ ...base, SERVER_BACKUPS_CONFIGURED: "false" }), /tested encrypted backups/);
+  assert.throws(() => loadAutomationConfig({ ...base, SERVER_SINGLE_HOST_ACKNOWLEDGED: "false" }), /single-host mode/);
+  const config = loadAutomationConfig(base);
+  assert.equal(config.deploymentMode, "production");
+  assert.equal(config.profileStorageEncrypted, true);
+  assert.equal(config.backupsConfigured, true);
 });
 
 test("a public bind requires an explicit safety override", () => {

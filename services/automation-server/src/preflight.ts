@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { loadAutomationConfig } from "./config.ts";
+import { livePublishingEnabled, loadAutomationConfig } from "./config.ts";
 import { assertSafeAutomationDatabase } from "./database.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
 
@@ -8,7 +8,7 @@ export function automationPreflight() {
   const database = assertSafeAutomationDatabase(config);
   const browserRequired = config.loginEnabled
     || config.publishingPreviewEnabled
-    || (config.executionEnabled && config.instagramPublishingEnabled);
+    || livePublishingEnabled(config);
   const browserExecutable = browserRequired
     ? detectServerBrowserExecutable(config.browserExecutablePath)
     : null;
@@ -25,7 +25,7 @@ export function automationPreflight() {
     browserRequired,
     browserExecutable,
     autoMigrate: config.autoMigrate,
-    liveWorkerCount: config.executionEnabled && config.instagramPublishingEnabled ? config.liveWorkerCount : 0,
+    liveWorkerCount: livePublishingEnabled(config) ? config.liveWorkerCount : 0,
   };
 }
 

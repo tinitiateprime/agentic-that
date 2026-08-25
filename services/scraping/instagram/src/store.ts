@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getStore } from "@netlify/blobs";
 import {
@@ -81,6 +81,16 @@ const shouldUseNetlifyBlobs = () => (
   process.env.NETLIFY === "true" ||
   Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+
+async function writePrivateJson(file: string, value: unknown) {
+  const directory = path.dirname(file);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, file);
+  await chmod(file, 0o600);
+}
 
 export function selectRecentRunFallback(
   runs: InstagramRun[],
@@ -252,8 +262,7 @@ export class InstagramRunStore {
       return;
     }
 
-    await mkdir(path.dirname(this.dataFile), { recursive: true });
-    await writeFile(this.dataFile, JSON.stringify(database, null, 2), "utf8");
+    await writePrivateJson(this.dataFile, database);
   }
 
   private async mutateLocalRuns<T>(mutator: (database: RunsDatabase) => T | Promise<T>) {
@@ -276,8 +285,7 @@ export class InstagramRunStore {
   }
 
   private async writeJobsDatabase(database: JobsDatabase) {
-    await mkdir(path.dirname(this.jobsFile), { recursive: true });
-    await writeFile(this.jobsFile, JSON.stringify(database, null, 2), "utf8");
+    await writePrivateJson(this.jobsFile, database);
   }
 
   private async mutateLocalJobs<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {

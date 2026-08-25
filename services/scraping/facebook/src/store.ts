@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getStore } from "@netlify/blobs";
 import {
@@ -75,6 +75,16 @@ const useNetlifyBlobs = () => (
   || process.env.NETLIFY === "true"
   || Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+
+async function writePrivateJson(file: string, value: unknown) {
+  const directory = path.dirname(file);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, file);
+  await chmod(file, 0o600);
+}
 
 function validRun(value: unknown) {
   if (!value || typeof value !== "object") return null;
@@ -188,8 +198,7 @@ export class FacebookRunStore {
   }
 
   private async writeRuns(database: RunsDatabase) {
-    await mkdir(path.dirname(this.runsFile), { recursive: true });
-    await writeFile(this.runsFile, JSON.stringify(database, null, 2), "utf8");
+    await writePrivateJson(this.runsFile, database);
   }
 
   private async mutateRuns<T>(mutator: (database: RunsDatabase) => T | Promise<T>) {
@@ -211,8 +220,7 @@ export class FacebookRunStore {
   }
 
   private async writeJobs(database: JobsDatabase) {
-    await mkdir(path.dirname(this.jobsFile), { recursive: true });
-    await writeFile(this.jobsFile, JSON.stringify(database, null, 2), "utf8");
+    await writePrivateJson(this.jobsFile, database);
   }
 
   private async mutateJobs<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {

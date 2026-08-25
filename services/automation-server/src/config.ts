@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SocialPlatform } from "./contracts.ts";
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -19,6 +20,8 @@ export type AutomationConfig = {
   instagramPublishingEnabled: boolean;
   facebookPublishingEnabled: boolean;
   xPublishingEnabled: boolean;
+  linkedinPublishingEnabled: boolean;
+  youtubePublishingEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
   publishingDryRunEnabled: boolean;
@@ -27,6 +30,9 @@ export type AutomationConfig = {
   liveWorkerCount: number;
   autoMigrate: boolean;
   allowPublicBind: boolean;
+  profileStorageEncrypted: boolean;
+  backupsConfigured: boolean;
+  singleHostAcknowledged: boolean;
 };
 
 function enabled(value: string | undefined) {
@@ -94,32 +100,41 @@ export function loadAutomationConfig(
   const browserExecutablePath = env.SERVER_BROWSER_EXECUTABLE_PATH?.trim() || "";
   const autoMigrate = enabled(env.SERVER_ARCHITECTURE_AUTO_MIGRATE);
 
-  if (runtimeDeployment === "production") {
-    throw new Error(
-      "Customer production mode is intentionally blocked until PostgreSQL and encrypted browser-profile storage are implemented. Use staging with test accounts only.",
-    );
-  }
-  if (runtimeDeployment === "staging") {
+  if (runtimeDeployment === "staging" || runtimeDeployment === "production") {
     if (!LOOPBACK_HOSTS.has(host) || allowPublicBind) {
-      throw new Error("Staging must bind to loopback behind an HTTPS reverse proxy.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} must bind to loopback behind the website server.`);
     }
     if (internalToken.length < 32) {
-      throw new Error("Staging requires SERVER_ARCHITECTURE_INTERNAL_TOKEN with at least 32 characters.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} requires SERVER_ARCHITECTURE_INTERNAL_TOKEN with at least 32 characters.`);
     }
     if (!env.SERVER_ARCHITECTURE_DATA_DIR?.trim() || !path.isAbsolute(env.SERVER_ARCHITECTURE_DATA_DIR.trim())) {
-      throw new Error("Staging requires an absolute SERVER_ARCHITECTURE_DATA_DIR.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} requires an absolute SERVER_ARCHITECTURE_DATA_DIR.`);
     }
     if (!env.SERVER_ARCHITECTURE_DATABASE_FILE?.trim() || !path.isAbsolute(env.SERVER_ARCHITECTURE_DATABASE_FILE.trim())) {
-      throw new Error("Staging requires an absolute SERVER_ARCHITECTURE_DATABASE_FILE.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} requires an absolute SERVER_ARCHITECTURE_DATABASE_FILE.`);
     }
     if (!autoMigrate) {
-      throw new Error("Staging requires SERVER_ARCHITECTURE_AUTO_MIGRATE=true.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} requires SERVER_ARCHITECTURE_AUTO_MIGRATE=true.`);
     }
     const browserFeaturesEnabled = enabled(env.SERVER_LOGIN_ENABLED)
       || enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED)
-      || (enabled(env.SERVER_EXECUTION_ENABLED) && (enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED) || enabled(env.SERVER_FACEBOOK_PUBLISHING_ENABLED) || enabled(env.SERVER_X_PUBLISHING_ENABLED)));
+      || (enabled(env.SERVER_EXECUTION_ENABLED) && (enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED) || enabled(env.SERVER_FACEBOOK_PUBLISHING_ENABLED) || enabled(env.SERVER_X_PUBLISHING_ENABLED) || enabled(env.SERVER_LINKEDIN_PUBLISHING_ENABLED) || enabled(env.SERVER_YOUTUBE_PUBLISHING_ENABLED)));
     if (browserFeaturesEnabled && (!browserExecutablePath || !path.isAbsolute(browserExecutablePath))) {
-      throw new Error("Staging browser features require an absolute SERVER_BROWSER_EXECUTABLE_PATH.");
+      throw new Error(`${runtimeDeployment === "production" ? "Production" : "Staging"} browser features require an absolute SERVER_BROWSER_EXECUTABLE_PATH.`);
+    }
+  }
+  const profileStorageEncrypted = enabled(env.SERVER_PROFILE_STORAGE_ENCRYPTED);
+  const backupsConfigured = enabled(env.SERVER_BACKUPS_CONFIGURED);
+  const singleHostAcknowledged = enabled(env.SERVER_SINGLE_HOST_ACKNOWLEDGED);
+  if (runtimeDeployment === "production") {
+    if (!singleHostAcknowledged) {
+      throw new Error("Production single-host mode requires SERVER_SINGLE_HOST_ACKNOWLEDGED=true.");
+    }
+    if (!profileStorageEncrypted) {
+      throw new Error("Production requires encrypted-at-rest profile storage and SERVER_PROFILE_STORAGE_ENCRYPTED=true.");
+    }
+    if (!backupsConfigured) {
+      throw new Error("Production requires tested encrypted backups and SERVER_BACKUPS_CONFIGURED=true.");
     }
   }
 
@@ -136,6 +151,8 @@ export function loadAutomationConfig(
     instagramPublishingEnabled: enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED),
     facebookPublishingEnabled: enabled(env.SERVER_FACEBOOK_PUBLISHING_ENABLED),
     xPublishingEnabled: enabled(env.SERVER_X_PUBLISHING_ENABLED),
+    linkedinPublishingEnabled: enabled(env.SERVER_LINKEDIN_PUBLISHING_ENABLED),
+    youtubePublishingEnabled: enabled(env.SERVER_YOUTUBE_PUBLISHING_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
     publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),
@@ -144,9 +161,31 @@ export function loadAutomationConfig(
     liveWorkerCount: liveWorkerCount(env.SERVER_LIVE_WORKER_COUNT),
     autoMigrate,
     allowPublicBind,
+    profileStorageEncrypted,
+    backupsConfigured,
+    singleHostAcknowledged,
   };
 }
 
 export function isLoopbackHost(host: string) {
   return LOOPBACK_HOSTS.has(host.trim().toLowerCase());
+}
+
+export function publishingPlatformEnabled(config: AutomationConfig, platform: SocialPlatform) {
+  if (!config.executionEnabled) return false;
+  if (platform === "instagram") return config.instagramPublishingEnabled;
+  if (platform === "facebook") return config.facebookPublishingEnabled;
+  if (platform === "x") return config.xPublishingEnabled;
+  if (platform === "linkedin") return config.linkedinPublishingEnabled;
+  return config.youtubePublishingEnabled;
+}
+
+export function livePublishingEnabled(config: AutomationConfig) {
+  return config.executionEnabled && (
+    config.instagramPublishingEnabled
+    || config.facebookPublishingEnabled
+    || config.xPublishingEnabled
+    || config.linkedinPublishingEnabled
+    || config.youtubePublishingEnabled
+  );
 }

@@ -5,7 +5,9 @@ import dynamic from "next/dynamic";
 import InstagramScraperConsole from "../../../instagram/console/src/InstagramScraperConsole";
 import { getFacebookCompanionStatus, runFacebookCompanionJob } from "./companionClient";
 
-const FACEBOOK_API_URL = process.env.NEXT_PUBLIC_FACEBOOK_API_URL || "/api/scraping/facebook";
+// Keep browser traffic on the website origin. Next.js proxies this path to the
+// private Ubuntu scraper service; remote users must never receive a localhost URL.
+const FACEBOOK_API_URL = "/api/scraping/facebook";
 const FacebookScraperVideoGuide = dynamic(() => import("./FacebookScraperVideoGuide"), { ssr: false });
 
 const facebookInputModes = [

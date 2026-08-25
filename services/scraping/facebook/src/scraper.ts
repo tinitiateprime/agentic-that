@@ -221,7 +221,7 @@ export function facebookNavigationHeaders() {
 
 export const facebookServiceInfo = {
   serviceRoot,
-  dataDir: path.join(serviceRoot, "data"),
+  dataDir: path.resolve(process.env.FACEBOOK_DATA_DIR?.trim() || path.join(serviceRoot, "data")),
   platform: `${os.platform()}-${os.arch()}`,
 };
 

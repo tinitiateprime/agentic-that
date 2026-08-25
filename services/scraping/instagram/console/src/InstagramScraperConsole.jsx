@@ -18,7 +18,9 @@ const ProfileComparisonWorkspace = dynamic(() => import("./ProfileComparisonWork
 });
 const InstagramScraperTour = dynamic(() => import("./InstagramScraperTour"), { ssr: false });
 
-const API_URL = process.env.NEXT_PUBLIC_INSTAGRAM_API_URL || "/api/scraping/instagram";
+// Keep browser traffic on the website origin. Next.js proxies this path to the
+// private Ubuntu scraper service; remote users must never receive a localhost URL.
+const API_URL = "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
 const INSTAGRAM_TOUR_STORAGE_KEY = "agenticthat-instagram-scraper-guide-v1";
 const TOUR_STEP = {

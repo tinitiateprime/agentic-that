@@ -95,6 +95,25 @@ async function xSessionPresent(context: BrowserContext) {
   return await authenticatedUi.first().isVisible().catch(() => false);
 }
 
+async function linkedinSessionPresent(context: BrowserContext) {
+  const cookies = await context.cookies("https://www.linkedin.com/");
+  if (!cookies.some(cookie => cookie.name === "li_at" && Boolean(cookie.value))) return false;
+  const page = context.pages().find(candidate => candidate.url().includes("linkedin.com/"));
+  if (!page || /\/login|\/checkpoint|\/uas\//i.test(page.url())) return false;
+  return await page.locator("#global-nav, .global-nav, [data-test-global-nav-link='feed']")
+    .first().isVisible().catch(() => false);
+}
+
+async function youtubeSessionPresent(context: BrowserContext) {
+  const cookies = await context.cookies(["https://www.youtube.com/", "https://accounts.google.com/"]);
+  const cookieReady = cookies.some(cookie => ["SAPISID", "__Secure-3PAPISID", "SID"].includes(cookie.name) && Boolean(cookie.value));
+  if (!cookieReady) return false;
+  const page = context.pages().find(candidate => candidate.url().includes("youtube.com/"));
+  if (!page || page.url().includes("accounts.google.com")) return false;
+  return await page.locator("button#avatar-btn, ytd-topbar-menu-button-renderer #avatar-btn, #end #avatar-btn")
+    .first().isVisible().catch(() => false);
+}
+
 async function wait(page: Page, milliseconds: number, signal: AbortSignal) {
   if (signal.aborted) throw signal.reason || new Error("Login was cancelled.");
   let onAbort: (() => void) | undefined;
@@ -175,7 +194,8 @@ export async function launchStandardXChrome(
     const context = browser.contexts()[0];
     if (!context) throw new Error("The standard X login browser did not expose its profile.");
     const pages = context.pages();
-    const page = pages.filter(candidate => candidate.url().includes("x.com/")).at(-1)
+    const targetHost = new URL(targetUrl).hostname.replace(/^www\./, "");
+    const page = pages.filter(candidate => candidate.url().includes(targetHost)).at(-1)
       || pages.at(-1)
       || await context.newPage();
     let closed = false;
@@ -212,7 +232,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     profileDirectory: string,
     surface: LoginSurface,
   ): Promise<PersistentLoginBrowser> {
-    if (!["instagram", "facebook", "x"].includes(account.platform)) throw new Error("This login browser does not support the selected platform yet.");
+    if (!["instagram", "facebook", "x", "linkedin", "youtube"].includes(account.platform)) throw new Error("This login browser does not support the selected platform yet.");
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) {
       throw new Error("Google Chrome or Microsoft Edge is required for local server login testing.");
@@ -225,8 +245,18 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     let closeStandardChrome: (() => Promise<void>) | null = null;
     let context: BrowserContext;
     let page: Page;
-    if (account.platform === "x") {
-      const launched = await launchStandardXChrome(executablePath, profileDirectory);
+    const platformName = account.platform === "facebook" ? "Facebook"
+      : account.platform === "x" ? "X"
+      : account.platform === "linkedin" ? "LinkedIn"
+      : account.platform === "youtube" ? "YouTube"
+      : "Instagram";
+    const loginUrl = account.platform === "facebook" ? "https://www.facebook.com/login/"
+      : account.platform === "x" ? "https://x.com/i/flow/login"
+      : account.platform === "linkedin" ? "https://www.linkedin.com/login"
+      : account.platform === "youtube" ? "https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/"
+      : "https://www.instagram.com/accounts/login/";
+    if (["x", "linkedin", "youtube"].includes(account.platform)) {
+      const launched = await launchStandardXChrome(executablePath, profileDirectory, loginUrl);
       attachedBrowser = launched.browser;
       closeStandardChrome = launched.close;
       context = launched.context;
@@ -246,14 +276,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
       });
       page = context.pages()[0] || await context.newPage();
     }
-    const platformName = account.platform === "facebook" ? "Facebook" : account.platform === "x" ? "X" : "Instagram";
-    const loginUrl = account.platform === "facebook" ? "https://www.facebook.com/login/"
-      : account.platform === "x" ? "https://x.com/i/flow/login"
-      : "https://www.instagram.com/accounts/login/";
-    await page.goto(loginUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
+    if (!page.url().startsWith(loginUrl)) await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     let closed = false;
     context.once("close", () => { closed = true; });
 
@@ -267,14 +290,18 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
           }
           const authenticated = account.platform === "facebook" ? await facebookSessionPresent(context)
             : account.platform === "x" ? await xSessionPresent(context)
+            : account.platform === "linkedin" ? await linkedinSessionPresent(context)
+            : account.platform === "youtube" ? await youtubeSessionPresent(context)
             : await instagramSessionPresent(context);
           if (authenticated) {
-            if (account.platform === "x") {
-              const holdMs = Number(process.env.X_LOGIN_HOLD_MS ?? 15_000);
-              await wait(page, Number.isFinite(holdMs) && holdMs >= 0 ? holdMs : 15_000, signal);
-              if (!await xSessionPresent(context)) {
-                throw new Error("X authentication did not remain active during session stabilization.");
-              }
+            if (["x", "linkedin", "youtube"].includes(account.platform)) {
+              const defaultHold = account.platform === "x" ? 15_000 : 5_000;
+              const holdMs = Number(process.env[`${account.platform.toUpperCase()}_LOGIN_HOLD_MS`] ?? defaultHold);
+              await wait(page, Number.isFinite(holdMs) && holdMs >= 0 ? holdMs : defaultHold, signal);
+              const stable = account.platform === "x" ? await xSessionPresent(context)
+                : account.platform === "linkedin" ? await linkedinSessionPresent(context)
+                : await youtubeSessionPresent(context);
+              if (!stable) throw new Error(`${platformName} authentication did not remain active during session stabilization.`);
             }
             return;
           }

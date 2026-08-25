@@ -6,7 +6,7 @@ import type { AutomationConfig } from "./config.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
 import { developmentConnectPage } from "./development-ui.ts";
-import { isLoopbackHost } from "./config.ts";
+import { isLoopbackHost, livePublishingEnabled, publishingPlatformEnabled } from "./config.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
@@ -26,6 +26,7 @@ function safeEqual(left: string, right: string) {
 
 export function createAutomationApp({ config, databaseReady, store, loginManager, files }: AppDependencies) {
   const app = express();
+  const publishingLiveEnabled = livePublishingEnabled(config);
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
     res.set({
@@ -39,7 +40,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
 
   const browserRequired = config.loginEnabled
     || config.publishingPreviewEnabled
-    || (config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled));
+    || publishingLiveEnabled;
   let browserReady = !browserRequired;
   let browserReadinessError = "";
   if (browserRequired) {
@@ -77,7 +78,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       loginEnabled: config.loginEnabled,
       publishingDryRunEnabled: config.publishingDryRunEnabled,
       publishingPreviewEnabled: config.publishingPreviewEnabled,
-      publishingLiveEnabled: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled),
+      publishingLiveEnabled,
     }));
   });
 
@@ -90,16 +91,22 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       databaseConfigured: true,
       databaseReady,
       databaseEngine: "sqlite",
-      storage: config.deploymentMode === "development" ? "local-development-only" : "local-single-server-staging",
+      storage: config.deploymentMode === "development"
+        ? "local-development-only"
+        : config.deploymentMode === "production"
+          ? "encrypted-single-server-production"
+          : "local-single-server-staging",
       browserReady,
-      livePublishingWorkerCount: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled)
+      livePublishingWorkerCount: publishingLiveEnabled
         ? config.liveWorkerCount
         : 0,
       features: {
-        publishing: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled),
-        instagramPublishing: config.instagramPublishingEnabled,
-        facebookPublishing: config.facebookPublishingEnabled,
-        xPublishing: config.xPublishingEnabled,
+        publishing: publishingLiveEnabled,
+        instagramPublishing: publishingPlatformEnabled(config, "instagram"),
+        facebookPublishing: publishingPlatformEnabled(config, "facebook"),
+        xPublishing: publishingPlatformEnabled(config, "x"),
+        linkedinPublishing: publishingPlatformEnabled(config, "linkedin"),
+        youtubePublishing: publishingPlatformEnabled(config, "youtube"),
         publishingDryRun: config.publishingDryRunEnabled,
         publishingPreview: config.publishingPreviewEnabled,
         login: config.loginEnabled,
@@ -267,8 +274,8 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.get("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
-      res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
+    if (!publishingLiveEnabled) {
+      res.status(409).json({ error: "Server publishing is disabled." });
       return;
     }
     const workspaceId = String(req.query.workspaceId || "").trim();
@@ -285,12 +292,21 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.post("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
-      res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
+    if (!publishingLiveEnabled) {
+      res.status(409).json({ error: "Server publishing is disabled." });
+      return;
+    }
+    const workspaceId = String(req.body?.workspaceId || "").trim();
+    const accountId = String(req.body?.accountId || "").trim();
+    const account = workspaceId && accountId
+      ? store!.listAccounts(workspaceId).find(candidate => candidate.id === accountId)
+      : null;
+    if (account && !publishingPlatformEnabled(config, account.platform as Parameters<typeof publishingPlatformEnabled>[1])) {
+      res.status(409).json({ error: `${account.platform} server publishing is not enabled.` });
       return;
     }
     if (req.body?.liveConfirmation !== "PUBLISH") {
-      res.status(400).json({ error: "Type PUBLISH to authorize Instagram's final Share action." });
+      res.status(400).json({ error: "Type PUBLISH to authorize the platform's final publish action." });
       return;
     }
     const job = await store!.createPublishingJob(req.body, "LIVE", "LOCAL", true);
@@ -321,8 +337,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     requireStore,
     express.raw({ type: () => true, limit: "250mb" }),
     async (req, res) => {
-      const livePublishingEnabled = config.executionEnabled && config.instagramPublishingEnabled;
-      if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled && !livePublishingEnabled) || !files) {
+      if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled && !publishingLiveEnabled) || !files) {
         res.status(409).json({ error: "Publishing media storage is disabled." });
         return;
       }
@@ -364,8 +379,8 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.delete("/v1/publishing/jobs/:jobId", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled || !config.instagramPublishingEnabled) {
-      res.status(409).json({ error: "Server publishing is disabled. Current Companion behavior remains active." });
+    if (!publishingLiveEnabled) {
+      res.status(409).json({ error: "Server publishing is disabled." });
       return;
     }
     const workspaceId = String(req.query.workspaceId || "").trim();
@@ -417,7 +432,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.get("/v1/publishing/jobs/:jobId/diagnostic-frame", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled || (!config.instagramPublishingEnabled && !config.facebookPublishingEnabled && !config.xPublishingEnabled) || !files) {
+    if (!publishingLiveEnabled || !files) {
       res.status(409).json({ error: "Server publishing is disabled." });
       return;
     }

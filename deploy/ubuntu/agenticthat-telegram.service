@@ -1,0 +1,32 @@
+[Unit]
+Description=AgenticThat Telegram messaging worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agenticthat
+Group=agenticthat
+WorkingDirectory=/opt/agenticthat
+EnvironmentFile=/etc/agenticthat/services.env
+ExecStart=/usr/bin/node --import tsx services/messaging/telegram/src/server.ts
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=120s
+UMask=0077
+StateDirectory=agenticthat-telegram
+ReadWritePaths=/var/lib/agenticthat-telegram
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

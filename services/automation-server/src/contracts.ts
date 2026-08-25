@@ -82,6 +82,15 @@ export const mediaReferenceSchema = z.object({
   mimeType: z.string().trim().min(1).max(160),
 });
 
+export const publishingPlatformOptionsSchema = z.object({
+  youtube: z.object({
+    title: z.string().trim().min(1).max(100),
+    audience: z.enum(["made_for_kids", "not_made_for_kids"]),
+    visibility: z.enum(["public", "unlisted", "private"]),
+  }).strict().optional(),
+}).strict().default({});
+export type PublishingPlatformOptions = z.infer<typeof publishingPlatformOptionsSchema>;
+
 export const createPublishingJobSchema = z.object({
   workspaceId: z.string().trim().min(1).max(160),
   accountId: z.string().trim().min(1).max(160),
@@ -89,6 +98,7 @@ export const createPublishingJobSchema = z.object({
   originalTimezone: z.string().trim().min(1).max(100).default("UTC"),
   caption: z.string().max(63_206).default(""),
   media: z.array(mediaReferenceSchema).max(20).default([]),
+  platformOptions: publishingPlatformOptionsSchema,
   idempotencyKey: z.string().trim().min(8).max(200),
 }).refine(value => value.caption.trim() || value.media.length > 0, {
   message: "A publishing job requires a caption or media.",

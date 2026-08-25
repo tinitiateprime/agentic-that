@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -90,6 +90,21 @@ test("repeated platform authentication reuses the workspace identity", async () 
     assert.equal(repeated.displayName, "Second user");
     assert.equal(repeated.accessLevel, "view");
     assert.notEqual(otherWorkspace.id, first.id);
+  } finally {
+    await store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("local Telegram persistence is private on Linux", { skip: process.platform === "win32" }, async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-store-"));
+  const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));
+
+  try {
+    await store.initialize();
+    await store.createUser("Private workspace");
+    assert.equal((await stat(dataDir)).mode & 0o777, 0o700);
+    assert.equal((await stat(path.join(dataDir, "store.json"))).mode & 0o777, 0o600);
   } finally {
     await store.close();
     await rm(dataDir, { recursive: true, force: true });

@@ -25,13 +25,13 @@ test("local development may reuse the isolated automation server configuration",
   });
 });
 
-test("production server automation requires an explicit HTTPS origin", () => {
+test("production server automation accepts HTTPS or a private loopback origin", () => {
   assert.throws(() => resolveAutomationServerBridgeConfig({
     NODE_ENV: "production",
     SERVER_AUTOMATION_DASHBOARD_ENABLED: "true",
     SERVER_AUTOMATION_ORIGIN: "http://worker.example.com",
     SERVER_AUTOMATION_INTERNAL_TOKEN: token,
-  }), /HTTPS origin/);
+  }), /HTTPS or a private loopback/);
   assert.deepEqual(resolveAutomationServerBridgeConfig({
     NODE_ENV: "production",
     SERVER_AUTOMATION_DASHBOARD_ENABLED: "true",
@@ -39,6 +39,15 @@ test("production server automation requires an explicit HTTPS origin", () => {
     SERVER_AUTOMATION_INTERNAL_TOKEN: token,
   }), {
     origin: "https://worker.example.com",
+    internalToken: token,
+  });
+  assert.deepEqual(resolveAutomationServerBridgeConfig({
+    NODE_ENV: "production",
+    SERVER_AUTOMATION_DASHBOARD_ENABLED: "true",
+    SERVER_AUTOMATION_ORIGIN: "http://127.0.0.1:8800",
+    SERVER_AUTOMATION_INTERNAL_TOKEN: token,
+  }), {
+    origin: "http://127.0.0.1:8800",
     internalToken: token,
   });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mediaReferenceSchema, socialPlatformSchema } from "./contracts.ts";
+import { mediaReferenceSchema, publishingPlatformOptionsSchema, socialPlatformSchema } from "./contracts.ts";
 import type { ClaimedPublishingJob, PublishingDryRunValidator } from "./executor.ts";
 import type { AutomationJobStore } from "./job-store.ts";
 
@@ -59,6 +59,7 @@ export class AutomationPublishingDryRunWorker {
         validationStage: claimed.validationStage,
         caption: claimed.caption,
         media,
+        platformOptions: publishingPlatformOptionsSchema.parse(claimed.platformOptions),
         fencingToken: claimed.fencingToken,
       };
       const validator = this.validators.get(platform);

@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v9";
+const MIGRATION_KEY = "server-architecture-sqlite-v11";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -40,7 +40,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         id            TEXT PRIMARY KEY,
         workspace_id  TEXT NOT NULL,
         account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
-        platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x')),
+        platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x', 'linkedin', 'youtube')),
         surface       TEXT NOT NULL DEFAULT 'visible' CHECK (surface IN ('visible', 'website')),
         state         TEXT NOT NULL
                       CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
@@ -69,6 +69,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         original_timezone TEXT NOT NULL DEFAULT 'UTC',
         caption           TEXT NOT NULL DEFAULT '',
         media             TEXT NOT NULL DEFAULT '[]',
+        platform_options  TEXT NOT NULL DEFAULT '{}',
         idempotency_key   TEXT NOT NULL,
         lease_owner       TEXT,
         lease_expires_at  TEXT,
@@ -147,13 +148,13 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
     const loginTable = database.prepare(`
       SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_sessions'
     `).get() as { sql: string } | undefined;
-    if (loginTable?.sql && !/platform\s+IN\s*\([^)]*['"]x['"]/i.test(loginTable.sql)) {
+    if (loginTable?.sql && !/platform\s+IN\s*\([^)]*['"]youtube['"]/i.test(loginTable.sql)) {
       database.exec(`
-        CREATE TABLE login_sessions_v9 (
+        CREATE TABLE login_sessions_v10 (
           id            TEXT PRIMARY KEY,
           workspace_id  TEXT NOT NULL,
           account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
-          platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x')),
+          platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x', 'linkedin', 'youtube')),
           surface       TEXT NOT NULL DEFAULT 'visible' CHECK (surface IN ('visible', 'website')),
           state         TEXT NOT NULL
                         CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
@@ -163,12 +164,12 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
           updated_at    TEXT NOT NULL,
           completed_at  TEXT
         );
-        INSERT INTO login_sessions_v9
+        INSERT INTO login_sessions_v10
           (id, workspace_id, account_id, platform, surface, state, error_code, error_message, created_at, updated_at, completed_at)
         SELECT id, workspace_id, account_id, platform, surface, state, error_code, error_message, created_at, updated_at, completed_at
         FROM login_sessions;
         DROP TABLE login_sessions;
-        ALTER TABLE login_sessions_v9 RENAME TO login_sessions;
+        ALTER TABLE login_sessions_v10 RENAME TO login_sessions;
         CREATE INDEX login_sessions_account_idx
           ON login_sessions (account_id, created_at DESC);
         CREATE UNIQUE INDEX login_sessions_one_active_account_idx
@@ -199,6 +200,9 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         ALTER TABLE publishing_jobs
         ADD COLUMN live_authorized INTEGER NOT NULL DEFAULT 0 CHECK (live_authorized IN (0, 1))
       `);
+    }
+    if (!publishingColumns.some(column => column.name === "platform_options")) {
+      database.exec(`ALTER TABLE publishing_jobs ADD COLUMN platform_options TEXT NOT NULL DEFAULT '{}'`);
     }
     database.exec(`
       CREATE INDEX IF NOT EXISTS publishing_jobs_mode_due_idx

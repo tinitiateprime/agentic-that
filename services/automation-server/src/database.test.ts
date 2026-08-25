@@ -65,6 +65,17 @@ test("migration creates the local SQLite schema", async () => {
         (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
       VALUES ('login_facebook_migration', 'workspace', 'account_facebook_migration', 'facebook', 'website', 'STARTING', ?, ?)
     `).run(now, now));
+    for (const platform of ["linkedin", "youtube"] as const) {
+      database.prepare(`
+        INSERT INTO social_accounts (id, workspace_id, platform, display_name, created_at, updated_at)
+        VALUES (?, 'workspace', ?, ?, ?, ?)
+      `).run(`account_${platform}_migration`, platform, `${platform} migration`, now, now);
+      assert.doesNotThrow(() => database.prepare(`
+        INSERT INTO login_sessions
+          (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
+        VALUES (?, 'workspace', ?, ?, 'website', 'STARTING', ?, ?)
+      `).run(`login_${platform}_migration`, `account_${platform}_migration`, platform, now, now));
+    }
     database.prepare(`
       INSERT INTO social_accounts (id, workspace_id, platform, display_name, created_at, updated_at)
       VALUES ('account_x_migration', 'workspace', 'x', 'X migration', ?, ?)
@@ -79,6 +90,7 @@ test("migration creates the local SQLite schema", async () => {
     assert.equal(publishingColumns.some(column => column.name === "validation_stage"), true);
     assert.equal(publishingColumns.some(column => column.name === "progress_message"), true);
     assert.equal(publishingColumns.some(column => column.name === "live_authorized"), true);
+    assert.equal(publishingColumns.some(column => column.name === "platform_options"), true);
     migrateAutomationSchema(database);
     assert.equal(automationSchemaReady(database), true);
   } finally {

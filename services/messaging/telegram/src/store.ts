@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
+import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { SecretCipher } from "./crypto.ts";
 
@@ -212,9 +212,11 @@ export class MultiUserStore {
       if (!existing) await store.setJSON("store", emptyDatabase(), { onlyIfNew: true });
       return;
     }
-    await mkdir(this.dataDir, { recursive: true });
+    await mkdir(this.dataDir, { recursive: true, mode: 0o700 });
+    await chmod(this.dataDir, 0o700);
     try {
       await access(this.dataFile, fsConstants.F_OK);
+      await chmod(this.dataFile, 0o600);
     } catch {
       await this.writeDatabase(emptyDatabase());
     }
@@ -638,10 +640,12 @@ export class MultiUserStore {
       return;
     }
 
-    await mkdir(this.dataDir, { recursive: true });
+    await mkdir(this.dataDir, { recursive: true, mode: 0o700 });
+    await chmod(this.dataDir, 0o700);
     const tempFile = path.join(this.dataDir, `store.${process.pid}.${Date.now()}.tmp`);
-    await writeFile(tempFile, `${JSON.stringify(database, null, 2)}\n`, "utf8");
+    await writeFile(tempFile, `${JSON.stringify(database, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await rename(tempFile, this.dataFile);
+    await chmod(this.dataFile, 0o600);
   }
 
   private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -651,8 +655,8 @@ export class MultiUserStore {
     const startedAt = Date.now();
     while (!handle) {
       try {
-        await mkdir(this.dataDir, { recursive: true });
-        handle = await open(this.lockFile, "wx");
+        await mkdir(this.dataDir, { recursive: true, mode: 0o700 });
+        handle = await open(this.lockFile, "wx", 0o600);
       } catch (error) {
         if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error;
         await this.removeStaleLock();

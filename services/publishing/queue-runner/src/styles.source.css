@@ -960,10 +960,11 @@ textarea, input[type="datetime-local"], .field input[type="text"] {
 .composer-field { display: grid; gap: 7px; }
 .composer-field > span { display: flex; justify-content: space-between; gap: 12px; color: #28443A; font-size: 11px; font-weight: 800; }
 .composer-field > span small { color: #8A9993; font-size: 9px; font-weight: 600; }
-.composer-field input, .composer-field textarea, .composer-shared-schedule input, .composer-shared-schedule select, .composer-override-fields input, .composer-override-fields select { width: 100%; border: 1px solid #C8D7D0; border-radius: 8px; background: #FFFFFF; color: #1D372E; font: inherit; outline: none; }
+.composer-field input, .composer-field textarea, .composer-field select, .composer-shared-schedule input, .composer-shared-schedule select, .composer-override-fields input, .composer-override-fields select { width: 100%; border: 1px solid #C8D7D0; border-radius: 8px; background: #FFFFFF; color: #1D372E; font: inherit; outline: none; }
 .composer-field input { min-height: 43px; padding: 0 12px; font-size: 12px; }
+.composer-field select { min-height: 43px; padding: 0 12px; font-size: 12px; }
 .composer-field textarea { resize: vertical; min-height: 128px; padding: 11px 12px; font-size: 12px; line-height: 1.55; }
-.composer-field input:focus, .composer-field textarea:focus, .composer-shared-schedule input:focus, .composer-shared-schedule select:focus, .composer-override-fields input:focus, .composer-override-fields select:focus { border-color: #2C8E75; box-shadow: 0 0 0 3px rgba(44, 142, 117, .1); }
+.composer-field input:focus, .composer-field textarea:focus, .composer-field select:focus, .composer-shared-schedule input:focus, .composer-shared-schedule select:focus, .composer-override-fields input:focus, .composer-override-fields select:focus { border-color: #2C8E75; box-shadow: 0 0 0 3px rgba(44, 142, 117, .1); }
 
 .composer-destination-column { background: #FFFFFF; }
 .composer-section-title { min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 15px; }

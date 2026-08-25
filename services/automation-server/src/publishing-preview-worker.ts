@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mediaReferenceSchema, socialPlatformSchema } from "./contracts.ts";
+import { mediaReferenceSchema, publishingPlatformOptionsSchema, socialPlatformSchema } from "./contracts.ts";
 import type {
   ClaimedPublishingJob,
   PublishingDryRunValidator,
@@ -71,6 +71,7 @@ export class AutomationPublishingPreviewWorker {
         validationStage: claimed.validationStage,
         caption: claimed.caption,
         media,
+        platformOptions: publishingPlatformOptionsSchema.parse(claimed.platformOptions),
         fencingToken: claimed.fencingToken,
       };
       const profile = this.store.getPublishingProfileState(job.accountId);

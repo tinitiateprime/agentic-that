@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("X login uses a standard Chrome process with a loopback-only DevTools endpoint", async () => {
+test("provider-sensitive logins use standard Chrome with a loopback-only DevTools endpoint", async () => {
   const source = await readFile(new URL("./login-browser.ts", import.meta.url), "utf8");
 
   assert.match(source, /spawn\(executablePath/);
@@ -11,8 +11,9 @@ test("X login uses a standard Chrome process with a loopback-only DevTools endpo
   assert.match(source, /--new-window/);
   assert.match(source, /\/json\/version/);
   assert.match(source, /chromium\.connectOverCDP\(endpoint\)/);
-  assert.match(source, /filter\(candidate => candidate\.url\(\)\.includes\("x\.com\/"\)\)\.at\(-1\)/);
+  assert.match(source, /const targetHost = new URL\(targetUrl\)\.hostname/);
   assert.doesNotMatch(source, /--enable-automation/);
-  assert.match(source, /X_LOGIN_HOLD_MS \?\? 15_000/);
-  assert.match(source, /X authentication did not remain active during session stabilization/);
+  assert.match(source, /\["x", "linkedin", "youtube"\]\.includes\(account\.platform\)/);
+  assert.match(source, /account\.platform === "x" \? 15_000 : 5_000/);
+  assert.match(source, /authentication did not remain active during session stabilization/);
 });

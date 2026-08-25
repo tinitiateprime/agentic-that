@@ -51,6 +51,13 @@ export type ServerAutomationJob = {
   scheduledAt: string;
   caption: string;
   media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
+  platformOptions?: {
+    youtube?: {
+      title: string;
+      audience: "made_for_kids" | "not_made_for_kids";
+      visibility: "public" | "unlisted" | "private";
+    };
+  };
   attemptCount: number;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -64,6 +71,7 @@ export type ServerAutomationLoginSession = {
   id: string;
   workspaceId: string;
   accountId: string;
+  platform: Platform;
   state: "STARTING" | "AWAITING_USER" | "CONNECTED" | "FAILED" | "CANCELLED" | "EXPIRED";
   surface: "website" | "visible";
   errorMessage?: string | null;
@@ -73,7 +81,15 @@ export type ServerAutomationOverview = {
   health: {
     ok: boolean;
     livePublishingWorkerCount: number;
-    features: { publishing: boolean; instagramPublishing: boolean; facebookPublishing: boolean; xPublishing: boolean; login: boolean };
+    features: {
+      publishing: boolean;
+      instagramPublishing: boolean;
+      facebookPublishing: boolean;
+      xPublishing: boolean;
+      linkedinPublishing: boolean;
+      youtubePublishing: boolean;
+      login: boolean;
+    };
   };
   accounts: ServerAutomationAccount[];
   jobs: ServerAutomationJob[];
@@ -649,6 +665,13 @@ export const api = {
     originalTimezone: string;
     caption: string;
     media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
+    platformOptions?: {
+      youtube?: {
+        title: string;
+        audience: "made_for_kids" | "not_made_for_kids";
+        visibility: "public" | "unlisted" | "private";
+      };
+    };
     idempotencyKey: string;
   }) => serverAutomationRequest<{ job: ServerAutomationJob }>("/jobs", {
     method: "POST",

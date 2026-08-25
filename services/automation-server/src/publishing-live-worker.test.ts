@@ -189,6 +189,25 @@ test("the X live executor records its fence before one exact Post click", async 
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
 });
 
+test("the LinkedIn live executor records its fence before one exact Post click", async () => {
+  const source = await readFile(new URL("./linkedin-live.ts", import.meta.url), "utf8");
+  assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
+  assert.match(source, /exact Post button did not become enabled/);
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
+  assert.doesNotMatch(source, /post\.click\(\{\s*force:/);
+});
+
+test("the YouTube live executor requires explicit policy choices and fences one final click", async () => {
+  const source = await readFile(new URL("./youtube-live.ts", import.meta.url), "utf8");
+  assert.equal(source.match(/finalAction\.click\s*\(/g)?.length, 1);
+  assert.match(source, /made_for_kids/);
+  assert.match(source, /not made for kids/i);
+  assert.match(source, /visibility === "public"/);
+  assert.match(source, /exact label guard/);
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
+  assert.doesNotMatch(source, /finalAction\.click\(\{\s*force:/);
+});
+
 test("the live worker pool runs different accounts concurrently but serializes each account", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-live-pool-"));
   const config = loadAutomationConfig({ SERVER_ARCHITECTURE_DATA_DIR: directory }, directory);

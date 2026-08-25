@@ -75,7 +75,13 @@ const telegramUrl = `${siteUrl}/console`;
 const instagramUrl = `${siteUrl}/scraper/instagram`;
 const facebookUrl = `${siteUrl}/scraper/facebook`;
 const publishQueueUrl = `${siteUrl}/publishing`;
-const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
+// Browsers always use same-origin /api routes. Only Next.js receives these
+// loopback service targets, so a remote user's browser never calls its own
+// localhost by mistake.
+const instagramApiUrl = `http://127.0.0.1:${instagramPort}`;
+const facebookApiUrl = `http://127.0.0.1:${facebookPort}`;
+const telegramApiUrl = `http://127.0.0.1:${telegramPort}`;
+const publishQueueApiUrl = `http://127.0.0.1:${publishQueuePort}`;
 
 console.log(`\nAgenticThat ${publishingOnly ? "publishing" : "development"} workspace`);
 console.log(`  Website            ${siteUrl}`);
@@ -100,13 +106,16 @@ const services = [
       PORT: String(sitePort),
       DEV_PORT_ATTEMPTS: "1",
       TELEGRAM_SERVICE_PORT: String(telegramPort),
+      TELEGRAM_API_URL: telegramApiUrl,
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
-      NEXT_PUBLIC_INSTAGRAM_API_URL: `http://${host}:${instagramPort}/api/scraping/instagram`,
+      INSTAGRAM_API_URL: instagramApiUrl,
+      NEXT_PUBLIC_INSTAGRAM_API_URL: "",
       FACEBOOK_SERVICE_PORT: String(facebookPort),
-      NEXT_PUBLIC_FACEBOOK_API_URL: `http://${host}:${facebookPort}/api/scraping/facebook`,
+      FACEBOOK_API_URL: facebookApiUrl,
+      NEXT_PUBLIC_FACEBOOK_API_URL: "",
       PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
       PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
-      NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
+      NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: "",
       NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: "/console",
       ...(publishingOnly ? { SERVER_AUTOMATION_DASHBOARD_ENABLED: "true" } : {}),
     },

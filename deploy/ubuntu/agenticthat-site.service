@@ -1,0 +1,36 @@
+[Unit]
+Description=AgenticThat website
+After=network-online.target postgresql.service agenticthat-automation.service agenticthat-telegram.service agenticthat-instagram.service agenticthat-facebook.service
+Wants=network-online.target
+Requires=agenticthat-automation.service agenticthat-telegram.service agenticthat-instagram.service agenticthat-facebook.service
+
+[Service]
+Type=simple
+User=agenticthat
+Group=agenticthat
+WorkingDirectory=/opt/agenticthat
+EnvironmentFile=/etc/agenticthat/site.env
+ExecStartPre=/usr/bin/npm run db:migrate:platform
+ExecStartPre=/usr/bin/npm run db:migrate:whatsapp
+ExecStart=/usr/bin/npm run preview
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStartSec=180s
+TimeoutStopSec=60s
+UMask=0077
+StateDirectory=agenticthat-site
+ReadWritePaths=/var/lib/agenticthat-site /opt/agenticthat/.next/cache
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

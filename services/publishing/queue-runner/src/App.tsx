@@ -608,7 +608,9 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         .filter(account => account.platform === 'instagram'
           ? latestServer.overview?.health.features.instagramPublishing
           : account.platform === 'facebook' ? latestServer.overview?.health.features.facebookPublishing
-          : account.platform === 'x' && latestServer.overview?.health.features.xPublishing)
+          : account.platform === 'x' ? latestServer.overview?.health.features.xPublishing
+          : account.platform === 'linkedin' ? latestServer.overview?.health.features.linkedinPublishing
+          : account.platform === 'youtube' && latestServer.overview?.health.features.youtubePublishing)
         .map(serverAccountForComposer) ?? []);
       setSchedules(latestSchedules);
       if (permissions.canManageUsers) {
@@ -962,16 +964,19 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-async function validateServerInstagramMedia(file: File) {
+async function validateServerMedia(file: File, targetPlatforms: Platform[]) {
   if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
-    throw new Error("The server Instagram worker supports one JPEG, PNG, MP4, or MOV file.");
+    throw new Error("The server worker supports JPEG, PNG, MP4, or MOV media.");
   }
   const video = file.type.startsWith("video/");
-  const maximumBytes = video ? 250 * 1024 * 1024 : 25 * 1024 * 1024;
+  const linkedinSelected = targetPlatforms.includes("linkedin");
+  const maximumBytes = video
+    ? (linkedinSelected ? 200 : 250) * 1024 * 1024
+    : (linkedinSelected ? 20 : 25) * 1024 * 1024;
   if (file.size < 1 || file.size > maximumBytes) {
-    throw new Error(`The server Instagram ${video ? "video" : "image"} must be between 1 byte and ${maximumBytes / 1024 / 1024} MB.`);
+    throw new Error(`The server ${video ? "video" : "image"} must be between 1 byte and ${maximumBytes / 1024 / 1024} MB for the selected accounts.`);
   }
-  if (video) return;
+  if (video || !targetPlatforms.includes("instagram")) return;
   const bitmap = await createImageBitmap(file);
   try {
     const aspectRatio = bitmap.width / bitmap.height;
@@ -1129,6 +1134,8 @@ function UnifiedComposer({
   const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [youtubeAudience, setYoutubeAudience] = useState<'' | 'made_for_kids' | 'not_made_for_kids'>('');
+  const [youtubeVisibility, setYoutubeVisibility] = useState<'' | 'public' | 'unlisted' | 'private'>('');
   const [description, setDescription] = useState('');
   const [platformDescriptions, setPlatformDescriptions] = useState<Partial<Record<Platform, string>>>({});
   const [copyMode, setCopyMode] = useState<ComposerCopyMode>('preview');
@@ -1161,11 +1168,11 @@ function UnifiedComposer({
   useEffect(() => {
     setPendingPreflightWarnings([]);
     setMessage(current => current?.type === 'warning' ? null : current);
-  }, [postFormat, file, additionalFiles, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+  }, [postFormat, file, additionalFiles, title, youtubeAudience, youtubeVisibility, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   useEffect(() => {
     serverSubmissionId.current = crypto.randomUUID();
-  }, [title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides]);
+  }, [title, youtubeAudience, youtubeVisibility, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides]);
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
@@ -1177,7 +1184,7 @@ function UnifiedComposer({
     || postFormat === null
     || postFormat === 'image'
     || postFormat === 'video'
-    || (postFormat === 'text' && ['facebook', 'x'].includes(account.platform))
+    || (postFormat === 'text' && ['facebook', 'x', 'linkedin', 'youtube'].includes(account.platform))
   )), [accounts, postFormat]);
   const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
     .filter(account => eligibility[account.platform].allowed)
@@ -1310,6 +1317,8 @@ function UnifiedComposer({
     setFile(null);
     setAdditionalFiles([]);
     setTitle('');
+    setYoutubeAudience('');
+    setYoutubeVisibility('');
     setDescription('');
     setPlatformDescriptions({});
     setCopyMode('preview');
@@ -1398,8 +1407,8 @@ function UnifiedComposer({
     }
     if (serverDestinations.length) {
       const serverAccounts = serverDestinations.map(destination => selectedAccounts.find(item => item.id === destination.accountId)!);
-      if (postFormat === 'text' && serverAccounts.some(account => !['facebook', 'x'].includes(account.platform))) {
-        return setMessage({ type: 'error', text: 'Server text-only publishing is currently available only for Facebook and X.' });
+      if (postFormat === 'text' && serverAccounts.some(account => !['facebook', 'x', 'linkedin', 'youtube'].includes(account.platform))) {
+        return setMessage({ type: 'error', text: 'Server text-only publishing is currently available for Facebook, X, LinkedIn, and YouTube Community.' });
       }
       if (postFormat !== 'text' && !file) {
         return setMessage({ type: 'error', text: 'Choose at least one image or video file.' });
@@ -1407,11 +1416,15 @@ function UnifiedComposer({
       if (additionalFiles.length && serverAccounts.some(account => account.platform !== 'instagram')) {
         return setMessage({ type: 'error', text: 'Carousel posts currently require only server-managed Instagram accounts.' });
       }
+      const youtubeVideoSelected = postFormat === 'video' && serverAccounts.some(account => account.platform === 'youtube');
+      if (youtubeVideoSelected && (!title.trim() || !youtubeAudience || !youtubeVisibility)) {
+        return setMessage({ type: 'error', text: 'Choose the YouTube title, audience, and visibility before publishing a video.' });
+      }
       if (serverDestinations.some(destination => destination.scheduleId)) {
         return setMessage({ type: 'error', text: 'Server worker accounts currently support Publish now or an exact date and time, not schedule templates.' });
       }
       try {
-        await Promise.all(selectedFiles.map(validateServerInstagramMedia));
+        await Promise.all(selectedFiles.map(selectedFile => validateServerMedia(selectedFile, serverAccounts.map(account => account.platform))));
       } catch (validationError) {
         return setMessage({ type: 'error', text: validationError instanceof Error ? validationError.message : 'The server media is invalid.' });
       }
@@ -1443,6 +1456,9 @@ function UnifiedComposer({
             fileName: uploaded.fileName,
             mimeType: uploaded.mimeType,
           })),
+          ...(selectedAccounts.find(item => item.id === destination.accountId)?.platform === 'youtube' && postFormat === 'video'
+            ? { platformOptions: { youtube: { title: title.trim(), audience: youtubeAudience as 'made_for_kids' | 'not_made_for_kids', visibility: youtubeVisibility as 'public' | 'unlisted' | 'private' } } }
+            : {}),
           idempotencyKey: `dashboard-${serverSubmissionId.current}-${destination.accountId}`,
         })));
         resetComposer();
@@ -1553,6 +1569,10 @@ function UnifiedComposer({
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Required only when YouTube is selected'} maxLength={100} /></label>}
+            {showYoutubeTitle && !handoffOnly && <>
+              <label className='composer-field'><span>YouTube audience <small>Required for COPPA compliance</small></span><select value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
+              <label className='composer-field'><span>YouTube visibility <small>No default is assumed</small></span><select value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
+            </>}
             <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
               <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
               <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
@@ -1826,7 +1846,7 @@ function ServerWorkerPanel({
   return <section className='server-worker-panel' aria-labelledby='server-worker-heading'>
     <header>
       <span><MonitorCheck size={21} /></span>
-      <div><p className='section-kicker'>Website-only publishing beta</p><h2 id='server-worker-heading'>Server Instagram worker</h2><small>{overview ? `${overview.health.livePublishingWorkerCount} workers online · ${accounts.filter(account => account.status === 'CONNECTED').length} connected accounts` : 'Worker connection unavailable'}</small></div>
+      <div><p className='section-kicker'>Website-only publishing beta</p><h2 id='server-worker-heading'>Server publishing worker</h2><small>{overview ? `${overview.health.livePublishingWorkerCount} workers online · ${accounts.filter(account => account.status === 'CONNECTED').length} connected accounts` : 'Worker connection unavailable'}</small></div>
       <a className='server-worker-manage-link' href='/config-manager?service=publishing&platform=instagram'><Settings2 size={14} />Manage accounts</a>
       <i className={overview?.health.features.publishing ? 'online' : 'offline'}>{overview?.health.features.publishing ? 'ONLINE' : 'OFFLINE'}</i>
     </header>

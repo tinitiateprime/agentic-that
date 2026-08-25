@@ -9,16 +9,25 @@ const nextConfig = {
   async rewrites() {
     const rewrites = [];
 
-    if (process.env.NODE_ENV === "development") {
-      const instagramPort = Number(process.env.INSTAGRAM_SERVICE_PORT || 8791);
+    const instagramTarget = process.env.INSTAGRAM_API_URL
+      || (process.env.NODE_ENV === "development"
+        ? `http://127.0.0.1:${Number(process.env.INSTAGRAM_SERVICE_PORT || 8791)}`
+        : "");
+    if (instagramTarget) {
       rewrites.push({
         source: "/api/scraping/instagram/:path*",
-        destination: `http://127.0.0.1:${instagramPort}/api/scraping/instagram/:path*`,
+        destination: `${instagramTarget.replace(/\/$/, "")}/api/scraping/instagram/:path*`,
       });
-      const facebookPort = Number(process.env.FACEBOOK_SERVICE_PORT || 8793);
+    }
+
+    const facebookTarget = process.env.FACEBOOK_API_URL
+      || (process.env.NODE_ENV === "development"
+        ? `http://127.0.0.1:${Number(process.env.FACEBOOK_SERVICE_PORT || 8793)}`
+        : "");
+    if (facebookTarget) {
       rewrites.push({
         source: "/api/scraping/facebook/:path*",
-        destination: `http://127.0.0.1:${facebookPort}/api/scraping/facebook/:path*`,
+        destination: `${facebookTarget.replace(/\/$/, "")}/api/scraping/facebook/:path*`,
       });
     }
 

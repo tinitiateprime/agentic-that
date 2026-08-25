@@ -871,7 +871,12 @@ function PublishingManager({
       ? Boolean(serverAutomation?.health?.features?.facebookPublishing)
       : selectedPlatform === "x"
         ? Boolean(serverAutomation?.health?.features?.xPublishing)
-        : false;
+        : selectedPlatform === "linkedin"
+          ? Boolean(serverAutomation?.health?.features?.linkedinPublishing)
+          : selectedPlatform === "youtube"
+            ? Boolean(serverAutomation?.health?.features?.youtubePublishing)
+            : false;
+  const serverSupportedPlatforms = ["instagram", "facebook", "x", "linkedin", "youtube"];
 
   const combinedAccounts = useMemo(
     () => (serverAutomation?.accounts || []).map(serverAccountForConfig),
@@ -920,7 +925,7 @@ function PublishingManager({
   const saveAccount = async (form) => {
     setBusy(true);
     try {
-      if (!["instagram", "facebook", "x"].includes(selectedPlatform)) throw new Error("Server Worker support for this platform is not available yet.");
+      if (!serverSupportedPlatforms.includes(selectedPlatform)) throw new Error("Server Worker support for this platform is not available yet.");
       if (!selectedServerPlatformAvailable) throw new Error(platformLabels[selectedPlatform] + " Server Worker is not enabled.");
       const result = form.id
         ? await serverAutomationRequest("/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
@@ -1093,8 +1098,8 @@ function PublishingManager({
       </div>
 
       <div className="config-publishing-toolbar">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>{["instagram", "facebook", "x"].includes(selectedPlatform) ? "Server accounts appear immediately in the publishing dashboard." : "Server Worker support for this platform is planned."}</p></div>
-        {!editing && ["instagram", "facebook", "x"].includes(selectedPlatform) && <button className="config-primary" type="button" disabled={!selectedServerPlatformAvailable} onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>{serverSupportedPlatforms.includes(selectedPlatform) ? "Server accounts appear immediately in the publishing dashboard." : "Server Worker support for this platform is planned."}</p></div>
+        {!editing && serverSupportedPlatforms.includes(selectedPlatform) && <button className="config-primary" type="button" disabled={!selectedServerPlatformAvailable} onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>
 
       {editing && (
@@ -1112,10 +1117,10 @@ function PublishingManager({
         <EmptyState
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
-          copy={["instagram", "facebook", "x"].includes(selectedPlatform)
+          copy={serverSupportedPlatforms.includes(selectedPlatform)
             ? selectedServerPlatformAvailable ? "Add a Server Worker account and complete login entirely through the website." : "Enable this platform's Server Worker before adding an account."
             : "This platform will become available after its server-side login and publishing worker is implemented."}
-          action={["instagram", "facebook", "x"].includes(selectedPlatform) && selectedServerPlatformAvailable ? <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button> : null}
+          action={serverSupportedPlatforms.includes(selectedPlatform) && selectedServerPlatformAvailable ? <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button> : null}
         />
       ) : !editing && (
         <div className="config-account-list">
@@ -1142,7 +1147,7 @@ function PublishingManager({
         onClose={() => setServerLogin(null)}
         onConnected={() => {
           setServerLogin(null);
-          setNotice({ tone: "success", message: "Instagram connected to Server Worker and is ready in the publishing composer." });
+          setNotice({ tone: "success", message: platformLabels[serverLogin.session.platform] + " connected to Server Worker and is ready in the publishing composer." });
           void onReloadServer();
         }}
       />}
@@ -1251,7 +1256,7 @@ function ConfigServerLoginBrowser({ initialSession, accountName, publishingIdent
       {frameUrl ? <div className="config-server-login-frame-shell"><img
         className="config-server-login-frame"
         src={frameUrl}
-        alt="Interactive Instagram login browser running on Server Worker"
+        alt={"Interactive " + platformLabels[session.platform] + " login browser running on Server Worker"}
         tabIndex={0}
         draggable={false}
         onClick={event => {
@@ -1291,7 +1296,7 @@ function ConfigServerLoginBrowser({ initialSession, accountName, publishingIdent
           event.preventDefault();
           sendInput({ type: "wheel", deltaX: event.deltaX, deltaY: event.deltaY });
         }}
-      />{clickFeedback && <span className="config-server-login-click" style={{ left: clickFeedback.left + "%", top: clickFeedback.top + "%" }} aria-hidden="true" />}</div> : <div className="config-server-login-loading"><Loader2 className="spin" size={24} /><span>Starting the isolated Instagram browser…</span></div>}
+      />{clickFeedback && <span className="config-server-login-click" style={{ left: clickFeedback.left + "%", top: clickFeedback.top + "%" }} aria-hidden="true" />}</div> : <div className="config-server-login-loading"><Loader2 className="spin" size={24} /><span>Starting the isolated {platformLabels[session.platform]} browser…</span></div>}
       {(error || session.errorMessage) && <p className="config-server-login-error" role="alert">{error || session.errorMessage}</p>}
     </section>
   </div>;

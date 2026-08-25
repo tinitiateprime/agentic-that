@@ -9,6 +9,8 @@ import { createAutomationDatabase } from "./database.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
 import { XPublishingDryRunValidator } from "./x-dry-run.ts";
+import { LinkedInPublishingDryRunValidator } from "./linkedin-dry-run.ts";
+import { YouTubePublishingDryRunValidator } from "./youtube-dry-run.ts";
 import { AutomationJobStore } from "./job-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
@@ -144,6 +146,7 @@ test("the Facebook dry-run accepts text-only posts with a saved session", async 
       originalTimezone: "UTC",
       caption: "Safe Facebook text post",
       media: [],
+      platformOptions: {},
       idempotencyKey: "facebook-text-dry-run-001",
     }, "DRY_RUN");
     const completed = await worker.runOnce();
@@ -171,6 +174,7 @@ test("the X dry-run accepts bounded text and rejects over-limit text", async () 
       validationStage: "LOCAL" as const,
       caption: "Safe X text post",
       media: [],
+      platformOptions: {},
       fencingToken: 1,
     };
     const profile = { version: 1, lastSavedAt: new Date().toISOString() };
@@ -178,6 +182,79 @@ test("the X dry-run accepts bounded text and rejects over-limit text", async () 
     const rejected = await validator.validate({ ...base, caption: "x".repeat(281) }, profile, new AbortController().signal);
     assert.equal(rejected.valid, false);
     assert.match(rejected.issues.join(" "), /280 characters/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the LinkedIn dry-run accepts text and one supported media file", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-linkedin-dry-run-"));
+  const files = new AutomationFileStore(directory);
+  await files.initialize();
+  try {
+    const storageKey = "linkedin-test.png";
+    await sharp({ create: { width: 640, height: 640, channels: 3, background: "#0a66c2" } })
+      .png()
+      .toFile(files.mediaFilePath(storageKey));
+    const validator = new LinkedInPublishingDryRunValidator(files);
+    const base = {
+      id: "job_linkedin_dry_run",
+      workspaceId: "linkedin-workspace",
+      accountId: "account_linkedin_dry_run",
+      platform: "linkedin" as const,
+      executionMode: "DRY_RUN" as const,
+      validationStage: "LOCAL" as const,
+      caption: "Safe LinkedIn post",
+      media: [{ storageKey, fileName: "post.png", mimeType: "image/png" }],
+      platformOptions: {},
+      fencingToken: 1,
+    };
+    const profile = { version: 1, lastSavedAt: new Date().toISOString() };
+    assert.equal((await validator.validate(base, profile, new AbortController().signal)).valid, true);
+    const tooMany = await validator.validate({ ...base, media: [...base.media, ...base.media] }, profile, new AbortController().signal);
+    assert.equal(tooMany.valid, false);
+    assert.match(tooMany.issues.join(" "), /at most one media file/);
+    const tooLong = await validator.validate({ ...base, caption: "x".repeat(3_001) }, profile, new AbortController().signal);
+    assert.equal(tooLong.valid, false);
+    assert.match(tooLong.issues.join(" "), /3,000 characters/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the YouTube dry-run requires explicit video audience and visibility", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-youtube-dry-run-"));
+  const files = new AutomationFileStore(directory);
+  await files.initialize();
+  try {
+    const storageKey = "youtube-test.mp4";
+    await writeFile(files.mediaFilePath(storageKey), Buffer.from([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+      0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x00, 0x00,
+    ]));
+    const validator = new YouTubePublishingDryRunValidator(files);
+    const base = {
+      id: "job_youtube_dry_run",
+      workspaceId: "youtube-workspace",
+      accountId: "account_youtube_dry_run",
+      platform: "youtube" as const,
+      executionMode: "DRY_RUN" as const,
+      validationStage: "LOCAL" as const,
+      caption: "Safe YouTube video description",
+      media: [{ storageKey, fileName: "video.mp4", mimeType: "video/mp4" }],
+      platformOptions: {},
+      fencingToken: 1,
+    };
+    const profile = { version: 1, lastSavedAt: new Date().toISOString() };
+    const missing = await validator.validate(base, profile, new AbortController().signal);
+    assert.equal(missing.valid, false);
+    assert.match(missing.issues.join(" "), /explicit title, audience classification, and visibility/);
+    const explicit = await validator.validate({
+      ...base,
+      platformOptions: { youtube: { title: "Safe title", audience: "not_made_for_kids", visibility: "private" } },
+    }, profile, new AbortController().signal);
+    assert.equal(explicit.valid, true);
+    assert.match(explicit.checks.join(" "), /explicitly set to private/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

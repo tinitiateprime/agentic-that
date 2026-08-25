@@ -1,4 +1,4 @@
-import type { PublishingJobState, SocialPlatform } from "./contracts.ts";
+import type { PublishingJobState, PublishingPlatformOptions, SocialPlatform } from "./contracts.ts";
 
 export type ClaimedPublishingJob = {
   id: string;
@@ -9,6 +9,7 @@ export type ClaimedPublishingJob = {
   validationStage: "LOCAL" | "INSTAGRAM_PREVIEW";
   caption: string;
   media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
+  platformOptions: PublishingPlatformOptions;
   fencingToken: number;
 };
 

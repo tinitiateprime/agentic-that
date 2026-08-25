@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getStore } from "@netlify/blobs";
 import {
@@ -88,11 +88,13 @@ const configuredBackgroundTimeoutMs = () => {
 
 export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
   private readonly dataFile = path.join(
-    process.cwd(),
-    "services",
-    "scraping",
-    "instagram",
-    "data",
+    path.resolve(process.env.INSTAGRAM_DATA_DIR?.trim() || path.join(
+      process.cwd(),
+      "services",
+      "scraping",
+      "instagram",
+      "data",
+    )),
     "growth-advisor-jobs.json"
   );
   private readonly useBlobs = shouldUseNetlifyBlobs();
@@ -169,8 +171,13 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
   }
 
   private async writeLocal(database: JobsDatabase) {
-    await mkdir(path.dirname(this.dataFile), { recursive: true });
-    await writeFile(this.dataFile, JSON.stringify(database, null, 2), "utf8");
+    const directory = path.dirname(this.dataFile);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const temporary = `${this.dataFile}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporary, JSON.stringify(database, null, 2), { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, this.dataFile);
+    await chmod(this.dataFile, 0o600);
   }
 
   private async mutateLocal<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {
