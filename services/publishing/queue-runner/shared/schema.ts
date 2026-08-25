@@ -9,7 +9,7 @@ export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
 export const accountSafetyStatuses = ["healthy", "warning", "paused", "restricted"] as const;
 export const accountSafetyModes = ["standard", "protected"] as const;
-export const publishingEngines = ["companion", "external_browser"] as const;
+export const publishingEngines = ["companion", "external_browser", "server_worker"] as const;
 export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
 
 export const platformSchema = z.enum(platforms);
@@ -40,7 +40,8 @@ export type PublishActionState = (typeof publishActionStates)[number];
 
 export const publishingEngineLabels: Record<PublishingEngine, string> = {
   companion: "Companion",
-  external_browser: "External browser"
+  external_browser: "External browser",
+  server_worker: "Server worker"
 };
 
 export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {

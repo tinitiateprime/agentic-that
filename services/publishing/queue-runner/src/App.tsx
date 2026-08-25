@@ -9,11 +9,21 @@ import {
   Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
+import {
+  api,
+  ContentPreflightApiError,
+  PublishingSafetyApiError,
+  setAuthToken,
+  setCentralAuthToken,
+  type AuthResponse,
+  type ServerAutomationAccount,
+  type ServerAutomationLoginSession,
+  type ServerAutomationOverview,
+} from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -44,13 +54,37 @@ function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 
 
 function accountConnectionLabel(account: PlatformAccount) {
   if (!account.enabled) return 'Paused';
+  if (account.executionEngine === 'server_worker') {
+    return account.readiness === 'ready' && account.credentialConfigured ? 'Ready' : 'Reconnect Required';
+  }
   if (account.readiness === 'reconnect_required' || account.sessionStatus === 'reconnect_required' || !account.credentialConfigured) return 'Reconnect Required';
   if (account.readiness === 'waiting_for_companion' || account.companionStatus === 'offline') return 'Waiting for Companion';
   return 'Ready';
 }
 
-function accountPublishingEngine(_account: PlatformAccount) {
-  return 'companion' as const;
+function accountPublishingEngine(account: PlatformAccount) {
+  return account.executionEngine ?? 'companion';
+}
+
+function serverAccountForComposer(account: ServerAutomationAccount): PlatformAccount {
+  const connected = account.status === 'CONNECTED';
+  return {
+    id: account.id,
+    workspaceId: account.workspaceId,
+    platform: 'instagram',
+    displayName: account.displayName,
+    handle: connected ? 'Persistent server session' : 'Login required',
+    loginIdentifier: '',
+    credentialConfigured: connected,
+    enabled: account.enabled && connected,
+    sessionStatus: connected ? 'connected' : 'reconnect_required',
+    readiness: connected ? 'ready' : 'reconnect_required',
+    executionEngine: 'server_worker',
+    safetyStatus: connected ? 'healthy' : 'restricted',
+    safetyMode: 'protected',
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+  };
 }
 
 const accountHealthLabels = {
@@ -541,6 +575,8 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [editingUpload, setEditingUpload] = useState<PlatformUpload | null>(null);
   const [schedulingSubmission, setSchedulingSubmission] = useState<ContentSubmission | null>(null);
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null);
+  const [serverAutomation, setServerAutomation] = useState<ServerAutomationOverview | null>(null);
+  const [serverAutomationError, setServerAutomationError] = useState<string | null>(null);
 
   const refresh = useCallback(async (showLoading = true) => {
     setError(null);
@@ -553,12 +589,26 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         api.accounts(),
         api.schedules(),
       ] as const;
-      const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
+      const serverRequest = api.serverAutomationOverview()
+        .then(overview => ({ overview, error: null as string | null }))
+        .catch(serverError => ({
+          overview: null,
+          error: serverError instanceof Error ? serverError.message : 'The server publishing worker is unavailable.',
+        }));
+      const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules, latestServer] = await Promise.all([
+        ...baseRequests,
+        serverRequest,
+      ]);
       setConnectionMode(health.transport);
       setIsRunning(health.automationRunning);
       setUploads(latestUploads);
       setSubmissions(latestSubmissions);
-      setAccounts(latestAccounts);
+      setServerAutomation(latestServer.overview);
+      setServerAutomationError(latestServer.error);
+      setAccounts([
+        ...latestAccounts,
+        ...(permissions.canRunAutomation ? latestServer.overview?.accounts.map(serverAccountForComposer) ?? [] : []),
+      ]);
       setSchedules(latestSchedules);
       if (permissions.canManageUsers) {
         const [latestUsers, latestActivity] = await Promise.all([
@@ -654,6 +704,9 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         onCloseEdit={() => setEditingUpload(null)}
         onCreated={() => void refresh(false)}
         onScheduleSubmission={setSchedulingSubmission}
+        serverAutomation={serverAutomation}
+        serverAutomationError={serverAutomationError}
+        onServerAutomationChanged={() => void refresh(false)}
       />
       {scheduleManagerOpen && (
         <ScheduleManagerModal
@@ -908,6 +961,27 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
+async function validateServerInstagramImage(file: File) {
+  if (!["image/jpeg", "image/png"].includes(file.type)) {
+    throw new Error("The server Instagram worker currently supports one JPEG or PNG image.");
+  }
+  if (file.size < 1 || file.size > 25 * 1024 * 1024) {
+    throw new Error("The server Instagram image must be between 1 byte and 25 MB.");
+  }
+  const bitmap = await createImageBitmap(file);
+  try {
+    const aspectRatio = bitmap.width / bitmap.height;
+    if (aspectRatio > 1.911) {
+      throw new Error(
+        `This image is ${bitmap.width}×${bitmap.height} (${aspectRatio.toFixed(2)}:1). `
+        + "Instagram requires landscape images no wider than 1.91:1.",
+      );
+    }
+  } finally {
+    bitmap.close();
+  }
+}
+
 function ComposerPreviewMedia({ file, previewUrl, platform, postFormat }: { file: File | null; previewUrl: string; platform: Platform; postFormat: PostFormat }) {
   if (postFormat === 'text') return null;
   if (!file || !previewUrl) return <div className='composer-preview-empty'>Add media</div>;
@@ -1062,6 +1136,11 @@ function UnifiedComposer({
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const serverSubmissionId = useRef(crypto.randomUUID());
+  const serverUploadedMedia = useRef<{
+    file: File;
+    media: { storageKey: string; fileName: string; mimeType: string; size: number };
+  } | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -1078,12 +1157,18 @@ function UnifiedComposer({
     setMessage(current => current?.type === 'warning' ? null : current);
   }, [postFormat, file, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
+  useEffect(() => {
+    serverSubmissionId.current = crypto.randomUUID();
+  }, [title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides]);
+
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
     getPlatformEligibility(platform, postFormat, file, title, description),
   ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
 
-  const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled), [accounts]);
+  const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled && (
+    accountPublishingEngine(account) !== 'server_worker' || postFormat === null || postFormat === 'image'
+  )), [accounts, postFormat]);
   const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
     .filter(account => eligibility[account.platform].allowed)
     .map(account => account.id)), [enabledAccounts, eligibility]);
@@ -1123,6 +1208,8 @@ function UnifiedComposer({
     }
     setFile(nextFile);
     setRightsConfirmed(false);
+    serverSubmissionId.current = crypto.randomUUID();
+    serverUploadedMedia.current = null;
   };
 
   const chooseFormat = (nextFormat: PostFormat) => {
@@ -1130,6 +1217,8 @@ function UnifiedComposer({
     setPostFormat(nextFormat);
     setFile(null);
     setRightsConfirmed(false);
+    serverSubmissionId.current = crypto.randomUUID();
+    serverUploadedMedia.current = null;
     if (nextFormat !== 'video') setTitle('');
   };
 
@@ -1194,6 +1283,8 @@ function UnifiedComposer({
     setPendingPreflightWarnings([]);
     setScheduleOverrides({});
     setSharedSchedule(emptyComposerSchedule());
+    serverSubmissionId.current = crypto.randomUUID();
+    serverUploadedMedia.current = null;
   };
 
   const submit = async (confirmWarnings = false) => {
@@ -1258,6 +1349,69 @@ function UnifiedComposer({
       description: effectivePlatformDescription(account.platform, description, platformDescriptions),
       ...(canSchedule ? destinationSchedule(scheduleOverrides[account.id] ?? sharedSchedule) : {}),
     }));
+
+    const serverDestinations = destinations.filter(destination => {
+      const account = selectedAccounts.find(item => item.id === destination.accountId);
+      return account && accountPublishingEngine(account) === 'server_worker';
+    });
+    const centralDestinations = destinations.filter(destination => !serverDestinations.includes(destination));
+    if (serverDestinations.length && centralDestinations.length) {
+      return setMessage({ type: 'error', text: 'For this beta, choose either Server worker accounts or Companion accounts in one post, not both.' });
+    }
+    if (serverDestinations.length) {
+      if (postFormat !== 'image' || !file) {
+        return setMessage({ type: 'error', text: 'The server Instagram worker currently supports one JPEG or PNG image.' });
+      }
+      if (serverDestinations.some(destination => destination.scheduleId)) {
+        return setMessage({ type: 'error', text: 'Server worker accounts currently support Publish now or an exact date and time, not schedule templates.' });
+      }
+      try {
+        await validateServerInstagramImage(file);
+      } catch (validationError) {
+        return setMessage({ type: 'error', text: validationError instanceof Error ? validationError.message : 'The server image is invalid.' });
+      }
+      const scheduledCount = serverDestinations.filter(destination => destination.scheduledAt).length;
+      const authorized = window.confirm(
+        scheduledCount === serverDestinations.length && scheduledCount > 0
+          ? `Schedule ${serverDestinations.length} Instagram ${serverDestinations.length === 1 ? 'post' : 'posts'} on the server? The server will click Share at the selected time.`
+          : `Publish to ${serverDestinations.length} Instagram ${serverDestinations.length === 1 ? 'account' : 'accounts'} using the server now? This authorizes one Share click per account.`,
+      );
+      if (!authorized) return setMessage({ type: 'warning', text: 'Server publishing was not authorized. Nothing was queued.' });
+
+      setSubmitting(true);
+      try {
+        const uploaded = serverUploadedMedia.current?.file === file
+          ? { media: serverUploadedMedia.current.media }
+          : await api.uploadServerAutomationMedia(file);
+        serverUploadedMedia.current = { file, media: uploaded.media };
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+        await Promise.all(serverDestinations.map(destination => api.createServerAutomationJob({
+          accountId: destination.accountId,
+          scheduledAt: destination.scheduledAt || new Date(Date.now() - 1_000).toISOString(),
+          originalTimezone: timezone,
+          caption: destination.description || description.trim(),
+          media: [{
+            storageKey: uploaded.media.storageKey,
+            fileName: uploaded.media.fileName,
+            mimeType: uploaded.media.mimeType,
+          }],
+          idempotencyKey: `dashboard-${serverSubmissionId.current}-${destination.accountId}`,
+        })));
+        resetComposer();
+        setMessage({
+          type: 'success',
+          text: scheduledCount
+            ? `${serverDestinations.length} server ${serverDestinations.length === 1 ? 'post was' : 'posts were'} scheduled.`
+            : `${serverDestinations.length} server ${serverDestinations.length === 1 ? 'post was' : 'posts were'} queued for publishing.`,
+        });
+        onCreated();
+      } catch (serverError) {
+        setMessage({ type: 'error', text: serverError instanceof Error ? serverError.message : 'The server post could not be queued.' });
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -1422,6 +1576,234 @@ function UnifiedComposer({
   );
 }
 
+function ServerLoginBrowser({
+  initialSession,
+  accountName,
+  onClose,
+  onConnected,
+}: {
+  initialSession: ServerAutomationLoginSession;
+  accountName: string;
+  onClose: () => void;
+  onConnected: () => void;
+}) {
+  const [session, setSession] = useState(initialSession);
+  const [frameUrl, setFrameUrl] = useState('');
+  const [error, setError] = useState('');
+  const inputQueue = useRef(Promise.resolve());
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const result = await api.serverAutomationLoginSession(initialSession.id);
+        if (!active) return;
+        setSession(result.session);
+        if (result.session.state === 'CONNECTED') {
+          onConnected();
+          return;
+        }
+        if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(result.session.state)) return;
+        timer = window.setTimeout(poll, 750);
+      } catch (pollError) {
+        if (active) setError(pollError instanceof Error ? pollError.message : 'Login status could not be loaded.');
+      }
+    };
+    void poll();
+    return () => { active = false; if (timer) window.clearTimeout(timer); };
+  }, [initialSession.id, onConnected]);
+
+  useEffect(() => {
+    if (!['STARTING', 'AWAITING_USER'].includes(session.state)) return;
+    let active = true;
+    let timer: number | undefined;
+    let objectUrl = '';
+    const pollFrame = async () => {
+      try {
+        const blob = await api.serverAutomationLoginFrame(initialSession.id);
+        if (!active) return;
+        const nextUrl = URL.createObjectURL(blob);
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = nextUrl;
+        setFrameUrl(nextUrl);
+      } catch {
+        // The browser can be between frames while starting or closing.
+      }
+      if (active) timer = window.setTimeout(pollFrame, 500);
+    };
+    void pollFrame();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [initialSession.id, session.state]);
+
+  const sendInput = (input: unknown) => {
+    inputQueue.current = inputQueue.current
+      .then(() => api.sendServerAutomationLoginInput(initialSession.id, input))
+      .catch(inputError => setError(inputError instanceof Error ? inputError.message : 'Browser input could not be forwarded.'));
+  };
+
+  const cancel = async () => {
+    await api.cancelServerAutomationLogin(initialSession.id).catch(() => undefined);
+    onClose();
+  };
+
+  return <div className='server-login-overlay' role='dialog' aria-modal='true' aria-labelledby='server-login-title'>
+    <section className='server-login-panel'>
+      <header><span><small>Private server browser</small><strong id='server-login-title'>Connect {accountName}</strong><em>Type directly in the browser image. AgenticThat forwards input without storing the password.</em></span><button type='button' onClick={() => void cancel()}><X size={17} />Cancel</button></header>
+      <div className='server-login-state'><CircleDashed className={['STARTING', 'AWAITING_USER'].includes(session.state) ? 'spin' : ''} size={15} />{session.state.replaceAll('_', ' ')}</div>
+      {frameUrl ? <img
+        className='server-login-frame'
+        src={frameUrl}
+        alt='Interactive Instagram login browser running on the server'
+        tabIndex={0}
+        draggable={false}
+        onClick={event => {
+          const image = event.currentTarget;
+          const box = image.getBoundingClientRect();
+          image.focus();
+          sendInput({
+            type: 'click',
+            x: ((event.clientX - box.left) / box.width) * image.naturalWidth,
+            y: ((event.clientY - box.top) / box.height) * image.naturalHeight,
+            button: 'left',
+          });
+        }}
+        onContextMenu={event => event.preventDefault()}
+        onKeyDown={event => {
+          const special: Record<string, string> = {
+            Tab: 'Tab', Enter: 'Enter', Escape: 'Escape', Backspace: 'Backspace', Delete: 'Delete',
+            ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
+            Home: 'Home', End: 'End', ' ': 'Space',
+          };
+          if (special[event.key]) {
+            event.preventDefault();
+            sendInput({ type: 'key', key: special[event.key] });
+          } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+            sendInput({ type: 'text', text: event.key });
+          }
+        }}
+        onPaste={event => {
+          event.preventDefault();
+          const value = event.clipboardData.getData('text');
+          for (let offset = 0; offset < value.length; offset += 64) sendInput({ type: 'text', text: value.slice(offset, offset + 64) });
+        }}
+        onWheel={event => {
+          event.preventDefault();
+          sendInput({ type: 'wheel', deltaX: event.deltaX, deltaY: event.deltaY });
+        }}
+      /> : <div className='server-login-loading'><Loader2 className='spin' size={24} /><span>Starting the isolated Instagram browser…</span></div>}
+      {(error || session.errorMessage) && <p className='server-worker-error' role='alert'>{error || session.errorMessage}</p>}
+    </section>
+  </div>;
+}
+
+function ServerWorkerPanel({
+  overview,
+  error,
+  canManage,
+  onChanged,
+}: {
+  overview: ServerAutomationOverview | null;
+  error: string | null;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const [displayName, setDisplayName] = useState('');
+  const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState('');
+  const [login, setLogin] = useState<{ session: ServerAutomationLoginSession; accountName: string } | null>(null);
+  const accounts = overview?.accounts ?? [];
+  const accountNames = useMemo(() => new Map(accounts.map(account => [account.id, account.displayName])), [accounts]);
+
+  const addAccount = async () => {
+    if (!displayName.trim()) return;
+    setBusy('add');
+    setNotice('');
+    try {
+      const result = await api.createServerAutomationAccount(displayName.trim());
+      setDisplayName('');
+      setNotice('Account profile created. Connect it to sign in.');
+      onChanged();
+      const loginResult = await api.startServerAutomationLogin(result.account.id);
+      setLogin({ session: loginResult.session, accountName: result.account.displayName });
+    } catch (actionError) {
+      setNotice(actionError instanceof Error ? actionError.message : 'The server account could not be created.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const connect = async (account: ServerAutomationAccount) => {
+    setBusy(account.id);
+    setNotice('');
+    try {
+      const result = await api.startServerAutomationLogin(account.id);
+      setLogin({ session: result.session, accountName: account.displayName });
+    } catch (actionError) {
+      setNotice(actionError instanceof Error ? actionError.message : 'The server login could not start.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const cancelJob = async (jobId: string) => {
+    setBusy(jobId);
+    setNotice('');
+    try {
+      await api.cancelServerAutomationJob(jobId);
+      setNotice('Scheduled server post cancelled.');
+      onChanged();
+    } catch (actionError) {
+      setNotice(actionError instanceof Error ? actionError.message : 'The scheduled post could not be cancelled.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return <section className='server-worker-panel' aria-labelledby='server-worker-heading'>
+    <header>
+      <span><MonitorCheck size={21} /></span>
+      <div><p className='section-kicker'>Website-only publishing beta</p><h2 id='server-worker-heading'>Server Instagram worker</h2><small>{overview ? `${overview.health.livePublishingWorkerCount} workers online · Companion not required for these accounts` : 'Worker connection unavailable'}</small></div>
+      <i className={overview?.health.features.publishing ? 'online' : 'offline'}>{overview?.health.features.publishing ? 'ONLINE' : 'OFFLINE'}</i>
+    </header>
+    {error && <p className='server-worker-error' role='alert'>{error}</p>}
+    {overview && <>
+      {canManage && <form onSubmit={event => { event.preventDefault(); void addAccount(); }}>
+        <label><span>Instagram account label</span><input value={displayName} maxLength={200} onChange={event => setDisplayName(event.target.value)} placeholder='Example: Brand Instagram' /></label>
+        <button type='submit' disabled={busy === 'add' || !displayName.trim()}>{busy === 'add' ? <Loader2 className='spin' size={16} /> : <KeyRound size={16} />}Add and connect</button>
+      </form>}
+      {notice && <p className='server-worker-notice' role='status'>{notice}</p>}
+      <div className='server-worker-account-list'>
+        {accounts.length ? accounts.map(account => <article key={account.id}>
+          <CustomIcon platform='instagram' size={22} />
+          <span><strong>{account.displayName}</strong><small>Persistent isolated server profile</small></span>
+          <em className={account.status === 'CONNECTED' ? 'connected' : ''}>{account.status.replaceAll('_', ' ')}</em>
+          {canManage && <button type='button' disabled={busy === account.id} onClick={() => void connect(account)}>{busy === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}{account.status === 'CONNECTED' ? 'Reconnect' : 'Connect'}</button>}
+        </article>) : <p className='server-worker-empty'>No server-managed Instagram account in this workspace yet.</p>}
+      </div>
+      <div className='server-worker-jobs'>
+        <strong>Recent server jobs</strong>
+        {overview.jobs.length ? overview.jobs.slice(0, 8).map(job => <article key={job.id}>
+          <span><strong>{accountNames.get(job.accountId) || 'Instagram account'}</strong><small>{new Date(job.scheduledAt).toLocaleString()} · {job.caption || job.media[0]?.fileName}</small>{(job.errorMessage || job.progressMessage) && <em>{job.errorMessage || job.progressMessage}</em>}</span>
+          <i className={`state-${job.state.toLowerCase()}`}>{job.state.replaceAll('_', ' ')}</i>
+          {job.state === 'SCHEDULED' && <button type='button' disabled={busy === job.id} onClick={() => void cancelJob(job.id)}><X size={13} />Cancel</button>}
+        </article>) : <p className='server-worker-empty'>No server publishing jobs yet. Connected accounts appear in the composer below.</p>}
+      </div>
+    </>}
+    {login && <ServerLoginBrowser
+      initialSession={login.session}
+      accountName={login.accountName}
+      onClose={() => setLogin(null)}
+      onConnected={() => { setLogin(null); setNotice('Instagram connected. It is ready in the composer.'); onChanged(); }}
+    />}
+  </section>;
+}
+
 function Workboard({
   user,
   permissions,
@@ -1448,6 +1830,9 @@ function Workboard({
   onCloseEdit,
   onCreated,
   onScheduleSubmission,
+  serverAutomation,
+  serverAutomationError,
+  onServerAutomationChanged,
 }: {
   user: UserProfile;
   permissions: RolePermissions;
@@ -1474,6 +1859,9 @@ function Workboard({
   onCloseEdit: () => void;
   onCreated: () => void;
   onScheduleSubmission: (submission: ContentSubmission) => void;
+  serverAutomation: ServerAutomationOverview | null;
+  serverAutomationError: string | null;
+  onServerAutomationChanged: () => void;
 }) {
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
@@ -1614,6 +2002,13 @@ function Workboard({
       </header>
 
       {error && <div className='workspace-error' role='alert'><CircleAlert size={18} /><span><strong>Workspace data could not refresh</strong><small>{error}</small></span><button type='button' onClick={onRefresh}><RefreshCw size={14} />Retry</button></div>}
+
+      {(serverAutomation || serverAutomationError) && <ServerWorkerPanel
+        overview={serverAutomation}
+        error={serverAutomationError}
+        canManage={permissions.canManageAccounts}
+        onChanged={onServerAutomationChanged}
+      />}
 
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>

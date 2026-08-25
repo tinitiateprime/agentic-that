@@ -31,6 +31,54 @@ export type AuthResponse = {
   token: string;
 };
 
+export type ServerAutomationAccount = {
+  id: string;
+  workspaceId: string;
+  platform: "instagram";
+  displayName: string;
+  status: "PENDING_LOGIN" | "CONNECTED" | "LOGIN_REQUIRED" | "PAUSED" | "DISABLED";
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ServerAutomationJob = {
+  id: string;
+  workspaceId: string;
+  accountId: string;
+  platform: "instagram";
+  state: "SCHEDULED" | "PUBLISHING" | "VERIFYING" | "PUBLISHED" | "FAILED" | "LOGIN_REQUIRED" | "UNCERTAIN" | "CANCELLED";
+  scheduledAt: string;
+  caption: string;
+  media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
+  attemptCount: number;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  progressMessage?: string | null;
+  platformPostUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ServerAutomationLoginSession = {
+  id: string;
+  workspaceId: string;
+  accountId: string;
+  state: "STARTING" | "AWAITING_USER" | "CONNECTED" | "FAILED" | "CANCELLED" | "EXPIRED";
+  surface: "website" | "visible";
+  errorMessage?: string | null;
+};
+
+export type ServerAutomationOverview = {
+  health: {
+    ok: boolean;
+    livePublishingWorkerCount: number;
+    features: { publishing: boolean; instagramPublishing: boolean; login: boolean };
+  };
+  accounts: ServerAutomationAccount[];
+  jobs: ServerAutomationJob[];
+};
+
 export type ContentPreflightApiIssue = {
   code: string;
   severity: "block" | "warning";
@@ -170,6 +218,31 @@ async function mediaBlob(fileName: string) {
     ? await fetch(`/api/publishing/media/${encodeURIComponent(fileName)}`, { headers, credentials: "same-origin" })
     : await publishingFetch(`/api/media/${encodeURIComponent(fileName)}`, { headers });
   if (!response.ok) throw new Error(response.status === 404 ? "Publishing media is unavailable." : "Unable to load publishing media.");
+  return response.blob();
+}
+
+async function serverAutomationRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!(init?.body instanceof Blob) && !(init?.body instanceof ArrayBuffer) && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  const response = await fetch(`/api/automation-server${path}`, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { message?: string; error?: string };
+    throw new PublishingApiRequestError(body.message || body.error || `Server publishing request failed with ${response.status}.`, response.status, path);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+async function serverAutomationFrame(path: string) {
+  const response = await fetch(`/api/automation-server${path}`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new Error("The private server browser frame could not be loaded.");
   return response.blob();
 }
 
@@ -502,5 +575,75 @@ export const api = {
 
   stopAutomation: () => request<{ stopped: boolean; message: string }>("/api/automation/stop", {
     method: "POST"
-  })
+  }),
+
+  serverAutomationOverview: async (): Promise<ServerAutomationOverview | null> => {
+    try {
+      const health = await serverAutomationRequest<ServerAutomationOverview["health"]>("/health");
+      const [accounts, jobs] = await Promise.all([
+        serverAutomationRequest<{ accounts: ServerAutomationAccount[] }>("/accounts"),
+        serverAutomationRequest<{ jobs: ServerAutomationJob[] }>("/jobs"),
+      ]);
+      return { health, accounts: accounts.accounts, jobs: jobs.jobs };
+    } catch (error) {
+      if (error instanceof PublishingApiRequestError && error.status === 404) return null;
+      throw error;
+    }
+  },
+
+  createServerAutomationAccount: (displayName: string) =>
+    serverAutomationRequest<{ account: ServerAutomationAccount }>("/accounts", {
+      method: "POST",
+      body: JSON.stringify({ displayName }),
+    }),
+
+  startServerAutomationLogin: (accountId: string) =>
+    serverAutomationRequest<{ session: ServerAutomationLoginSession }>(`/accounts/${encodeURIComponent(accountId)}/login`, {
+      method: "POST",
+      body: "{}",
+    }),
+
+  serverAutomationLoginSession: (sessionId: string) =>
+    serverAutomationRequest<{ session: ServerAutomationLoginSession }>(`/sessions/${encodeURIComponent(sessionId)}`),
+
+  serverAutomationLoginFrame: (sessionId: string) =>
+    serverAutomationFrame(`/sessions/${encodeURIComponent(sessionId)}/frame`),
+
+  sendServerAutomationLoginInput: (sessionId: string, input: unknown) =>
+    serverAutomationRequest<void>(`/sessions/${encodeURIComponent(sessionId)}/input`, {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    }),
+
+  cancelServerAutomationLogin: (sessionId: string) =>
+    serverAutomationRequest<{ session: ServerAutomationLoginSession }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
+
+  uploadServerAutomationMedia: async (file: File) => {
+    const response = await fetch("/api/automation-server/media", {
+      method: "POST",
+      headers: { "content-type": file.type, "x-file-name": file.name },
+      body: file,
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { message?: string; error?: string };
+      throw new Error(body.message || body.error || "The server publishing image upload failed.");
+    }
+    return response.json() as Promise<{ media: { storageKey: string; fileName: string; mimeType: string; size: number } }>;
+  },
+
+  createServerAutomationJob: (payload: {
+    accountId: string;
+    scheduledAt: string;
+    originalTimezone: string;
+    caption: string;
+    media: Array<{ storageKey: string; fileName: string; mimeType: string }>;
+    idempotencyKey: string;
+  }) => serverAutomationRequest<{ job: ServerAutomationJob }>("/jobs", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, liveConfirmation: "PUBLISH" }),
+  }),
+
+  cancelServerAutomationJob: (jobId: string) =>
+    serverAutomationRequest<{ job: ServerAutomationJob }>(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
 };

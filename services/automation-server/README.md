@@ -41,6 +41,11 @@ an isolated local SQLite file under `.server-data`.
   and cancellation that succeeds only while a job is still `SCHEDULED`.
 - A bounded live-publishing pool can run different accounts concurrently while
   the database lease prevents two workers from using one account profile.
+- Authenticated development integration with the existing AgenticThat
+  publishing dashboard. The dashboard proxies through its own server, keeps
+  the worker token out of browser JavaScript, forces the signed-in workspace on
+  every request, supports website login frames, and routes one-image Instagram
+  posts to server-managed accounts behind a disabled-by-default production flag.
 - No Electron or Docker dependency.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
@@ -97,6 +102,14 @@ npm run server-architecture:dev
    post**, then type `PUBLISH`. The browser page can close, but this local server
    computer must remain running. A queued post can be cancelled only while its
    status is still `SCHEDULED`.
+10. During local Next.js development, the publishing dashboard can reuse this
+    service's `.env.local` when live execution is explicitly enabled. Open the
+    normal AgenticThat `/publishing` page to add a server-managed Instagram
+    account and use it in the existing composer. The old Companion accounts
+    remain separate and unchanged. Production never reads this local fallback;
+    it requires `SERVER_AUTOMATION_DASHBOARD_ENABLED=true`, an HTTPS
+    `SERVER_AUTOMATION_ORIGIN`, and a matching
+    `SERVER_AUTOMATION_INTERNAL_TOKEN` in the website environment.
 
 Google Chrome or Microsoft Edge must already be installed on the local server
 computer. The development page never asks for a social-media password; enter
