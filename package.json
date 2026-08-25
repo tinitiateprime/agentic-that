@@ -7,6 +7,7 @@
     "dev": "npm run publishing:css && node scripts/dev-all.mjs",
     "dev:all": "npm run dev",
     "dev:site": "node scripts/copy-telegram-console.mjs && node scripts/dev-next.mjs",
+    "dev:publishing-site": "npm run publishing:css && node scripts/dev-publishing-site.mjs",
     "services:telegram": "npm --prefix services/messaging/telegram run server",
     "services:telegram:install": "npm --prefix services/messaging/telegram install",
     "services:instagram": "tsx services/scraping/instagram/src/server.ts",

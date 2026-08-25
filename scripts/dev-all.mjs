@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
 const projectRoot = process.cwd();
 const host = process.env.HOST || "127.0.0.1";
+const publishingOnly = process.env.DEV_PUBLISHING_ONLY === "true";
 const portAttempts = Number(process.env.DEV_PORT_ATTEMPTS || 20);
 const reservedPorts = new Set();
 
@@ -76,11 +77,13 @@ const facebookUrl = `${siteUrl}/scraper/facebook`;
 const publishQueueUrl = `${siteUrl}/publishing`;
 const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
 
-console.log("\nAgenticThat development workspace");
-console.log(`  Website + WhatsApp  ${siteUrl}`);
-console.log(`  Telegram           ${telegramUrl}`);
-console.log(`  Instagram          ${instagramUrl}`);
-console.log(`  Facebook           ${facebookUrl}`);
+console.log(`\nAgenticThat ${publishingOnly ? "publishing" : "development"} workspace`);
+console.log(`  Website            ${siteUrl}`);
+if (!publishingOnly) {
+  console.log(`  Telegram           ${telegramUrl}`);
+  console.log(`  Instagram          ${instagramUrl}`);
+  console.log(`  Facebook           ${facebookUrl}`);
+}
 console.log(`  Publish Queue      ${publishQueueUrl}`);
 console.log("  Press Ctrl+C once to stop every service.\n");
 
@@ -154,7 +157,7 @@ const services = [
       FACEBOOK_SERVICE_PORT: String(facebookPort),
     },
   },
-];
+].filter(service => !publishingOnly || service.name === "site" || service.name === "publishing");
 
 const reset = "\u001b[0m";
 const useColor = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);
