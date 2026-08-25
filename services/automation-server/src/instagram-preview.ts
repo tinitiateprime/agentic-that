@@ -124,14 +124,17 @@ async function openPostComposer(page: Page, signal: AbortSignal) {
   }
 }
 
-async function uploadOneImage(page: Page, mediaPath: string, signal: AbortSignal) {
+async function uploadMedia(page: Page, mediaPaths: string[], includesVideo: boolean, signal: AbortSignal) {
   signal.throwIfAborted();
   const dialogInput = page.locator('[role="dialog"] input[type="file"]').last();
   const input = (await dialogInput.count()) > 0 ? dialogInput : page.locator('input[type="file"]').last();
   if ((await input.count()) < 1) throw new Error("Instagram's media input was not available.");
-  await input.setInputFiles(mediaPath);
-  const crop = await waitForVisible(page, [page.getByText(/^Crop$/i)], signal, 60_000);
-  if (!crop) throw new Error("Instagram did not accept the preview image.");
+  await input.setInputFiles(mediaPaths);
+  const accepted = await waitForVisible(page, [
+    page.getByText(/^Crop$/i),
+    page.getByText(/^Edit video$/i),
+  ], signal, includesVideo ? 180_000 : 60_000);
+  if (!accepted) throw new Error(`Instagram did not accept the selected ${mediaPaths.length > 1 ? "carousel media" : includesVideo ? "video" : "image"}.`);
   await clickIfVisible(page.getByRole("button", { name: /^OK$/i }), 2_500);
 }
 
@@ -177,20 +180,22 @@ async function selectOriginalAspect(page: Page, signal: AbortSignal) {
   await page.waitForTimeout(250);
 }
 
-async function advanceToShareScreen(page: Page, signal: AbortSignal) {
-  const cropNext = await waitForVisible(page, [
-    page.getByRole("button", { name: /^Next$/i }),
-    page.getByText(/^Next$/i),
-  ], signal, 10_000);
-  if (!cropNext) throw new Error("Instagram's crop Next control was not available.");
-  await safePreviewClick(cropNext, 10_000);
+async function advanceToShareScreen(page: Page, signal: AbortSignal, alreadyOnEditScreen = false) {
+  if (!alreadyOnEditScreen) {
+    const cropNext = await waitForVisible(page, [
+      page.getByRole("button", { name: /^Next$/i }),
+      page.getByText(/^Next$/i),
+    ], signal, 10_000);
+    if (!cropNext) throw new Error("Instagram's crop Next control was not available.");
+    await safePreviewClick(cropNext, 10_000);
+  }
 
   const editReady = await waitForVisible(page, [
     page.getByText(/^Edit$/i),
     page.getByText(/^Edit video$/i),
     page.getByText(/^Filters$/i),
     page.getByText(/^Adjustments$/i),
-  ], signal, 60_000);
+  ], signal, alreadyOnEditScreen ? 10_000 : 180_000);
   if (!editReady) throw new Error("Instagram's edit screen did not appear.");
   const editNext = await firstVisible([
     page.getByRole("button", { name: /^Next$/i }),
@@ -233,12 +238,14 @@ export async function prepareInstagramFinalComposer(input: {
   page: Page;
   context: BrowserContext;
   job: ClaimedPublishingJob;
-  mediaPath: string;
+  mediaPaths: string[];
   signal: AbortSignal;
   reportProgress: (message: string) => void;
   setStage: (stage: string) => void;
 }) {
-  const { page, context, job, mediaPath, signal, reportProgress, setStage } = input;
+  const { page, context, job, mediaPaths, signal, reportProgress, setStage } = input;
+  const includesVideo = job.media.some(media => media.mimeType.toLowerCase().startsWith("video/"));
+  const mediaLabel = mediaPaths.length > 1 ? `carousel (${mediaPaths.length} items)` : includesVideo ? "video" : "image";
   reportProgress("Opening Instagram with the saved server session.");
   await page.goto(INSTAGRAM_HOME_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await dismissPrompts(page);
@@ -246,15 +253,18 @@ export async function prepareInstagramFinalComposer(input: {
   setStage("opening Instagram's post composer");
   reportProgress("Saved Instagram session verified. Opening the post composer.");
   await openPostComposer(page, signal);
-  setStage("uploading the test image");
-  reportProgress("Uploading the test image into Instagram's composer.");
-  await uploadOneImage(page, mediaPath, signal);
-  setStage("selecting Instagram's Original crop option");
-  reportProgress("Image accepted. Selecting Original to preserve its aspect ratio.");
-  await selectOriginalAspect(page, signal);
+  setStage(`uploading the ${mediaLabel}`);
+  reportProgress(`Uploading the ${mediaLabel} into Instagram's composer.`);
+  await uploadMedia(page, mediaPaths, includesVideo, signal);
+  const alreadyOnEditScreen = Boolean(await firstVisible([page.getByText(/^Edit video$/i)]));
+  if (!alreadyOnEditScreen) {
+    setStage("selecting Instagram's Original crop option");
+    reportProgress(`${mediaPaths.length > 1 ? "Carousel" : includesVideo ? "Video" : "Image"} accepted. Selecting Original to preserve its aspect ratio.`);
+    await selectOriginalAspect(page, signal);
+  }
   setStage("advancing through Instagram's crop and edit screens");
-  reportProgress("Original crop selected. Advancing through crop and edit screens.");
-  await advanceToShareScreen(page, signal);
+  reportProgress(`Instagram accepted the ${mediaLabel}. Advancing through its edit screens.`);
+  await advanceToShareScreen(page, signal, alreadyOnEditScreen);
   setStage("filling Instagram's final composer");
   reportProgress("Final composer reached. Adding the caption.");
   await fillCaptionAndConfirmShareIsVisible(page, job.caption, signal);
@@ -277,8 +287,8 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     if (job.executionMode !== "DRY_RUN" || job.validationStage !== "INSTAGRAM_PREVIEW") {
       throw new Error("The preview executor refuses jobs outside the isolated preview stage.");
     }
-    if (job.media.length !== 1 || !["image/jpeg", "image/png"].includes(job.media[0]!.mimeType.toLowerCase())) {
-      throw new Error("The Instagram preview currently requires exactly one JPEG or PNG image.");
+    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(media.mimeType.toLowerCase()))) {
+      throw new Error("The Instagram preview requires between 1 and 10 JPEG, PNG, MP4, or MOV files.");
     }
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for Instagram previews.");
@@ -313,7 +323,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         page,
         context,
         job,
-        mediaPath: this.files.mediaFilePath(job.media[0]!.storageKey),
+        mediaPaths: job.media.map(media => this.files.mediaFilePath(media.storageKey)),
         signal,
         reportProgress,
         setStage: value => { stage = value; },
@@ -330,7 +340,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         screenshot,
         checks: [
           "The saved Instagram session opened successfully.",
-          "Instagram accepted the test image and caption.",
+          `Instagram accepted ${job.media.length > 1 ? `${job.media.length} carousel items` : `the ${job.media[0]!.mimeType.startsWith("video/") ? "video" : "image"}`} and caption.`,
           "The final composer was visible and closed without clicking Share.",
         ],
       };

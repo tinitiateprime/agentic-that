@@ -51,7 +51,7 @@ export class AutomationPublishingLiveWorker {
     const heartbeat = setInterval(() => {
       try {
         const owned = this.store.heartbeatPublishingJob(claimed.id, this.workerId, claimed.fencingToken!, 360);
-        if (!owned) controller.abort(new Error("The live Instagram publishing lease was lost."));
+        if (!owned) controller.abort(new Error("The live publishing lease was lost."));
       } catch (error) {
         controller.abort(error);
       }
@@ -133,6 +133,16 @@ export class AutomationPublishingLiveWorker {
           },
           message => this.store.recordPublishingProgress(job.id, this.workerId, job.fencingToken, message),
         );
+        if (!finalActionStarted && result.state === "LOGIN_REQUIRED") {
+          return this.store.finishPublishingJob({
+            jobId: job.id,
+            workerId: this.workerId,
+            fencingToken: job.fencingToken,
+            state: "LOGIN_REQUIRED",
+            errorCode: result.errorCode || "LIVE_LOGIN_REQUIRED",
+            errorMessage: result.errorMessage || `Reconnect the ${platform} account.`,
+          });
+        }
         if (!finalActionStarted) {
           return this.store.finishPublishingJob({
             jobId: job.id,
@@ -140,7 +150,7 @@ export class AutomationPublishingLiveWorker {
             fencingToken: job.fencingToken,
             state: "FAILED",
             errorCode: "LIVE_FINAL_ACTION_NOT_RECORDED",
-            errorMessage: "The executor returned without recording Instagram's final Share action.",
+            errorMessage: `The ${platform} executor returned without recording its final publish action.`,
           });
         }
         if (result.state !== "PUBLISHED") {
@@ -150,7 +160,7 @@ export class AutomationPublishingLiveWorker {
             fencingToken: job.fencingToken,
             state: "UNCERTAIN",
             errorCode: "LIVE_RESULT_UNCERTAIN",
-            errorMessage: result.errorMessage || "Instagram Share was submitted without a verified published result.",
+            errorMessage: result.errorMessage || `${platform} submitted the final action without a verified published result.`,
           });
         }
         return this.store.finishPublishingJob({

@@ -55,6 +55,25 @@ test("migration creates the local SQLite schema", async () => {
     assert.equal(automationSchemaReady(database), true);
     const columns = database.prepare("PRAGMA table_info(login_sessions)").all() as Array<{ name: string }>;
     assert.equal(columns.some(column => column.name === "surface"), true);
+    const now = new Date().toISOString();
+    database.prepare(`
+      INSERT INTO social_accounts (id, workspace_id, platform, display_name, created_at, updated_at)
+      VALUES ('account_facebook_migration', 'workspace', 'facebook', 'Facebook migration', ?, ?)
+    `).run(now, now);
+    assert.doesNotThrow(() => database.prepare(`
+      INSERT INTO login_sessions
+        (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
+      VALUES ('login_facebook_migration', 'workspace', 'account_facebook_migration', 'facebook', 'website', 'STARTING', ?, ?)
+    `).run(now, now));
+    database.prepare(`
+      INSERT INTO social_accounts (id, workspace_id, platform, display_name, created_at, updated_at)
+      VALUES ('account_x_migration', 'workspace', 'x', 'X migration', ?, ?)
+    `).run(now, now);
+    assert.doesNotThrow(() => database.prepare(`
+      INSERT INTO login_sessions
+        (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
+      VALUES ('login_x_migration', 'workspace', 'account_x_migration', 'x', 'website', 'STARTING', ?, ?)
+    `).run(now, now));
     const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;
     assert.equal(publishingColumns.some(column => column.name === "execution_mode"), true);
     assert.equal(publishingColumns.some(column => column.name === "validation_stage"), true);

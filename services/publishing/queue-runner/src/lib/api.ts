@@ -34,7 +34,7 @@ export type AuthResponse = {
 export type ServerAutomationAccount = {
   id: string;
   workspaceId: string;
-  platform: "instagram";
+  platform: Platform;
   displayName: string;
   status: "PENDING_LOGIN" | "CONNECTED" | "LOGIN_REQUIRED" | "PAUSED" | "DISABLED";
   enabled: boolean;
@@ -46,7 +46,7 @@ export type ServerAutomationJob = {
   id: string;
   workspaceId: string;
   accountId: string;
-  platform: "instagram";
+  platform: Platform;
   state: "SCHEDULED" | "PUBLISHING" | "VERIFYING" | "PUBLISHED" | "FAILED" | "LOGIN_REQUIRED" | "UNCERTAIN" | "CANCELLED";
   scheduledAt: string;
   caption: string;
@@ -73,7 +73,7 @@ export type ServerAutomationOverview = {
   health: {
     ok: boolean;
     livePublishingWorkerCount: number;
-    features: { publishing: boolean; instagramPublishing: boolean; login: boolean };
+    features: { publishing: boolean; instagramPublishing: boolean; facebookPublishing: boolean; xPublishing: boolean; login: boolean };
   };
   accounts: ServerAutomationAccount[];
   jobs: ServerAutomationJob[];
@@ -598,10 +598,10 @@ export const api = {
     }
   },
 
-  createServerAutomationAccount: (displayName: string) =>
+  createServerAutomationAccount: (displayName: string, platform: Platform = "instagram") =>
     serverAutomationRequest<{ account: ServerAutomationAccount }>("/accounts", {
       method: "POST",
-      body: JSON.stringify({ displayName }),
+      body: JSON.stringify({ displayName, platform }),
     }),
 
   startServerAutomationLogin: (accountId: string) =>

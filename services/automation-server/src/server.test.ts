@@ -36,6 +36,8 @@ test("health reports every new execution feature disabled by default", async () 
     assert.deepEqual(body.features, {
       publishing: false,
       instagramPublishing: false,
+      facebookPublishing: false,
+      xPublishing: false,
       publishingDryRun: false,
       publishingPreview: false,
       login: false,

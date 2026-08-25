@@ -12,9 +12,14 @@ import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { PlaywrightInstagramPreviewExecutor } from "./instagram-preview.ts";
 import { PlaywrightInstagramPublishingExecutor } from "./instagram-live.ts";
+import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
+import { PlaywrightFacebookPublishingExecutor } from "./facebook-live.ts";
+import { XPublishingDryRunValidator } from "./x-dry-run.ts";
+import { PlaywrightXPublishingExecutor } from "./x-live.ts";
 import { AutomationPublishingDryRunWorker } from "./publishing-dry-run-worker.ts";
 import { AutomationPublishingPreviewWorker } from "./publishing-preview-worker.ts";
 import { AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
+import type { PublishingDryRunValidator, ServerPublishingExecutor } from "./executor.ts";
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
@@ -37,7 +42,11 @@ export async function startAutomationServer() {
   const publishingDryRunWorker = store && config.publishingDryRunEnabled
     ? new AutomationPublishingDryRunWorker(
         store,
-        new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
+        new Map<string, PublishingDryRunValidator>([
+          ["instagram", new InstagramPublishingDryRunValidator(files)],
+          ["facebook", new FacebookPublishingDryRunValidator(files)],
+          ["x", new XPublishingDryRunValidator(files)],
+        ]),
         config.workerPollMs,
       )
     : null;
@@ -50,11 +59,19 @@ export async function startAutomationServer() {
         config.workerPollMs,
       )
     : null;
-  const publishingLiveWorkerPool = store && config.executionEnabled && config.instagramPublishingEnabled
+  const publishingLiveWorkerPool = store && config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled)
     ? new AutomationPublishingLiveWorkerPool(
         store,
-        new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
-        new Map([["instagram", new PlaywrightInstagramPublishingExecutor(files, config.browserExecutablePath)]]),
+        new Map<string, PublishingDryRunValidator>([
+          ["instagram", new InstagramPublishingDryRunValidator(files)],
+          ["facebook", new FacebookPublishingDryRunValidator(files)],
+          ["x", new XPublishingDryRunValidator(files)],
+        ]),
+        new Map<string, ServerPublishingExecutor>([
+          ...(config.instagramPublishingEnabled ? [["instagram", new PlaywrightInstagramPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
+          ...(config.facebookPublishingEnabled ? [["facebook", new PlaywrightFacebookPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
+          ...(config.xPublishingEnabled ? [["x", new PlaywrightXPublishingExecutor(files, config.browserExecutablePath)] as const] : []),
+        ]),
         config.workerPollMs,
         config.liveWorkerCount,
       )
@@ -80,7 +97,7 @@ export async function startAutomationServer() {
 
   process.stdout.write(
     `AgenticThat automation server listening on http://${config.host}:${config.port} ` +
-      `(publishing ${config.executionEnabled && config.instagramPublishingEnabled ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
+      `(publishing ${config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled) ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
   );
   return { server, config, shutdown };
 }

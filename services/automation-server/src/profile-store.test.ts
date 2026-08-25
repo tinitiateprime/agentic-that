@@ -44,6 +44,10 @@ test("media storage keys cannot escape the isolated media directory", async () =
     const saved = await store.storeDevelopmentMedia(Buffer.from([0xff, 0xd8, 0xff]), "test.jpg", "image/jpeg");
     assert.match(saved.storageKey, /^media_[a-f0-9]{32}[.]jpg$/);
     assert.deepEqual(await readFile(store.mediaFilePath(saved.storageKey)), Buffer.from([0xff, 0xd8, 0xff]));
+    const videoBytes = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
+    const video = await store.storeDevelopmentMedia(videoBytes, "reel.mp4", "video/mp4");
+    assert.match(video.storageKey, /^media_[a-f0-9]{32}[.]mp4$/);
+    assert.deepEqual(await readFile(store.mediaFilePath(video.storageKey)), videoBytes);
     await assert.rejects(
       () => store.storeDevelopmentMedia(Buffer.from("bad"), "bad.exe", "application/octet-stream"),
       /not supported/,

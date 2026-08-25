@@ -39,7 +39,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
 
   const browserRequired = config.loginEnabled
     || config.publishingPreviewEnabled
-    || (config.executionEnabled && config.instagramPublishingEnabled);
+    || (config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled));
   let browserReady = !browserRequired;
   let browserReadinessError = "";
   if (browserRequired) {
@@ -77,7 +77,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       loginEnabled: config.loginEnabled,
       publishingDryRunEnabled: config.publishingDryRunEnabled,
       publishingPreviewEnabled: config.publishingPreviewEnabled,
-      publishingLiveEnabled: config.executionEnabled && config.instagramPublishingEnabled,
+      publishingLiveEnabled: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled),
     }));
   });
 
@@ -92,12 +92,14 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       databaseEngine: "sqlite",
       storage: config.deploymentMode === "development" ? "local-development-only" : "local-single-server-staging",
       browserReady,
-      livePublishingWorkerCount: config.executionEnabled && config.instagramPublishingEnabled
+      livePublishingWorkerCount: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled)
         ? config.liveWorkerCount
         : 0,
       features: {
-        publishing: config.executionEnabled && config.instagramPublishingEnabled,
+        publishing: config.executionEnabled && (config.instagramPublishingEnabled || config.facebookPublishingEnabled || config.xPublishingEnabled),
         instagramPublishing: config.instagramPublishingEnabled,
+        facebookPublishing: config.facebookPublishingEnabled,
+        xPublishing: config.xPublishingEnabled,
         publishingDryRun: config.publishingDryRunEnabled,
         publishingPreview: config.publishingPreviewEnabled,
         login: config.loginEnabled,
@@ -317,7 +319,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     "/v1/media",
     requireInternalToken,
     requireStore,
-    express.raw({ type: () => true, limit: "25mb" }),
+    express.raw({ type: () => true, limit: "250mb" }),
     async (req, res) => {
       const livePublishingEnabled = config.executionEnabled && config.instagramPublishingEnabled;
       if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled && !livePublishingEnabled) || !files) {
@@ -415,7 +417,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.get("/v1/publishing/jobs/:jobId/diagnostic-frame", requireInternalToken, requireStore, async (req, res) => {
-    if (!config.executionEnabled || !config.instagramPublishingEnabled || !files) {
+    if (!config.executionEnabled || (!config.instagramPublishingEnabled && !config.facebookPublishingEnabled && !config.xPublishingEnabled) || !files) {
       res.status(409).json({ error: "Server publishing is disabled." });
       return;
     }

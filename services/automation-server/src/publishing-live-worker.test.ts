@@ -31,6 +31,14 @@ test("Instagram publish responses provide strong success and failure evidence", 
     message: "Please wait a few minutes before trying again.",
   });
   assert.equal(interpretInstagramPublishResponse(200, { status: "pending" }), null);
+  assert.deepEqual(interpretInstagramPublishResponse(200, {
+    status: "ok",
+    media: { pk: "987654", code: "REEL_123", product_type: "clips" },
+  }), {
+    state: "PUBLISHED",
+    platformPostId: "987654",
+    platformPostUrl: "https://www.instagram.com/reel/REEL_123/",
+  });
 });
 
 test("the live worker requires authorization and fences Instagram's final action", async () => {
@@ -49,6 +57,11 @@ test("the live worker requires authorization and fences Instagram's final action
       assert.equal(job.validationStage, "LOCAL");
       reportProgress?.("Fake final composer ready.");
       if (job.caption === "Missing final fence") return { state: "PUBLISHED" };
+      if (job.caption === "Expired login") return {
+        state: "LOGIN_REQUIRED",
+        errorCode: "FAKE_LOGIN_REQUIRED",
+        errorMessage: "Reconnect the test account.",
+      };
       await onFinalActionStarting();
       finalActions += 1;
       assert.equal(store.getPublishingJob(job.workspaceId, job.id)?.state, "VERIFYING");
@@ -122,6 +135,17 @@ test("the live worker requires authorization and fences Instagram's final action
     assert.equal(unfenced?.state, "FAILED");
     assert.equal(unfenced?.errorCode, "LIVE_FINAL_ACTION_NOT_RECORDED");
     assert.equal(finalActions, 2);
+
+    const loginRequiredJob = store.createPublishingJob({
+      ...request,
+      caption: "Expired login",
+      idempotencyKey: "authorized-live-publishing-004",
+    }, "LIVE", "LOCAL", true);
+    const loginRequired = await worker.runOnce();
+    assert.equal(loginRequired?.id, loginRequiredJob.id);
+    assert.equal(loginRequired?.state, "LOGIN_REQUIRED");
+    assert.equal(loginRequired?.errorCode, "FAKE_LOGIN_REQUIRED");
+    assert.equal(finalActions, 2);
   } finally {
     await worker.stop();
     database.close();
@@ -141,6 +165,28 @@ test("the live Playwright executor has one exact guarded Share click", async () 
   const cropNext = previewSource.indexOf("Instagram's crop Next control was not available.");
   assert.ok(originalCrop >= 0, "The shared Instagram flow must select Original crop.");
   assert.ok(cropNext > originalCrop, "Original crop must be selected before the crop Next step.");
+});
+
+test("the Facebook live executor has one exact guarded Post click", async () => {
+  const source = await readFile(new URL("./facebook-live.ts", import.meta.url), "utf8");
+  assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
+  assert.match(source, /exact Post-label guard/);
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
+  assert.match(source, /editor\.locator\('xpath=ancestor::\*\[@role="dialog"\]\[1\]'\)/);
+  assert.doesNotMatch(source, /filter\(\{ hasText: \/Create post\|What's on your mind\/i \}\)\.last\(\)/);
+});
+
+test("the X live executor records its fence before one exact Post click", async () => {
+  const source = await readFile(new URL("./x-live.ts", import.meta.url), "utf8");
+  assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
+  assert.match(source, /exact Post-label guard/);
+  assert.match(source, /X_UPLOAD_TIMEOUT_MS \?\? 300_000/);
+  assert.match(source, /did not become enabled while the media was uploading/);
+  assert.match(source, /firstEnabledVisible/);
+  assert.match(source, /filter\(candidate => candidate !== page\)/);
+  assert.match(source, /X keeps an inline Home composer visible while its modal opens/);
+  assert.doesNotMatch(source, /page\.locator\('\[data-testid="tweetTextarea_0"\]'\)/);
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
 });
 
 test("the live worker pool runs different accounts concurrently but serializes each account", async () => {

@@ -28,12 +28,12 @@ an isolated local SQLite file under `.server-data`.
 - Dry-run jobs finish as `CANCELLED` with `DRY_RUN_COMPLETE` or
   `DRY_RUN_VALIDATION_FAILED`; they never become publishable live jobs.
 - Confirmation-gated Instagram composer previews open the saved profile,
-  upload one test image, enter the caption, capture the final composer, and
+  upload one JPEG/PNG image or MP4/MOV video, enter the caption, capture the final composer, and
   close before Share. The preview boundary has no publish method.
 - Preview browser work has a 150-second hard limit, visible stage progress,
   safe interrupted-job recovery, and a private diagnostic screenshot when
   Instagram stops at an unexpected screen.
-- First guarded Instagram live worker for one JPEG/PNG feed post. Live jobs
+- First guarded Instagram live worker for one JPEG/PNG feed post or MP4/MOV Reel. Live jobs
   require two feature flags, an authorized database bit, exact `PUBLISH`
   confirmation, an owned account lease, and a fenced transition to `VERIFYING`
   before the executor can click Share.
@@ -44,7 +44,7 @@ an isolated local SQLite file under `.server-data`.
 - Authenticated development integration with the existing AgenticThat
   publishing dashboard. The dashboard proxies through its own server, keeps
   the worker token out of browser JavaScript, forces the signed-in workspace on
-  every request, supports website login frames, and routes one-image Instagram
+  every request, supports website login frames, and routes single-media Instagram
   posts to server-managed accounts behind a disabled-by-default production flag.
 - No Electron or Docker dependency.
 
@@ -59,6 +59,13 @@ default.
 networked composer preview. Neither flag enables live publishing. Live Instagram
 testing requires both `SERVER_EXECUTION_ENABLED=true` and
 `SERVER_INSTAGRAM_PUBLISHING_ENABLED=true`; committed defaults remain false.
+Facebook server publishing is separately gated by
+`SERVER_FACEBOOK_PUBLISHING_ENABLED=true` and supports text-only, one JPEG/PNG
+image, or one MP4/MOV video per post. Instagram supports 1–10 same-format
+images or videos for carousel jobs. All final publish actions still require the
+explicit live authorization fence.
+X server publishing is separately gated by `SERVER_X_PUBLISHING_ENABLED=true`
+and supports standard text posts plus one JPEG/PNG image or MP4/MOV video.
 `SERVER_LIVE_WORKER_COUNT` controls live publishing concurrency from 1 through
 8 and defaults to 1. Increase it gradually because each active job can launch
 its own Chromium process.
@@ -95,7 +102,7 @@ npm run server-architecture:dev
 7. To test the Instagram composer without publishing, also set
    `SERVER_PUBLISHING_PREVIEW_ENABLED=true`, restart, choose the same test media,
    and click **Prepare private preview**. After confirmation, this uploads the
-   image into Instagram, captures the final composer, and closes before Share.
+   image or video into Instagram, captures the final composer, and closes before Share.
 8. Only with a test account and content you intend to make public, enable both
    live flags, restart, click **Publish test post**, and type the exact word
    `PUBLISH`. This performs the irreversible Instagram Share action. If the

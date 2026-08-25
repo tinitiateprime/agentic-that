@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { spawn, type ChildProcess } from "node:child_process";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import type { LoginBrowserInput, LoginSurface } from "./contracts.ts";
 import type { LoginAccount } from "./login-store.ts";
 
@@ -73,6 +75,26 @@ async function instagramSessionPresent(context: BrowserContext) {
   return cookies.some(cookie => cookie.name === "sessionid" && Boolean(cookie.value));
 }
 
+async function facebookSessionPresent(context: BrowserContext) {
+  const cookies = await context.cookies("https://www.facebook.com/");
+  return cookies.some(cookie => cookie.name === "c_user" && Boolean(cookie.value));
+}
+
+async function xSessionPresent(context: BrowserContext) {
+  const cookies = await context.cookies(["https://x.com/", "https://twitter.com/"]);
+  if (!cookies.some(cookie => cookie.name === "auth_token" && Boolean(cookie.value))) return false;
+  const page = context.pages().find(candidate => candidate.url().includes("x.com/"));
+  if (!page || /\/i\/flow\/login|\/login(?:\?|$)|account\/access/i.test(page.url())) return false;
+  const authenticatedUi = page.locator([
+    '[data-testid="SideNav_AccountSwitcher_Button"]',
+    '[data-testid="AppTabBar_Home_Link"]',
+    '[data-testid="SideNav_NewTweet_Button"]',
+    'a[href="/compose/post"]',
+    'a[href="/home"][role="link"]',
+  ].join(", "));
+  return await authenticatedUi.first().isVisible().catch(() => false);
+}
+
 async function wait(page: Page, milliseconds: number, signal: AbortSignal) {
   if (signal.aborted) throw signal.reason || new Error("Login was cancelled.");
   let onAbort: (() => void) | undefined;
@@ -87,6 +109,98 @@ async function wait(page: Page, milliseconds: number, signal: AbortSignal) {
   }
 }
 
+function getFreeLoopbackPort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a local browser connection port.")));
+    });
+  });
+}
+
+async function waitForChromeDevTools(port: number, process: ChildProcess) {
+  const endpoint = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (process.exitCode !== null) throw new Error("The standard X login browser exited while starting.");
+    try {
+      const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(1_000) });
+      if (response.ok) return endpoint;
+    } catch {
+      // The dedicated browser profile is still starting.
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error("The standard X login browser did not become ready.");
+}
+
+function waitForProcessExit(process: ChildProcess, timeoutMs: number) {
+  if (process.exitCode !== null) return Promise.resolve(true);
+  return new Promise<boolean>(resolve => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    process.once("exit", () => { clearTimeout(timer); resolve(true); });
+  });
+}
+
+export async function launchStandardXChrome(
+  executablePath: string,
+  profileDirectory: string,
+  targetUrl = "https://x.com/i/flow/login",
+  visible = true,
+) {
+  const port = await getFreeLoopbackPort();
+  const process = spawn(executablePath, [
+    `--user-data-dir=${profileDirectory}`,
+    "--profile-directory=Default",
+    "--remote-debugging-address=127.0.0.1",
+    `--remote-debugging-port=${port}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-mode",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+    `--window-position=${visible ? "0,0" : "-10000,-10000"}`,
+    "--window-size=1280,800",
+    "--new-window",
+    targetUrl,
+  ], { stdio: "ignore", windowsHide: false });
+  try {
+    const endpoint = await waitForChromeDevTools(port, process);
+    const browser = await chromium.connectOverCDP(endpoint);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("The standard X login browser did not expose its profile.");
+    const pages = context.pages();
+    const page = pages.filter(candidate => candidate.url().includes("x.com/")).at(-1)
+      || pages.at(-1)
+      || await context.newPage();
+    let closed = false;
+    return {
+      browser, context, page, process,
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        await Promise.race([
+          browser.close().catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 1_500)),
+        ]);
+        const exited = await waitForProcessExit(process, 3_000);
+        if (!exited && process.exitCode === null) {
+          process.kill("SIGTERM");
+          await waitForProcessExit(process, 2_000);
+        }
+      },
+    };
+  } catch (error) {
+    process.kill("SIGTERM");
+    throw error;
+  }
+}
+
 export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
   constructor(
     private readonly configuredExecutablePath: string,
@@ -98,26 +212,45 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     profileDirectory: string,
     surface: LoginSurface,
   ): Promise<PersistentLoginBrowser> {
-    if (account.platform !== "instagram") throw new Error("This login browser currently supports only Instagram.");
+    if (!["instagram", "facebook", "x"].includes(account.platform)) throw new Error("This login browser does not support the selected platform yet.");
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) {
       throw new Error("Google Chrome or Microsoft Edge is required for local server login testing.");
     }
     prepareProfile(profileDirectory);
-    const context = await chromium.launchPersistentContext(profileDirectory, {
-      executablePath,
-      headless: surface === "website",
-      viewport: surface === "website" ? { width: 1280, height: 800 } : null,
-      acceptDownloads: false,
-      args: [
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-mode",
-        "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
-      ],
-    });
-    const page = context.pages()[0] || await context.newPage();
-    await page.goto("https://www.instagram.com/accounts/login/", {
+    // X login runs in a standard server-owned Chrome process. Playwright only
+    // attaches to its loopback DevTools endpoint to stream frames and input;
+    // it does not launch X with its automation command-line switches.
+    let attachedBrowser: Browser | null = null;
+    let closeStandardChrome: (() => Promise<void>) | null = null;
+    let context: BrowserContext;
+    let page: Page;
+    if (account.platform === "x") {
+      const launched = await launchStandardXChrome(executablePath, profileDirectory);
+      attachedBrowser = launched.browser;
+      closeStandardChrome = launched.close;
+      context = launched.context;
+      page = launched.page;
+    } else {
+      context = await chromium.launchPersistentContext(profileDirectory, {
+        executablePath,
+        headless: surface === "website",
+        viewport: surface === "website" ? { width: 1280, height: 800 } : null,
+        acceptDownloads: false,
+        args: [
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-background-mode",
+          "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+        ],
+      });
+      page = context.pages()[0] || await context.newPage();
+    }
+    const platformName = account.platform === "facebook" ? "Facebook" : account.platform === "x" ? "X" : "Instagram";
+    const loginUrl = account.platform === "facebook" ? "https://www.facebook.com/login/"
+      : account.platform === "x" ? "https://x.com/i/flow/login"
+      : "https://www.instagram.com/accounts/login/";
+    await page.goto(loginUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -130,19 +263,31 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
         const deadline = Date.now() + this.timeoutMs;
         while (Date.now() < deadline) {
           if (closed || page.isClosed()) {
-            throw new LoginBrowserClosedError("The Instagram login browser was closed before connection finished.");
+            throw new LoginBrowserClosedError(`The ${platformName} login browser was closed before connection finished.`);
           }
-          if (await instagramSessionPresent(context)) return;
+          const authenticated = account.platform === "facebook" ? await facebookSessionPresent(context)
+            : account.platform === "x" ? await xSessionPresent(context)
+            : await instagramSessionPresent(context);
+          if (authenticated) {
+            if (account.platform === "x") {
+              const holdMs = Number(process.env.X_LOGIN_HOLD_MS ?? 15_000);
+              await wait(page, Number.isFinite(holdMs) && holdMs >= 0 ? holdMs : 15_000, signal);
+              if (!await xSessionPresent(context)) {
+                throw new Error("X authentication did not remain active during session stabilization.");
+              }
+            }
+            return;
+          }
           await wait(page, 750, signal);
         }
-        throw new LoginBrowserExpiredError("Instagram login did not finish before the local login window expired.");
+        throw new LoginBrowserExpiredError(`${platformName} login did not finish before the local login window expired.`);
       },
       captureFrame: async () => {
-        if (closed || page.isClosed()) throw new LoginBrowserClosedError("The Instagram login browser is closed.");
+        if (closed || page.isClosed()) throw new LoginBrowserClosedError(`The ${platformName} login browser is closed.`);
         return page.screenshot({ type: "jpeg", quality: 68, animations: "disabled", timeout: 8_000 });
       },
       dispatchInput: async input => {
-        if (closed || page.isClosed()) throw new LoginBrowserClosedError("The Instagram login browser is closed.");
+        if (closed || page.isClosed()) throw new LoginBrowserClosedError(`The ${platformName} login browser is closed.`);
         await page.bringToFront();
         if (input.type === "click") {
           await page.mouse.click(input.x, input.y, { button: input.button });
@@ -155,7 +300,11 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
         }
       },
       close: async () => {
-        if (!closed) await context.close().catch(() => undefined);
+        if (!closed) {
+          if (closeStandardChrome) await closeStandardChrome().catch(() => undefined);
+          else if (attachedBrowser) await attachedBrowser.close().catch(() => undefined);
+          else await context.close().catch(() => undefined);
+        }
         closed = true;
       },
     };

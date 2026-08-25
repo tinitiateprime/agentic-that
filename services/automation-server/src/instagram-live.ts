@@ -39,12 +39,13 @@ export function interpretInstagramPublishResponse(statusCode: number, body: unkn
   const status = recordValue(payload.status)?.toLowerCase();
   const platformPostId = recordValue(media.pk) || recordValue(media.id) || recordValue(payload.media_id);
   const shortcode = recordValue(media.code) || recordValue(media.shortcode);
+  const productType = recordValue(media.product_type)?.toLowerCase();
 
   if (statusCode >= 200 && statusCode < 300 && (status === "ok" || platformPostId || shortcode)) {
     return {
       state: "PUBLISHED",
       ...(platformPostId ? { platformPostId } : {}),
-      ...(shortcode ? { platformPostUrl: `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/` } : {}),
+      ...(shortcode ? { platformPostUrl: `https://www.instagram.com/${productType === "clips" ? "reel" : "p"}/${encodeURIComponent(shortcode)}/` } : {}),
     };
   }
   if (statusCode >= 400 || status === "fail" || status === "error") {
@@ -142,8 +143,8 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
     if (job.executionMode !== "LIVE" || job.validationStage !== "LOCAL") {
       throw new Error("The live executor refuses jobs outside the authorized live stage.");
     }
-    if (job.media.length !== 1 || !["image/jpeg", "image/png"].includes(job.media[0]!.mimeType.toLowerCase())) {
-      throw new Error("Initial live Instagram publishing requires exactly one JPEG or PNG image.");
+    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(media.mimeType.toLowerCase()))) {
+      throw new Error("Live Instagram publishing requires between 1 and 10 JPEG, PNG, MP4, or MOV files.");
     }
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for Instagram publishing.");
@@ -180,7 +181,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
         page,
         context,
         job,
-        mediaPath: this.files.mediaFilePath(job.media[0]!.storageKey),
+        mediaPaths: job.media.map(media => this.files.mediaFilePath(media.storageKey)),
         signal,
         reportProgress,
         setStage: value => { stage = value; },

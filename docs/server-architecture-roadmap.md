@@ -33,6 +33,9 @@
     refresh, and atomic cancellation before a worker claims the post.
 17. Configurable 1-8 worker live-publishing pool with tests proving concurrent
     execution across accounts and strict serialization within one account.
+18. Server-managed Instagram accounts are the authoritative account source for
+    the authenticated Config Manager, product status, and publishing dashboard;
+    legacy Companion records remain stored but are not offered in the main flow.
 
 ## Next development work
 
@@ -40,10 +43,11 @@
 2. Replace local frame polling with an efficient TLS/WSS streaming transport.
 3. Add short-lived login-stream authorization and strict origin checks.
 4. Add remote-server viewport resizing and reconnect handling.
-5. Expand `ServerPublishingExecutor` beyond the initial single-image Instagram
-   feed-post and scheduling test to carousels, video, and additional platforms.
+5. Expand `ServerPublishingExecutor` beyond Instagram feed posts, Reels, and
+   carousels, Facebook text/image/video, and X text/single-media posts to
+   LinkedIn, YouTube, and richer Facebook/X multi-media posts.
 6. Add the profile-version write guard to the future live executor.
-7. Connect only a test workspace through a per-account `server` engine flag.
+7. Expand the server-authoritative account model to each additional platform.
 8. Add temporary-browser scraping workers.
 
 ## Requirements before live production

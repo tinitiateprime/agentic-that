@@ -39,12 +39,17 @@ function summarizePublishingAccounts(accounts) {
 async function loadPublishingAccounts() {
   const headers = new Headers();
   headers.set("authorization", "Bearer " + await getClientServiceToken("publishing"));
-  const response = await fetch("/api/central-publishing/accounts", {
+  const response = await fetch("/api/automation-server/accounts", {
     cache: "no-store",
     headers,
     credentials: "include",
   });
-  return jsonResponse(response);
+  const data = await jsonResponse(response);
+  return (data.accounts || []).map((account) => ({
+    ...account,
+    handle: account.status === "CONNECTED" ? "Persistent server session" : "Login required",
+    credentialConfigured: account.status === "CONNECTED",
+  }));
 }
 
 async function loadTelegram(path) {

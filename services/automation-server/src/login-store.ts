@@ -1,12 +1,12 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
-import { automationId, type LoginSessionState, type LoginSurface } from "./contracts.ts";
+import { automationId, type LoginSessionState, type LoginSurface, type SocialPlatform } from "./contracts.ts";
 export type { LoginSurface } from "./contracts.ts";
 
 export type LoginAccount = {
   id: string;
   workspaceId: string;
-  platform: "instagram";
+  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x">;
   displayName: string;
 };
 
@@ -14,7 +14,7 @@ type LoginSessionRow = {
   id: string;
   workspace_id: string;
   account_id: string;
-  platform: "instagram";
+  platform: Extract<SocialPlatform, "instagram" | "facebook" | "x">;
   surface: LoginSurface;
   state: LoginSessionState;
   error_code: string | null;
@@ -79,8 +79,8 @@ export class AutomationLoginStore {
         | { id: string; workspace_id: string; platform: string; display_name: string }
         | undefined;
       if (!accountRow) throw new Error("The selected server login account is unavailable.");
-      if (accountRow.platform !== "instagram") {
-        throw new Error("Only Instagram server login is enabled in this development milestone.");
+      if (!["instagram", "facebook", "x"].includes(accountRow.platform)) {
+        throw new Error("Server login is not enabled for this platform yet.");
       }
       const now = new Date().toISOString();
       const publishingLock = this.database.prepare(`
@@ -93,7 +93,7 @@ export class AutomationLoginStore {
       const account: LoginAccount = {
         id: accountRow.id,
         workspaceId: accountRow.workspace_id,
-        platform: "instagram",
+        platform: accountRow.platform as LoginAccount["platform"],
         displayName: accountRow.display_name,
       };
       const active = this.database.prepare(`
@@ -108,8 +108,8 @@ export class AutomationLoginStore {
       this.database.prepare(`
         INSERT INTO login_sessions
           (id, workspace_id, account_id, platform, surface, state, created_at, updated_at)
-        VALUES (?, ?, ?, 'instagram', ?, 'STARTING', ?, ?)
-      `).run(id, workspaceId, accountId, surface, createdAt, createdAt);
+        VALUES (?, ?, ?, ?, ?, 'STARTING', ?, ?)
+      `).run(id, workspaceId, accountId, account.platform, surface, createdAt, createdAt);
       const row = this.database.prepare("SELECT * FROM login_sessions WHERE id = ?").get(id) as LoginSessionRow;
       return { session: publicSession(row), account, created: true };
     });

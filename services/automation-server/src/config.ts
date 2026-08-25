@@ -17,6 +17,8 @@ export type AutomationConfig = {
   loginTimeoutMs: number;
   executionEnabled: boolean;
   instagramPublishingEnabled: boolean;
+  facebookPublishingEnabled: boolean;
+  xPublishingEnabled: boolean;
   loginEnabled: boolean;
   scrapingEnabled: boolean;
   publishingDryRunEnabled: boolean;
@@ -115,7 +117,7 @@ export function loadAutomationConfig(
     }
     const browserFeaturesEnabled = enabled(env.SERVER_LOGIN_ENABLED)
       || enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED)
-      || (enabled(env.SERVER_EXECUTION_ENABLED) && enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED));
+      || (enabled(env.SERVER_EXECUTION_ENABLED) && (enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED) || enabled(env.SERVER_FACEBOOK_PUBLISHING_ENABLED) || enabled(env.SERVER_X_PUBLISHING_ENABLED)));
     if (browserFeaturesEnabled && (!browserExecutablePath || !path.isAbsolute(browserExecutablePath))) {
       throw new Error("Staging browser features require an absolute SERVER_BROWSER_EXECUTABLE_PATH.");
     }
@@ -132,6 +134,8 @@ export function loadAutomationConfig(
     loginTimeoutMs: loginTimeout(env.SERVER_LOGIN_TIMEOUT_MS),
     executionEnabled: enabled(env.SERVER_EXECUTION_ENABLED),
     instagramPublishingEnabled: enabled(env.SERVER_INSTAGRAM_PUBLISHING_ENABLED),
+    facebookPublishingEnabled: enabled(env.SERVER_FACEBOOK_PUBLISHING_ENABLED),
+    xPublishingEnabled: enabled(env.SERVER_X_PUBLISHING_ENABLED),
     loginEnabled: enabled(env.SERVER_LOGIN_ENABLED),
     scrapingEnabled: enabled(env.SERVER_SCRAPING_ENABLED),
     publishingDryRunEnabled: enabled(env.SERVER_PUBLISHING_DRY_RUN_ENABLED),

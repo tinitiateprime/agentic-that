@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { FACEBOOK_COMPOSER_EDITOR_SELECTORS } from "./services/publishers/facebook.js";
 import {
@@ -37,4 +38,18 @@ test("X publishing retains initial file acceptance after X clears the input", ()
   const currentInputFileCountAfterXProcessing = 0;
   assert.equal(currentInputFileCountAfterXProcessing, 0);
   assert.equal(hasReadyXMedia(initialFileSelectionCompleted, true), true);
+});
+
+test("the authenticated website uses server-managed publishing accounts as its authority", () => {
+  const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const configManager = readFileSync(new URL("../../../../app/config-manager/ConfigManager.jsx", import.meta.url), "utf8");
+  const productStatus = readFileSync(new URL("../../../../src/platform/use-product-status.js", import.meta.url), "utf8");
+
+  assert.match(dashboard, /\.map\(serverAccountForComposer\) \?\? \[\]\)/);
+  assert.match(dashboard, /platform: account\.platform/);
+  assert.doesNotMatch(dashboard, /function serverAccountForComposer[\s\S]*?platform: 'instagram'[\s\S]*?\n}/);
+  assert.doesNotMatch(dashboard, /\.\.\.latestAccounts/);
+  assert.match(configManager, /\(serverAutomation\?\.accounts \|\| \[\]\)\.map\(serverAccountForConfig\)/);
+  assert.doesNotMatch(configManager, /Pair this device/);
+  assert.match(productStatus, /fetch\("\/api\/automation-server\/accounts"/);
 });

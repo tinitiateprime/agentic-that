@@ -7,7 +7,14 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+const SERVER_MEDIA_LIMITS = new Map([
+  ["image/jpeg", MAX_IMAGE_BYTES],
+  ["image/png", MAX_IMAGE_BYTES],
+  ["video/mp4", MAX_VIDEO_BYTES],
+  ["video/quicktime", MAX_VIDEO_BYTES],
+]);
 
 function unavailable() {
   return Response.json({ message: "Server publishing integration is disabled." }, { status: 404 });
@@ -81,7 +88,7 @@ export async function POST(request, context) {
       return upstreamResponse(await automationServerRequest(config, "/v1/accounts", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspaceId: principal.workspaceId, platform: "instagram", displayName: body.displayName }),
+        body: JSON.stringify({ workspaceId: principal.workspaceId, platform: body.platform, displayName: body.displayName }),
       }));
     }
     if (route.length === 3 && route[0] === "accounts" && route[2] === "login") {
@@ -105,13 +112,15 @@ export async function POST(request, context) {
     }
     if (route.length === 1 && route[0] === "media") {
       const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
+      const mimeType = String(request.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+      const limit = SERVER_MEDIA_LIMITS.get(mimeType);
+      if (!limit) throw new Error("Choose one JPEG, PNG, MP4, or MOV file.");
       const contentLength = Number(request.headers.get("content-length") || 0);
-      if (contentLength > MAX_MEDIA_BYTES) throw new Error("Server publishing images must be 25 MB or smaller.");
+      if (contentLength > limit) throw new Error(`Server publishing ${mimeType.startsWith("video/") ? "videos" : "images"} must be ${limit / 1024 / 1024} MB or smaller.`);
       const bytes = Buffer.from(await request.arrayBuffer());
-      if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) throw new Error("Server publishing images must be between 1 byte and 25 MB.");
+      if (!bytes.length || bytes.length > limit) throw new Error(`Server publishing media must be between 1 byte and ${limit / 1024 / 1024} MB.`);
       const fileName = String(request.headers.get("x-file-name") || "").trim();
-      const mimeType = String(request.headers.get("content-type") || "").split(";", 1)[0].trim();
-      if (!fileName || !["image/jpeg", "image/png"].includes(mimeType)) throw new Error("Choose one JPEG or PNG image.");
+      if (!fileName) throw new Error("The media filename is required.");
       return upstreamResponse(await automationServerRequest(config, "/v1/media", {
         method: "POST",
         headers: {

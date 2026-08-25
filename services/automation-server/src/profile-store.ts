@@ -81,8 +81,9 @@ export class AutomationFileStore {
     };
     const extension = extensions[mimeType.toLowerCase()];
     if (!extension) throw new Error("This media type is not supported by the Instagram dry run.");
-    if (!bytes.length || bytes.length > 25 * 1024 * 1024) {
-      throw new Error("Local dry-run media must be between 1 byte and 25 MB.");
+    const maximumBytes = mimeType.toLowerCase().startsWith("video/") ? 250 * 1024 * 1024 : 25 * 1024 * 1024;
+    if (!bytes.length || bytes.length > maximumBytes) {
+      throw new Error(`Local publishing media must be between 1 byte and ${maximumBytes / 1024 / 1024} MB.`);
     }
     const fileName = path.basename(originalName.trim());
     if (!fileName || fileName === "." || fileName.length > 255) throw new Error("The media filename is invalid.");

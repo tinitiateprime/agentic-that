@@ -1,7 +1,7 @@
 import type { AutomationDatabase } from "./database.ts";
 import { withImmediateTransaction } from "./database.ts";
 
-const MIGRATION_KEY = "server-architecture-sqlite-v7";
+const MIGRATION_KEY = "server-architecture-sqlite-v9";
 
 export function migrateAutomationSchema(database: AutomationDatabase) {
   withImmediateTransaction(database, () => {
@@ -40,7 +40,7 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         id            TEXT PRIMARY KEY,
         workspace_id  TEXT NOT NULL,
         account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
-        platform      TEXT NOT NULL CHECK (platform IN ('instagram')),
+        platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x')),
         surface       TEXT NOT NULL DEFAULT 'visible' CHECK (surface IN ('visible', 'website')),
         state         TEXT NOT NULL
                       CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
@@ -142,6 +142,38 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         ALTER TABLE login_sessions
         ADD COLUMN surface TEXT NOT NULL DEFAULT 'visible'
           CHECK (surface IN ('visible', 'website'))
+      `);
+    }
+    const loginTable = database.prepare(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'login_sessions'
+    `).get() as { sql: string } | undefined;
+    if (loginTable?.sql && !/platform\s+IN\s*\([^)]*['"]x['"]/i.test(loginTable.sql)) {
+      database.exec(`
+        CREATE TABLE login_sessions_v9 (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          account_id    TEXT NOT NULL REFERENCES social_accounts(id) ON DELETE CASCADE,
+          platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook', 'x')),
+          surface       TEXT NOT NULL DEFAULT 'visible' CHECK (surface IN ('visible', 'website')),
+          state         TEXT NOT NULL
+                        CHECK (state IN ('STARTING', 'AWAITING_USER', 'CONNECTED', 'FAILED', 'CANCELLED', 'EXPIRED')),
+          error_code    TEXT,
+          error_message TEXT,
+          created_at    TEXT NOT NULL,
+          updated_at    TEXT NOT NULL,
+          completed_at  TEXT
+        );
+        INSERT INTO login_sessions_v9
+          (id, workspace_id, account_id, platform, surface, state, error_code, error_message, created_at, updated_at, completed_at)
+        SELECT id, workspace_id, account_id, platform, surface, state, error_code, error_message, created_at, updated_at, completed_at
+        FROM login_sessions;
+        DROP TABLE login_sessions;
+        ALTER TABLE login_sessions_v9 RENAME TO login_sessions;
+        CREATE INDEX login_sessions_account_idx
+          ON login_sessions (account_id, created_at DESC);
+        CREATE UNIQUE INDEX login_sessions_one_active_account_idx
+          ON login_sessions (account_id)
+          WHERE state IN ('STARTING', 'AWAITING_USER');
       `);
     }
     const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;

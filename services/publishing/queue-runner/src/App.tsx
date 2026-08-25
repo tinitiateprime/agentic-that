@@ -2,7 +2,7 @@
 
 import {
   Loader2, RefreshCw, Upload, X,
-  CalendarClock, FileText, Pencil, Trash2,
+  CalendarClock, Database, FileText, Pencil, Trash2,
   ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
@@ -71,7 +71,7 @@ function serverAccountForComposer(account: ServerAutomationAccount): PlatformAcc
   return {
     id: account.id,
     workspaceId: account.workspaceId,
-    platform: 'instagram',
+    platform: account.platform,
     displayName: account.displayName,
     handle: connected ? 'Persistent server session' : 'Login required',
     loginIdentifier: '',
@@ -586,7 +586,6 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         api.health(),
         api.uploads(),
         api.submissions(),
-        api.accounts(),
         api.schedules(),
       ] as const;
       const serverRequest = api.serverAutomationOverview()
@@ -595,7 +594,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
           overview: null,
           error: serverError instanceof Error ? serverError.message : 'The server publishing worker is unavailable.',
         }));
-      const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules, latestServer] = await Promise.all([
+      const [health, latestUploads, latestSubmissions, latestSchedules, latestServer] = await Promise.all([
         ...baseRequests,
         serverRequest,
       ]);
@@ -605,10 +604,12 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       setSubmissions(latestSubmissions);
       setServerAutomation(latestServer.overview);
       setServerAutomationError(latestServer.error);
-      setAccounts([
-        ...latestAccounts,
-        ...(permissions.canRunAutomation ? latestServer.overview?.accounts.map(serverAccountForComposer) ?? [] : []),
-      ]);
+      setAccounts(latestServer.overview?.accounts
+        .filter(account => account.platform === 'instagram'
+          ? latestServer.overview?.health.features.instagramPublishing
+          : account.platform === 'facebook' ? latestServer.overview?.health.features.facebookPublishing
+          : account.platform === 'x' && latestServer.overview?.health.features.xPublishing)
+        .map(serverAccountForComposer) ?? []);
       setSchedules(latestSchedules);
       if (permissions.canManageUsers) {
         const [latestUsers, latestActivity] = await Promise.all([
@@ -961,13 +962,16 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-async function validateServerInstagramImage(file: File) {
-  if (!["image/jpeg", "image/png"].includes(file.type)) {
-    throw new Error("The server Instagram worker currently supports one JPEG or PNG image.");
+async function validateServerInstagramMedia(file: File) {
+  if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
+    throw new Error("The server Instagram worker supports one JPEG, PNG, MP4, or MOV file.");
   }
-  if (file.size < 1 || file.size > 25 * 1024 * 1024) {
-    throw new Error("The server Instagram image must be between 1 byte and 25 MB.");
+  const video = file.type.startsWith("video/");
+  const maximumBytes = video ? 250 * 1024 * 1024 : 25 * 1024 * 1024;
+  if (file.size < 1 || file.size > maximumBytes) {
+    throw new Error(`The server Instagram ${video ? "video" : "image"} must be between 1 byte and ${maximumBytes / 1024 / 1024} MB.`);
   }
+  if (video) return;
   const bitmap = await createImageBitmap(file);
   try {
     const aspectRatio = bitmap.width / bitmap.height;
@@ -1122,6 +1126,7 @@ function UnifiedComposer({
 }) {
   const [postFormat, setPostFormat] = useState<PostFormat | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -1138,9 +1143,10 @@ function UnifiedComposer({
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const serverSubmissionId = useRef(crypto.randomUUID());
   const serverUploadedMedia = useRef<{
-    file: File;
-    media: { storageKey: string; fileName: string; mimeType: string; size: number };
+    files: File[];
+    media: Array<{ storageKey: string; fileName: string; mimeType: string; size: number }>;
   } | null>(null);
+  const selectedFiles = useMemo(() => file ? [file, ...additionalFiles] : [], [file, additionalFiles]);
 
   useEffect(() => {
     if (!file) {
@@ -1155,7 +1161,7 @@ function UnifiedComposer({
   useEffect(() => {
     setPendingPreflightWarnings([]);
     setMessage(current => current?.type === 'warning' ? null : current);
-  }, [postFormat, file, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+  }, [postFormat, file, additionalFiles, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   useEffect(() => {
     serverSubmissionId.current = crypto.randomUUID();
@@ -1167,7 +1173,11 @@ function UnifiedComposer({
   ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
 
   const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled && (
-    accountPublishingEngine(account) !== 'server_worker' || postFormat === null || postFormat === 'image'
+    accountPublishingEngine(account) !== 'server_worker'
+    || postFormat === null
+    || postFormat === 'image'
+    || postFormat === 'video'
+    || (postFormat === 'text' && ['facebook', 'x'].includes(account.platform))
   )), [accounts, postFormat]);
   const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
     .filter(account => eligibility[account.platform].allowed)
@@ -1207,6 +1217,29 @@ function UnifiedComposer({
       return;
     }
     setFile(nextFile);
+    setAdditionalFiles([]);
+    setRightsConfirmed(false);
+    serverSubmissionId.current = crypto.randomUUID();
+    serverUploadedMedia.current = null;
+  };
+
+  const chooseFiles = (nextFiles: File[]) => {
+    setMessage(null);
+    if (nextFiles.length > 10) {
+      setMessage({ type: 'error', text: 'Instagram carousels support up to 10 images or videos.' });
+      return;
+    }
+    const invalid = nextFiles.find(nextFile => !nextFile.type.startsWith('image/') && !nextFile.type.startsWith('video/'));
+    if (invalid) {
+      setMessage({ type: 'error', text: `${invalid.name} is not an image or video.` });
+      return;
+    }
+    if (postFormat && nextFiles.some(nextFile => !nextFile.type.startsWith(`${postFormat}/`))) {
+      setMessage({ type: 'error', text: `Choose only ${postFormat} files for this carousel.` });
+      return;
+    }
+    setFile(nextFiles[0] ?? null);
+    setAdditionalFiles(nextFiles.slice(1));
     setRightsConfirmed(false);
     serverSubmissionId.current = crypto.randomUUID();
     serverUploadedMedia.current = null;
@@ -1216,6 +1249,7 @@ function UnifiedComposer({
     setMessage(null);
     setPostFormat(nextFormat);
     setFile(null);
+    setAdditionalFiles([]);
     setRightsConfirmed(false);
     serverSubmissionId.current = crypto.randomUUID();
     serverUploadedMedia.current = null;
@@ -1274,6 +1308,7 @@ function UnifiedComposer({
   const resetComposer = () => {
     setPostFormat(null);
     setFile(null);
+    setAdditionalFiles([]);
     setTitle('');
     setDescription('');
     setPlatformDescriptions({});
@@ -1356,45 +1391,58 @@ function UnifiedComposer({
     });
     const centralDestinations = destinations.filter(destination => !serverDestinations.includes(destination));
     if (serverDestinations.length && centralDestinations.length) {
-      return setMessage({ type: 'error', text: 'For this beta, choose either Server worker accounts or Companion accounts in one post, not both.' });
+      return setMessage({ type: 'error', text: 'Choose only Server Worker accounts for website publishing.' });
+    }
+    if (!serverDestinations.length && additionalFiles.length) {
+      return setMessage({ type: 'error', text: 'Multiple files currently require a server-managed Instagram account.' });
     }
     if (serverDestinations.length) {
-      if (postFormat !== 'image' || !file) {
-        return setMessage({ type: 'error', text: 'The server Instagram worker currently supports one JPEG or PNG image.' });
+      const serverAccounts = serverDestinations.map(destination => selectedAccounts.find(item => item.id === destination.accountId)!);
+      if (postFormat === 'text' && serverAccounts.some(account => !['facebook', 'x'].includes(account.platform))) {
+        return setMessage({ type: 'error', text: 'Server text-only publishing is currently available only for Facebook and X.' });
+      }
+      if (postFormat !== 'text' && !file) {
+        return setMessage({ type: 'error', text: 'Choose at least one image or video file.' });
+      }
+      if (additionalFiles.length && serverAccounts.some(account => account.platform !== 'instagram')) {
+        return setMessage({ type: 'error', text: 'Carousel posts currently require only server-managed Instagram accounts.' });
       }
       if (serverDestinations.some(destination => destination.scheduleId)) {
         return setMessage({ type: 'error', text: 'Server worker accounts currently support Publish now or an exact date and time, not schedule templates.' });
       }
       try {
-        await validateServerInstagramImage(file);
+        await Promise.all(selectedFiles.map(validateServerInstagramMedia));
       } catch (validationError) {
-        return setMessage({ type: 'error', text: validationError instanceof Error ? validationError.message : 'The server image is invalid.' });
+        return setMessage({ type: 'error', text: validationError instanceof Error ? validationError.message : 'The server media is invalid.' });
       }
       const scheduledCount = serverDestinations.filter(destination => destination.scheduledAt).length;
       const authorized = window.confirm(
         scheduledCount === serverDestinations.length && scheduledCount > 0
-          ? `Schedule ${serverDestinations.length} Instagram ${serverDestinations.length === 1 ? 'post' : 'posts'} on the server? The server will click Share at the selected time.`
-          : `Publish to ${serverDestinations.length} Instagram ${serverDestinations.length === 1 ? 'account' : 'accounts'} using the server now? This authorizes one Share click per account.`,
+          ? `Schedule ${serverDestinations.length} ${serverDestinations.length === 1 ? 'post' : 'posts'} on the server? The server will perform the final publish action at the selected time.`
+          : `Publish to ${serverDestinations.length} server-managed ${serverDestinations.length === 1 ? 'account' : 'accounts'} now? This authorizes one final publish action per account.`,
       );
       if (!authorized) return setMessage({ type: 'warning', text: 'Server publishing was not authorized. Nothing was queued.' });
 
       setSubmitting(true);
       try {
-        const uploaded = serverUploadedMedia.current?.file === file
-          ? { media: serverUploadedMedia.current.media }
-          : await api.uploadServerAutomationMedia(file);
-        serverUploadedMedia.current = { file, media: uploaded.media };
+        const cached = serverUploadedMedia.current;
+        const uploadedMedia = cached
+          && cached.files.length === selectedFiles.length
+          && cached.files.every((cachedFile, index) => cachedFile === selectedFiles[index])
+          ? cached.media
+          : await Promise.all(selectedFiles.map(async selectedFile => (await api.uploadServerAutomationMedia(selectedFile)).media));
+        serverUploadedMedia.current = { files: selectedFiles, media: uploadedMedia };
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
         await Promise.all(serverDestinations.map(destination => api.createServerAutomationJob({
           accountId: destination.accountId,
           scheduledAt: destination.scheduledAt || new Date(Date.now() - 1_000).toISOString(),
           originalTimezone: timezone,
           caption: destination.description || description.trim(),
-          media: [{
-            storageKey: uploaded.media.storageKey,
-            fileName: uploaded.media.fileName,
-            mimeType: uploaded.media.mimeType,
-          }],
+          media: uploadedMedia.map(uploaded => ({
+            storageKey: uploaded.storageKey,
+            fileName: uploaded.fileName,
+            mimeType: uploaded.mimeType,
+          })),
           idempotencyKey: `dashboard-${serverSubmissionId.current}-${destination.accountId}`,
         })));
         resetComposer();
@@ -1494,14 +1542,14 @@ function UnifiedComposer({
               onDragEnter={event => { event.preventDefault(); setDragActive(true); }}
               onDragOver={event => event.preventDefault()}
               onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragActive(false); }}
-              onDrop={event => { event.preventDefault(); setDragActive(false); chooseFile(event.dataTransfer.files[0] ?? null); }}
+              onDrop={event => { event.preventDefault(); setDragActive(false); chooseFiles([...event.dataTransfer.files]); }}
             >
-              <input id='unified-post-file' type='file' accept={`${postFormat}/*`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
+              <input id='unified-post-file' type='file' multiple accept={`${postFormat}/*`} onChange={event => chooseFiles([...(event.target.files ?? [])])} />
               {file && previewUrl ? <div className='composer-media-preview'>
                 {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
                 <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
-                <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
-              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+                <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{selectedFiles.length > 1 ? `${selectedFiles.length} carousel items` : file.name}</strong><small>{selectedFiles.length > 1 ? `${formatComposerFileSize(selectedFiles.reduce((total, item) => total + item.size, 0))} total` : formatComposerFileSize(file.size)}</small></span>
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop up to 10 {postFormat} files here</strong><span>Choose multiple files for an Instagram carousel</span><small>Images: 25 MB each · videos: 250 MB each</small></label>}
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Required only when YouTube is selected'} maxLength={100} /></label>}
@@ -1788,7 +1836,7 @@ function ServerWorkerPanel({
       <div className='server-worker-jobs'>
         <strong>Recent server jobs</strong>
         {overview.jobs.length ? overview.jobs.slice(0, 8).map(job => <article key={job.id}>
-          <span><strong>{accountNames.get(job.accountId) || 'Instagram account'}</strong><small>{new Date(job.scheduledAt).toLocaleString()} · {job.caption || job.media[0]?.fileName}</small>{(job.errorMessage || job.progressMessage) && <em>{job.errorMessage || job.progressMessage}</em>}</span>
+          <span><strong>{accountNames.get(job.accountId) || `${platformLabels[job.platform]} account`}</strong><small>{new Date(job.scheduledAt).toLocaleString()} · {job.caption || job.media[0]?.fileName}</small>{(job.errorMessage || job.progressMessage) && <em>{job.errorMessage || job.progressMessage}</em>}</span>
           <i className={`state-${job.state.toLowerCase()}`}>{job.state.replaceAll('_', ' ')}</i>
           {job.state === 'SCHEDULED' && <button type='button' disabled={busy === job.id} onClick={() => void cancelJob(job.id)}><X size={13} />Cancel</button>}
         </article>) : <p className='server-worker-empty'>No server publishing jobs yet. Connected accounts appear in the composer below.</p>}
@@ -1983,7 +2031,7 @@ function Workboard({
         </nav>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
-          <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
+          <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue with server-managed publishing accounts' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Server workspace' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && (isRunning
             ? <button className='workboard-stop' onClick={onStop}><X size={16} />Emergency stop</button>
@@ -2048,7 +2096,7 @@ function Workboard({
             </div>
           </div>
           <ol className='publishing-context-steps' aria-label='Publishing setup steps'>
-            <li><i><MonitorCheck size={19} /></i><strong>Pair Companion</strong><small>Manager computer only</small></li>
+            <li><i><Database size={19} /></i><strong>Connect server account</strong><small>No user download</small></li>
             <li><i><KeyRound size={19} /></i><strong>Sign in once</strong><small>Use the account login</small></li>
             <li><i><Send size={19} /></i><strong>Create a post</strong><small>Choose account and publish</small></li>
           </ol>
