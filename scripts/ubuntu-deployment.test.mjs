@@ -32,6 +32,7 @@ test("single-host production retains explicit encryption and backup gates", asyn
   assert.match(automation, /SERVER_ARCHITECTURE_ALLOW_PUBLIC_BIND=false/);
   assert.match(automation, /SERVER_PROFILE_STORAGE_ENCRYPTED=true/);
   assert.match(automation, /SERVER_BACKUPS_CONFIGURED=true/);
+  assert.match(automation, /SERVER_MEDIA_UPLOAD_MAX_BYTES=10737418240/);
   assert.match(automation, /SERVER_(?:INSTAGRAM|FACEBOOK|X|LINKEDIN|YOUTUBE)_PUBLISHING_ENABLED=true/);
 });
 

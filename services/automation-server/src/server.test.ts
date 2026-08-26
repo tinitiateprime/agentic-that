@@ -448,3 +448,81 @@ test("dry-run media uploads require authorization and preserve a decoded display
     await runtime.close();
   }
 });
+
+test("chunked media routes preserve workspace scope, offsets, and completion", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token",
+    SERVER_PUBLISHING_DRY_RUN_ENABLED: "true",
+  });
+  const calls: Array<{ operation: string; values: unknown[] }> = [];
+  const fakeFiles = {
+    async beginDevelopmentMediaUpload(...values: unknown[]) {
+      calls.push({ operation: "begin", values });
+      return { uploadId: "upload_0123456789abcdef0123456789abcdef", chunkSize: 4 * 1024 * 1024 };
+    },
+    async appendDevelopmentMediaUpload(...values: unknown[]) {
+      calls.push({ operation: "append", values });
+      return { received: 3, size: 3 };
+    },
+    async completeDevelopmentMediaUpload(...values: unknown[]) {
+      calls.push({ operation: "complete", values });
+      return { storageKey: "media_test.jpg", fileName: "test.jpg", mimeType: "image/jpeg", size: 3 };
+    },
+    async cancelDevelopmentMediaUpload(...values: unknown[]) {
+      calls.push({ operation: "cancel", values });
+    },
+  } as unknown as AutomationFileStore;
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    store: {} as AutomationJobStore,
+    loginManager: null,
+    files: fakeFiles,
+  }));
+  const tokenHeader = { "x-agenticthat-internal-token": config.internalToken };
+  const uploadId = "upload_0123456789abcdef0123456789abcdef";
+  try {
+    const begin = await fetch(`${runtime.url}/v1/media/uploads`, {
+      method: "POST",
+      headers: { ...tokenHeader, "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: "workspace-a", fileName: "test.jpg", mimeType: "image/jpeg", size: 3 }),
+    });
+    assert.equal(begin.status, 201);
+    assert.equal((await begin.json()).upload.uploadId, uploadId);
+
+    const append = await fetch(`${runtime.url}/v1/media/uploads/${uploadId}`, {
+      method: "PUT",
+      headers: {
+        ...tokenHeader,
+        "content-type": "application/octet-stream",
+        "x-agenticthat-workspace-id": "workspace-a",
+        "x-agenticthat-upload-offset": "0",
+      },
+      body: Buffer.from("abc"),
+    });
+    assert.equal(append.status, 200);
+
+    const complete = await fetch(`${runtime.url}/v1/media/uploads/${uploadId}/complete`, {
+      method: "POST",
+      headers: { ...tokenHeader, "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: "workspace-a" }),
+    });
+    assert.equal(complete.status, 201);
+
+    const cancel = await fetch(`${runtime.url}/v1/media/uploads/${uploadId}?workspaceId=workspace-a`, {
+      method: "DELETE",
+      headers: tokenHeader,
+    });
+    assert.equal(cancel.status, 204);
+    assert.deepEqual(calls.map(call => call.operation), ["begin", "append", "complete", "cancel"]);
+    assert.deepEqual(calls[0]?.values, ["workspace-a", "test.jpg", "image/jpeg", 3]);
+    assert.equal(calls[1]?.values[0], "workspace-a");
+    assert.equal(calls[1]?.values[1], uploadId);
+    assert.equal(calls[1]?.values[2], 0);
+    assert.deepEqual(calls[1]?.values[3], Buffer.from("abc"));
+    assert.deepEqual(calls[2]?.values, ["workspace-a", uploadId]);
+    assert.deepEqual(calls[3]?.values, ["workspace-a", uploadId]);
+  } finally {
+    await runtime.close();
+  }
+});

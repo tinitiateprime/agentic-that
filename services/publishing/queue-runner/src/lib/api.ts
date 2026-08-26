@@ -642,21 +642,45 @@ export const api = {
     serverAutomationRequest<{ session: ServerAutomationLoginSession }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
 
   uploadServerAutomationMedia: async (file: File) => {
-    const headers = new Headers({ "content-type": file.type, "x-file-name": file.name });
-    if (centralIdentitySeed) {
-      headers.set("authorization", `Bearer ${await getClientServiceToken("publishing", centralIdentitySeed)}`);
+    if (!file.size) throw new Error("Choose a non-empty media file.");
+    if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
+      throw new Error("Choose one JPEG, PNG, MP4, or MOV file.");
     }
-    const response = await fetch("/api/automation-server/media", {
+    const started = await serverAutomationRequest<{ upload: { uploadId: string; chunkSize: number } }>("/media/uploads", {
       method: "POST",
-      headers,
-      body: file,
-      credentials: "same-origin",
+      body: JSON.stringify({ fileName: file.name, mimeType: file.type, size: file.size }),
     });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as { message?: string; error?: string };
-      throw new Error(body.message || body.error || "The server publishing image upload failed.");
+    const uploadId = started.upload.uploadId;
+    const chunkSize = Math.min(Math.max(started.upload.chunkSize || 4 * 1024 * 1024, 256 * 1024), 4 * 1024 * 1024);
+    try {
+      for (let offset = 0; offset < file.size; offset += chunkSize) {
+        const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
+        let lastError: unknown = null;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await serverAutomationRequest(`/media/uploads/${encodeURIComponent(uploadId)}`, {
+              method: "PUT",
+              headers: { "content-type": "application/octet-stream", "x-upload-offset": String(offset) },
+              body: chunk,
+            });
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (error instanceof PublishingApiRequestError && error.status < 500) break;
+            if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+          }
+        }
+        if (lastError) throw lastError;
+      }
+      return await serverAutomationRequest<{ media: { storageKey: string; fileName: string; mimeType: string; size: number } }>(`/media/uploads/${encodeURIComponent(uploadId)}/complete`, {
+        method: "POST",
+        body: "{}",
+      });
+    } catch (error) {
+      await serverAutomationRequest(`/media/uploads/${encodeURIComponent(uploadId)}`, { method: "DELETE" }).catch(() => undefined);
+      throw error;
     }
-    return response.json() as Promise<{ media: { storageKey: string; fileName: string; mimeType: string; size: number } }>;
   },
 
   createServerAutomationJob: (payload: {

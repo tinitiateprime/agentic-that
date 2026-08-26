@@ -19,6 +19,7 @@ export type PersistentLoginBrowser = {
 
 export interface LoginBrowserLauncher {
   launch(account: LoginAccount, profileDirectory: string, surface: LoginSurface): Promise<PersistentLoginBrowser>;
+  verifySavedSession?(account: LoginAccount, profileDirectory: string): Promise<void>;
 }
 
 function browserCandidates() {
@@ -123,13 +124,22 @@ async function linkedinSessionPresent(context: BrowserContext) {
 }
 
 async function youtubeSessionPresent(context: BrowserContext) {
-  const cookies = await context.cookies(["https://www.youtube.com/", "https://accounts.google.com/"]);
-  const cookieReady = cookies.some(cookie => ["SAPISID", "__Secure-3PAPISID", "SID"].includes(cookie.name) && Boolean(cookie.value));
+  const cookies = await context.cookies();
+  const cookieReady = cookies.some(cookie =>
+    ["SAPISID", "__Secure-3PAPISID", "SID"].includes(cookie.name)
+    && Boolean(cookie.value)
+    && (cookie.domain.endsWith(".youtube.com") || cookie.domain.endsWith(".google.com"))
+  );
   if (!cookieReady) return false;
-  const page = context.pages().find(candidate => candidate.url().includes("youtube.com/"));
-  if (!page || page.url().includes("accounts.google.com")) return false;
-  return await page.locator("button#avatar-btn, ytd-topbar-menu-button-renderer #avatar-btn, #end #avatar-btn")
-    .first().isVisible().catch(() => false);
+  return context.pages().some(candidate => {
+    try {
+      const url = new URL(candidate.url());
+      return (url.hostname === "youtube.com" || url.hostname.endsWith(".youtube.com"))
+        && !/\/signin(?:\/|$)/i.test(url.pathname);
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function wait(page: Page, milliseconds: number, signal: AbortSignal) {
@@ -201,6 +211,11 @@ export async function launchStandardXChrome(
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
     "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+    // systemd browser workers do not have a desktop keyring. A deterministic
+    // Chrome password store keeps encrypted profile cookies readable across
+    // the separate login and publishing browser processes. The profile itself
+    // remains on the required encrypted-at-rest data volume.
+    "--password-store=basic",
     `--window-position=${visible ? "0,0" : "-10000,-10000"}`,
     "--window-size=1280,800",
     "--new-window",
@@ -245,6 +260,50 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     private readonly timeoutMs: number,
   ) {}
 
+  async verifySavedSession(account: LoginAccount, profileDirectory: string) {
+    const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
+    if (!executablePath) throw new Error("A supported browser is required to verify the saved login session.");
+    const targetUrl = account.platform === "facebook" ? "https://www.facebook.com/"
+      : account.platform === "x" ? "https://x.com/home"
+      : account.platform === "linkedin" ? "https://www.linkedin.com/feed/"
+      : account.platform === "youtube" ? "https://studio.youtube.com/"
+      : "https://www.instagram.com/";
+    let close: (() => Promise<void>) | null = null;
+    let context: BrowserContext;
+    let page: Page;
+    try {
+      if (["x", "linkedin", "youtube"].includes(account.platform)) {
+        const launched = await launchStandardXChrome(executablePath, profileDirectory, targetUrl, false);
+        context = launched.context;
+        page = launched.page;
+        close = launched.close;
+      } else {
+        context = await chromium.launchPersistentContext(profileDirectory, {
+          executablePath,
+          headless: true,
+          viewport: { width: 1280, height: 800 },
+          args: ["--no-first-run", "--no-default-browser-check", "--disable-background-mode", "--password-store=basic"],
+        });
+        page = context.pages()[0] || await context.newPage();
+        close = () => context.close();
+      }
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const authenticated = account.platform === "facebook" ? await facebookSessionPresent(context)
+          : account.platform === "x" ? await xSessionPresent(context)
+          : account.platform === "linkedin" ? await linkedinSessionPresent(context)
+          : account.platform === "youtube" ? await youtubeSessionPresent(context)
+          : await instagramSessionPresent(context);
+        if (authenticated) return;
+        await page.waitForTimeout(500);
+      }
+      throw new Error(`${account.platform} login succeeded in the browser but did not persist to the saved server profile. Please complete login again.`);
+    } finally {
+      await close?.().catch(() => undefined);
+    }
+  }
+
   async launch(
     account: LoginAccount,
     profileDirectory: string,
@@ -271,7 +330,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     const loginUrl = account.platform === "facebook" ? "https://www.facebook.com/login/"
       : account.platform === "x" ? "https://x.com/i/flow/login"
       : account.platform === "linkedin" ? "https://www.linkedin.com/login"
-      : account.platform === "youtube" ? "https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/"
+      : account.platform === "youtube" ? "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fstudio.youtube.com%2F"
       : "https://www.instagram.com/accounts/login/";
     if (["x", "linkedin", "youtube"].includes(account.platform)) {
       const launched = await launchStandardXChrome(executablePath, profileDirectory, loginUrl);
@@ -290,6 +349,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
           "--no-default-browser-check",
           "--disable-background-mode",
           "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+          "--password-store=basic",
         ],
       });
       page = context.pages()[0] || await context.newPage();

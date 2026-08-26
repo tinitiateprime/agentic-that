@@ -3,8 +3,6 @@ import type { PublishingDryRunResult, PublishingDryRunValidator, PublishingProfi
 import type { AutomationFileStore } from "./profile-store.ts";
 
 const SUPPORTED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "video/mp4", "video/quicktime"]);
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 
 export class FacebookPublishingDryRunValidator implements PublishingDryRunValidator {
   readonly platform = "facebook" as const;
@@ -33,8 +31,7 @@ export class FacebookPublishingDryRunValidator implements PublishingDryRunValida
         continue;
       }
       const size = (await stat(this.files.mediaFilePath(media.storageKey))).size;
-      const limit = mimeType.startsWith("video/") ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
-      if (size < 1 || size > limit) issues.push(`${media.fileName} must be between 1 byte and ${limit / 1024 / 1024} MB.`);
+      if (size < 1) issues.push(`${media.fileName} cannot be empty.`);
       else checks.push(`${media.fileName} is present in isolated media storage.`);
     }
     checks.push("Dry-run mode has no browser launch or Post-button code path.");

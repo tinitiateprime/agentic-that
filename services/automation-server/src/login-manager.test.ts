@@ -31,6 +31,8 @@ test("Instagram login uses one persistent account session and marks the profile 
   const accounts = new AutomationJobStore(database, files);
   const sessions = new AutomationLoginStore(database);
   let launchCount = 0;
+  let browserClosed = false;
+  let verifiedAfterClose = false;
   let receivedInput: unknown = null;
   let confirmLogin = () => {};
   const authenticated = new Promise<void>(resolve => { confirmLogin = resolve; });
@@ -44,9 +46,10 @@ test("Instagram login uses one persistent account session and marks the profile 
         },
         async captureFrame() { return Buffer.from("frame"); },
         async dispatchInput(input) { receivedInput = input; },
-        async close() {},
+        async close() { browserClosed = true; },
       };
     },
+    async verifySavedSession() { verifiedAfterClose = browserClosed; },
   };
   const manager = new AutomationLoginManager(sessions, files, launcher);
 
@@ -79,6 +82,7 @@ test("Instagram login uses one persistent account session and marks the profile 
     confirmLogin();
     await until(() => manager.get("login-workspace", started.id)?.state === "CONNECTED");
     assert.equal(accounts.listAccounts("login-workspace")[0]?.status, "CONNECTED");
+    assert.equal(verifiedAfterClose, true);
     const profile = database.prepare(`
       SELECT version, last_saved_at FROM browser_profiles WHERE account_id = ?
     `).get(account.id) as { version: number; last_saved_at: string | null };

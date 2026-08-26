@@ -27,7 +27,7 @@ import type { PublishingDryRunValidator, ServerPublishingExecutor } from "./exec
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
-  const files = new AutomationFileStore(config.dataDirectory);
+  const files = new AutomationFileStore(config.dataDirectory, config.mediaUploadMaxBytes);
   await files.initialize();
 
   assertSafeAutomationDatabase(config);

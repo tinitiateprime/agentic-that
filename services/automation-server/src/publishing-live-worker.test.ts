@@ -171,6 +171,10 @@ test("the Facebook live executor has one exact guarded Post click", async () => 
   const source = await readFile(new URL("./facebook-live.ts", import.meta.url), "utf8");
   assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
   assert.match(source, /exact Post-label guard/);
+  assert.match(source, /FACEBOOK_UPLOAD_TIMEOUT_MS/);
+  assert.match(source, /Post button did not become enabled while the media was processing/);
+  assert.match(source, /\[role="button"\]\[aria-label="Post"\]/);
+  assert.match(source, /--password-store=basic/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
   assert.match(source, /editor\.locator\('xpath=ancestor::\*\[@role="dialog"\]\[1\]'\)/);
   assert.doesNotMatch(source, /filter\(\{ hasText: \/Create post\|What's on your mind\/i \}\)\.last\(\)/);

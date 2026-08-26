@@ -110,6 +110,28 @@ export async function POST(request, context) {
         body: JSON.stringify({ workspaceId: principal.workspaceId, inputs }),
       }));
     }
+    if (route.length === 2 && route[0] === "media" && route[1] === "uploads") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
+      const body = await jsonBody(request);
+      return upstreamResponse(await automationServerRequest(config, "/v1/media/uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: principal.workspaceId,
+          fileName: body.fileName,
+          mimeType: body.mimeType,
+          size: body.size,
+        }),
+      }));
+    }
+    if (route.length === 4 && route[0] === "media" && route[1] === "uploads" && route[3] === "complete") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
+      return upstreamResponse(await automationServerRequest(config, `/v1/media/uploads/${encodeURIComponent(route[2])}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: principal.workspaceId }),
+      }));
+    }
     if (route.length === 1 && route[0] === "media") {
       const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
       const mimeType = String(request.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
@@ -157,6 +179,32 @@ export async function POST(request, context) {
   }
 }
 
+export async function PUT(request, context) {
+  try {
+    const config = automationServerBridgeConfig();
+    if (!config) return unavailable();
+    const route = await parts(context);
+    if (route.length !== 3 || route[0] !== "media" || route[1] !== "uploads") return unavailable();
+    const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
+    const contentLength = Number(request.headers.get("content-length") || 0);
+    if (contentLength > 4 * 1024 * 1024) throw new Error("Media upload chunks must be 4 MB or smaller.");
+    const bytes = Buffer.from(await request.arrayBuffer());
+    if (!bytes.length || bytes.length > 4 * 1024 * 1024) throw new Error("Media upload chunks must be between 1 byte and 4 MB.");
+    const offset = Number(request.headers.get("x-upload-offset"));
+    return upstreamResponse(await automationServerRequest(config, `/v1/media/uploads/${encodeURIComponent(route[2])}`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-agenticthat-workspace-id": principal.workspaceId,
+        "x-agenticthat-upload-offset": String(offset),
+      },
+      body: bytes,
+    }));
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function PATCH(request, context) {
   try {
     const config = automationServerBridgeConfig();
@@ -182,6 +230,14 @@ export async function DELETE(request, context) {
     const config = automationServerBridgeConfig();
     if (!config) return unavailable();
     const route = await parts(context);
+    if (route.length === 3 && route[0] === "media" && route[1] === "uploads") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.content.create", "publishing");
+      return upstreamResponse(await automationServerRequest(
+        config,
+        `/v1/media/uploads/${encodeURIComponent(route[2])}?${workspaceQuery(principal.workspaceId)}`,
+        { method: "DELETE" },
+      ));
+    }
     if (route.length === 2 && route[0] === "accounts") {
       const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       return upstreamResponse(await automationServerRequest(

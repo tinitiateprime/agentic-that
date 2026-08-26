@@ -25,8 +25,7 @@ export class XPublishingDryRunValidator implements PublishingDryRunValidator {
       if (!TYPES.has(type)) { issues.push(`${media.fileName} uses an unsupported X media type.`); continue; }
       if (!await this.files.mediaFileExists(media.storageKey)) { issues.push(`${media.fileName} is missing from isolated server media storage.`); continue; }
       const size = (await stat(this.files.mediaFilePath(media.storageKey))).size;
-      const limit = type.startsWith("video/") ? 250 * 1024 * 1024 : 25 * 1024 * 1024;
-      if (size < 1 || size > limit) issues.push(`${media.fileName} must be between 1 byte and ${limit / 1024 / 1024} MB.`);
+      if (size < 1) issues.push(`${media.fileName} cannot be empty.`);
       else checks.push(`${media.fileName} is present in isolated media storage.`);
     }
     checks.push("Dry-run mode has no browser launch or Post-button code path.");

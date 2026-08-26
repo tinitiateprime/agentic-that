@@ -9,7 +9,6 @@ import { open, stat } from "node:fs/promises";
 import sharp from "sharp";
 
 const SUPPORTED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "video/mp4", "video/quicktime"]);
-const MAX_LOCAL_MEDIA_BYTES = 250 * 1024 * 1024;
 const MAX_INSTAGRAM_LANDSCAPE_ASPECT_RATIO = 1.91;
 
 async function videoContainerLooksValid(filePath: string) {
@@ -74,8 +73,8 @@ export class InstagramPublishingDryRunValidator implements PublishingDryRunValid
       }
       const filePath = this.files.mediaFilePath(media.storageKey);
       const fileStats = await stat(filePath);
-      if (fileStats.size < 1 || fileStats.size > MAX_LOCAL_MEDIA_BYTES) {
-        issues.push(`${media.fileName} must be between 1 byte and 250 MB for local validation.`);
+      if (fileStats.size < 1) {
+        issues.push(`${media.fileName} cannot be empty.`);
         continue;
       }
       if (media.mimeType.startsWith("image/")) {

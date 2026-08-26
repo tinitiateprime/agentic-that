@@ -102,6 +102,13 @@ export class AutomationLoginManager {
       this.store.markAwaitingUser(sessionId);
       await active.browser.waitForAuthenticated(active.controller.signal);
       if (active.controller.signal.aborted) return;
+      // Close Chrome first so its cookie database is flushed, then prove a
+      // fresh worker process can read the same saved session. An account must
+      // never be shown as connected based only on the still-open login window.
+      await active.browser.close();
+      active.browser = null;
+      await this.launcher.verifySavedSession?.(account, profileDirectory);
+      if (active.controller.signal.aborted) return;
       this.store.markConnected(sessionId);
     } catch (error) {
       const current = this.store.getSessionForShutdown(sessionId);

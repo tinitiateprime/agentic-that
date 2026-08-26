@@ -50,7 +50,52 @@ test("media storage keys cannot escape the isolated media directory", async () =
     assert.deepEqual(await readFile(store.mediaFilePath(video.storageKey)), videoBytes);
     await assert.rejects(
       () => store.storeDevelopmentMedia(Buffer.from("bad"), "bad.exe", "application/octet-stream"),
-      /not supported/,
+      /JPEG, PNG, MP4, or MOV/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("chunked media uploads accept large-file pieces sequentially and remain workspace isolated", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-chunked-media-"));
+  try {
+    const store = new AutomationFileStore(directory, 16 * 1024 * 1024);
+    await store.initialize();
+    const first = Buffer.from("first chunk");
+    const second = Buffer.from(" and second chunk");
+    const upload = await store.beginDevelopmentMediaUpload(
+      "workspace-a",
+      "large video.mp4",
+      "video/mp4",
+      first.length + second.length,
+    );
+    assert.equal(upload.chunkSize, 4 * 1024 * 1024);
+    await assert.rejects(
+      () => store.appendDevelopmentMediaUpload("workspace-b", upload.uploadId, 0, first),
+      /not found for this workspace/,
+    );
+    await store.appendDevelopmentMediaUpload("workspace-a", upload.uploadId, 0, first);
+    assert.deepEqual(
+      await store.appendDevelopmentMediaUpload("workspace-a", upload.uploadId, 0, first),
+      { received: first.length, size: first.length + second.length },
+    );
+    await assert.rejects(
+      () => store.appendDevelopmentMediaUpload("workspace-a", upload.uploadId, 1, Buffer.from("different")),
+      /offset mismatch/,
+    );
+    await store.appendDevelopmentMediaUpload("workspace-a", upload.uploadId, first.length, second);
+    assert.deepEqual(
+      await store.appendDevelopmentMediaUpload("workspace-a", upload.uploadId, first.length, second),
+      { received: first.length + second.length, size: first.length + second.length },
+    );
+    const saved = await store.completeDevelopmentMediaUpload("workspace-a", upload.uploadId);
+    assert.equal(saved.fileName, "large video.mp4");
+    assert.equal(saved.size, first.length + second.length);
+    assert.deepEqual(await readFile(store.mediaFilePath(saved.storageKey)), Buffer.concat([first, second]));
+    await assert.rejects(
+      () => store.completeDevelopmentMediaUpload("workspace-a", upload.uploadId),
+      /not found for this workspace/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

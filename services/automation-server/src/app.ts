@@ -364,6 +364,61 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     },
   );
 
+  app.post("/v1/media/uploads", requireInternalToken, requireStore, async (req, res) => {
+    if ((!config.publishingDryRunEnabled && !config.publishingPreviewEnabled && !publishingLiveEnabled) || !files) {
+      res.status(409).json({ error: "Publishing media storage is disabled." });
+      return;
+    }
+    const upload = await files.beginDevelopmentMediaUpload(
+      String(req.body?.workspaceId || ""),
+      String(req.body?.fileName || ""),
+      String(req.body?.mimeType || ""),
+      Number(req.body?.size),
+    );
+    res.status(201).json({ upload });
+  });
+
+  app.put(
+    "/v1/media/uploads/:uploadId",
+    requireInternalToken,
+    requireStore,
+    express.raw({ type: () => true, limit: "5mb" }),
+    async (req, res) => {
+      if (!files || !Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: "A binary media chunk is required." });
+        return;
+      }
+      const progress = await files.appendDevelopmentMediaUpload(
+        String(req.headers["x-agenticthat-workspace-id"] || ""),
+        String(req.params.uploadId),
+        Number(req.headers["x-agenticthat-upload-offset"]),
+        req.body,
+      );
+      res.json({ progress });
+    },
+  );
+
+  app.post("/v1/media/uploads/:uploadId/complete", requireInternalToken, requireStore, async (req, res) => {
+    if (!files) {
+      res.status(409).json({ error: "Publishing media storage is disabled." });
+      return;
+    }
+    const media = await files.completeDevelopmentMediaUpload(String(req.body?.workspaceId || ""), String(req.params.uploadId));
+    res.status(201).json({ media });
+  });
+
+  app.delete("/v1/media/uploads/:uploadId", requireInternalToken, requireStore, async (req, res) => {
+    if (!files) {
+      res.status(409).json({ error: "Publishing media storage is disabled." });
+      return;
+    }
+    await files.cancelDevelopmentMediaUpload(
+      String(req.query.workspaceId || ""),
+      String(req.params.uploadId),
+    );
+    res.status(204).end();
+  });
+
   app.get("/v1/publishing/jobs/:jobId", requireInternalToken, requireStore, async (req, res) => {
     const workspaceId = String(req.query.workspaceId || "").trim();
     if (!workspaceId) {

@@ -969,13 +969,7 @@ async function validateServerMedia(file: File, targetPlatforms: Platform[]) {
     throw new Error("The server worker supports JPEG, PNG, MP4, or MOV media.");
   }
   const video = file.type.startsWith("video/");
-  const linkedinSelected = targetPlatforms.includes("linkedin");
-  const maximumBytes = video
-    ? (linkedinSelected ? 200 : 250) * 1024 * 1024
-    : (linkedinSelected ? 20 : 25) * 1024 * 1024;
-  if (file.size < 1 || file.size > maximumBytes) {
-    throw new Error(`The server ${video ? "video" : "image"} must be between 1 byte and ${maximumBytes / 1024 / 1024} MB for the selected accounts.`);
-  }
+  if (file.size < 1) throw new Error(`The server ${video ? "video" : "image"} cannot be empty.`);
   if (video || !targetPlatforms.includes("instagram")) return;
   const bitmap = await createImageBitmap(file);
   try {
@@ -1565,7 +1559,7 @@ function UnifiedComposer({
                 {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
                 <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
                 <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{selectedFiles.length > 1 ? `${selectedFiles.length} carousel items` : file.name}</strong><small>{selectedFiles.length > 1 ? `${formatComposerFileSize(selectedFiles.reduce((total, item) => total + item.size, 0))} total` : formatComposerFileSize(file.size)}</small></span>
-              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop up to 10 {postFormat} files here</strong><span>Choose multiple files for an Instagram carousel</span><small>Images: 25 MB each · videos: 250 MB each</small></label>}
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop up to 10 {postFormat} files here</strong><span>Choose multiple files for an Instagram carousel</span><small>Large files are transferred in secure 4 MB chunks</small></label>}
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Required only when YouTube is selected'} maxLength={100} /></label>}

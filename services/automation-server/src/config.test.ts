@@ -21,6 +21,7 @@ test("server architecture is disabled and loopback-only by default", () => {
   assert.equal(config.publishingPreviewEnabled, false);
   assert.equal(config.workerPollMs, 2_000);
   assert.equal(config.liveWorkerCount, 1);
+  assert.equal(config.mediaUploadMaxBytes, 10 * 1024 * 1024 * 1024);
   assert.equal(config.autoMigrate, false);
   assert.equal(config.profileStorageEncrypted, false);
   assert.equal(config.backupsConfigured, false);
@@ -104,5 +105,6 @@ test("invalid ports are rejected", () => {
   assert.throws(() => loadAutomationConfig({ SERVER_WORKER_POLL_MS: "10" }), /between 250 and 60000/);
   assert.throws(() => loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "0" }), /between 1 and 8/);
   assert.throws(() => loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "9" }), /between 1 and 8/);
+  assert.throws(() => loadAutomationConfig({ SERVER_MEDIA_UPLOAD_MAX_BYTES: "1024" }), /between 8 MB and 256 GB/);
   assert.equal(loadAutomationConfig({ SERVER_LIVE_WORKER_COUNT: "4" }).liveWorkerCount, 4);
 });

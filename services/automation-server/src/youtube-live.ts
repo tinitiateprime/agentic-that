@@ -35,14 +35,20 @@ async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal,
 }
 
 async function youtubeAuthenticated(context: BrowserContext, page: Page) {
-  const cookies = await context.cookies(["https://www.youtube.com/", "https://studio.youtube.com/", "https://accounts.google.com/"]);
-  const cookieReady = cookies.some(cookie => ["SAPISID", "__Secure-3PAPISID", "SID"].includes(cookie.name) && Boolean(cookie.value));
-  if (!cookieReady || /accounts\.google\.com|\/signin/i.test(page.url())) return false;
-  return Boolean(await firstVisible([
-    page.locator("button#avatar-btn"),
-    page.locator("ytcp-button#create-icon"),
-    page.locator("#avatar-btn"),
-  ]));
+  const cookies = await context.cookies();
+  const cookieReady = cookies.some(cookie =>
+    ["SAPISID", "__Secure-3PAPISID", "SID"].includes(cookie.name)
+    && Boolean(cookie.value)
+    && (cookie.domain.endsWith(".youtube.com") || cookie.domain.endsWith(".google.com"))
+  );
+  if (!cookieReady) return false;
+  try {
+    const url = new URL(page.url());
+    return (url.hostname === "youtube.com" || url.hostname.endsWith(".youtube.com"))
+      && !/\/signin(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 async function fillEditable(page: Page, locator: Locator, text: string) {

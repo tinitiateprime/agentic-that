@@ -62,3 +62,15 @@ test("the composer exposes YouTube video requirements before account selection",
   assert.match(dashboard, /const selectedNeedsTitle = youtubeVideoSelected/);
   assert.match(dashboard, /<span>\{handoffOnly \? 'Video title' : 'YouTube title'\}/);
 });
+
+test("server media uploads use small chunks instead of browser-side platform size caps", () => {
+  const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+
+  assert.doesNotMatch(dashboard, /Images: 25 MB each/);
+  assert.doesNotMatch(dashboard, /maximumBytes/);
+  assert.match(dashboard, /secure 4 MB chunks/);
+  assert.match(api, /for \(let offset = 0; offset < file\.size; offset \+= chunkSize\)/);
+  assert.match(api, /file\.slice\(offset/);
+  assert.match(api, /\/media\/uploads/);
+});

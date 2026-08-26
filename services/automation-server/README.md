@@ -97,8 +97,10 @@ npm run server-architecture:dev
    then open `http://127.0.0.1:8800/development/connect`.
 6. To test the worker safely, also set
    `SERVER_PUBLISHING_DRY_RUN_ENABLED=true`, select a connected test account,
-   choose a JPEG or PNG up to 25 MB, and click **Run safe check**. This validates
-   the queue and saved files without opening Instagram or publishing anything.
+   choose a JPEG or PNG, and click **Run safe check**. Large media is uploaded
+   in small chunks; the configurable host storage ceiling still protects the
+   server disk. This validates the queue and saved files without opening
+   Instagram or publishing anything.
 7. To test the Instagram composer without publishing, also set
    `SERVER_PUBLISHING_PREVIEW_ENABLED=true`, restart, choose the same test media,
    and click **Prepare private preview**. After confirmation, this uploads the

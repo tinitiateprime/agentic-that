@@ -28,6 +28,7 @@ export type AutomationConfig = {
   publishingPreviewEnabled: boolean;
   workerPollMs: number;
   liveWorkerCount: number;
+  mediaUploadMaxBytes: number;
   autoMigrate: boolean;
   allowPublicBind: boolean;
   profileStorageEncrypted: boolean;
@@ -75,6 +76,14 @@ function liveWorkerCount(value: string | undefined) {
   const parsed = Number(value || 1);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
     throw new Error("SERVER_LIVE_WORKER_COUNT must be an integer between 1 and 8.");
+  }
+  return parsed;
+}
+
+function mediaUploadMaxBytes(value: string | undefined) {
+  const parsed = Number(value || 10 * 1024 * 1024 * 1024);
+  if (!Number.isSafeInteger(parsed) || parsed < 8 * 1024 * 1024 || parsed > 256 * 1024 * 1024 * 1024) {
+    throw new Error("SERVER_MEDIA_UPLOAD_MAX_BYTES must be between 8 MB and 256 GB.");
   }
   return parsed;
 }
@@ -159,6 +168,7 @@ export function loadAutomationConfig(
     publishingPreviewEnabled: enabled(env.SERVER_PUBLISHING_PREVIEW_ENABLED),
     workerPollMs: workerPoll(env.SERVER_WORKER_POLL_MS),
     liveWorkerCount: liveWorkerCount(env.SERVER_LIVE_WORKER_COUNT),
+    mediaUploadMaxBytes: mediaUploadMaxBytes(env.SERVER_MEDIA_UPLOAD_MAX_BYTES),
     autoMigrate,
     allowPublicBind,
     profileStorageEncrypted,

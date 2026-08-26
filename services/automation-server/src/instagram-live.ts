@@ -160,6 +160,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
         "--no-default-browser-check",
         "--disable-background-mode",
         "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+        "--password-store=basic",
       ],
     });
     let deadlineExpired = false;

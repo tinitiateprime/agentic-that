@@ -57,8 +57,7 @@ export class YouTubePublishingDryRunValidator implements PublishingDryRunValidat
         continue;
       }
       const size = (await stat(this.files.mediaFilePath(item.storageKey))).size;
-      const limit = 250 * 1024 * 1024;
-      if (size < 1 || size > limit) issues.push(`${item.fileName} must be between 1 byte and 250 MB.`);
+      if (size < 1) issues.push(`${item.fileName} cannot be empty.`);
       else checks.push(`${item.fileName} is present in isolated media storage.`);
     }
     checks.push("Dry-run mode has no browser launch or final-action code path.");
