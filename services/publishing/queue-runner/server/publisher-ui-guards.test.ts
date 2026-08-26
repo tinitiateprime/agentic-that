@@ -53,3 +53,12 @@ test("the authenticated website uses server-managed publishing accounts as its a
   assert.doesNotMatch(configManager, /Pair this device/);
   assert.match(productStatus, /fetch\("\/api\/automation-server\/accounts"/);
 });
+
+test("the composer exposes YouTube video requirements before account selection", () => {
+  const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(dashboard, /const showYoutubeTitle = postFormat === 'video'/);
+  assert.match(dashboard, /const youtubeVideoSelected = Boolean\(postFormat === 'video' && selectedPlatforms\.includes\('youtube'\)\)/);
+  assert.match(dashboard, /const selectedNeedsTitle = youtubeVideoSelected/);
+  assert.match(dashboard, /<span>\{handoffOnly \? 'Video title' : 'YouTube title'\}/);
+});

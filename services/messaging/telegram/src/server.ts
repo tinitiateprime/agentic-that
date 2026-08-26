@@ -935,7 +935,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         lastName: optionalString(body, "lastName", 120)
       });
     } catch (error) {
-      throw telegramSendError(error, recipient);
+      const mapped = telegramSendError(error, recipient);
+      // Keep request data and recipients out of system logs while retaining a
+      // useful operational signal for remote-user failures.
+      console.warn(`Telegram send was rejected for account ${account.id} with HTTP ${mapped.status}.`);
+      throw mapped;
     }
     if (shouldRunBackgroundListeners()) void startTelegramListener(account);
     const message = await store.recordMessage({
@@ -945,6 +949,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       text,
       telegramMessageId: sent.messageId
     });
+    console.log(`Telegram confirmed ${sent.messageId.split(",").length} message ID(s) for account ${account.id}.`);
     sendJson(request, response, 200, { ok: true, sent, message });
     return;
   }

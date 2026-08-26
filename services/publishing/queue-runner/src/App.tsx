@@ -1199,14 +1199,14 @@ function UnifiedComposer({
     .map(accountId => accounts.find(account => account.id === accountId))
     .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
-  const selectedNeedsTitle = showYoutubeTitle;
+  // Show YouTube's required video fields before destination selection. When
+  // these fields depended on an already-selected YouTube account, eligibility
+  // required a title while the UI hid the only title input: a circular lock.
+  const showYoutubeTitle = postFormat === 'video';
+  const youtubeVideoSelected = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
+  const selectedNeedsTitle = youtubeVideoSelected;
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
-
-  useEffect(() => {
-    if (!showYoutubeTitle && title) setTitle('');
-  }, [showYoutubeTitle, title]);
 
   useEffect(() => {
     setPlatformDescriptions(current => Object.fromEntries(Object.entries(current).filter(([platform]) => selectedPlatforms.includes(platform as Platform))) as Partial<Record<Platform, string>>);
@@ -1569,7 +1569,7 @@ function UnifiedComposer({
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Required only when YouTube is selected'} maxLength={100} /></label>}
-            {showYoutubeTitle && !handoffOnly && <>
+            {youtubeVideoSelected && !handoffOnly && <>
               <label className='composer-field'><span>YouTube audience <small>Required for COPPA compliance</small></span><select value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
               <label className='composer-field'><span>YouTube visibility <small>No default is assumed</small></span><select value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
             </>}

@@ -95,13 +95,31 @@ async function xSessionPresent(context: BrowserContext) {
   return await authenticatedUi.first().isVisible().catch(() => false);
 }
 
+export function isAuthenticatedLinkedInUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "linkedin.com" && !url.hostname.endsWith(".linkedin.com")) return false;
+    return !/\/(?:login|checkpoint|uas)(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function linkedinSessionPresent(context: BrowserContext) {
-  const cookies = await context.cookies("https://www.linkedin.com/");
-  if (!cookies.some(cookie => cookie.name === "li_at" && Boolean(cookie.value))) return false;
-  const page = context.pages().find(candidate => candidate.url().includes("linkedin.com/"));
-  if (!page || /\/login|\/checkpoint|\/uas\//i.test(page.url())) return false;
-  return await page.locator("#global-nav, .global-nav, [data-test-global-nav-link='feed']")
-    .first().isVisible().catch(() => false);
+  // Read the whole CDP cookie jar because LinkedIn can finish a provider login
+  // in a second tab and can scope li_at to a parent LinkedIn domain.
+  const cookies = await context.cookies();
+  const sessionCookie = cookies.some(cookie =>
+    cookie.name === "li_at"
+    && Boolean(cookie.value)
+    && (cookie.domain === "linkedin.com" || cookie.domain.endsWith(".linkedin.com"))
+  );
+  if (!sessionCookie) return false;
+
+  // li_at is LinkedIn's authenticated browser session. Do not require one
+  // brittle navigation CSS class as well: LinkedIn regularly changes its app
+  // shell, and an authenticated /feed or /mynetwork page is sufficient.
+  return context.pages().some(candidate => isAuthenticatedLinkedInUrl(candidate.url()));
 }
 
 async function youtubeSessionPresent(context: BrowserContext) {

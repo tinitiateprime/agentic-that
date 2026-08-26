@@ -465,13 +465,13 @@ function contactRecipient(contact) {
 function postTargets(post) {
   const rows = [];
   const seen = new Set();
-  const add = (recipient, source, firstName = "") => {
+  const add = (recipient, source, firstName = "", kind = "manual") => {
     const clean = recipientFromGroupLine(recipient);
     if (!clean) return;
     const key = clean.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ recipient: clean, source, firstName });
+    rows.push({ recipient: clean, source, firstName, kind });
   };
   add(post.recipient, "Manual");
   (post.contacts || []).forEach((id) => {
@@ -1126,6 +1126,8 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   await sendInboxThreadMessage(form.dataset.inboxQuickForm, form.querySelector("textarea"));
 });
+let postSendPending = false;
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -1141,16 +1143,24 @@ document.addEventListener("click", async (event) => {
   if (button.id === "post-clear") clearPost();
   if (button.id === "post-schedule") { if (!$("post-scheduled-at").value) return status(el.postStatusMessage, "Choose a scheduled date.", "error"); savePost("Scheduled"); status(el.postStatusMessage, "Post saved as scheduled.", "success"); }
   if (button.id === "post-send-now") {
-    const post = savePost();
-    if (!post) return;
-    const result = await sendPostToTargets(post, el.postStatusMessage);
-    if (result.failures.length) {
-      status(el.postStatusMessage, `Sent ${result.sentCount}/${result.targets.length}. Failed: ${result.failures.slice(0, 3).join("; ")}`, "error");
-      return;
+    if (postSendPending) return;
+    postSendPending = true;
+    button.disabled = true;
+    try {
+      const post = savePost();
+      if (!post) return;
+      const result = await sendPostToTargets(post, el.postStatusMessage);
+      if (result.failures.length) {
+        status(el.postStatusMessage, `Sent ${result.sentCount}/${result.targets.length}. Failed: ${result.failures.slice(0, 3).join("; ")}`, "error");
+        return;
+      }
+      $("post-status").value = "Posted";
+      savePost("Posted");
+      status(el.postStatusMessage, `Post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, "success");
+    } finally {
+      postSendPending = false;
+      button.disabled = false;
     }
-    $("post-status").value = "Posted";
-    savePost("Posted");
-    status(el.postStatusMessage, `Post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, "success");
   }  if (button.id === "backup-export") { el.backupJson.value = JSON.stringify(backupData(), null, 2); status(el.backupStatus, "Backup exported.", "success"); }
   if (button.id === "backup-import") {
     try { const data = JSON.parse(el.backupJson.value || "{}"); state.profiles = data.profiles && typeof data.profiles === "object" ? data.profiles : state.profiles; state.contacts = Array.isArray(data.contacts) ? data.contacts : state.contacts; state.groups = Array.isArray(data.groups) ? data.groups : state.groups; state.channels = Array.isArray(data.channels) ? data.channels : state.channels; state.posts = Array.isArray(data.posts) ? data.posts : state.posts; state.postHistory = Array.isArray(data.postHistory) ? data.postHistory : state.postHistory; state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings; saveAll(); applyTheme(); render(); status(el.backupStatus, "Backup restored.", "success"); }

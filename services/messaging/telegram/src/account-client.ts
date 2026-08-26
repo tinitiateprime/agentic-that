@@ -339,6 +339,9 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
       const sent = await client.sendMessage(peer, { message: chunk });
       if (sent.id) sentIds.push(sent.id.toString());
     }
+    if (!sentIds.length) {
+      throw new Error("Telegram did not return a message ID, so delivery could not be confirmed.");
+    }
     return { recipient, messageId: sentIds.join(","), sentAt: new Date().toISOString() };
   } finally {
     await client.disconnect();

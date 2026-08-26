@@ -19,3 +19,10 @@ test("paid-message rejection includes Telegram's required Star amount", () => {
   assert.equal(error.status, 402);
   assert.match(error.message, /requires 5 Telegram Stars per message/);
 });
+
+test("unconfirmed Telegram sends are never reported as successful", () => {
+  const error = telegramSendError(new Error("Telegram did not return a message ID, so delivery could not be confirmed."));
+
+  assert.equal(error.status, 502);
+  assert.match(error.message, /delivery could not be confirmed/);
+});
