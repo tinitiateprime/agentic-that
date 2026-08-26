@@ -4,6 +4,16 @@ import { detectServerBrowserExecutable, isAuthenticatedLinkedInUrl, launchStanda
 import type { AutomationFileStore } from "./profile-store.ts";
 import { setServerLocalInputFile } from "./local-file-input.ts";
 
+export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
+  '[role="dialog"] [contenteditable="true"]',
+  '[role="dialog"] [role="textbox"]',
+  '[role="dialog"] textarea',
+  '.share-creation-state__text-editor [contenteditable="true"]',
+  '.ql-editor[contenteditable="true"]',
+  '.tiptap.ProseMirror[contenteditable="true"]',
+  '.ProseMirror[contenteditable="true"][role="textbox"]',
+] as const;
+
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 10); index < count; index += 1) {
     const item = locator.nth(index);
@@ -21,6 +31,105 @@ async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal,
     await page.waitForTimeout(500);
   }
   return null;
+}
+
+function linkedInComposerEditors(page: Page) {
+  return LINKEDIN_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
+}
+
+async function waitForLinkedInComposer(page: Page, signal: AbortSignal, timeout: number) {
+  return waitVisible(page, linkedInComposerEditors(page), signal, timeout);
+}
+
+async function activateLinkedInComposerControl(control: Locator) {
+  await control.evaluate(element => {
+    const label = `${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`.replace(/\s+/g, " ").trim();
+    if (!/start a post/i.test(label)) throw new Error("The LinkedIn control was no longer Start a post.");
+    (element as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
+    (element as HTMLElement).focus();
+    (element as HTMLElement).click();
+  });
+}
+
+async function enterLinkedInPostText(page: Page, editor: Locator, text: string) {
+  const expected = text.replace(/\s+/g, " ").trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await editor.evaluate(element => {
+      (element as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
+      (element as HTMLElement).click();
+      (element as HTMLElement).focus();
+    });
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.press("Backspace");
+    if (text) await page.keyboard.insertText(text);
+    const entered = await editor.evaluate(element => {
+      if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
+      return (element as HTMLElement).innerText || element.textContent || "";
+    }).catch(() => "");
+    const normalized = entered.replace(/\s+/g, " ").trim();
+    if (normalized === expected || normalized.includes(expected)) return;
+    await page.waitForTimeout(500);
+  }
+  throw new Error("LinkedIn's post text was not retained by its current editor.");
+}
+
+async function openLinkedInComposer(page: Page, signal: AbortSignal) {
+  if (/linkedin\.com\/sharing\/compose/i.test(page.url())) {
+    const existing = await waitForLinkedInComposer(page, signal, 2_000);
+    if (existing) return existing;
+  }
+
+  const controls = [
+    page.getByRole("button", { name: /Start a post/i }),
+    page.locator('button[class*="share-box-feed-entry__trigger"]'),
+    page.locator('[data-view-name*="start-post" i]'),
+    page.locator('[data-control-name*="sharebox" i]'),
+    page.locator('button').filter({ hasText: /Start a post/i }),
+    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
+    page.locator('[aria-label*="Start a post" i]'),
+  ];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    signal.throwIfAborted();
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
+    if (!await waitVisible(page, controls, signal, attempt ? 8_000 : 15_000)) continue;
+    for (const control of controls) {
+      for (let index = 0, count = Math.min(await control.count().catch(() => 0), 12); index < count; index += 1) {
+        const candidate = control.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await activateLinkedInComposerControl(candidate).catch(() => undefined);
+        const editor = await waitForLinkedInComposer(page, signal, 4_000);
+        if (editor) return editor;
+      }
+    }
+  }
+
+  throw new Error("LinkedIn's Start a post control did not open its current post editor.");
+}
+
+async function activateExactLinkedInPost(post: Locator) {
+  await post.evaluate(element => {
+    const label = `${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`.replace(/\s+/g, " ").trim();
+    if (!/^post(?:\s+post)?$/i.test(label) || element.getAttribute("aria-disabled") === "true") {
+      throw new Error("The final LinkedIn control was no longer an enabled exact Post action.");
+    }
+    (element as HTMLElement).click();
+  });
+}
+
+async function waitForLinkedInPublishConfirmation(page: Page, editor: Locator, dialog: Locator, signal: AbortSignal) {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    if (await dialog.count() && !await dialog.isVisible().catch(() => false)) return;
+    if (!await editor.isVisible().catch(() => false)) return;
+    if (!/linkedin\.com\/sharing\/compose/i.test(page.url()) && await firstVisible([
+      page.getByText(/Post successful|Your post has been shared|View post/i),
+      page.locator('[role="alert"]').filter({ hasText: /posted|shared/i }),
+    ])) return;
+    await page.waitForTimeout(750);
+  }
+  throw new Error("LinkedIn did not show a publish confirmation or close its composer.");
 }
 
 export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExecutor {
@@ -42,20 +151,8 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
       if (!isAuthenticatedLinkedInUrl(page.url())) {
         return { state: "LOGIN_REQUIRED" as const, errorCode: "LINKEDIN_LOGIN_REQUIRED", errorMessage: "Reconnect the LinkedIn account." };
       }
-      const opener = await waitVisible(page, [
-        page.getByRole("button", { name: /Start a post/i }),
-        page.locator('button[class*="share-box-feed-entry__trigger"]'),
-        page.locator('[aria-label*="Start a post" i]'),
-      ], signal, 45_000);
-      if (!opener) throw new Error("LinkedIn's Start a post control was unavailable.");
-      await opener.click({ timeout: 10_000 });
-      const editor = await waitVisible(page, [
-        page.locator('[role="dialog"] .tiptap[contenteditable="true"]'),
-        page.locator('[role="dialog"] [contenteditable="true"][role="textbox"]'),
-        page.locator('.share-creation-state__text-editor .tiptap[contenteditable="true"]'),
-      ], signal, 30_000);
-      if (!editor) throw new Error("LinkedIn's post editor was unavailable.");
-      await editor.fill(job.caption);
+      const editor = await openLinkedInComposer(page, signal);
+      await enterLinkedInPostText(page, editor, job.caption);
       const dialog = editor.locator("xpath=ancestor::*[@role='dialog'][1]");
       const root = await dialog.count() ? dialog : page.locator("body");
       if (job.media[0]) {
@@ -84,8 +181,8 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
       await onFinalActionStarting();
       signal.throwIfAborted();
       finalActionAttempted = true;
-      await post.click({ timeout: 10_000 });
-      if (await dialog.count()) await dialog.waitFor({ state: "hidden", timeout: 90_000 });
+      await activateExactLinkedInPost(post);
+      await waitForLinkedInPublishConfirmation(page, editor, dialog, signal);
       return { state: "PUBLISHED" as const };
     } catch (error) {
       if (!browser.page.isClosed()) {

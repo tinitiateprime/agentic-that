@@ -197,12 +197,17 @@ test("the X live executor records its fence before one exact Post click", async 
 
 test("the LinkedIn live executor records its fence before one exact Post click", async () => {
   const source = await readFile(new URL("./linkedin-live.ts", import.meta.url), "utf8");
-  assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
+  assert.equal(source.match(/async function activateExactLinkedInPost\s*\(/g)?.length, 1);
+  assert.match(source, /final LinkedIn control was no longer an enabled exact Post action/);
   assert.match(source, /exact Post button did not become enabled/);
+  assert.match(source, /linkedin\\\.com\\\/sharing\\\/compose/);
+  assert.match(source, /\.tiptap\.ProseMirror\[contenteditable="true"\]/);
+  assert.match(source, /data-view-name\*="start-post"/);
   assert.match(source, /setServerLocalInputFile/);
   assert.doesNotMatch(source, /setInputFiles/);
-  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
-  assert.doesNotMatch(source, /post\.click\(\{\s*force:/);
+  assert.match(source, /did not show a publish confirmation or close its composer/);
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await activateExactLinkedInPost(post)"));
+  assert.doesNotMatch(source, /post\.click\s*\(/);
 });
 
 test("the YouTube live executor requires explicit policy choices and fences one final click", async () => {
@@ -214,6 +219,8 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /exact label guard/);
   assert.match(source, /setServerLocalInputFile/);
   assert.match(source, /clickReversibleControl/);
+  assert.match(source, /accepted the file but did not show its video metadata fields/);
+  assert.match(source, /ancestor::ytcp-uploads-dialog/);
   assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
   assert.doesNotMatch(source, /finalAction\.click\(\{\s*force:/);

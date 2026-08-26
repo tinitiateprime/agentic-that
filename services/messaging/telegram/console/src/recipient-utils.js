@@ -24,9 +24,11 @@ export function normalizeContactPhone(rawPhone, countryCode = "+91", allowedCoun
 }
 
 export function savedContactRecipient(contact, allowedCountryCodes = []) {
-  // A saved phone identifies the intended Telegram account more reliably than
-  // a manually typed label/username. Only use the username as a fallback.
+  // Telegram may hide an otherwise valid phone from the sending account.
+  // A saved public @username is therefore the most reliable routable identity.
+  const handle = recipientFromGroupLine(contact?.handle || "");
+  if (handle.startsWith("@")) return handle;
   const phone = normalizeContactPhone(contact?.phone, contact?.countryCode || "+91", allowedCountryCodes);
   if (phone) return phone;
-  return recipientFromGroupLine(contact?.handle || "");
+  return handle;
 }

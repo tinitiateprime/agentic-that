@@ -196,23 +196,42 @@ async function uploadVideo(
 ) {
   const options = job.platformOptions.youtube;
   if (!options || !job.media[0]) throw new Error("YouTube video options and one video file are required.");
-  const inputCandidates = page.locator('input[type="file"][accept*="video"], ytcp-uploads-dialog input[type="file"], input[type="file"]');
-  let input = await waitAttached(page, [inputCandidates], signal, 30_000);
+  const inputCandidates = [
+    page.locator('ytcp-uploads-dialog input[type="file"]'),
+    page.locator('input[type="file"][accept*="video"]'),
+    page.locator('input[type="file"]'),
+  ];
+  let input = await waitAttached(page, inputCandidates, signal, 30_000);
   if (!input) {
     const create = await waitVisible(page, [page.getByRole("button", { name: /^Create$/i }), page.locator("ytcp-button#create-icon")], signal, 30_000);
     if (create) await clickReversibleControl(page, create, signal);
     const upload = await waitVisible(page, [page.getByRole("menuitem", { name: /Upload videos/i }), page.getByText(/^Upload videos$/i)], signal, 20_000);
     if (upload) await clickReversibleControl(page, upload, signal);
-    input = await waitAttached(page, [inputCandidates], signal, 20_000);
+    input = await waitAttached(page, inputCandidates, signal, 20_000);
   }
   if (!input) throw new Error("YouTube Studio's video input was unavailable.");
   reportProgress("Uploading the video to YouTube Studio.");
   await setServerLocalInputFile(page, input, files.mediaFilePath(job.media[0].storageKey));
-  const dialog = await waitVisible(page, [page.locator("ytcp-uploads-dialog")], signal, 60_000);
-  if (!dialog) throw new Error("YouTube Studio's upload dialog did not open.");
-  const title = await waitVisible(page, [dialog.locator("#title-textarea #textbox"), dialog.locator("#title-textarea")], signal, 60_000);
-  const description = await waitVisible(page, [dialog.locator("#description-textarea #textbox"), dialog.locator("#description-textarea")], signal, 30_000);
-  if (!title || !description) throw new Error("YouTube Studio's title or description editor was unavailable.");
+  // Current Studio builds sometimes render the metadata step without the
+  // legacy ytcp-uploads-dialog custom element. The title is the stable proof
+  // that the selected video was accepted, so derive the owning root from it.
+  const title = await waitVisible(page, [
+    page.locator("ytcp-uploads-dialog #title-textarea #textbox"),
+    page.locator("#title-textarea #textbox"),
+    page.locator('#title-textarea[contenteditable="true"]'),
+    page.locator("#title-textarea"),
+  ], signal, 120_000);
+  if (!title) throw new Error("YouTube Studio accepted the file but did not show its video metadata fields.");
+  const customDialog = title.locator("xpath=ancestor::ytcp-uploads-dialog[1]");
+  const roleDialog = title.locator("xpath=ancestor::*[@role='dialog'][1]");
+  const dialog = await customDialog.count() ? customDialog : await roleDialog.count() ? roleDialog : page.locator("body");
+  const description = await waitVisible(page, [
+    dialog.locator("#description-textarea #textbox"),
+    page.locator("#description-textarea #textbox"),
+    dialog.locator('#description-textarea[contenteditable="true"]'),
+    page.locator("#description-textarea"),
+  ], signal, 60_000);
+  if (!description) throw new Error("YouTube Studio's description editor was unavailable.");
   await fillEditable(page, title, options.title);
   await fillEditable(page, description, job.caption);
 
@@ -258,7 +277,7 @@ async function uploadVideo(
     signal.throwIfAborted();
     if (!await dialog.isVisible().catch(() => false)) { confirmed = true; break; }
     if (await firstVisible([
-      page.getByText(/Video published|Your video has been published|Changes saved/i),
+      page.getByText(/Video processing|public on YouTube|Video published|Your video has been published|Changes saved/i),
       page.locator("ytcp-video-share-dialog"),
     ])) { confirmed = true; break; }
     await page.waitForTimeout(750);

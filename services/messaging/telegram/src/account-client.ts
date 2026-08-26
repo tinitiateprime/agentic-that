@@ -247,6 +247,29 @@ async function inputEntityFromUser(client: TelegramClient, user: Api.User) {
   return client.getInputEntity(user);
 }
 
+function userMatchesPhone(user: Api.User, phone: string) {
+  return Boolean(user.phone) && `+${user.phone?.replace(/\D/g, "")}` === phone;
+}
+
+async function resolvePhoneFromTelegramContacts(client: TelegramClient, phone: string) {
+  const contacts = await client.invoke(new Api.contacts.GetContacts({ hash: bigInt.zero }));
+  if (!(contacts instanceof Api.contacts.Contacts)) return null;
+  const user = contacts.users.find(
+    (item): item is Api.User => item instanceof Api.User && userMatchesPhone(item, phone)
+  );
+  return user ? inputEntityFromUser(client, user) : null;
+}
+
+async function resolvePhoneFromTelegramDialogs(client: TelegramClient, phone: string) {
+  for await (const dialog of client.iterDialogs({ limit: 500 })) {
+    const entity = dialog.entity;
+    if (entity instanceof Api.User && userMatchesPhone(entity, phone)) {
+      return inputEntityFromUser(client, entity);
+    }
+  }
+  return null;
+}
+
 async function resolveExistingPhoneContact(client: TelegramClient, phoneInput: string) {
   const phone = normalizePhone(phoneInput);
   const lookups = [phone, phone.slice(1)];
@@ -259,11 +282,26 @@ async function resolveExistingPhoneContact(client: TelegramClient, phoneInput: s
     }
   }
 
-  const resolved = await client.invoke(new Api.contacts.ResolvePhone({ phone: phone.slice(1) }));
-  const users = "users" in resolved ? resolved.users : [];
-  const user = users.find((item): item is Api.User => item instanceof Api.User);
-  if (!user) throw new Error("Telegram could not resolve this phone number from existing contacts.");
-  return inputEntityFromUser(client, user);
+  try {
+    const resolved = await client.invoke(new Api.contacts.ResolvePhone({ phone: phone.slice(1) }));
+    const users = "users" in resolved ? resolved.users : [];
+    const user = users.find((item): item is Api.User => item instanceof Api.User);
+    if (user) return inputEntityFromUser(client, user);
+  } catch (error) {
+    const seconds = floodWaitSeconds(error);
+    if (seconds) {
+      throw new Error(`Telegram asked to wait ${seconds} seconds before resolving this phone number. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+    }
+    // The recipient may still be an existing contact or dialog whose phone is
+    // available to this connected account, so inspect those authoritative
+    // collections before attempting a new contact import.
+  }
+
+  const contact = await resolvePhoneFromTelegramContacts(client, phone).catch(() => null);
+  if (contact) return contact;
+  const dialog = await resolvePhoneFromTelegramDialogs(client, phone).catch(() => null);
+  if (dialog) return dialog;
+  throw new Error("Telegram could not resolve this phone number from the account's contacts or existing chats.");
 }
 
 async function importPhoneContact(client: TelegramClient, input: SendMessageInput) {
@@ -299,6 +337,12 @@ async function importPhoneContact(client: TelegramClient, input: SendMessageInpu
     );
     if (user) return inputEntityFromUser(client, user);
 
+    // Importing can update Telegram's server-side contact list even when the
+    // immediate response omits the entity. Re-read the exact phone before
+    // concluding that the recipient's privacy setting prevents discovery.
+    const refreshed = await resolvePhoneFromTelegramContacts(client, phone).catch(() => null);
+    if (refreshed) return refreshed;
+
     const retryContacts = "retryContacts" in result ? result.retryContacts : [];
     const shouldRetry = retryContacts.some(value => value.toString() === clientId.toString());
     if (!shouldRetry) break;
@@ -316,7 +360,7 @@ async function resolveMessagePeer(client: TelegramClient, input: SendMessageInpu
   try {
     return await resolveExistingPhoneContact(client, recipient);
   } catch (error) {
-    if (!allowImport) throw error;
+    if (!allowImport || /asked to wait \d+ seconds/i.test(errorMessage(error))) throw error;
   }
 
   return importPhoneContact(client, input);
