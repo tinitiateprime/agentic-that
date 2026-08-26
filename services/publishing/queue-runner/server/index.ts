@@ -10,6 +10,7 @@ import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
+import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
 import {
   cancelAllInstagramCompanionJobs,
   cancelInstagramCompanionJob,
@@ -528,6 +529,7 @@ function companionTrialScrapeLimitKey(
   req: RequestWithInstagramOwner | RequestWithFacebookOwner,
   platform: "instagram" | "facebook",
 ) {
+  if (teamTestingFullAccessEnabled()) return null;
   if (!req.trialWorkspaceId) return null;
   return `${req.trialWorkspaceId}:${platform}`;
 }

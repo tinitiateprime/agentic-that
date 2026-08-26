@@ -18,10 +18,40 @@ test("starts long work without awaiting it and deduplicates the same job", async
   assert.equal(jobs.has("workspace:job"), true);
   await nextTurn();
   assert.equal(started, 1);
+  assert.equal(jobs.active, 1);
+  assert.equal(jobs.queued, 0);
 
   release();
   await nextTurn();
   assert.equal(jobs.has("workspace:job"), false);
+});
+
+test("queues different jobs instead of running browser work concurrently", async () => {
+  const jobs = new InProcessBackgroundJobs();
+  const started: string[] = [];
+  let releaseFirst!: () => void;
+  const first = () => new Promise<void>((resolve) => {
+    started.push("first");
+    releaseFirst = resolve;
+  });
+  const second = async () => { started.push("second"); };
+
+  assert.equal(jobs.start("workspace:first", first), true);
+  assert.equal(jobs.start("workspace:second", second), true);
+  await nextTurn();
+  assert.deepEqual(started, ["first"]);
+  assert.equal(jobs.active, 1);
+  assert.equal(jobs.queued, 1);
+
+  releaseFirst();
+  await nextTurn();
+  assert.deepEqual(started, ["first", "second"]);
+  await nextTurn();
+  assert.equal(jobs.size, 0);
+});
+
+test("rejects invalid concurrency", () => {
+  assert.throws(() => new InProcessBackgroundJobs(0), /positive integer/);
 });
 
 test("contains rejected background work and reports it once", async () => {

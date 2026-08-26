@@ -20,6 +20,7 @@ import { RequestRateLimiter } from "./rate-limit.ts";
 import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserStore, type TelegramAccountWithSession } from "./store.ts";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
+import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonBody = Record<string, unknown>;
@@ -370,6 +371,7 @@ function requireUserLevel(user: AppUser, required: keyof typeof accessRank) {
 }
 
 function enforceTrialTelegramMessageLimit(user: AuthenticatedAppUser) {
+  if (teamTestingFullAccessEnabled()) return;
   if (user.billingStatus !== "trialing") return;
   const workspaceKey = user.workspaceId || user.id;
   const hourlyKey = `${workspaceKey}:telegram:hour`;

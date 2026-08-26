@@ -84,8 +84,10 @@ sudo -u agenticthat env NODE_ENV=production \
 ```
 
 When testing is complete, set `NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false` in
-`/etc/agenticthat/site.env`, rebuild with the same value, and restart the site
-to restore the stored trial, plan, module-access, and usage restrictions.
+both `/etc/agenticthat/site.env` and `/etc/agenticthat/services.env`, rebuild
+with the same value, and restart the site, Telegram, Instagram, and Facebook
+services to restore the stored trial, plan, module-access, and usage
+restrictions.
 
 The website service applies the idempotent platform and WhatsApp database
 migrations before every start. For the first deployment, run them once and

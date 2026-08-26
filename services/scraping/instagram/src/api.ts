@@ -12,6 +12,7 @@ import {
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { operationalBrowserError } from "../../browser-runtime.ts";
 import { InProcessBackgroundJobs } from "../../background-jobs.ts";
+import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -27,6 +28,7 @@ const serverBackgroundJobs = new InProcessBackgroundJobs();
 const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
 
 function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
+  if (teamTestingFullAccessEnabled()) return;
   if (identity.billingStatus !== "trialing") return;
   const result = trialScrapeLimiter.consume(
     `${identity.workspaceId}:instagram`,

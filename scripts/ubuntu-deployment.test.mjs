@@ -15,11 +15,13 @@ test("the public Nginx site exposes only Next.js", async () => {
 
 test("browser-visible configuration contains no localhost service URL", async () => {
   const site = await read("site.env.example");
+  const services = await read("services.env.example");
   assert.match(site, /INSTAGRAM_API_URL=http:\/\/127\.0\.0\.1:8791/);
   assert.match(site, /FACEBOOK_API_URL=http:\/\/127\.0\.0\.1:8793/);
   assert.match(site, /TELEGRAM_API_URL=http:\/\/127\.0\.0\.1:8787/);
   assert.doesNotMatch(site, /NEXT_PUBLIC_(?:INSTAGRAM|FACEBOOK|PUBLISH_QUEUE)_API_URL/);
   assert.match(site, /NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=true/);
+  assert.match(services, /NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=true/);
   assert.match(site, /Set this to false and rebuild/);
   assert.match(site, /RBAC_ENFORCEMENT_MODE=enforce/);
 });
