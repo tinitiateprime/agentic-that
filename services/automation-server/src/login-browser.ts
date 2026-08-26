@@ -106,6 +106,17 @@ export function isAuthenticatedLinkedInUrl(value: string) {
   }
 }
 
+export async function isAuthenticatedLinkedInPage(page: Page) {
+  if (!isAuthenticatedLinkedInUrl(page.url())) return false;
+  return page.locator([
+    'button[aria-label*="Start a post" i]',
+    'button[class*="share-box-feed-entry__trigger"]',
+    '[aria-label*="Start a post" i]',
+    'a[href*="/mynetwork/"]',
+    'a[href*="/messaging/"]',
+  ].join(", ")).first().isVisible().catch(() => false);
+}
+
 async function linkedinSessionPresent(context: BrowserContext) {
   // Read the whole CDP cookie jar because LinkedIn can finish a provider login
   // in a second tab and can scope li_at to a parent LinkedIn domain.
@@ -115,12 +126,17 @@ async function linkedinSessionPresent(context: BrowserContext) {
     && Boolean(cookie.value)
     && (cookie.domain === "linkedin.com" || cookie.domain.endsWith(".linkedin.com"))
   );
-  if (!sessionCookie) return false;
+  const authenticatedPages = context.pages().filter(candidate => isAuthenticatedLinkedInUrl(candidate.url()));
+  if (!authenticatedPages.length) return false;
+  if (sessionCookie) return true;
 
-  // li_at is LinkedIn's authenticated browser session. Do not require one
-  // brittle navigation CSS class as well: LinkedIn regularly changes its app
-  // shell, and an authenticated /feed or /mynetwork page is sufficient.
-  return context.pages().some(candidate => isAuthenticatedLinkedInUrl(candidate.url()));
+  // Some current LinkedIn sessions keep the feed working while CDP does not
+  // expose li_at to context.cookies(). The authenticated feed controls are a
+  // stronger signal than rejecting the visibly logged-in page as disconnected.
+  for (const page of authenticatedPages) {
+    if (await isAuthenticatedLinkedInPage(page)) return true;
+  }
+  return false;
 }
 
 async function youtubeSessionPresent(context: BrowserContext) {

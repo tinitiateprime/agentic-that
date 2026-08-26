@@ -63,6 +63,16 @@ async function waitForFacebookPost(page: Page, dialog: Locator, signal: AbortSig
     : "Facebook's exact Post button was not available.");
 }
 
+async function activateExactFacebookPost(post: Locator) {
+  await post.evaluate(element => {
+    const label = `${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`.replace(/\s+/g, " ").trim();
+    if (!/^post(?:\s+post)?$/i.test(label) || element.getAttribute("aria-disabled") === "true") {
+      throw new Error("The final Facebook control was no longer an enabled exact Post action.");
+    }
+    (element as HTMLElement).click();
+  });
+}
+
 export class PlaywrightFacebookPublishingExecutor implements ServerPublishingExecutor {
   readonly platform = "facebook" as const;
 
@@ -119,7 +129,9 @@ export class PlaywrightFacebookPublishingExecutor implements ServerPublishingExe
       await onFinalActionStarting();
       signal.throwIfAborted();
       finalActionAttempted = true;
-      await post.click({ timeout: 10_000 });
+      // Facebook's composer can leave a transparent layer over its enabled
+      // role=button. Activate the already fenced, exact Post element itself.
+      await activateExactFacebookPost(post);
       await dialog.waitFor({ state: "hidden", timeout: 120_000 });
       return { state: "PUBLISHED" as const };
     } catch (error) {

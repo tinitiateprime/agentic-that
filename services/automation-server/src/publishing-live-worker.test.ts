@@ -169,13 +169,13 @@ test("the live Playwright executor has one exact guarded Share click", async () 
 
 test("the Facebook live executor has one exact guarded Post click", async () => {
   const source = await readFile(new URL("./facebook-live.ts", import.meta.url), "utf8");
-  assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
+  assert.equal(source.match(/\(element as HTMLElement\)\.click\s*\(/g)?.length, 1);
   assert.match(source, /exact Post-label guard/);
   assert.match(source, /FACEBOOK_UPLOAD_TIMEOUT_MS/);
   assert.match(source, /Post button did not become enabled while the media was processing/);
   assert.match(source, /\[role="button"\]\[aria-label="Post"\]/);
   assert.match(source, /--password-store=basic/);
-  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
+  assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await activateExactFacebookPost(post)"));
   assert.match(source, /editor\.locator\('xpath=ancestor::\*\[@role="dialog"\]\[1\]'\)/);
   assert.doesNotMatch(source, /filter\(\{ hasText: \/Create post\|What's on your mind\/i \}\)\.last\(\)/);
 });
@@ -189,6 +189,8 @@ test("the X live executor records its fence before one exact Post click", async 
   assert.match(source, /firstEnabledVisible/);
   assert.match(source, /filter\(candidate => candidate !== page\)/);
   assert.match(source, /X keeps an inline Home composer visible while its modal opens/);
+  assert.match(source, /setServerLocalInputFile/);
+  assert.doesNotMatch(source, /setInputFiles/);
   assert.doesNotMatch(source, /page\.locator\('\[data-testid="tweetTextarea_0"\]'\)/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
 });
@@ -197,6 +199,8 @@ test("the LinkedIn live executor records its fence before one exact Post click",
   const source = await readFile(new URL("./linkedin-live.ts", import.meta.url), "utf8");
   assert.equal(source.match(/post\.click\s*\(/g)?.length, 1);
   assert.match(source, /exact Post button did not become enabled/);
+  assert.match(source, /setServerLocalInputFile/);
+  assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await post.click"));
   assert.doesNotMatch(source, /post\.click\(\{\s*force:/);
 });
@@ -208,8 +212,19 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /not made for kids/i);
   assert.match(source, /visibility === "public"/);
   assert.match(source, /exact label guard/);
+  assert.match(source, /setServerLocalInputFile/);
+  assert.match(source, /clickReversibleControl/);
+  assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
   assert.doesNotMatch(source, /finalAction\.click\(\{\s*force:/);
+});
+
+test("standard Chrome media uploads pass local paths directly through CDP", async () => {
+  const source = await readFile(new URL("./local-file-input.ts", import.meta.url), "utf8");
+  assert.match(source, /DOM\.setFileInputFiles/);
+  assert.match(source, /files: \[absolutePath\]/);
+  assert.match(source, /Runtime\.evaluate/);
+  assert.doesNotMatch(source, /readFile|arrayBuffer|base64/);
 });
 
 test("the live worker pool runs different accounts concurrently but serializes each account", async () => {

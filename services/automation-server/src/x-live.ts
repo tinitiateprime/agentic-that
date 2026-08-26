@@ -2,6 +2,7 @@ import { type Locator, type Page } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 import { detectServerBrowserExecutable, launchStandardXChrome } from "./login-browser.ts";
+import { setServerLocalInputFile } from "./local-file-input.ts";
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 8); index < count; index += 1) {
@@ -117,7 +118,7 @@ export class PlaywrightXPublishingExecutor implements ServerPublishingExecutor {
         const target = await input.count() ? input : fallback;
         if (!await target.count()) throw new Error("X's media input was not available.");
         reportProgress("Uploading media to X's composer.");
-        await target.setInputFiles(this.files.mediaFilePath(job.media[0].storageKey));
+        await setServerLocalInputFile(page, target, this.files.mediaFilePath(job.media[0].storageKey));
         const preview = await waitVisible(page, [composer.locator('[data-testid="attachments"]'), composer.locator('[data-testid="media"]'), composer.locator('[data-testid^="removeMedia"]')], signal, 300_000);
         if (!preview) throw new Error("X did not confirm the attached media preview.");
       }

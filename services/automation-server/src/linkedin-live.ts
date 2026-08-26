@@ -1,7 +1,8 @@
 import type { Locator, Page } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
-import { detectServerBrowserExecutable, launchStandardXChrome } from "./login-browser.ts";
+import { detectServerBrowserExecutable, isAuthenticatedLinkedInUrl, launchStandardXChrome } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
+import { setServerLocalInputFile } from "./local-file-input.ts";
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 10); index < count; index += 1) {
@@ -38,8 +39,7 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
       await Promise.all(context.pages().filter(candidate => candidate !== page).map(candidate => candidate.close().catch(() => undefined)));
       reportProgress("Opening LinkedIn with the saved server session.");
       await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60_000 });
-      const cookies = await context.cookies("https://www.linkedin.com/");
-      if (/\/login|\/checkpoint|\/uas\//i.test(page.url()) || !cookies.some(cookie => cookie.name === "li_at" && cookie.value)) {
+      if (!isAuthenticatedLinkedInUrl(page.url())) {
         return { state: "LOGIN_REQUIRED" as const, errorCode: "LINKEDIN_LOGIN_REQUIRED", errorMessage: "Reconnect the LinkedIn account." };
       }
       const opener = await waitVisible(page, [
@@ -68,7 +68,7 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
           input = page.locator('input[type="file"]').last();
         }
         if (!await input.count()) throw new Error("LinkedIn's media input was unavailable.");
-        await input.setInputFiles(this.files.mediaFilePath(job.media[0].storageKey));
+        await setServerLocalInputFile(page, input, this.files.mediaFilePath(job.media[0].storageKey));
         const next = await waitVisible(page, [page.getByRole("button", { name: /^Done$|^Next$/i })], signal, 120_000);
         if (next) await next.click({ timeout: 10_000 });
       }

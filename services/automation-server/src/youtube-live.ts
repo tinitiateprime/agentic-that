@@ -2,6 +2,7 @@ import type { BrowserContext, Locator, Page } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
 import { detectServerBrowserExecutable, launchStandardXChrome } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
+import { setServerLocalInputFile } from "./local-file-input.ts";
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) {
@@ -23,6 +24,14 @@ async function firstEnabledVisible(locators: Locator[]) {
   return null;
 }
 
+async function firstAttached(locators: Locator[]) {
+  for (const locator of locators) {
+    const count = await locator.count().catch(() => 0);
+    if (count) return locator.last();
+  }
+  return null;
+}
+
 async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal, timeout: number) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -32,6 +41,32 @@ async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal,
     await page.waitForTimeout(500);
   }
   return null;
+}
+
+async function waitAttached(page: Page, locators: Locator[], signal: AbortSignal, timeout: number) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const candidate = await firstAttached(locators);
+    if (candidate) return candidate;
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+async function clickReversibleControl(page: Page, control: Locator, signal: AbortSignal) {
+  signal.throwIfAborted();
+  await control.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => undefined);
+  try {
+    await control.click({ timeout: 5_000 });
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!await control.isVisible().catch(() => false) || !await control.isEnabled().catch(() => false)) throw error;
+    // Studio sometimes leaves a transparent shell over the hydrated Create
+    // control. This is only for reversible menu controls, never Publish/Save.
+    await control.evaluate(element => (element as HTMLElement).click());
+  }
+  await page.waitForTimeout(500);
 }
 
 async function youtubeAuthenticated(context: BrowserContext, page: Page) {
@@ -142,7 +177,7 @@ async function publishCommunityPost(
     }
     const target = await input.count() ? input : page.locator('input[type="file"]').last();
     if (!await target.count()) throw new Error("YouTube's Community image input was unavailable.");
-    await target.setInputFiles(files.mediaFilePath(job.media[0].storageKey));
+    await setServerLocalInputFile(page, target, files.mediaFilePath(job.media[0].storageKey));
   }
   const post = await enabledExactButton(page, composer, /^Post$/i, signal, 120_000);
   if (!post) throw new Error("YouTube's exact Community Post button did not become enabled.");
@@ -161,17 +196,18 @@ async function uploadVideo(
 ) {
   const options = job.platformOptions.youtube;
   if (!options || !job.media[0]) throw new Error("YouTube video options and one video file are required.");
-  let input = page.locator('input[type="file"][accept*="video"], ytcp-uploads-dialog input[type="file"], input[type="file"]').last();
-  if (!await input.count()) {
+  const inputCandidates = page.locator('input[type="file"][accept*="video"], ytcp-uploads-dialog input[type="file"], input[type="file"]');
+  let input = await waitAttached(page, [inputCandidates], signal, 30_000);
+  if (!input) {
     const create = await waitVisible(page, [page.getByRole("button", { name: /^Create$/i }), page.locator("ytcp-button#create-icon")], signal, 30_000);
-    if (create) await create.click({ timeout: 10_000 });
+    if (create) await clickReversibleControl(page, create, signal);
     const upload = await waitVisible(page, [page.getByRole("menuitem", { name: /Upload videos/i }), page.getByText(/^Upload videos$/i)], signal, 20_000);
-    if (upload) await upload.click({ timeout: 10_000 });
-    input = page.locator('input[type="file"][accept*="video"], ytcp-uploads-dialog input[type="file"], input[type="file"]').last();
+    if (upload) await clickReversibleControl(page, upload, signal);
+    input = await waitAttached(page, [inputCandidates], signal, 20_000);
   }
-  if (!await input.count()) throw new Error("YouTube Studio's video input was unavailable.");
+  if (!input) throw new Error("YouTube Studio's video input was unavailable.");
   reportProgress("Uploading the video to YouTube Studio.");
-  await input.setInputFiles(files.mediaFilePath(job.media[0].storageKey));
+  await setServerLocalInputFile(page, input, files.mediaFilePath(job.media[0].storageKey));
   const dialog = await waitVisible(page, [page.locator("ytcp-uploads-dialog")], signal, 60_000);
   if (!dialog) throw new Error("YouTube Studio's upload dialog did not open.");
   const title = await waitVisible(page, [dialog.locator("#title-textarea #textbox"), dialog.locator("#title-textarea")], signal, 60_000);

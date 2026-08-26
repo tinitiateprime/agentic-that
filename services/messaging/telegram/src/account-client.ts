@@ -67,6 +67,15 @@ export function normalizePhone(phone: string) {
   return normalized;
 }
 
+export function telegramPhoneMatchesUser(phoneInput: string, telegramUserPhone = "") {
+  if (!telegramUserPhone.trim()) return false;
+  try {
+    return normalizePhone(phoneInput).slice(1) === telegramUserPhone.replace(/\D/g, "");
+  } catch {
+    return false;
+  }
+}
+
 function createClient(credentials: TelegramApiCredentials, sessionString = "") {
   return new TelegramClient(new StringSession(sessionString), credentials.apiId, credentials.apiHash, {
     connectionRetries: 5
@@ -259,40 +268,43 @@ async function resolveExistingPhoneContact(client: TelegramClient, phoneInput: s
 
 async function importPhoneContact(client: TelegramClient, input: SendMessageInput) {
   const phone = normalizePhone(input.recipient);
-  const clientId = bigInt(Date.now()).multiply(1000).add(Math.floor(Math.random() * 1000));
-  let result;
-  try {
-    result = await client.invoke(
-      new Api.contacts.ImportContacts({
-        contacts: [
-          new Api.InputPhoneContact({
-            clientId,
-            phone: phone.slice(1),
-            firstName: input.firstName?.trim() || "Telegram",
-            lastName: input.lastName?.trim() || "Contact"
-          })
-        ]
-      })
-    );
-  } catch (error) {
-    const seconds = floodWaitSeconds(error);
-    if (seconds) {
-      throw new Error(`Telegram asked to wait ${seconds} seconds before importing this phone contact. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const clientId = bigInt(Date.now()).multiply(1000).add(Math.floor(Math.random() * 1000));
+    let result;
+    try {
+      result = await client.invoke(
+        new Api.contacts.ImportContacts({
+          contacts: [
+            new Api.InputPhoneContact({
+              clientId,
+              phone: phone.slice(1),
+              firstName: input.firstName?.trim() || "Telegram",
+              lastName: input.lastName?.trim() || "Contact"
+            })
+          ]
+        })
+      );
+    } catch (error) {
+      const seconds = floodWaitSeconds(error);
+      if (seconds) {
+        throw new Error(`Telegram asked to wait ${seconds} seconds before importing this phone contact. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+      }
+      throw error;
     }
-    throw error;
-  }
-  const imported = "imported" in result ? result.imported : [];
-  const users = "users" in result ? result.users : [];
-  const userId = imported[0]?.userId?.toString();
-  const user = users.find(
-    (item): item is Api.User => item instanceof Api.User && (!userId || item.id.toString() === userId)
-  );
+    const imported = "imported" in result ? result.imported : [];
+    const users = "users" in result ? result.users : [];
+    const userId = imported[0]?.userId?.toString();
+    const user = users.find(
+      (item): item is Api.User => item instanceof Api.User && (!userId || item.id.toString() === userId)
+    );
+    if (user) return inputEntityFromUser(client, user);
 
-  if (!user) {
-    throw new Error("Telegram could not resolve this phone number. It may be incorrect, private, or not on Telegram.");
+    const retryContacts = "retryContacts" in result ? result.retryContacts : [];
+    const shouldRetry = retryContacts.some(value => value.toString() === clientId.toString());
+    if (!shouldRetry) break;
   }
 
-  return inputEntityFromUser(client, user);
+  throw new Error("Telegram's phone privacy prevented this account from being resolved. Ask the recipient to message the connected account first, or save the recipient's @username and retry.");
 }
 
 async function resolveMessagePeer(client: TelegramClient, input: SendMessageInput, allowImport: boolean) {
@@ -320,8 +332,10 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
   const client = createClient(credentials, sessionString);
   try {
     await client.connect();
-    await client.getMe();
-    const peer = await resolveMessagePeer(client, input, true);
+    const currentUser = await client.getMe();
+    const peer = recipient.startsWith("+") && telegramPhoneMatchesUser(recipient, currentUser.phone || "")
+      ? await inputEntityFromUser(client, currentUser)
+      : await resolveMessagePeer(client, input, true);
     const sentIds: string[] = [];
     const textChunks = mediaFile ? [] : splitTelegramMessage(message);
     if (mediaFile) {
