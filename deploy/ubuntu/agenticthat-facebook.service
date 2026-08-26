@@ -9,6 +9,11 @@ User=agenticthat
 Group=agenticthat
 WorkingDirectory=/opt/agenticthat
 EnvironmentFile=/etc/agenticthat/services.env
+Environment=HOME=/var/lib/agenticthat-facebook
+Environment=XDG_CONFIG_HOME=/var/lib/agenticthat-facebook/.config
+Environment=XDG_CACHE_HOME=/var/lib/agenticthat-facebook/.cache
+Environment=XDG_DATA_HOME=/var/lib/agenticthat-facebook/.local/share
+Environment=XDG_RUNTIME_DIR=/run/agenticthat-facebook
 ExecStart=/usr/bin/node --import tsx services/scraping/facebook/src/server.ts
 Restart=on-failure
 RestartSec=5s
@@ -16,6 +21,9 @@ KillSignal=SIGTERM
 TimeoutStopSec=300s
 UMask=0077
 StateDirectory=agenticthat-facebook
+StateDirectoryMode=0700
+RuntimeDirectory=agenticthat-facebook
+RuntimeDirectoryMode=0700
 ReadWritePaths=/var/lib/agenticthat-facebook
 PrivateTmp=true
 ProtectHome=true

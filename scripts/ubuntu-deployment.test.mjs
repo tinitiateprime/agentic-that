@@ -48,3 +48,19 @@ test("all application services run unprivileged with private writable state", as
     assert.doesNotMatch(unit, /0\.0\.0\.0/);
   }
 });
+
+test("browser services receive isolated writable HOME and XDG directories", async () => {
+  for (const service of ["automation", "instagram", "facebook"]) {
+    const stateDirectory = `agenticthat-${service}`;
+    const unit = await read(`${stateDirectory}.service`);
+    assert.match(unit, new RegExp(`Environment=HOME=/var/lib/${stateDirectory}`));
+    assert.match(unit, new RegExp(`Environment=XDG_CONFIG_HOME=/var/lib/${stateDirectory}/\\.config`));
+    assert.match(unit, new RegExp(`Environment=XDG_CACHE_HOME=/var/lib/${stateDirectory}/\\.cache`));
+    assert.match(unit, new RegExp(`Environment=XDG_DATA_HOME=/var/lib/${stateDirectory}/\\.local/share`));
+    assert.match(unit, new RegExp(`Environment=XDG_RUNTIME_DIR=/run/${stateDirectory}`));
+    assert.match(unit, new RegExp(`StateDirectory=${stateDirectory}`));
+    assert.match(unit, new RegExp(`RuntimeDirectory=${stateDirectory}`));
+    assert.match(unit, /StateDirectoryMode=0700/);
+    assert.match(unit, /RuntimeDirectoryMode=0700/);
+  }
+});

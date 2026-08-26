@@ -9,6 +9,11 @@ User=agenticthat
 Group=agenticthat
 WorkingDirectory=/opt/agenticthat
 EnvironmentFile=/etc/agenticthat/services.env
+Environment=HOME=/var/lib/agenticthat-instagram
+Environment=XDG_CONFIG_HOME=/var/lib/agenticthat-instagram/.config
+Environment=XDG_CACHE_HOME=/var/lib/agenticthat-instagram/.cache
+Environment=XDG_DATA_HOME=/var/lib/agenticthat-instagram/.local/share
+Environment=XDG_RUNTIME_DIR=/run/agenticthat-instagram
 ExecStart=/usr/bin/node --import tsx services/scraping/instagram/src/server.ts
 Restart=on-failure
 RestartSec=5s
@@ -16,6 +21,9 @@ KillSignal=SIGTERM
 TimeoutStopSec=300s
 UMask=0077
 StateDirectory=agenticthat-instagram
+StateDirectoryMode=0700
+RuntimeDirectory=agenticthat-instagram
+RuntimeDirectoryMode=0700
 ReadWritePaths=/var/lib/agenticthat-instagram
 PrivateTmp=true
 ProtectHome=true

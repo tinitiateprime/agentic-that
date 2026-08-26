@@ -10,6 +10,10 @@ Group=agenticthat
 WorkingDirectory=/opt/agenticthat
 EnvironmentFile=/etc/agenticthat/automation.env
 Environment=HOME=/var/lib/agenticthat-automation
+Environment=XDG_CONFIG_HOME=/var/lib/agenticthat-automation/.config
+Environment=XDG_CACHE_HOME=/var/lib/agenticthat-automation/.cache
+Environment=XDG_DATA_HOME=/var/lib/agenticthat-automation/.local/share
+Environment=XDG_RUNTIME_DIR=/run/agenticthat-automation
 ExecStartPre=/usr/bin/node --import tsx services/automation-server/src/preflight.ts
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /usr/bin/node --import tsx services/automation-server/src/server.ts
 Restart=on-failure
@@ -18,7 +22,9 @@ KillSignal=SIGTERM
 TimeoutStopSec=300s
 UMask=0077
 StateDirectory=agenticthat-automation
+StateDirectoryMode=0700
 RuntimeDirectory=agenticthat-automation
+RuntimeDirectoryMode=0700
 ReadWritePaths=/var/lib/agenticthat-automation
 PrivateTmp=true
 ProtectHome=true
