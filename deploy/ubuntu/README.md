@@ -68,17 +68,24 @@ come from the operator's Telegram application and stay server-side.
 ## 3. Build and migrate
 
 The scraper proxy destinations are compiled into the Next.js route manifest,
-so build with these non-secret loopback settings:
+so build with these non-secret loopback settings. Full testing access is
+temporarily enabled here: it removes AgenticThat's trial clock, module
+entitlements, and product usage quotas while preserving sign-in, workspace
+isolation, operational roles, provider limits, and publishing safeguards.
 
 ```text
 cd /opt/agenticthat
 sudo -u agenticthat env NODE_ENV=production \
-  NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false \
+  NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=true \
   INSTAGRAM_API_URL=http://127.0.0.1:8791 \
   FACEBOOK_API_URL=http://127.0.0.1:8793 \
   TELEGRAM_API_URL=http://127.0.0.1:8787 \
   npm run build
 ```
+
+When testing is complete, set `NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false` in
+`/etc/agenticthat/site.env`, rebuild with the same value, and restart the site
+to restore the stored trial, plan, module-access, and usage restrictions.
 
 The website service applies the idempotent platform and WhatsApp database
 migrations before every start. For the first deployment, run them once and
