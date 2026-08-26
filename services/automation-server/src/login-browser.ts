@@ -288,7 +288,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
     let context: BrowserContext;
     let page: Page;
     try {
-      if (["x", "linkedin", "youtube"].includes(account.platform)) {
+      if (["x", "youtube"].includes(account.platform)) {
         const launched = await launchStandardXChrome(executablePath, profileDirectory, targetUrl, false);
         context = launched.context;
         page = launched.page;
@@ -331,9 +331,10 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
       throw new Error("Google Chrome or Microsoft Edge is required for local server login testing.");
     }
     prepareProfile(profileDirectory);
-    // X login runs in a standard server-owned Chrome process. Playwright only
-    // attaches to its loopback DevTools endpoint to stream frames and input;
-    // it does not launch X with its automation command-line switches.
+    // X and Google login run in a standard server-owned Chrome process.
+    // Playwright only attaches to their loopback DevTools endpoint to stream
+    // frames and input; LinkedIn can use the same persistent context as
+    // Instagram/Facebook and therefore does not need a second browser path.
     let attachedBrowser: Browser | null = null;
     let closeStandardChrome: (() => Promise<void>) | null = null;
     let context: BrowserContext;
@@ -348,7 +349,7 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
       : account.platform === "linkedin" ? "https://www.linkedin.com/login"
       : account.platform === "youtube" ? "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fstudio.youtube.com%2F"
       : "https://www.instagram.com/accounts/login/";
-    if (["x", "linkedin", "youtube"].includes(account.platform)) {
+    if (["x", "youtube"].includes(account.platform)) {
       const launched = await launchStandardXChrome(executablePath, profileDirectory, loginUrl);
       attachedBrowser = launched.browser;
       closeStandardChrome = launched.close;
@@ -388,13 +389,11 @@ export class PlaywrightLoginBrowserLauncher implements LoginBrowserLauncher {
             : account.platform === "youtube" ? await youtubeSessionPresent(context)
             : await instagramSessionPresent(context);
           if (authenticated) {
-            if (["x", "linkedin", "youtube"].includes(account.platform)) {
+            if (["x", "youtube"].includes(account.platform)) {
               const defaultHold = account.platform === "x" ? 15_000 : 5_000;
               const holdMs = Number(process.env[`${account.platform.toUpperCase()}_LOGIN_HOLD_MS`] ?? defaultHold);
               await wait(page, Number.isFinite(holdMs) && holdMs >= 0 ? holdMs : defaultHold, signal);
-              const stable = account.platform === "x" ? await xSessionPresent(context)
-                : account.platform === "linkedin" ? await linkedinSessionPresent(context)
-                : await youtubeSessionPresent(context);
+              const stable = account.platform === "x" ? await xSessionPresent(context) : await youtubeSessionPresent(context);
               if (!stable) throw new Error(`${platformName} authentication did not remain active during session stabilization.`);
             }
             return;

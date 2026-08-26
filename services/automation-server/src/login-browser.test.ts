@@ -4,7 +4,7 @@ import test from "node:test";
 import type { Page } from "playwright-core";
 import { isAuthenticatedLinkedInPage, isAuthenticatedLinkedInUrl } from "./login-browser.ts";
 
-test("provider-sensitive logins use standard Chrome with a loopback-only DevTools endpoint", async () => {
+test("X and Google logins use standard Chrome while LinkedIn uses the normal persistent context", async () => {
   const source = await readFile(new URL("./login-browser.ts", import.meta.url), "utf8");
 
   assert.match(source, /spawn\(executablePath/);
@@ -16,7 +16,8 @@ test("provider-sensitive logins use standard Chrome with a loopback-only DevTool
   assert.match(source, /const targetHost = new URL\(targetUrl\)\.hostname/);
   assert.doesNotMatch(source, /--enable-automation/);
   assert.match(source, /--password-store=basic/);
-  assert.match(source, /\["x", "linkedin", "youtube"\]\.includes\(account\.platform\)/);
+  assert.match(source, /\["x", "youtube"\]\.includes\(account\.platform\)/);
+  assert.doesNotMatch(source, /\["x", "linkedin", "youtube"\]\.includes\(account\.platform\)/);
   assert.match(source, /account\.platform === "x" \? 15_000 : 5_000/);
   assert.match(source, /authentication did not remain active during session stabilization/);
   assert.match(source, /verifySavedSession/);

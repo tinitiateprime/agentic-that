@@ -1,8 +1,8 @@
-import type { Locator, Page } from "playwright-core";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
-import { detectServerBrowserExecutable, isAuthenticatedLinkedInUrl, launchStandardXChrome } from "./login-browser.ts";
+import { detectServerBrowserExecutable, isAuthenticatedLinkedInPage, isAuthenticatedLinkedInUrl } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
-import { setServerLocalInputFile } from "./local-file-input.ts";
+import { setServerLocalFileChooserFile, setServerLocalInputFile } from "./local-file-input.ts";
 
 export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
   '[role="dialog"] [contenteditable="true"]',
@@ -22,11 +22,35 @@ async function firstVisible(locators: Locator[]) {
   return null;
 }
 
+async function firstEnabledVisible(locators: Locator[]) {
+  for (const locator of locators) for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 10); index < count; index += 1) {
+    const item = locator.nth(index);
+    if (await item.isVisible().catch(() => false) && await item.isEnabled().catch(() => false)) return item;
+  }
+  return null;
+}
+
+async function firstAttached(locators: Locator[]) {
+  for (const locator of locators) if (await locator.count().catch(() => 0)) return locator.last();
+  return null;
+}
+
 async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal, timeout: number) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
     const item = await firstVisible(locators);
+    if (item) return item;
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+async function waitAttached(page: Page, locators: Locator[], signal: AbortSignal, timeout: number) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const item = await firstAttached(locators);
     if (item) return item;
     await page.waitForTimeout(500);
   }
@@ -39,6 +63,46 @@ function linkedInComposerEditors(page: Page) {
 
 async function waitForLinkedInComposer(page: Page, signal: AbortSignal, timeout: number) {
   return waitVisible(page, linkedInComposerEditors(page), signal, timeout);
+}
+
+async function dismissLinkedInCookiePrompt(page: Page) {
+  const control = await firstVisible([
+    page.getByRole("button", { name: /Accept cookies/i }),
+    page.getByRole("button", { name: /^Accept$/i }),
+    page.getByRole("button", { name: /^Agree$/i }),
+    page.getByRole("button", { name: /Reject optional cookies/i }),
+  ]);
+  if (control) await control.click({ timeout: 5_000 }).catch(() => undefined);
+}
+
+async function linkedinAuthenticated(context: BrowserContext, page: Page) {
+  if (!isAuthenticatedLinkedInUrl(page.url())) return false;
+  const cookies = await context.cookies();
+  if (cookies.some(cookie => cookie.name === "li_at" && Boolean(cookie.value)
+    && (cookie.domain === "linkedin.com" || cookie.domain.endsWith(".linkedin.com")))) return true;
+  return isAuthenticatedLinkedInPage(page);
+}
+
+type ViewportTarget = { locator: Locator; point: { x: number; y: number } };
+
+async function firstInViewport(page: Page, locators: Locator[]): Promise<ViewportTarget | null> {
+  const viewport = page.viewportSize() ?? await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  for (const locator of locators) {
+    for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 12); index < count; index += 1) {
+      const candidate = locator.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      const box = await candidate.boundingBox().catch(() => null);
+      if (!box || box.width <= 0 || box.height <= 0) continue;
+      const left = Math.max(0, box.x);
+      const top = Math.max(0, box.y);
+      const right = Math.min(viewport.width, box.x + box.width);
+      const bottom = Math.min(viewport.height, box.y + box.height);
+      if (right - left >= 4 && bottom - top >= 4) {
+        return { locator: candidate, point: { x: left + (right - left) / 2, y: top + (bottom - top) / 2 } };
+      }
+    }
+  }
+  return null;
 }
 
 async function activateLinkedInComposerControl(control: Locator) {
@@ -89,10 +153,17 @@ async function openLinkedInComposer(page: Page, signal: AbortSignal) {
     page.locator('[aria-label*="Start a post" i]'),
   ];
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const deadline = Date.now() + 45_000;
+  for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt += 1) {
     signal.throwIfAborted();
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
-    if (!await waitVisible(page, controls, signal, attempt ? 8_000 : 15_000)) continue;
+    await page.waitForTimeout(attempt ? 1_500 : 750);
+    const onScreen = await firstInViewport(page, controls);
+    if (onScreen) {
+      await page.mouse.click(onScreen.point.x, onScreen.point.y).catch(() => undefined);
+      const editor = await waitForLinkedInComposer(page, signal, 5_000);
+      if (editor) return editor;
+    }
     for (const control of controls) {
       for (let index = 0, count = Math.min(await control.count().catch(() => 0), 12); index < count; index += 1) {
         const candidate = control.nth(index);
@@ -105,6 +176,56 @@ async function openLinkedInComposer(page: Page, signal: AbortSignal) {
   }
 
   throw new Error("LinkedIn's Start a post control did not open its current post editor.");
+}
+
+async function attachLinkedInMedia(page: Page, editor: Locator, filePath: string, signal: AbortSignal) {
+  const dialog = editor.locator("xpath=ancestor::*[@role='dialog'][1]");
+  const root = await dialog.count() ? dialog : page.locator("body");
+  let input = root.locator('input[type="file"]').last();
+  if (await input.count()) {
+    await setServerLocalInputFile(page, input, filePath);
+  } else {
+    const button = await firstVisible([
+      root.getByRole("button", { name: /Add media|Media|Photo|Video/i }),
+      root.locator('button[aria-label*="media" i]'),
+      page.getByRole("button", { name: /Add media|Media|Photo|Video/i }),
+    ]);
+    if (!button) throw new Error("LinkedIn's media control was unavailable.");
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 }).catch(() => null);
+    await button.click({ timeout: 10_000 }).catch(() => button.evaluate(element => (element as HTMLElement).click()));
+    const chooser = await chooserPromise;
+    if (chooser) {
+      await setServerLocalFileChooserFile(page, chooser, filePath);
+    } else {
+      input = await waitAttached(page, [page.locator('input[type="file"]').last()], signal, 10_000) ?? input;
+      if (!await input.count()) throw new Error("LinkedIn's media picker did not expose a file input.");
+      await setServerLocalInputFile(page, input, filePath);
+    }
+  }
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const next = await firstEnabledVisible([
+      page.getByRole("button", { name: /^Done$|^Next$/i }),
+      page.locator('[role="dialog"] button').filter({ hasText: /^Done$|^Next$/i }),
+    ]);
+    if (next) {
+      await next.click({ timeout: 10_000 });
+      return;
+    }
+    const post = await firstEnabledVisible([
+      page.getByRole("button", { name: /^Post$/i }),
+      page.locator('[role="dialog"] button').filter({ hasText: /^Post$/i }),
+    ]);
+    if (post) return;
+    const error = await firstVisible([
+      page.locator('[role="alert"]').filter({ hasText: /failed|error|unsupported|too large|try again/i }),
+    ]);
+    const message = (await error?.textContent())?.replace(/\s+/g, " ").trim();
+    if (message) throw new Error(`LinkedIn media upload error: ${message}`);
+    await page.waitForTimeout(750);
+  }
+  throw new Error("LinkedIn media did not finish processing before the post timeout.");
 }
 
 async function activateExactLinkedInPost(post: Locator) {
@@ -141,34 +262,34 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
     if (job.executionMode !== "LIVE" || job.validationStage !== "LOCAL") throw new Error("The LinkedIn executor refuses jobs outside the authorized live stage.");
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for LinkedIn publishing.");
-    const browser = await launchStandardXChrome(executablePath, this.files.profileDirectory(job.accountId), "https://www.linkedin.com/feed/", false);
+    const context = await chromium.launchPersistentContext(this.files.profileDirectory(job.accountId), {
+      executablePath,
+      headless: true,
+      viewport: { width: 1280, height: 900 },
+      acceptDownloads: false,
+      args: ["--no-first-run", "--no-default-browser-check", "--disable-background-mode", "--password-store=basic"],
+    });
+    const page = context.pages()[0] || await context.newPage();
     let finalActionAttempted = false;
     try {
-      const { page, context } = browser;
       await Promise.all(context.pages().filter(candidate => candidate !== page).map(candidate => candidate.close().catch(() => undefined)));
       reportProgress("Opening LinkedIn with the saved server session.");
       await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60_000 });
-      if (!isAuthenticatedLinkedInUrl(page.url())) {
+      await dismissLinkedInCookiePrompt(page);
+      const authDeadline = Date.now() + 30_000;
+      while (Date.now() < authDeadline && !await linkedinAuthenticated(context, page)) await page.waitForTimeout(500);
+      if (!await linkedinAuthenticated(context, page)) {
         return { state: "LOGIN_REQUIRED" as const, errorCode: "LINKEDIN_LOGIN_REQUIRED", errorMessage: "Reconnect the LinkedIn account." };
       }
-      const editor = await openLinkedInComposer(page, signal);
+      let editor = await openLinkedInComposer(page, signal);
+      if (job.media[0]) {
+        reportProgress("Uploading media to LinkedIn's composer.");
+        await attachLinkedInMedia(page, editor, this.files.mediaFilePath(job.media[0].storageKey), signal);
+        editor = await waitForLinkedInComposer(page, signal, 30_000) ?? editor;
+      }
       await enterLinkedInPostText(page, editor, job.caption);
       const dialog = editor.locator("xpath=ancestor::*[@role='dialog'][1]");
       const root = await dialog.count() ? dialog : page.locator("body");
-      if (job.media[0]) {
-        reportProgress("Uploading media to LinkedIn's composer.");
-        let input = root.locator('input[type="file"]').last();
-        if (!await input.count()) {
-          const button = await firstVisible([root.getByRole("button", { name: /Add media|Media|Photo|Video/i }), root.locator('button[aria-label*="media" i]')]);
-          if (!button) throw new Error("LinkedIn's media control was unavailable.");
-          await button.click({ timeout: 10_000 });
-          input = page.locator('input[type="file"]').last();
-        }
-        if (!await input.count()) throw new Error("LinkedIn's media input was unavailable.");
-        await setServerLocalInputFile(page, input, this.files.mediaFilePath(job.media[0].storageKey));
-        const next = await waitVisible(page, [page.getByRole("button", { name: /^Done$|^Next$/i })], signal, 120_000);
-        if (next) await next.click({ timeout: 10_000 });
-      }
       const deadline = Date.now() + 120_000;
       let post: Locator | null = null;
       while (Date.now() < deadline) {
@@ -185,14 +306,14 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
       await waitForLinkedInPublishConfirmation(page, editor, dialog, signal);
       return { state: "PUBLISHED" as const };
     } catch (error) {
-      if (!browser.page.isClosed()) {
-        const screenshot = await browser.page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
+      if (!page.isClosed()) {
+        const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
         if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
       }
       if (finalActionAttempted) return { state: "UNCERTAIN" as const, errorCode: "LINKEDIN_RESULT_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "LinkedIn confirmation was unavailable." };
       throw error;
     } finally {
-      await browser.close().catch(() => undefined);
+      await context.close().catch(() => undefined);
     }
   }
 }

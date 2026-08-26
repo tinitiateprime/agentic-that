@@ -2,7 +2,7 @@ import type { BrowserContext, Locator, Page } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
 import { detectServerBrowserExecutable, launchStandardXChrome } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
-import { setServerLocalInputFile } from "./local-file-input.ts";
+import { setServerLocalFileChooserFile, setServerLocalInputFile } from "./local-file-input.ts";
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) {
@@ -196,22 +196,75 @@ async function uploadVideo(
 ) {
   const options = job.platformOptions.youtube;
   if (!options || !job.media[0]) throw new Error("YouTube video options and one video file are required.");
-  const inputCandidates = [
+  const inputCandidates = () => [
     page.locator('ytcp-uploads-dialog input[type="file"]'),
     page.locator('input[type="file"][accept*="video"]'),
     page.locator('input[type="file"]'),
   ];
-  let input = await waitAttached(page, inputCandidates, signal, 30_000);
-  if (!input) {
-    const create = await waitVisible(page, [page.getByRole("button", { name: /^Create$/i }), page.locator("ytcp-button#create-icon")], signal, 30_000);
-    if (create) await clickReversibleControl(page, create, signal);
-    const upload = await waitVisible(page, [page.getByRole("menuitem", { name: /Upload videos/i }), page.getByText(/^Upload videos$/i)], signal, 20_000);
-    if (upload) await clickReversibleControl(page, upload, signal);
-    input = await waitAttached(page, inputCandidates, signal, 20_000);
-  }
-  if (!input) throw new Error("YouTube Studio's video input was unavailable.");
   reportProgress("Uploading the video to YouTube Studio.");
-  await setServerLocalInputFile(page, input, files.mediaFilePath(job.media[0].storageKey));
+  const filePath = files.mediaFilePath(job.media[0].storageKey);
+  const useExistingInput = async (timeout: number) => {
+    const input = await waitAttached(page, inputCandidates(), signal, timeout);
+    if (!input) return false;
+    await setServerLocalInputFile(page, input, filePath);
+    return true;
+  };
+  const clickUploadControl = async (control: Locator) => {
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 8_000 }).catch(() => null);
+    await clickReversibleControl(page, control, signal);
+    const chooser = await chooserPromise;
+    if (chooser) {
+      await setServerLocalFileChooserFile(page, chooser, filePath);
+      return true;
+    }
+    return useExistingInput(5_000);
+  };
+
+  let attached = await useExistingInput(5_000);
+  if (!attached) {
+    const selectFiles = await waitVisible(page, [
+      page.getByRole("button", { name: /Select files/i }),
+      page.getByText(/^Select files$/i),
+      page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+    ], signal, 8_000);
+    if (selectFiles) attached = await clickUploadControl(selectFiles);
+  }
+  if (!attached) {
+    const directUpload = await waitVisible(page, [
+      page.getByRole("button", { name: /^Upload videos$/i }),
+      page.getByText(/^Upload videos$/i),
+      page.locator("ytcp-button").filter({ hasText: /^Upload videos$/i }),
+    ], signal, 8_000);
+    if (directUpload) attached = await clickUploadControl(directUpload);
+  }
+  if (!attached) {
+    const create = await waitVisible(page, [
+      page.getByRole("button", { name: /^Create$/i }),
+      page.locator('button[aria-label*="Create" i], button[title*="Create" i]'),
+      page.locator("ytcp-button#create-icon"),
+      page.locator("#create-icon").filter({ hasText: /Create/i }),
+      page.getByText(/^Create$/i),
+    ], signal, 20_000);
+    if (create) {
+      await clickReversibleControl(page, create, signal);
+      const upload = await waitVisible(page, [
+        page.getByRole("menuitem", { name: /Upload videos/i }),
+        page.locator('[role="menuitem"]').filter({ hasText: /Upload videos/i }),
+        page.getByText(/^Upload videos$/i),
+      ], signal, 15_000);
+      if (upload) attached = await clickUploadControl(upload);
+    }
+  }
+  if (!attached) {
+    const finalSelectFiles = await waitVisible(page, [
+      page.getByRole("button", { name: /Select files/i }),
+      page.getByText(/^Select files$/i),
+      page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+    ], signal, 10_000);
+    if (finalSelectFiles) attached = await clickUploadControl(finalSelectFiles);
+  }
+  if (!attached) attached = await useExistingInput(5_000);
+  if (!attached) throw new Error("YouTube Studio did not expose an Upload videos, Select files, or video file-input control.");
   // Current Studio builds sometimes render the metadata step without the
   // legacy ytcp-uploads-dialog custom element. The title is the stable proof
   // that the selected video was accepted, so derive the owning root from it.

@@ -204,6 +204,11 @@ test("the LinkedIn live executor records its fence before one exact Post click",
   assert.match(source, /\.tiptap\.ProseMirror\[contenteditable="true"\]/);
   assert.match(source, /data-view-name\*="start-post"/);
   assert.match(source, /setServerLocalInputFile/);
+  assert.match(source, /setServerLocalFileChooserFile/);
+  assert.match(source, /chromium\.launchPersistentContext/);
+  assert.match(source, /isAuthenticatedLinkedInPage/);
+  assert.match(source, /dismissLinkedInCookiePrompt/);
+  assert.doesNotMatch(source, /launchStandardXChrome/);
   assert.doesNotMatch(source, /setInputFiles/);
   assert.match(source, /did not show a publish confirmation or close its composer/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await activateExactLinkedInPost(post)"));
@@ -218,6 +223,9 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /visibility === "public"/);
   assert.match(source, /exact label guard/);
   assert.match(source, /setServerLocalInputFile/);
+  assert.match(source, /setServerLocalFileChooserFile/);
+  assert.match(source, /Select files/);
+  assert.match(source, /Upload videos/);
   assert.match(source, /clickReversibleControl/);
   assert.match(source, /accepted the file but did not show its video metadata fields/);
   assert.match(source, /ancestor::ytcp-uploads-dialog/);
@@ -231,6 +239,7 @@ test("standard Chrome media uploads pass local paths directly through CDP", asyn
   assert.match(source, /DOM\.setFileInputFiles/);
   assert.match(source, /files: \[absolutePath\]/);
   assert.match(source, /Runtime\.evaluate/);
+  assert.match(source, /chooser\.element\(\)/);
   assert.doesNotMatch(source, /readFile|arrayBuffer|base64/);
 });
 

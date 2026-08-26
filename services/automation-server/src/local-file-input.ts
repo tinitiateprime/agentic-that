@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { Locator, Page } from "playwright-core";
+import type { ElementHandle, FileChooser, Locator, Page } from "playwright-core";
+
+type FileInputTarget = Locator | ElementHandle<Node>;
 
 /**
  * Assigns a server-local file directly through Chrome DevTools.
@@ -10,11 +12,14 @@ import type { Locator, Page } from "playwright-core";
  * Our Chrome process and media storage are on the same Ubuntu host, so passing
  * the absolute local path to Chrome avoids that false transport ceiling.
  */
-export async function setServerLocalInputFile(page: Page, input: Locator, filePath: string) {
+async function setServerLocalInputElementFile(page: Page, input: FileInputTarget, filePath: string) {
   const absolutePath = path.resolve(filePath);
   if (absolutePath !== filePath) throw new Error("The server media path must be absolute.");
   const pageKey = `__agenticthat_server_upload_${randomUUID().replaceAll("-", "")}`;
-  await input.evaluate((element, key) => {
+  const evaluatable = input as unknown as {
+    evaluate(pageFunction: (element: HTMLElement, key: string) => void, key: string): Promise<void>;
+  };
+  await evaluatable.evaluate((element, key) => {
     if (element.tagName !== "INPUT" || element.getAttribute("type")?.toLowerCase() !== "file") {
       throw new Error("The selected browser control is not a file input.");
     }
@@ -38,5 +43,18 @@ export async function setServerLocalInputFile(page: Page, input: Locator, filePa
     }).catch(() => undefined);
     await client.send("Runtime.releaseObjectGroup", { objectGroup: pageKey }).catch(() => undefined);
     await client.detach().catch(() => undefined);
+  }
+}
+
+export function setServerLocalInputFile(page: Page, input: Locator, filePath: string) {
+  return setServerLocalInputElementFile(page, input, filePath);
+}
+
+export async function setServerLocalFileChooserFile(page: Page, chooser: FileChooser, filePath: string) {
+  const element = chooser.element();
+  try {
+    await setServerLocalInputElementFile(page, element, filePath);
+  } finally {
+    await element.dispose().catch(() => undefined);
   }
 }
