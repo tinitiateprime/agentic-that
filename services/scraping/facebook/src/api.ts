@@ -3,6 +3,7 @@ import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./sto
 import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { operationalBrowserError } from "../../browser-runtime.ts";
+import { InProcessBackgroundJobs } from "../../background-jobs.ts";
 
 const headers = {
   "content-type": "application/json; charset=utf-8",
@@ -14,6 +15,7 @@ const headers = {
   "access-control-allow-headers": "authorization,content-type,cache-control,pragma",
 };
 const trialScrapeLimiter = new RollingTrialUsageLimiter();
+const serverBackgroundJobs = new InProcessBackgroundJobs();
 const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
 
 function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
@@ -189,8 +191,19 @@ export async function handleFacebookRequest(request: Request) {
     }
     const runJob = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJob) {
-      const result = await executeFacebookJob(runJob[1], identity.workspaceId);
-      return result ? json(result) : json({ message: "Job not found" }, 404);
+      const jobId = runJob[1];
+      const current = await store.getJob(jobId);
+      if (!current) return json({ message: "Job not found" }, 404);
+      if (current.status === "complete" || current.status === "failed") {
+        return json(await jobResponse(current, store));
+      }
+      const executionKey = `${identity.workspaceId}:${jobId}`;
+      serverBackgroundJobs.start(
+        executionKey,
+        () => executeFacebookJob(jobId, identity.workspaceId),
+        error => console.error("Facebook background job failed", operationalBrowserError(error)),
+      );
+      return json(await jobResponse(current, store), 202);
     }
     const getJob = route.match(/^jobs\/([^/]+)$/);
     if (request.method === "GET" && getJob) {

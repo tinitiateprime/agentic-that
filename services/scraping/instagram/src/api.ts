@@ -11,6 +11,7 @@ import {
 } from "../../../../lib/scraping-service-auth.ts";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { operationalBrowserError } from "../../browser-runtime.ts";
+import { InProcessBackgroundJobs } from "../../background-jobs.ts";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -22,6 +23,7 @@ const jsonHeaders = {
   "access-control-allow-headers": "authorization, content-type, cache-control, pragma"
 };
 const trialScrapeLimiter = new RollingTrialUsageLimiter();
+const serverBackgroundJobs = new InProcessBackgroundJobs();
 const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
 
 function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
@@ -301,8 +303,19 @@ export async function handleInstagramRequest(request: Request) {
     }
     const runJobMatch = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJobMatch) {
-      const result = await executeInstagramJob(runJobMatch[1], identity.workspaceId);
-      return result ? json(result) : json({ message: "Job not found" }, 404);
+      const jobId = runJobMatch[1];
+      const current = await store.getJob(jobId);
+      if (!current) return json({ message: "Job not found" }, 404);
+      if (current.status === "complete" || current.status === "failed") {
+        return json(await jobResponse(current, store));
+      }
+      const executionKey = `${identity.workspaceId}:${jobId}`;
+      serverBackgroundJobs.start(
+        executionKey,
+        () => executeInstagramJob(jobId, identity.workspaceId),
+        error => console.error("Instagram background job failed", operationalBrowserError(error)),
+      );
+      return json(await jobResponse(current, store), 202);
     }
     const getJobMatch = route.match(/^jobs\/([^/]+)$/);
     if (request.method === "GET" && getJobMatch) {
