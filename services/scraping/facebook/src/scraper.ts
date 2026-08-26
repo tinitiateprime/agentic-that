@@ -1,15 +1,13 @@
-import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  chromium,
-  type Browser,
   type BrowserContext,
   type BrowserContextOptions,
   type Page,
   type Response,
 } from "playwright-core";
+import { launchScrapingBrowser, recoverableBrowserRuntimeError } from "../../browser-runtime.ts";
 
 export type FacebookInputMode = "profile" | "keyword" | "profile_url" | "post_url";
 export type FacebookProfileType = "page" | "public_profile";
@@ -1381,62 +1379,7 @@ function responseCollector() {
   };
 }
 
-function localChromeCandidates() {
-  if (process.platform === "win32") {
-    return [
-      process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
-      process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
-      process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
-      process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Microsoft", "Edge", "Application", "msedge.exe"),
-    ].filter((value): value is string => Boolean(value));
-  }
-  if (process.platform === "darwin") return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"];
-  return ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
-}
-
-function localChromiumExecutablePath() {
-  const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH;
-  if (configured && existsSync(configured)) return configured;
-  for (const candidate of localChromeCandidates()) if (existsSync(candidate)) return candidate;
-  return null;
-}
-
-async function launchBrowserOnce() {
-  const localExecutable = localChromiumExecutablePath();
-  if (localExecutable) {
-    return chromium.launch({
-      args: ["--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"],
-      executablePath: localExecutable,
-      headless: true,
-    });
-  }
-  const chromiumPack = (await import("@sparticuz/chromium")).default;
-  return chromium.launch({
-    args: [...chromiumPack.args, "--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"],
-    executablePath: await chromiumPack.executablePath(),
-    headless: true,
-  });
-}
-
-async function launchBrowser() {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await launchBrowserOnce();
-    } catch (error) {
-      lastError = error;
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 600));
-    }
-  }
-  throw lastError;
-}
-
-function recoverableBrowserRuntimeError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || "");
-  return /browser.*(?:closed|disconnected)|Target page, context or browser has been closed|newContext|ECONNRESET|ERR_CONNECTION|navigation.*timeout/i.test(message);
-}
-
-async function createPage(browser: Browser): Promise<FacebookBrowserSession> {
+async function createPage(browser: Awaited<ReturnType<typeof launchScrapingBrowser>>): Promise<FacebookBrowserSession> {
   const options: BrowserContextOptions = {
     locale: "en-US",
     viewport: { width: 1280, height: 900 },
@@ -1456,7 +1399,7 @@ async function createPage(browser: Browser): Promise<FacebookBrowserSession> {
   };
 }
 
-function browserSessionFactory(browser: Browser): FacebookBrowserSessionFactory {
+function browserSessionFactory(browser: Awaited<ReturnType<typeof launchScrapingBrowser>>): FacebookBrowserSessionFactory {
   return { create: () => createPage(browser) };
 }
 
@@ -1959,7 +1902,7 @@ export async function runFacebookScrape(
 ) {
   let lastError: unknown;
   for (let runtimeAttempt = 1; runtimeAttempt <= 2; runtimeAttempt += 1) {
-    const browser = await launchBrowser();
+    const browser = await launchScrapingBrowser();
     const closeOnAbort = () => { void browser.close().catch(() => undefined); };
     runtime.signal?.addEventListener("abort", closeOnAbort, { once: true });
     try {

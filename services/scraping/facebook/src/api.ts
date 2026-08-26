@@ -2,6 +2,7 @@ import { getFacebookScraperInfo, runFacebookScrape } from "./scraper.ts";
 import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./store.ts";
 import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
+import { operationalBrowserError } from "../../browser-runtime.ts";
 
 const headers = {
   "content-type": "application/json; charset=utf-8",
@@ -156,7 +157,7 @@ export async function executeFacebookJob(jobId: string, workspaceId: string) {
     const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
     return complete ? jobResponse(complete, store) : null;
   } catch (error) {
-    console.error("Facebook server scrape failed", error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+    console.error("Facebook server scrape failed", operationalBrowserError(error));
     const failed = await store.updateJob(jobId, { status: "failed", error: friendlyError(error) });
     return failed ? jobResponse(failed, store) : null;
   }
@@ -208,6 +209,9 @@ export async function handleFacebookRequest(request: Request) {
     }
     return json({ message: "Not found" }, 404);
   } catch (error) {
+    if (!(error instanceof ScrapingServiceAuthError) && !(error instanceof FacebookRequestError)) {
+      console.error("Facebook scraping request failed", operationalBrowserError(error));
+    }
     return json(
       { message: friendlyError(error) },
       error instanceof ScrapingServiceAuthError ? error.status : error instanceof FacebookRequestError ? 400 : 500

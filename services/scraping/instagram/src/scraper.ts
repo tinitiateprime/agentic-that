@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page, type Response } from "playwright-core";
+import { type BrowserContext, type BrowserContextOptions, type Locator, type Page, type Response } from "playwright-core";
+import { launchScrapingBrowser, recoverableBrowserRuntimeError } from "../../browser-runtime.ts";
 
 export type InstagramScrapeInput = {
   query: string;
@@ -368,40 +369,6 @@ function normalizeQuery(query: string): NormalizedQuery {
   };
 }
 
-function localChromeCandidates() {
-  if (process.platform === "win32") {
-    const roots = [
-      process.env.LOCALAPPDATA,
-      process.env.PROGRAMFILES,
-      process.env["PROGRAMFILES(X86)"]
-    ].filter(Boolean) as string[];
-    return roots.flatMap((root) => [
-      path.join(root, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(root, "Microsoft", "Edge", "Application", "msedge.exe")
-    ]);
-  }
-
-  if (process.platform === "darwin") {
-    return [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-    ];
-  }
-
-  return ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
-}
-
-async function chromiumExecutablePath(chromiumPack: typeof import("@sparticuz/chromium").default) {
-  const configured = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH;
-  if (configured && existsSync(configured)) return configured;
-
-  for (const candidate of localChromeCandidates()) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  return chromiumPack.executablePath();
-}
-
 export async function getInstagramScraperInfo() {
   return {
     mode: "public-browser",
@@ -411,22 +378,7 @@ export async function getInstagramScraperInfo() {
   };
 }
 
-async function launchBrowser() {
-  const chromiumPack = (await import("@sparticuz/chromium")).default;
-  const executablePath = await chromiumExecutablePath(chromiumPack);
-  return chromium.launch({
-    args: [
-      ...chromiumPack.args,
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-sandbox"
-    ],
-    executablePath,
-    headless: true
-  });
-}
-
-async function createPage(browser: Browser): Promise<InstagramBrowserSession> {
+async function createPage(browser: Awaited<ReturnType<typeof launchScrapingBrowser>>): Promise<InstagramBrowserSession> {
   const contextOptions: BrowserContextOptions = {
     locale: "en-US",
     viewport: { width: 1280, height: 900 },
@@ -449,7 +401,7 @@ async function createPage(browser: Browser): Promise<InstagramBrowserSession> {
   };
 }
 
-function browserSessionFactory(browser: Browser): InstagramBrowserSessionFactory {
+function browserSessionFactory(browser: Awaited<ReturnType<typeof launchScrapingBrowser>>): InstagramBrowserSessionFactory {
   return { create: () => createPage(browser) };
 }
 
@@ -4590,12 +4542,20 @@ export async function runInstagramScrapeWithSessionFactory(
 }
 
 export async function runInstagramScrape(input: InstagramScrapeInput) {
-  const browser = await launchBrowser();
-  try {
-    return await runInstagramScrapeWithSessionFactory(input, browserSessionFactory(browser));
-  } finally {
-    await browser.close();
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const browser = await launchScrapingBrowser();
+    try {
+      return await runInstagramScrapeWithSessionFactory(input, browserSessionFactory(browser));
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !recoverableBrowserRuntimeError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 600));
+    } finally {
+      await browser.close().catch(() => undefined);
+    }
   }
+  throw lastError;
 }
 
 export const instagramServiceInfo = {

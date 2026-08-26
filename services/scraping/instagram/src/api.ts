@@ -10,6 +10,7 @@ import {
   ScrapingServiceAuthError
 } from "../../../../lib/scraping-service-auth.ts";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
+import { operationalBrowserError } from "../../browser-runtime.ts";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -260,6 +261,7 @@ export async function executeInstagramJob(jobId: string, workspaceId: string) {
     const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
     return complete ? jobResponse(complete, store) : null;
   } catch (error) {
+    console.error("Instagram server scrape failed", operationalBrowserError(error));
     const failed = await store.updateJob(jobId, {
       status: "failed",
       error: friendlyScrapeMessage(error)
@@ -334,6 +336,9 @@ export async function handleInstagramRequest(request: Request) {
 
     return json({ message: "Not found" }, 404);
   } catch (error) {
+    if (!(error instanceof ScrapingServiceAuthError) && !(error instanceof InstagramRequestError)) {
+      console.error("Instagram scraping request failed", operationalBrowserError(error));
+    }
     const message = friendlyScrapeMessage(error);
     return json(
       { message },
