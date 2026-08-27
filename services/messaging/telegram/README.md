@@ -739,7 +739,7 @@ Use a public `@username` if possible. Phone numbers must include `+countrycode`,
 
 ### Media send fails
 
-Use **Upload from device** and wait for “uploaded and ready.” The file is stored in private server state and uploaded by the connected Telegram account; Telegram does not need to fetch a public URL.
+Use the **Drop a file here or choose from device** box and wait for “uploaded and ready.” The file is stored in private server state and uploaded by the connected Telegram account; Telegram does not need to fetch a public URL. The post type controls how Telegram receives it: photo, streamable video, GIF/animation, audio track, voice message, video note, or unchanged document. OGG/Opus is recommended for voice messages, and a short square video is recommended for video notes.
 
 ### Inbox does not show incoming replies
 

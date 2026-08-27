@@ -93,6 +93,28 @@ async function fillEditable(page: Page, locator: Locator, text: string) {
   if (text) await page.keyboard.insertText(text);
 }
 
+async function editableText(locator: Locator) {
+  return locator.evaluate(element => {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return element.value;
+    const editable = element.matches('[contenteditable="true"], [role="textbox"]')
+      ? element
+      : element.querySelector('[contenteditable="true"], [role="textbox"], textarea, input');
+    if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) return editable.value;
+    return (editable as HTMLElement | null)?.innerText || editable?.textContent || element.textContent || "";
+  }).catch(() => "");
+}
+
+async function fillVerifiedYouTubeField(page: Page, locator: Locator, text: string, fieldName: string) {
+  const expected = text.replace(/\s+/g, " ").trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await fillEditable(page, locator, text);
+    await page.waitForTimeout(400);
+    const actual = (await editableText(locator)).replace(/\s+/g, " ").trim();
+    if (actual === expected) return;
+  }
+  throw new Error(`YouTube Studio did not retain the requested ${fieldName}.`);
+}
+
 export function exactYouTubeButtonLabelMatches(label: RegExp, ...values: Array<string | null | undefined>) {
   return values.some(value => {
     const normalized = String(value || "").replace(/\s+/g, " ").trim();
@@ -100,6 +122,12 @@ export function exactYouTubeButtonLabelMatches(label: RegExp, ...values: Array<s
     label.lastIndex = 0;
     return label.test(normalized);
   });
+}
+
+export function isYouTubePublishSuccessText(value: string | null | undefined) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return /(?:Video published|Your video has been published|Video saved|Your video has been saved|public on YouTube)/i.test(text)
+    && !/(?:not|wasn['’]t|couldn['’]t|failed|error)/i.test(text);
 }
 
 async function enabledExactButton(page: Page, root: Locator, label: RegExp, signal: AbortSignal, timeout = 90_000) {
@@ -151,20 +179,26 @@ function youtubeUploadTransitionTimeout() {
   return Math.max(60_000, Math.min(60 * 60_000, Math.floor(configured)));
 }
 
-async function currentYouTubeUploadStage(page: Page) {
+async function currentYouTubeUploadStage(page: Page, root: Locator = page.locator("body")) {
   if (await firstVisible([
-    page.getByText(/Choose when to publish|Save or publish/i),
-    page.getByRole("radio", { name: /^Public$|^Private$|^Unlisted$/i }),
-    page.locator('tp-yt-paper-radio-button[name="PUBLIC"], tp-yt-paper-radio-button[name="PRIVATE"], tp-yt-paper-radio-button[name="UNLISTED"]'),
+    root.getByText(/Choose when to publish|Save or publish/i),
+    root.getByRole("radio", { name: /^Public$|^Private$|^Unlisted$/i }),
+    root.locator('tp-yt-paper-radio-button[name="PUBLIC"], tp-yt-paper-radio-button[name="PRIVATE"], tp-yt-paper-radio-button[name="UNLISTED"]'),
   ])) return "Visibility";
   if (await firstVisible([
-    page.getByText(/check your video for issues|we['’]ll check your video|Copyright checks?/i),
+    root.getByText(/check your video for issues|we['’]ll check your video|Copyright checks?/i),
   ])) return "Checks";
   if (await firstVisible([
-    page.getByText(/Use cards and an end screen|Add subtitles/i),
+    root.getByText(/Use cards and an end screen|Add subtitles/i),
   ])) return "Video elements";
   if (await firstVisible([
-    page.locator("#title-textarea"),
+    root.getByText(/Ad suitability|Tell us about your video|Does your video contain/i),
+  ])) return "Ad suitability";
+  if (await firstVisible([
+    root.getByText(/Monetization|Earn money from your video|Turn on ads/i),
+  ])) return "Monetization";
+  if (await firstVisible([
+    root.locator("#title-textarea"),
   ])) return "Details";
   return "the current upload step";
 }
@@ -181,18 +215,19 @@ async function visibleYouTubeUploadError(page: Page) {
 
 async function advanceYouTubeUploadToVisibility(
   page: Page,
+  dialog: Locator,
   signal: AbortSignal,
   reportProgress: (message: string) => void,
 ) {
   const deadline = Date.now() + youtubeUploadTransitionTimeout();
   for (let transitions = 0; transitions < 10 && Date.now() < deadline; transitions += 1) {
     signal.throwIfAborted();
-    const stage = await currentYouTubeUploadStage(page);
+    const stage = await currentYouTubeUploadStage(page, dialog);
     if (stage === "Visibility") return;
     reportProgress(`Waiting for YouTube's ${stage} step to become ready.`);
     const next = await enabledExactButton(
       page,
-      page.locator("body"),
+      dialog,
       /^Next$/i,
       signal,
       Math.max(1_000, deadline - Date.now()),
@@ -204,19 +239,27 @@ async function advanceYouTubeUploadToVisibility(
         : `YouTube's Next button did not become enabled on ${stage} before the upload timeout.`);
     }
     await clickReversibleControl(page, next, signal);
+    reportProgress(`YouTube accepted the ${stage} step.`);
     if (stage === "the current upload step") {
       await page.waitForTimeout(1_500);
       continue;
     }
     const transitionDeadline = Math.min(deadline, Date.now() + 30_000);
+    let transitioned = false;
     while (Date.now() < transitionDeadline) {
       signal.throwIfAborted();
-      const nextStage = await currentYouTubeUploadStage(page);
-      if (nextStage === "Visibility" || nextStage !== stage) break;
+      const nextStage = await currentYouTubeUploadStage(page, dialog);
+      if (nextStage === "Visibility" || nextStage !== stage) {
+        transitioned = true;
+        break;
+      }
       await page.waitForTimeout(500);
     }
+    if (!transitioned) {
+      throw new Error(`YouTube accepted Next but did not advance beyond ${stage}.`);
+    }
   }
-  const stage = await currentYouTubeUploadStage(page);
+  const stage = await currentYouTubeUploadStage(page, dialog);
   const uploadError = await visibleYouTubeUploadError(page);
   throw new Error(uploadError
     ? `YouTube stopped at ${stage}: ${uploadError}`
@@ -229,12 +272,72 @@ async function submitFinalAction(
   signal: AbortSignal,
   onFinalActionStarting: () => Promise<void>,
 ) {
-  const label = `${await finalAction.getAttribute("aria-label").catch(() => "") || ""} ${await finalAction.textContent().catch(() => "") || ""}`
-    .replace(/\s+/g, " ").trim();
-  if (!expectedLabel.test(label)) throw new Error("YouTube's final control did not pass its exact label guard.");
+  const ariaLabel = await finalAction.getAttribute("aria-label").catch(() => "");
+  const visibleText = await finalAction.textContent().catch(() => "");
+  if (!exactYouTubeButtonLabelMatches(expectedLabel, ariaLabel, visibleText)) {
+    throw new Error("YouTube's final control did not pass its exact label guard.");
+  }
   await onFinalActionStarting();
   signal.throwIfAborted();
   await finalAction.click({ timeout: 15_000 });
+}
+
+async function youtubeRadioSelected(locator: Locator) {
+  return locator.evaluate(element => {
+    const radio = element.matches('tp-yt-paper-radio-button, [role="radio"], input[type="radio"]')
+      ? element
+      : element.closest('tp-yt-paper-radio-button, [role="radio"], label')
+        || element.querySelector('tp-yt-paper-radio-button, [role="radio"], input[type="radio"]')
+        || element;
+    const input = radio instanceof HTMLInputElement
+      ? radio
+      : radio.querySelector<HTMLInputElement>('input[type="radio"]');
+    return radio.getAttribute("aria-checked") === "true"
+      || radio.hasAttribute("checked")
+      || Boolean(input?.checked)
+      || ("checked" in radio && Boolean((radio as HTMLElement & { checked?: boolean }).checked));
+  }).catch(() => false);
+}
+
+async function selectYouTubeRadio(
+  page: Page,
+  root: Locator,
+  label: RegExp,
+  names: string[],
+  fieldName: string,
+  signal: AbortSignal,
+) {
+  const nameSelector = names.map(name => `tp-yt-paper-radio-button[name="${name}"], [role="radio"][name="${name}"], input[type="radio"][name="${name}"]`).join(", ");
+  const candidates = () => [
+    root.getByRole("radio", { name: label }),
+    ...(nameSelector ? [root.locator(nameSelector)] : []),
+    root.locator("tp-yt-paper-radio-button").filter({ hasText: label }),
+  ];
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const radio = await firstVisible(candidates());
+    if (radio) {
+      if (!await youtubeRadioSelected(radio)) {
+        await radio.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => undefined);
+        await radio.click({ timeout: 10_000 });
+      }
+      const selectionDeadline = Date.now() + 10_000;
+      while (Date.now() < selectionDeadline) {
+        signal.throwIfAborted();
+        for (const locator of candidates()) {
+          for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 12); index < count; index += 1) {
+            const candidate = locator.nth(index);
+            if (await candidate.isVisible().catch(() => false) && await youtubeRadioSelected(candidate)) return;
+          }
+        }
+        await page.waitForTimeout(300);
+      }
+      throw new Error(`YouTube Studio did not retain the requested ${fieldName}.`);
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`YouTube Studio's requested ${fieldName} option was unavailable.`);
 }
 
 async function openCommunityComposer(page: Page, signal: AbortSignal) {
@@ -396,39 +499,37 @@ async function uploadVideo(
     page.locator("#description-textarea"),
   ], signal, 60_000);
   if (!description) throw new Error("YouTube Studio's description editor was unavailable.");
-  await fillEditable(page, title, options.title);
-  await fillEditable(page, description, job.caption);
+  reportProgress("Filling and verifying the YouTube title and description.");
+  await fillVerifiedYouTubeField(page, title, options.title, "video title");
+  await fillVerifiedYouTubeField(page, description, job.caption, "video description");
 
   const audienceText = options.audience === "made_for_kids"
     ? /Yes,? (?:it['’]s|this video is) made for kids/i
     : /No,? (?:it['’]s|this video is) not made for kids/i;
-  const audience = await waitVisible(page, [
-    dialog.getByRole("radio", { name: audienceText }),
-    dialog.locator("tp-yt-paper-radio-button").filter({ hasText: audienceText }),
-  ], signal, 60_000);
-  if (!audience) throw new Error("YouTube Studio's requested audience option was unavailable.");
-  await audience.click({ timeout: 10_000 });
-  const selectedAudience = await audience.getAttribute("aria-checked").catch(() => null);
-  if (selectedAudience === "false") throw new Error("YouTube did not retain the selected audience classification.");
+  const audienceNames = options.audience === "made_for_kids"
+    ? ["VIDEO_MADE_FOR_KIDS_MFK", "MADE_FOR_KIDS"]
+    : ["VIDEO_MADE_FOR_KIDS_NOT_MFK", "NOT_MADE_FOR_KIDS"];
+  reportProgress(`Selecting the dashboard audience choice: ${options.audience === "made_for_kids" ? "made for kids" : "not made for kids"}.`);
+  await selectYouTubeRadio(page, dialog, audienceText, audienceNames, "audience classification", signal);
 
   // Channels can have extra monetization, ad-suitability, or rights screens.
   // Follow the visible Studio state until Visibility instead of assuming that
   // every account has exactly three Next transitions.
-  await advanceYouTubeUploadToVisibility(page, signal, reportProgress);
+  await advanceYouTubeUploadToVisibility(page, dialog, signal, reportProgress);
 
   const visibilityText = new RegExp(`^${options.visibility}$`, "i");
-  const visibility = await waitVisible(page, [
-    dialog.getByRole("radio", { name: visibilityText }),
-    dialog.locator(`tp-yt-paper-radio-button[name="${options.visibility.toUpperCase()}"]`),
-    dialog.locator("tp-yt-paper-radio-button").filter({ hasText: visibilityText }),
-  ], signal, 60_000);
-  if (!visibility) throw new Error(`YouTube Studio's ${options.visibility} visibility option was unavailable.`);
-  await visibility.click({ timeout: 10_000 });
-  const selectedVisibility = await visibility.getAttribute("aria-checked").catch(() => null);
-  if (selectedVisibility === "false") throw new Error("YouTube did not retain the selected visibility.");
+  reportProgress(`Selecting the dashboard visibility choice: ${options.visibility}.`);
+  await selectYouTubeRadio(
+    page,
+    dialog,
+    visibilityText,
+    [options.visibility.toUpperCase()],
+    `${options.visibility} visibility`,
+    signal,
+  );
 
   const finalLabel = options.visibility === "public" ? /^(?:Publish|Save)$/i : /^Save$/i;
-  const finalAction = await enabledExactButton(page, page.locator("body"), finalLabel, signal, youtubeUploadTransitionTimeout());
+  const finalAction = await enabledExactButton(page, dialog, finalLabel, signal, youtubeUploadTransitionTimeout());
   if (!finalAction) throw new Error("YouTube Studio's exact final Save or Publish button did not become enabled.");
   const platformPostUrl = await dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
   reportProgress(`Final YouTube ${options.visibility} action authorized. Recording the irreversible action before clicking.`);
@@ -437,14 +538,28 @@ async function uploadVideo(
   let confirmed = false;
   while (Date.now() < confirmationDeadline) {
     signal.throwIfAborted();
-    if (!await dialog.isVisible().catch(() => false)) { confirmed = true; break; }
-    if (await firstVisible([
-      page.getByText(/Video processing|public on YouTube|Video published|Your video has been published|Changes saved/i),
-      page.locator("ytcp-video-share-dialog"),
-    ])) { confirmed = true; break; }
+    const shareDialog = await firstVisible([page.locator("ytcp-video-share-dialog")]);
+    if (shareDialog) { confirmed = true; break; }
+    const notices = page.locator('[role="alert"], [role="status"], [aria-live], ytcp-video-share-dialog');
+    for (let index = 0, count = Math.min(await notices.count().catch(() => 0), 20); index < count; index += 1) {
+      const notice = notices.nth(index);
+      if (!await notice.isVisible().catch(() => false)) continue;
+      if (isYouTubePublishSuccessText(await notice.textContent().catch(() => ""))) {
+        confirmed = true;
+        break;
+      }
+    }
+    if (confirmed) break;
+    const failure = await firstVisible([
+      page.locator('[role="alert"], [role="status"], [aria-live]').filter({ hasText: /couldn['’]t (?:save|publish)|failed to (?:save|publish)|publish failed|try again/i }),
+    ]);
+    const failureText = (await failure?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
+    if (failureText) throw new Error(`YouTube rejected the final action: ${failureText}`);
     await page.waitForTimeout(750);
   }
-  if (!confirmed) throw new Error("YouTube did not show a publish/save confirmation.");
+  if (!confirmed) {
+    throw new Error("YouTube did not show an explicit publish/save confirmation. Closing the upload dialog alone is not proof of delivery.");
+  }
   return platformPostUrl || undefined;
 }
 

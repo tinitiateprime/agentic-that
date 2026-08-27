@@ -5,6 +5,7 @@ import {
   savedContactRecipient
 } from "./recipient-utils.js";
 import { uploadTelegramDeviceFile } from "./media-upload.js";
+import { inferTelegramUploadPostType, telegramUploadTypeHint } from "./media-kind.js";
 
 export function initTelegramConsole(options = {}) {
 let centralServiceToken = String(options.serviceToken || "");
@@ -38,7 +39,7 @@ const titles = {
   backup: ["Workspace tools", "Backup and restore"]
 };
 
-const postLabels = { text: "Text only", image: "Image + text", video: "Video + text", document: "Document", audio: "Audio", voice: "Voice", poll: "Poll", quiz: "Quiz", forwarded: "Forwarded" };
+const postLabels = { text: "Text only", image: "Image + text", video: "Video + text", animation: "GIF / animation", document: "Document", audio: "Audio", voice: "Voice message", video_note: "Video note", poll: "Poll", quiz: "Quiz", forwarded: "Forwarded" };
 const inboxViewLabels = { split: "Split", compact: "Compact", focus: "Focus", multi: "Multi" };
 const apps = ["Telegram Workflow", "WhatsApp Workflow", "Discord Workflow", "Slack Workflow"];
 const contactCountries = Array.from(document.querySelectorAll("#phone-country-code option"))
@@ -119,7 +120,7 @@ const el = {
   contactForm: $("contact-form"), contactCountryCode: $("contact-country-code"), contactList: $("contact-list"), contactCount: $("contact-count"), contactStatus: $("contact-status"),
   inboxSearch: $("inbox-search"), inboxShell: $("inbox-shell"), inboxViewButtons: $$(".inbox-view-control button[data-inbox-view]"), inboxThreadList: $("inbox-thread-list"), inboxActiveHeading: $("inbox-active-heading"), inboxThread: $("inbox-thread"), inboxMultiBoard: $("inbox-multi-board"), inboxForm: $("inbox-form"), inboxMessage: $("inbox-message"), inboxSendButton: $("inbox-send-button"), inboxRefresh: $("inbox-refresh"), inboxStatus: $("inbox-status"),
   groupForm: $("group-form"), groupList: $("group-list"), channelForm: $("channel-form"), channelList: $("channel-list"),
-  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postMediaFile: $("post-media-file"), postMediaStatus: $("post-media-status"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
+  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postMediaDropzone: $("post-media-dropzone"), postMediaFile: $("post-media-file"), postMediaStatus: $("post-media-status"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
   postHistorySent: $("post-history-sent"), postHistoryPending: $("post-history-pending"),
   globalSearch: $("global-search"), globalResults: $("global-results"), settingsForm: $("settings-form"), settingsStatus: $("settings-status"), backupJson: $("backup-json"), backupStatus: $("backup-status")
 };
@@ -533,10 +534,10 @@ function savePost(statusOverride = "") {
   return post;
 }
 function fillPost(post) {
-  revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready.` : "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
+  revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaDropzone.classList.toggle("has-file", Boolean(post.mediaUploadId)); el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready. ${telegramUploadTypeHint(post.type)}` : `Choose a file. ${telegramUploadTypeHint(post.type)}`; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
 }
 function revokePostMediaPreview() { if (state.mediaPreviewUrl) URL.revokeObjectURL(state.mediaPreviewUrl); state.mediaPreviewUrl = ""; }
-function clearPost() { revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaStatus.textContent = "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
+function clearPost() { revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaDropzone.classList.remove("has-file", "is-uploading", "is-dragging"); el.postMediaStatus.textContent = `Choose a file. ${telegramUploadTypeHint("text")}`; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
 function formatDate(value) { const date = new Date(value); return value && !Number.isNaN(date.getTime()) ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : value; }
 function renderPostPreview() {
   const post = postFromForm();
@@ -545,8 +546,9 @@ function renderPostPreview() {
   const tags = [postLabels[post.type], post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : "", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
   let media = "";
   const previewSource = state.mediaPreviewUrl && post.mediaUploadId ? state.mediaPreviewUrl : post.mediaUrl;
-  if (previewSource && post.type === "image") media = `<img src="${esc(previewSource)}" alt="">`;
-  else if (previewSource && post.type === "video") media = `<video src="${esc(previewSource)}" controls></video>`;
+  if (previewSource && ["image", "animation"].includes(post.type)) media = `<img src="${esc(previewSource)}" alt="">`;
+  else if (previewSource && ["video", "video_note"].includes(post.type)) media = `<video src="${esc(previewSource)}" controls></video>`;
+  else if (previewSource && ["audio", "voice"].includes(post.type)) media = `<audio src="${esc(previewSource)}" controls></audio>`;
   else if (post.mediaUploadId) media = `<div class="uploaded-media-summary"><strong>${esc(post.mediaName || "Uploaded file")}</strong><small>${post.mediaSize ? `${(post.mediaSize / 1024 / 1024).toFixed(2)} MB` : "Ready on server"}</small></div>`;
   else if (post.mediaUrl) media = `<span class="uploaded-media-summary">Legacy media attachment</span>`;
   const body = (post.type === "poll" || post.type === "quiz")
@@ -1112,12 +1114,21 @@ el.channelForm.addEventListener("submit", (event) => {
   write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
 });el.postForm.addEventListener("submit", (event) => { event.preventDefault(); savePost(); });
 ["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
-el.postMediaFile.addEventListener("change", async () => {
-  const file = el.postMediaFile.files?.[0];
+$("post-type").addEventListener("change", () => {
+  const uploadName = $("post-media-name").value.trim();
+  el.postMediaStatus.textContent = uploadName
+    ? `${uploadName} is stored privately and ready. ${telegramUploadTypeHint($("post-type").value)}`
+    : `Choose a file. ${telegramUploadTypeHint($("post-type").value)}`;
+});
+
+async function uploadPostMediaFile(file) {
   if (!file) return;
   const account = currentAccount();
   if (!account) { el.postMediaFile.value = ""; return status(el.postStatusMessage, "Select the sending Telegram profile first.", "error"); }
   state.mediaUploading = true;
+  el.postMediaDropzone.classList.remove("has-file");
+  el.postMediaDropzone.classList.add("is-uploading");
+  el.postMediaDropzone.setAttribute("aria-busy", "true");
   status(el.postStatusMessage, "Uploading the file privately to Ubuntu...");
   try {
     const upload = await uploadTelegramDeviceFile({
@@ -1135,11 +1146,10 @@ el.postMediaFile.addEventListener("change", async () => {
     $("post-media-name").value = upload.fileName;
     $("post-media-mime").value = upload.mimeType;
     $("post-media-size").value = String(upload.size);
-    if (file.type.startsWith("image/")) $("post-type").value = "image";
-    else if (file.type.startsWith("video/")) $("post-type").value = "video";
-    else if (file.type.startsWith("audio/")) $("post-type").value = "audio";
-    else $("post-type").value = "document";
-    el.postMediaStatus.textContent = `${upload.fileName} uploaded and ready to send.`;
+    const mediaType = inferTelegramUploadPostType(file, $("post-type").value);
+    $("post-type").value = mediaType;
+    el.postMediaDropzone.classList.add("has-file");
+    el.postMediaStatus.textContent = `${upload.fileName} uploaded and ready. ${telegramUploadTypeHint(mediaType)}`;
     status(el.postStatusMessage, "File upload complete.", "success");
     renderPostPreview();
   } catch (error) {
@@ -1149,7 +1159,35 @@ el.postMediaFile.addEventListener("change", async () => {
     onError(error, el.postStatusMessage);
   } finally {
     state.mediaUploading = false;
+    el.postMediaFile.value = "";
+    el.postMediaDropzone.classList.remove("is-uploading");
+    el.postMediaDropzone.removeAttribute("aria-busy");
   }
+}
+
+el.postMediaFile.addEventListener("change", async () => {
+  await uploadPostMediaFile(el.postMediaFile.files?.[0]);
+});
+el.postMediaDropzone.addEventListener("click", (event) => {
+  if (event.target !== el.postMediaFile && !state.mediaUploading) el.postMediaFile.click();
+});
+el.postMediaDropzone.addEventListener("keydown", (event) => {
+  if ((event.key === "Enter" || event.key === " ") && !state.mediaUploading) {
+    event.preventDefault();
+    el.postMediaFile.click();
+  }
+});
+["dragenter", "dragover"].forEach((eventName) => el.postMediaDropzone.addEventListener(eventName, (event) => {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  if (!state.mediaUploading) el.postMediaDropzone.classList.add("is-dragging");
+}));
+["dragleave", "drop"].forEach((eventName) => el.postMediaDropzone.addEventListener(eventName, (event) => {
+  event.preventDefault();
+  el.postMediaDropzone.classList.remove("is-dragging");
+}));
+el.postMediaDropzone.addEventListener("drop", async (event) => {
+  if (!state.mediaUploading) await uploadPostMediaFile(event.dataTransfer?.files?.[0]);
 });
 el.postContactTargets.addEventListener("change", renderPostPreview);
 el.postGroupTargets.addEventListener("change", renderPostPreview);

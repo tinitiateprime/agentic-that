@@ -2407,6 +2407,9 @@ export function TelegramConsole({ integrated = false }) {
                           h("option", {"value":"video"},
                             "Video + text"
                           ),
+                          h("option", {"value":"animation"},
+                            "GIF / animation"
+                          ),
                           h("option", {"value":"document"},
                             "Document"
                           ),
@@ -2415,6 +2418,9 @@ export function TelegramConsole({ integrated = false }) {
                           ),
                           h("option", {"value":"voice"},
                             "Voice message"
+                          ),
+                          h("option", {"value":"video_note"},
+                            "Video note"
                           ),
                           h("option", {"value":"poll"},
                             "Poll"
@@ -2457,17 +2463,28 @@ export function TelegramConsole({ integrated = false }) {
                       "Scheduled date"
                     ),
                     h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
-                    h("label", {"htmlFor":"post-media-file"},
-                      "Upload from device"
+                    h("section", {"id":"post-media-dropzone","className":"telegram-upload-box","tabIndex":"0","role":"button","aria-label":"Upload Telegram media from this device","aria-describedby":"post-media-status"},
+                      h("input", {"id":"post-media-file","className":"telegram-upload-input","type":"file","accept":"*/*"}),
+                      h("span", {"className":"telegram-upload-icon","aria-hidden":"true"},
+                        "↑"
+                      ),
+                      h("strong", null,
+                        "Drop a file here or choose from device"
+                      ),
+                      h("span", {"className":"telegram-upload-copy"},
+                        "Images, videos, GIFs, audio, voice messages, video notes, and documents"
+                      ),
+                      h("span", {"className":"telegram-upload-button"},
+                        "Choose file"
+                      )
                     ),
-                    h("input", {"id":"post-media-file","type":"file","accept":"image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip"}),
                     h("input", {"id":"post-media-url","type":"hidden"}),
                     h("input", {"id":"post-media-upload-id","type":"hidden"}),
                     h("input", {"id":"post-media-name","type":"hidden"}),
                     h("input", {"id":"post-media-mime","type":"hidden"}),
                     h("input", {"id":"post-media-size","type":"hidden"}),
                     h("small", {"id":"post-media-status","className":"muted","role":"status","aria-live":"polite"},
-                      "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."
+                      "Choose any supported file. It will be stored privately on the Ubuntu server for sending or scheduling."
                     ),
                     h("label", {"htmlFor":"post-body"},
                       "Text or caption"

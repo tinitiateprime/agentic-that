@@ -13,7 +13,7 @@ import { setServerLocalInputFile } from "./local-file-input.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
-import { exactYouTubeButtonLabelMatches } from "./youtube-live.ts";
+import { exactYouTubeButtonLabelMatches, isYouTubePublishSuccessText } from "./youtube-live.ts";
 import { interpretInstagramPublishResponse } from "./instagram-live.ts";
 import { isLinkedInPublishSuccessText } from "./linkedin-live.ts";
 
@@ -246,6 +246,9 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /ancestor::ytcp-uploads-dialog/);
   assert.match(source, /advanceYouTubeUploadToVisibility/);
   assert.match(source, /monetization, ad-suitability, or rights screens/);
+  assert.match(source, /fillVerifiedYouTubeField/);
+  assert.match(source, /selectYouTubeRadio/);
+  assert.match(source, /explicit publish\/save confirmation/);
   assert.doesNotMatch(source, /for \(const step of \["Video elements", "Checks", "Visibility"\]\)/);
   assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
@@ -256,6 +259,14 @@ test("YouTube exact buttons remain detectable when aria and visible labels are b
   assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next", "Next"), true);
   assert.equal(exactYouTubeButtonLabelMatches(/^Publish$/i, "Publish", "PUBLISH"), true);
   assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next step", "Continue"), false);
+});
+
+test("YouTube requires explicit positive publish evidence and rejects failure copy", () => {
+  assert.equal(isYouTubePublishSuccessText("Video published"), true);
+  assert.equal(isYouTubePublishSuccessText("Your video has been saved"), true);
+  assert.equal(isYouTubePublishSuccessText("Your video couldn't be published. Try again."), false);
+  assert.equal(isYouTubePublishSuccessText("Video processing"), false);
+  assert.equal(isYouTubePublishSuccessText("Changes saved"), false);
 });
 
 test("standard Chrome media uploads pass local paths directly through CDP", async () => {

@@ -396,8 +396,14 @@ export async function prepareTelegramMedia(
   }
 }
 
-function shouldForceDocument(mediaType = "") {
-  return ["document", "audio", "voice", "forwarded"].includes(mediaType);
+export function telegramMediaSendOptions(mediaType = "") {
+  const normalized = mediaType.trim().toLowerCase();
+  return {
+    forceDocument: normalized === "document" || normalized === "forwarded",
+    voiceNote: normalized === "voice",
+    videoNote: normalized === "video_note",
+    supportsStreaming: normalized === "video",
+  };
 }
 function floodWaitSeconds(error: unknown) {
   if (error && typeof error === "object" && "seconds" in error) {
@@ -556,11 +562,11 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
     const textChunks = mediaFile ? [] : splitTelegramMessage(message);
     if (mediaFile) {
       const { caption, remaining } = splitCaptionAndText(message);
+      const sendOptions = telegramMediaSendOptions(input.mediaType);
       const sent = await client.sendFile(peer, {
         file: mediaFile,
         caption,
-        forceDocument: shouldForceDocument(input.mediaType),
-        supportsStreaming: input.mediaType === "video"
+        ...sendOptions,
       });
       if (sent.id) sentIds.push(sent.id.toString());
       textChunks.push(...splitTelegramMessage(remaining));

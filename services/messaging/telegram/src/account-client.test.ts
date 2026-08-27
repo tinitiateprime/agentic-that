@@ -3,13 +3,37 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { prepareTelegramMedia, telegramPhoneMatchesUser } from "./account-client.ts";
+import { prepareTelegramMedia, telegramMediaSendOptions, telegramPhoneMatchesUser } from "./account-client.ts";
 
 test("a connected Telegram account recognizes its own international phone number", () => {
   assert.equal(telegramPhoneMatchesUser("+91 62812 46483", "916281246483"), true);
   assert.equal(telegramPhoneMatchesUser("+916281246483", "+916281246483"), true);
   assert.equal(telegramPhoneMatchesUser("+916281246483", "918799445479"), false);
   assert.equal(telegramPhoneMatchesUser("invalid", "916281246483"), false);
+});
+
+test("Telegram uploads preserve native image, video, audio, voice, and document delivery modes", () => {
+  assert.deepEqual(telegramMediaSendOptions("image"), {
+    forceDocument: false, voiceNote: false, videoNote: false, supportsStreaming: false,
+  });
+  assert.deepEqual(telegramMediaSendOptions("video"), {
+    forceDocument: false, voiceNote: false, videoNote: false, supportsStreaming: true,
+  });
+  assert.deepEqual(telegramMediaSendOptions("animation"), {
+    forceDocument: false, voiceNote: false, videoNote: false, supportsStreaming: false,
+  });
+  assert.deepEqual(telegramMediaSendOptions("audio"), {
+    forceDocument: false, voiceNote: false, videoNote: false, supportsStreaming: false,
+  });
+  assert.deepEqual(telegramMediaSendOptions("voice"), {
+    forceDocument: false, voiceNote: true, videoNote: false, supportsStreaming: false,
+  });
+  assert.deepEqual(telegramMediaSendOptions("video_note"), {
+    forceDocument: false, voiceNote: false, videoNote: true, supportsStreaming: false,
+  });
+  assert.deepEqual(telegramMediaSendOptions("document"), {
+    forceDocument: true, voiceNote: false, videoNote: false, supportsStreaming: false,
+  });
 });
 
 test("phone delivery checks the connected account's contacts and dialogs before import", async () => {
