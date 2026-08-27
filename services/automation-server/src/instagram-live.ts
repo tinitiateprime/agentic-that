@@ -1,11 +1,16 @@
 import { chromium, type Locator, type Page, type Request, type Response } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
 import {
+  InstagramMediaRejectedError,
   InstagramPreviewLoginRequiredError,
   prepareInstagramFinalComposer,
 } from "./instagram-preview.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
-import { instagramMediaTypeSupported, prepareInstagramMedia } from "./instagram-media.ts";
+import {
+  instagramMediaTypeSupported,
+  originalInstagramMediaPaths,
+  prepareInstagramFallbackMedia,
+} from "./instagram-media.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
 async function firstVisible(locators: Locator[]) {
@@ -168,7 +173,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
     let finalActionAttempted = false;
     let activePage: Page | null = null;
     let stage = "opening the saved Instagram session";
-    let cleanupPreparedMedia = async () => {};
+    let cleanupFallbackMedia = async () => {};
     const deadline = setTimeout(() => {
       deadlineExpired = true;
       reportProgress("Closing a live publishing browser that exceeded its five-minute limit.");
@@ -180,21 +185,36 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
       const page = context.pages()[0] || await context.newPage();
       activePage = page;
       page.setDefaultTimeout(10_000);
-      stage = "normalizing Instagram media without cropping";
-      const preparedMedia = await prepareInstagramMedia(this.files, job);
-      cleanupPreparedMedia = preparedMedia.cleanup;
-      if (preparedMedia.normalizedImages) {
-        reportProgress(`Prepared ${preparedMedia.normalizedImages} image${preparedMedia.normalizedImages === 1 ? "" : "s"} for Instagram without cropping.`);
+      const originalPaths = originalInstagramMediaPaths(this.files, job);
+      reportProgress("Trying the exact original Instagram media without modification.");
+      try {
+        await prepareInstagramFinalComposer({
+          page,
+          context,
+          job,
+          mediaPaths: originalPaths,
+          signal,
+          reportProgress,
+          setStage: value => { stage = value; },
+        });
+      } catch (error) {
+        const canUseImageFallback = error instanceof InstagramMediaRejectedError
+          && job.media.every(media => media.mimeType.toLowerCase().startsWith("image/"));
+        if (!canUseImageFallback) throw error;
+        stage = "preparing Instagram's non-cropping compatibility fallback";
+        reportProgress("Instagram rejected the original image. Preparing a padded compatibility copy without cropping.");
+        const fallbackMedia = await prepareInstagramFallbackMedia(this.files, job);
+        cleanupFallbackMedia = fallbackMedia.cleanup;
+        await prepareInstagramFinalComposer({
+          page,
+          context,
+          job,
+          mediaPaths: fallbackMedia.paths,
+          signal,
+          reportProgress,
+          setStage: value => { stage = value; },
+        });
       }
-      await prepareInstagramFinalComposer({
-        page,
-        context,
-        job,
-        mediaPaths: preparedMedia.paths,
-        signal,
-        reportProgress,
-        setStage: value => { stage = value; },
-      });
 
       stage = "submitting Instagram's final Share action";
       const share = await firstVisible([page.getByRole("button", { name: /^Share$/i })]);
@@ -256,7 +276,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
         context.close({ reason: "Instagram live publishing browser finished." }).catch(() => undefined),
         new Promise<void>(resolve => setTimeout(resolve, 5_000)),
       ]);
-      await cleanupPreparedMedia().catch(() => undefined);
+      await cleanupFallbackMedia().catch(() => undefined);
     }
   }
 }

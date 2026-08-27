@@ -1,7 +1,11 @@
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core";
 import type { ClaimedPublishingJob, PublishingPreviewExecutor } from "./executor.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
-import { instagramMediaTypeSupported, prepareInstagramMedia } from "./instagram-media.ts";
+import {
+  instagramMediaTypeSupported,
+  originalInstagramMediaPaths,
+  prepareInstagramFallbackMedia,
+} from "./instagram-media.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
@@ -13,6 +17,7 @@ export class InstagramPreviewPreparationError extends Error {
 }
 
 export class InstagramPreviewLoginRequiredError extends InstagramPreviewPreparationError {}
+export class InstagramMediaRejectedError extends Error {}
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) {
@@ -131,11 +136,28 @@ async function uploadMedia(page: Page, mediaPaths: string[], includesVideo: bool
   const input = (await dialogInput.count()) > 0 ? dialogInput : page.locator('input[type="file"]').last();
   if ((await input.count()) < 1) throw new Error("Instagram's media input was not available.");
   await input.setInputFiles(mediaPaths);
-  const accepted = await waitForVisible(page, [
-    page.getByText(/^Crop$/i),
-    page.getByText(/^Edit video$/i),
-  ], signal, includesVideo ? 180_000 : 60_000);
-  if (!accepted) throw new Error(`Instagram did not accept the selected ${mediaPaths.length > 1 ? "carousel media" : includesVideo ? "video" : "image"}.`);
+  const deadline = Date.now() + (includesVideo ? 180_000 : 60_000);
+  let accepted: Locator | null = null;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    accepted = await firstVisible([
+      page.getByText(/^Crop$/i),
+      page.getByText(/^Edit video$/i),
+    ]);
+    if (accepted) break;
+    const rejection = await firstVisible([
+      page.locator('[role="alert"], [role="status"]').filter({ hasText: /not supported|aspect ratio|couldn['’]t upload|failed to upload|try another|select another/i }),
+      page.getByText(/photo.*(?:not supported|couldn['’]t upload|failed to upload)|(?:not supported|aspect ratio).*photo/i),
+    ]);
+    const message = (await rejection?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
+    if (message) throw new InstagramMediaRejectedError(`Instagram rejected the original media: ${message}`);
+    await page.waitForTimeout(250);
+  }
+  if (!accepted) {
+    throw new InstagramMediaRejectedError(
+      `Instagram did not accept the selected ${mediaPaths.length > 1 ? "carousel media" : includesVideo ? "video" : "image"}.`,
+    );
+  }
   await clickIfVisible(page.getByRole("button", { name: /^OK$/i }), 2_500);
 }
 
@@ -311,7 +333,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     let deadlineExpired = false;
     let stage = "opening the saved Instagram session";
     let page: Page | null = null;
-    let cleanupPreparedMedia = async () => {};
+    let cleanupFallbackMedia = async () => {};
     const deadline = setTimeout(() => {
       deadlineExpired = true;
       reportProgress("Closing a preview that exceeded the 150-second browser limit.");
@@ -322,21 +344,36 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
       signal.throwIfAborted();
       page = context.pages()[0] || await context.newPage();
       page.setDefaultTimeout(10_000);
-      stage = "normalizing Instagram media without cropping";
-      const preparedMedia = await prepareInstagramMedia(this.files, job);
-      cleanupPreparedMedia = preparedMedia.cleanup;
-      if (preparedMedia.normalizedImages) {
-        reportProgress(`Prepared ${preparedMedia.normalizedImages} image${preparedMedia.normalizedImages === 1 ? "" : "s"} for Instagram without cropping.`);
+      const originalPaths = originalInstagramMediaPaths(this.files, job);
+      reportProgress("Trying the exact original Instagram media without modification.");
+      try {
+        await prepareInstagramFinalComposer({
+          page,
+          context,
+          job,
+          mediaPaths: originalPaths,
+          signal,
+          reportProgress,
+          setStage: value => { stage = value; },
+        });
+      } catch (error) {
+        const canUseImageFallback = error instanceof InstagramMediaRejectedError
+          && job.media.every(media => media.mimeType.toLowerCase().startsWith("image/"));
+        if (!canUseImageFallback) throw error;
+        stage = "preparing Instagram's non-cropping compatibility fallback";
+        reportProgress("Instagram rejected the original image. Preparing a padded compatibility copy without cropping.");
+        const fallbackMedia = await prepareInstagramFallbackMedia(this.files, job);
+        cleanupFallbackMedia = fallbackMedia.cleanup;
+        await prepareInstagramFinalComposer({
+          page,
+          context,
+          job,
+          mediaPaths: fallbackMedia.paths,
+          signal,
+          reportProgress,
+          setStage: value => { stage = value; },
+        });
       }
-      await prepareInstagramFinalComposer({
-        page,
-        context,
-        job,
-        mediaPaths: preparedMedia.paths,
-        signal,
-        reportProgress,
-        setStage: value => { stage = value; },
-      });
       stage = "capturing the final composer screenshot";
       reportProgress("Capturing the private final-composer screenshot.");
       const screenshot = await page.screenshot({
@@ -376,7 +413,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         context.close({ reason: "Instagram private preview finished before Share." }).catch(() => undefined),
         new Promise<void>(resolve => setTimeout(resolve, 5_000)),
       ]);
-      await cleanupPreparedMedia().catch(() => undefined);
+      await cleanupFallbackMedia().catch(() => undefined);
     }
   }
 }

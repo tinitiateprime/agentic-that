@@ -196,6 +196,12 @@ test("the live Playwright executor has one exact guarded Share click", async () 
   assert.match(liveSource, /exact Share-label guard/);
   assert.doesNotMatch(liveSource, /share\.click\(\{\s*force:/);
   assert.ok(liveSource.indexOf("waitForEnabledShare(page, share, signal)") < liveSource.indexOf("await onFinalActionStarting()"));
+  assert.ok(
+    liveSource.indexOf("Trying the exact original Instagram media without modification")
+      < liveSource.indexOf("Instagram rejected the original image. Preparing a padded compatibility copy"),
+    "Instagram must try the original file before its reversible compatibility fallback.",
+  );
+  assert.match(liveSource, /error instanceof InstagramMediaRejectedError/);
   assert.doesNotMatch(previewSource, /share\.click\s*\(/i);
   const originalCrop = previewSource.indexOf('page.getByText(/^Original$/i)');
   const cropNext = previewSource.indexOf("Instagram's crop Next control was not available.");

@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
-import { prepareInstagramMedia } from "./instagram-media.ts";
+import { originalInstagramMediaPaths, prepareInstagramFallbackMedia } from "./instagram-media.ts";
 import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
 import { XPublishingDryRunValidator } from "./x-dry-run.ts";
 import { LinkedInPublishingDryRunValidator } from "./linkedin-dry-run.ts";
@@ -136,7 +136,7 @@ test("the Instagram dry-run worker validates and cancels a job without publishin
   }
 });
 
-test("Instagram image preparation preserves wide and tall images inside supported canvases", async () => {
+test("Instagram tries original images first and preserves fallback content inside supported canvases", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-instagram-media-"));
   const files = new AutomationFileStore(directory);
   await files.initialize();
@@ -150,12 +150,17 @@ test("Instagram image preparation preserves wide and tall images inside supporte
       .tiff()
       .toFile(files.mediaFilePath(tallKey));
 
-    const prepared = await prepareInstagramMedia(files, {
+    const media = {
       media: [
         { storageKey: wideKey, fileName: "wide.webp", mimeType: "image/webp" },
         { storageKey: tallKey, fileName: "tall.tiff", mimeType: "image/tiff" },
       ],
-    });
+    };
+    assert.deepEqual(originalInstagramMediaPaths(files, media), [
+      files.mediaFilePath(wideKey),
+      files.mediaFilePath(tallKey),
+    ]);
+    const prepared = await prepareInstagramFallbackMedia(files, media);
     assert.equal(prepared.normalizedImages, 2);
     const [wide, tall] = await Promise.all(prepared.paths.map(filePath => sharp(filePath).metadata()));
     assert.equal(wide.format, "jpeg");

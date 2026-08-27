@@ -20,6 +20,18 @@ export function instagramMediaTypeSupported(mimeType: string) {
   return INSTAGRAM_IMAGE_INPUT_TYPES.has(normalized) || INSTAGRAM_VIDEO_INPUT_TYPES.has(normalized);
 }
 
+export function originalInstagramMediaPaths(
+  files: AutomationFileStore,
+  job: Pick<ClaimedPublishingJob, "media">,
+) {
+  return job.media.map(media => {
+    if (!instagramMediaTypeSupported(media.mimeType)) {
+      throw new Error(`${media.fileName} uses an unsupported Instagram media type.`);
+    }
+    return files.mediaFilePath(media.storageKey);
+  });
+}
+
 type PreparedInstagramMedia = {
   paths: string[];
   normalizedImages: number;
@@ -59,11 +71,11 @@ function instagramCanvas(width: number, height: number) {
 }
 
 /**
- * Converts every supported still-image input to a private JPEG that Instagram's
- * web composer accepts. Out-of-range shapes are padded, never cropped, so the
- * complete user image remains visible. Videos keep their original paths.
+ * Creates a compatibility fallback only after Instagram rejects the original
+ * still image. Out-of-range shapes are padded, never cropped, so the complete
+ * user image remains visible. Videos keep their original paths.
  */
-export async function prepareInstagramMedia(
+export async function prepareInstagramFallbackMedia(
   files: AutomationFileStore,
   job: Pick<ClaimedPublishingJob, "media">,
 ): Promise<PreparedInstagramMedia> {
