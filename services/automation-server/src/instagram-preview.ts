@@ -3,8 +3,7 @@ import type { ClaimedPublishingJob, PublishingPreviewExecutor } from "./executor
 import { detectServerBrowserExecutable } from "./login-browser.ts";
 import {
   instagramMediaTypeSupported,
-  originalInstagramMediaPaths,
-  prepareInstagramFallbackMedia,
+  prepareInstagramMedia,
 } from "./instagram-media.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
@@ -17,7 +16,6 @@ export class InstagramPreviewPreparationError extends Error {
 }
 
 export class InstagramPreviewLoginRequiredError extends InstagramPreviewPreparationError {}
-export class InstagramMediaRejectedError extends Error {}
 
 async function firstVisible(locators: Locator[]) {
   for (const locator of locators) {
@@ -150,11 +148,11 @@ async function uploadMedia(page: Page, mediaPaths: string[], includesVideo: bool
       page.getByText(/photo.*(?:not supported|couldn['’]t upload|failed to upload)|(?:not supported|aspect ratio).*photo/i),
     ]);
     const message = (await rejection?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
-    if (message) throw new InstagramMediaRejectedError(`Instagram rejected the original media: ${message}`);
+    if (message) throw new Error(`Instagram rejected the prepared media: ${message}`);
     await page.waitForTimeout(250);
   }
   if (!accepted) {
-    throw new InstagramMediaRejectedError(
+    throw new Error(
       `Instagram did not accept the selected ${mediaPaths.length > 1 ? "carousel media" : includesVideo ? "video" : "image"}.`,
     );
   }
@@ -333,7 +331,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     let deadlineExpired = false;
     let stage = "opening the saved Instagram session";
     let page: Page | null = null;
-    let cleanupFallbackMedia = async () => {};
+    let cleanupPreparedMedia = async () => {};
     const deadline = setTimeout(() => {
       deadlineExpired = true;
       reportProgress("Closing a preview that exceeded the 150-second browser limit.");
@@ -344,36 +342,21 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
       signal.throwIfAborted();
       page = context.pages()[0] || await context.newPage();
       page.setDefaultTimeout(10_000);
-      const originalPaths = originalInstagramMediaPaths(this.files, job);
-      reportProgress("Trying the exact original Instagram media without modification.");
-      try {
-        await prepareInstagramFinalComposer({
-          page,
-          context,
-          job,
-          mediaPaths: originalPaths,
-          signal,
-          reportProgress,
-          setStage: value => { stage = value; },
-        });
-      } catch (error) {
-        const canUseImageFallback = error instanceof InstagramMediaRejectedError
-          && job.media.every(media => media.mimeType.toLowerCase().startsWith("image/"));
-        if (!canUseImageFallback) throw error;
-        stage = "preparing Instagram's non-cropping compatibility fallback";
-        reportProgress("Instagram rejected the original image. Preparing a padded compatibility copy without cropping.");
-        const fallbackMedia = await prepareInstagramFallbackMedia(this.files, job);
-        cleanupFallbackMedia = fallbackMedia.cleanup;
-        await prepareInstagramFinalComposer({
-          page,
-          context,
-          job,
-          mediaPaths: fallbackMedia.paths,
-          signal,
-          reportProgress,
-          setStage: value => { stage = value; },
-        });
-      }
+      stage = "preparing Instagram-compatible media";
+      const preparedMedia = await prepareInstagramMedia(this.files, job);
+      cleanupPreparedMedia = preparedMedia.cleanup;
+      reportProgress(preparedMedia.normalizedImages > 0
+        ? `Added non-cropping compatibility padding or conversion to ${preparedMedia.normalizedImages} image${preparedMedia.normalizedImages === 1 ? "" : "s"}.`
+        : "Using the exact original Instagram media without modification.");
+      await prepareInstagramFinalComposer({
+        page,
+        context,
+        job,
+        mediaPaths: preparedMedia.paths,
+        signal,
+        reportProgress,
+        setStage: value => { stage = value; },
+      });
       stage = "capturing the final composer screenshot";
       reportProgress("Capturing the private final-composer screenshot.");
       const screenshot = await page.screenshot({
@@ -413,7 +396,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         context.close({ reason: "Instagram private preview finished before Share." }).catch(() => undefined),
         new Promise<void>(resolve => setTimeout(resolve, 5_000)),
       ]);
-      await cleanupFallbackMedia().catch(() => undefined);
+      await cleanupPreparedMedia().catch(() => undefined);
     }
   }
 }

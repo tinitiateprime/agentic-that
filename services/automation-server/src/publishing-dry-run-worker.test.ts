@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
-import { originalInstagramMediaPaths, prepareInstagramFallbackMedia } from "./instagram-media.ts";
+import { prepareInstagramMedia } from "./instagram-media.ts";
 import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
 import { XPublishingDryRunValidator } from "./x-dry-run.ts";
 import { LinkedInPublishingDryRunValidator } from "./linkedin-dry-run.ts";
@@ -136,33 +136,35 @@ test("the Instagram dry-run worker validates and cancels a job without publishin
   }
 });
 
-test("Instagram tries original images first and preserves fallback content inside supported canvases", async () => {
+test("Instagram preserves compliant originals and pads out-of-range images without cropping", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-instagram-media-"));
   const files = new AutomationFileStore(directory);
   await files.initialize();
   try {
     const wideKey = "media_wide.webp";
     const tallKey = "media_tall.tiff";
+    const squareKey = "media_square.jpg";
     await sharp({ create: { width: 776, height: 370, channels: 3, background: "#167552" } })
       .webp()
       .toFile(files.mediaFilePath(wideKey));
     await sharp({ create: { width: 300, height: 900, channels: 3, background: "#0a66c2" } })
       .tiff()
       .toFile(files.mediaFilePath(tallKey));
+    await sharp({ create: { width: 1_000, height: 1_000, channels: 3, background: "#b42318" } })
+      .jpeg()
+      .toFile(files.mediaFilePath(squareKey));
 
     const media = {
       media: [
         { storageKey: wideKey, fileName: "wide.webp", mimeType: "image/webp" },
         { storageKey: tallKey, fileName: "tall.tiff", mimeType: "image/tiff" },
+        { storageKey: squareKey, fileName: "square.jpg", mimeType: "image/jpeg" },
       ],
     };
-    assert.deepEqual(originalInstagramMediaPaths(files, media), [
-      files.mediaFilePath(wideKey),
-      files.mediaFilePath(tallKey),
-    ]);
-    const prepared = await prepareInstagramFallbackMedia(files, media);
+    const prepared = await prepareInstagramMedia(files, media);
     assert.equal(prepared.normalizedImages, 2);
-    const [wide, tall] = await Promise.all(prepared.paths.map(filePath => sharp(filePath).metadata()));
+    assert.equal(prepared.paths[2], files.mediaFilePath(squareKey));
+    const [wide, tall] = await Promise.all(prepared.paths.slice(0, 2).map(filePath => sharp(filePath).metadata()));
     assert.equal(wide.format, "jpeg");
     assert.ok((wide.width || 0) / (wide.height || 1) <= 1.91);
     assert.equal(tall.format, "jpeg");

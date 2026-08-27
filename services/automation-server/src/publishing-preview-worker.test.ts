@@ -131,6 +131,6 @@ test("the Playwright preview implementation contains no Share click or publish c
   assert.match(source, /refused Instagram's Share control/);
   assert.match(source, /150_000/);
   assert.match(source, /never clicks Share/i);
-  assert.match(source, /Trying the exact original Instagram media without modification/);
-  assert.match(source, /Instagram rejected the original image\. Preparing a padded compatibility copy/);
+  assert.match(source, /prepareInstagramMedia\(this\.files, job\)/);
+  assert.match(source, /Added non-cropping compatibility padding or conversion/);
 });

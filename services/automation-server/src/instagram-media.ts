@@ -20,18 +20,6 @@ export function instagramMediaTypeSupported(mimeType: string) {
   return INSTAGRAM_IMAGE_INPUT_TYPES.has(normalized) || INSTAGRAM_VIDEO_INPUT_TYPES.has(normalized);
 }
 
-export function originalInstagramMediaPaths(
-  files: AutomationFileStore,
-  job: Pick<ClaimedPublishingJob, "media">,
-) {
-  return job.media.map(media => {
-    if (!instagramMediaTypeSupported(media.mimeType)) {
-      throw new Error(`${media.fileName} uses an unsupported Instagram media type.`);
-    }
-    return files.mediaFilePath(media.storageKey);
-  });
-}
-
 type PreparedInstagramMedia = {
   paths: string[];
   normalizedImages: number;
@@ -71,11 +59,12 @@ function instagramCanvas(width: number, height: number) {
 }
 
 /**
- * Creates a compatibility fallback only after Instagram rejects the original
- * still image. Out-of-range shapes are padded, never cropped, so the complete
- * user image remains visible. Videos keep their original paths.
+ * Preserves already-compatible JPEG/PNG files exactly. Images outside the
+ * supported feed ratio, oversized images, and browser-incompatible formats
+ * are converted to a JPEG canvas. The canvas adds padding and never crops, so
+ * every source pixel remains visible. Videos keep their original paths.
  */
-export async function prepareInstagramFallbackMedia(
+export async function prepareInstagramMedia(
   files: AutomationFileStore,
   job: Pick<ClaimedPublishingJob, "media">,
 ): Promise<PreparedInstagramMedia> {
@@ -99,6 +88,13 @@ export async function prepareInstagramFallbackMedia(
       const oriented = orientedDimensions(metadata);
       const scaled = scaledDimensions(oriented.width, oriented.height);
       const canvas = instagramCanvas(scaled.width, scaled.height);
+      const keepsOriginalFormat = mimeType === "image/jpeg" || mimeType === "image/png";
+      const needsResize = scaled.width !== oriented.width || scaled.height !== oriented.height;
+      const needsPadding = canvas.width !== scaled.width || canvas.height !== scaled.height;
+      if (keepsOriginalFormat && !needsResize && !needsPadding) {
+        preparedPaths.push(sourcePath);
+        continue;
+      }
       const left = Math.floor((canvas.width - scaled.width) / 2);
       const right = canvas.width - scaled.width - left;
       const top = Math.floor((canvas.height - scaled.height) / 2);
