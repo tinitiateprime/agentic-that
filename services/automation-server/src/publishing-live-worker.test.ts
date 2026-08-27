@@ -16,6 +16,7 @@ import { migrateAutomationSchema } from "./schema.ts";
 import {
   exactYouTubeButtonLabelMatches,
   isYouTubePublishSuccessText,
+  youtubeClosedUploadConfirmsFinalAction,
   youtubeFinalActionLabelMatches,
 } from "./youtube-live.ts";
 import { interpretInstagramPublishResponse } from "./instagram-live.ts";
@@ -256,6 +257,8 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /fillVerifiedYouTubeField/);
   assert.match(source, /selectYouTubeRadio/);
   assert.match(source, /explicit publish\/save confirmation/);
+  assert.match(source, /continuously closed upload surface on a healthy Studio page/);
+  assert.match(source, /This path never clicks or retries the final action/);
   assert.doesNotMatch(source, /for \(const step of \["Video elements", "Checks", "Visibility"\]\)/);
   assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
@@ -274,6 +277,14 @@ test("YouTube visibility choices require their exact final actions", () => {
   assert.equal(youtubeFinalActionLabelMatches("unlisted", "Save", "Save"), true);
   assert.equal(youtubeFinalActionLabelMatches("private", "Save", "Save"), true);
   assert.equal(youtubeFinalActionLabelMatches("private", "Publish", "Publish"), false);
+});
+
+test("YouTube accepts a stable closed upload surface only on healthy Studio without a rejection", () => {
+  assert.equal(youtubeClosedUploadConfirmsFinalAction(8_000, "https://studio.youtube.com/channel/test/videos/upload", ""), true);
+  assert.equal(youtubeClosedUploadConfirmsFinalAction(7_999, "https://studio.youtube.com/channel/test/videos/upload", ""), false);
+  assert.equal(youtubeClosedUploadConfirmsFinalAction(8_000, "https://studio.youtube.com/channel/test/videos/upload", "Publish failed"), false);
+  assert.equal(youtubeClosedUploadConfirmsFinalAction(8_000, "https://accounts.google.com/signin", ""), false);
+  assert.equal(youtubeClosedUploadConfirmsFinalAction(8_000, "https://studio.youtube.com/oops", ""), false);
 });
 
 test("YouTube requires explicit positive publish evidence and rejects failure copy", () => {

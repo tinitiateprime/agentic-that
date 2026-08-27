@@ -68,3 +68,15 @@ test("browser services receive isolated writable HOME and XDG directories", asyn
     assert.match(unit, /RuntimeDirectoryMode=0700/);
   }
 });
+
+test("the integrated Telegram console bundles its upload UI and styles with versioned Next assets", async () => {
+  const page = await readFile(new URL("../app/console/page.jsx", import.meta.url), "utf8");
+  const consoleSource = await readFile(new URL("../services/messaging/telegram/console/src/TelegramConsole.jsx", import.meta.url), "utf8");
+  const controller = await readFile(new URL("../services/messaging/telegram/console/src/telegram-controller.js", import.meta.url), "utf8");
+
+  assert.match(page, /import "@telegram\/public\/styles\.css"/);
+  assert.doesNotMatch(page, /telegram-console-assets\/styles\.css/);
+  assert.match(consoleSource, /post-media-file/);
+  assert.match(consoleSource, /Images, videos, GIFs, audio, voice messages, video notes, and documents/);
+  assert.match(controller, /uploadTelegramDeviceFile/);
+});

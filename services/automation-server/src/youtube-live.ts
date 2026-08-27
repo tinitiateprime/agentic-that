@@ -322,6 +322,21 @@ export function youtubeFinalActionLabelMatches(
   return exactYouTubeButtonLabelMatches(visibility === "public" ? /^Publish$/i : /^Save$/i, ...values);
 }
 
+export function youtubeClosedUploadConfirmsFinalAction(
+  closedForMs: number,
+  pageUrl: string,
+  failureText: string | null | undefined,
+) {
+  if (closedForMs < 8_000 || String(failureText || "").trim()) return false;
+  try {
+    const url = new URL(pageUrl);
+    return url.hostname === "studio.youtube.com"
+      && !/\/(?:signin|oops|error)(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function submitFinalAction(
   finalAction: Locator,
   expectedLabel: RegExp,
@@ -396,16 +411,26 @@ async function selectYouTubeRadio(
   throw new Error(`YouTube Studio's requested ${fieldName} option was unavailable.`);
 }
 
-async function visibleYouTubeShareConfirmation(page: Page) {
+async function visibleYouTubeShareConfirmation(page: Page, countBeforeFinalAction: number) {
   const dialogs = page.locator("ytcp-video-share-dialog");
   for (let index = 0, count = Math.min(await dialogs.count().catch(() => 0), 5); index < count; index += 1) {
     const dialog = dialogs.nth(index);
+    const text = (await dialog.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || "";
     const visibleContent = await firstVisible([
       dialog.locator('tp-yt-paper-dialog, [role="dialog"]'),
       dialog.getByText(/Video published|Video saved|Share link/i),
     ]);
-    if (!await dialog.isVisible().catch(() => false) && !visibleContent) continue;
-    const url = await dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
+    const urlElement = dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"], input[value*="youtu.be"], input[value*="youtube.com/watch"]').first();
+    const url = await urlElement.evaluate(element => {
+      if (element instanceof HTMLInputElement) return element.value;
+      return element.getAttribute("href") || element.textContent || "";
+    }).catch(() => null);
+    const newlyAttached = index >= countBeforeFinalAction;
+    if (!newlyAttached
+      && !await dialog.isVisible().catch(() => false)
+      && !visibleContent
+      && !url
+      && !isYouTubePublishSuccessText(text)) continue;
     return { url };
   }
   return null;
@@ -633,13 +658,15 @@ async function uploadVideo(
     throw new Error(`YouTube Studio did not expose the final ${options.visibility === "public" ? "Publish" : "Save"} action required by the dashboard visibility choice.`);
   }
   let platformPostUrl = await visibilityDialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
+  const shareDialogCountBeforeFinalAction = await page.locator("ytcp-video-share-dialog").count().catch(() => 0);
   reportProgress(`Final YouTube ${options.visibility} action authorized. Recording the irreversible action before clicking.`);
   await submitFinalAction(finalAction, finalLabel, signal, onFinalActionStarting);
   const confirmationDeadline = Date.now() + 120_000;
   let confirmed = false;
+  let uploadClosedAt = 0;
   while (Date.now() < confirmationDeadline) {
     signal.throwIfAborted();
-    const shareConfirmation = await visibleYouTubeShareConfirmation(page);
+    const shareConfirmation = await visibleYouTubeShareConfirmation(page, shareDialogCountBeforeFinalAction);
     if (shareConfirmation) {
       platformPostUrl = shareConfirmation.url || platformPostUrl;
       confirmed = true;
@@ -663,6 +690,21 @@ async function uploadVideo(
     if (await visibleSavedYouTubeRow(page, platformPostUrl)) {
       confirmed = true;
       break;
+    }
+    // Current Studio builds do not consistently render a visible success
+    // toast or share dialog. After the exact guarded Publish/Save click, a
+    // continuously closed upload surface on a healthy Studio page is the
+    // browser's acknowledgement. The safety window prevents a transient DOM
+    // replacement from being mistaken for delivery, and a visible rejection
+    // always wins above. This path never clicks or retries the final action.
+    if (await resolveYouTubeUploadRoot(page)) {
+      uploadClosedAt = 0;
+    } else {
+      uploadClosedAt ||= Date.now();
+      if (youtubeClosedUploadConfirmsFinalAction(Date.now() - uploadClosedAt, page.url(), failureText)) {
+        confirmed = true;
+        break;
+      }
     }
     await page.waitForTimeout(750);
   }
