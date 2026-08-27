@@ -135,6 +135,7 @@ async function enabledExactButton(page: Page, root: Locator, label: RegExp, sign
   while (Date.now() < deadline) {
     signal.throwIfAborted();
     const candidates = [
+      root.locator("#next-button, #done-button"),
       root.getByRole("button", { name: label }),
       root.locator("ytcp-button").filter({ hasText: label }),
       root.locator('[role="button"]').filter({ hasText: label }),
@@ -179,6 +180,52 @@ function youtubeUploadTransitionTimeout() {
   return Math.max(60_000, Math.min(60 * 60_000, Math.floor(configured)));
 }
 
+function youtubeUploadStepReadyTimeout() {
+  const configured = Number(process.env.YOUTUBE_UPLOAD_STEP_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 3 * 60_000;
+  return Math.max(30_000, Math.min(15 * 60_000, Math.floor(configured)));
+}
+
+async function resolveYouTubeUploadRoot(page: Page) {
+  // The ytcp-uploads-dialog host itself has a zero-sized box in current
+  // Studio builds, but it remains the stable owner while Details, Video
+  // elements, Checks, and Visibility replace their inner DOM. Never anchor
+  // this locator to a field from one panel: that field is removed on Next.
+  const uploadHost = page.locator("ytcp-uploads-dialog").first();
+  if (await uploadHost.count().catch(() => 0) && await firstVisible([
+    uploadHost.locator("#title-textarea"),
+    uploadHost.locator("#next-button"),
+    uploadHost.locator("#done-button"),
+    uploadHost.getByText(/Use cards and an end screen|check your video for issues|Choose when to publish|Save or publish/i),
+  ])) return uploadHost;
+
+  // Retain a fallback for Studio variants that omit the custom host. Pick a
+  // currently visible dialog only when it contains upload-specific controls.
+  const dialogs = page.locator('tp-yt-paper-dialog[role="dialog"], [role="dialog"]');
+  for (let index = 0, count = Math.min(await dialogs.count().catch(() => 0), 20); index < count; index += 1) {
+    const candidate = dialogs.nth(index);
+    if (!await candidate.isVisible().catch(() => false)) continue;
+    if (await firstVisible([
+      candidate.locator("#title-textarea"),
+      candidate.locator("#next-button"),
+      candidate.locator("#done-button"),
+      candidate.getByText(/Use cards and an end screen|check your video for issues|Choose when to publish|Save or publish/i),
+    ])) return candidate;
+  }
+  return null;
+}
+
+async function waitForYouTubeUploadRoot(page: Page, signal: AbortSignal, timeout = 30_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const root = await resolveYouTubeUploadRoot(page);
+    if (root) return root;
+    await page.waitForTimeout(300);
+  }
+  return null;
+}
+
 async function currentYouTubeUploadStage(page: Page, root: Locator = page.locator("body")) {
   if (await firstVisible([
     root.getByText(/Choose when to publish|Save or publish/i),
@@ -200,7 +247,7 @@ async function currentYouTubeUploadStage(page: Page, root: Locator = page.locato
   if (await firstVisible([
     root.locator("#title-textarea"),
   ])) return "Details";
-  return "the current upload step";
+  return "Unknown";
 }
 
 async function visibleYouTubeUploadError(page: Page) {
@@ -215,22 +262,26 @@ async function visibleYouTubeUploadError(page: Page) {
 
 async function advanceYouTubeUploadToVisibility(
   page: Page,
-  dialog: Locator,
   signal: AbortSignal,
   reportProgress: (message: string) => void,
 ) {
   const deadline = Date.now() + youtubeUploadTransitionTimeout();
   for (let transitions = 0; transitions < 10 && Date.now() < deadline; transitions += 1) {
     signal.throwIfAborted();
+    const dialog = await waitForYouTubeUploadRoot(page, signal, 15_000);
+    if (!dialog) throw new Error("YouTube Studio's active upload dialog disappeared before Visibility.");
     const stage = await currentYouTubeUploadStage(page, dialog);
     if (stage === "Visibility") return;
+    if (stage === "Unknown") {
+      throw new Error("YouTube Studio displayed an unrecognized upload step instead of Details, Video elements, Checks, or Visibility.");
+    }
     reportProgress(`Waiting for YouTube's ${stage} step to become ready.`);
     const next = await enabledExactButton(
       page,
       dialog,
       /^Next$/i,
       signal,
-      Math.max(1_000, deadline - Date.now()),
+      Math.max(1_000, Math.min(youtubeUploadStepReadyTimeout(), deadline - Date.now())),
     );
     if (!next) {
       const uploadError = await visibleYouTubeUploadError(page);
@@ -240,16 +291,13 @@ async function advanceYouTubeUploadToVisibility(
     }
     await clickReversibleControl(page, next, signal);
     reportProgress(`YouTube accepted the ${stage} step.`);
-    if (stage === "the current upload step") {
-      await page.waitForTimeout(1_500);
-      continue;
-    }
     const transitionDeadline = Math.min(deadline, Date.now() + 30_000);
     let transitioned = false;
     while (Date.now() < transitionDeadline) {
       signal.throwIfAborted();
-      const nextStage = await currentYouTubeUploadStage(page, dialog);
-      if (nextStage === "Visibility" || nextStage !== stage) {
+      const nextDialog = await resolveYouTubeUploadRoot(page);
+      const nextStage = nextDialog ? await currentYouTubeUploadStage(page, nextDialog) : "Unknown";
+      if (nextStage !== "Unknown" && (nextStage === "Visibility" || nextStage !== stage)) {
         transitioned = true;
         break;
       }
@@ -259,11 +307,19 @@ async function advanceYouTubeUploadToVisibility(
       throw new Error(`YouTube accepted Next but did not advance beyond ${stage}.`);
     }
   }
-  const stage = await currentYouTubeUploadStage(page, dialog);
+  const dialog = await resolveYouTubeUploadRoot(page);
+  const stage = dialog ? await currentYouTubeUploadStage(page, dialog) : "Unknown";
   const uploadError = await visibleYouTubeUploadError(page);
   throw new Error(uploadError
     ? `YouTube stopped at ${stage}: ${uploadError}`
     : `YouTube did not reach Visibility; it remained on ${stage}.`);
+}
+
+export function youtubeFinalActionLabelMatches(
+  visibility: "public" | "unlisted" | "private",
+  ...values: Array<string | null | undefined>
+) {
+  return exactYouTubeButtonLabelMatches(visibility === "public" ? /^Publish$/i : /^Save$/i, ...values);
 }
 
 async function submitFinalAction(
@@ -338,6 +394,40 @@ async function selectYouTubeRadio(
     await page.waitForTimeout(500);
   }
   throw new Error(`YouTube Studio's requested ${fieldName} option was unavailable.`);
+}
+
+async function visibleYouTubeShareConfirmation(page: Page) {
+  const dialogs = page.locator("ytcp-video-share-dialog");
+  for (let index = 0, count = Math.min(await dialogs.count().catch(() => 0), 5); index < count; index += 1) {
+    const dialog = dialogs.nth(index);
+    const visibleContent = await firstVisible([
+      dialog.locator('tp-yt-paper-dialog, [role="dialog"]'),
+      dialog.getByText(/Video published|Video saved|Share link/i),
+    ]);
+    if (!await dialog.isVisible().catch(() => false) && !visibleContent) continue;
+    const url = await dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
+    return { url };
+  }
+  return null;
+}
+
+function youtubeVideoId(url: string | null | undefined) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const candidate = parsed.hostname === "youtu.be" ? parsed.pathname.slice(1) : parsed.searchParams.get("v") || "";
+    return /^[A-Za-z0-9_-]{6,20}$/.test(candidate) ? candidate : "";
+  } catch {
+    return "";
+  }
+}
+
+async function visibleSavedYouTubeRow(page: Page, platformPostUrl: string | null | undefined) {
+  const videoId = youtubeVideoId(platformPostUrl);
+  if (!videoId || await resolveYouTubeUploadRoot(page)) return false;
+  return Boolean(await firstVisible([
+    page.locator(`a[href*="${videoId}"]`),
+  ]));
 }
 
 async function openCommunityComposer(page: Page, signal: AbortSignal) {
@@ -479,9 +569,9 @@ async function uploadVideo(
   }
   if (!attached) attached = await useExistingInput(5_000);
   if (!attached) throw new Error("YouTube Studio did not expose an Upload videos, Select files, or video file-input control.");
-  // Current Studio builds sometimes render the metadata step without the
-  // legacy ytcp-uploads-dialog custom element. The title is the stable proof
-  // that the selected video was accepted, so derive the owning root from it.
+  // The visible title proves that Studio accepted the selected video. The
+  // upload root is resolved independently because Studio removes this title
+  // node when it advances to Video elements.
   const title = await waitVisible(page, [
     page.locator("ytcp-uploads-dialog #title-textarea #textbox"),
     page.locator("#title-textarea #textbox"),
@@ -489,13 +579,12 @@ async function uploadVideo(
     page.locator("#title-textarea"),
   ], signal, 120_000);
   if (!title) throw new Error("YouTube Studio accepted the file but did not show its video metadata fields.");
-  const customDialog = title.locator("xpath=ancestor::ytcp-uploads-dialog[1]");
-  const roleDialog = title.locator("xpath=ancestor::*[@role='dialog'][1]");
-  const dialog = await customDialog.count() ? customDialog : await roleDialog.count() ? roleDialog : page.locator("body");
+  const detailsDialog = await waitForYouTubeUploadRoot(page, signal);
+  if (!detailsDialog) throw new Error("YouTube Studio's Details upload dialog was unavailable.");
   const description = await waitVisible(page, [
-    dialog.locator("#description-textarea #textbox"),
+    detailsDialog.locator("#description-textarea #textbox"),
     page.locator("#description-textarea #textbox"),
-    dialog.locator('#description-textarea[contenteditable="true"]'),
+    detailsDialog.locator('#description-textarea[contenteditable="true"]'),
     page.locator("#description-textarea"),
   ], signal, 60_000);
   if (!description) throw new Error("YouTube Studio's description editor was unavailable.");
@@ -510,36 +599,52 @@ async function uploadVideo(
     ? ["VIDEO_MADE_FOR_KIDS_MFK", "MADE_FOR_KIDS"]
     : ["VIDEO_MADE_FOR_KIDS_NOT_MFK", "NOT_MADE_FOR_KIDS"];
   reportProgress(`Selecting the dashboard audience choice: ${options.audience === "made_for_kids" ? "made for kids" : "not made for kids"}.`);
-  await selectYouTubeRadio(page, dialog, audienceText, audienceNames, "audience classification", signal);
+  await selectYouTubeRadio(page, detailsDialog, audienceText, audienceNames, "audience classification", signal);
 
   // Channels can have extra monetization, ad-suitability, or rights screens.
   // Follow the visible Studio state until Visibility instead of assuming that
   // every account has exactly three Next transitions.
-  await advanceYouTubeUploadToVisibility(page, dialog, signal, reportProgress);
+  await advanceYouTubeUploadToVisibility(page, signal, reportProgress);
 
+  const visibilityDialog = await waitForYouTubeUploadRoot(page, signal);
+  if (!visibilityDialog || await currentYouTubeUploadStage(page, visibilityDialog) !== "Visibility") {
+    throw new Error("YouTube Studio did not retain its Visibility step.");
+  }
   const visibilityText = new RegExp(`^${options.visibility}$`, "i");
   reportProgress(`Selecting the dashboard visibility choice: ${options.visibility}.`);
   await selectYouTubeRadio(
     page,
-    dialog,
+    visibilityDialog,
     visibilityText,
     [options.visibility.toUpperCase()],
     `${options.visibility} visibility`,
     signal,
   );
 
-  const finalLabel = options.visibility === "public" ? /^(?:Publish|Save)$/i : /^Save$/i;
-  const finalAction = await enabledExactButton(page, dialog, finalLabel, signal, youtubeUploadTransitionTimeout());
+  // Live Studio currently changes #done-button to Publish only after Public
+  // is selected; Unlisted and Private use Save. Never accept Save for Public,
+  // because that would silently preserve a private draft.
+  const finalLabel = options.visibility === "public" ? /^Publish$/i : /^Save$/i;
+  const finalAction = await enabledExactButton(page, visibilityDialog, finalLabel, signal, 60_000);
   if (!finalAction) throw new Error("YouTube Studio's exact final Save or Publish button did not become enabled.");
-  const platformPostUrl = await dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
+  const finalAriaLabel = await finalAction.getAttribute("aria-label").catch(() => "");
+  const finalVisibleText = await finalAction.textContent().catch(() => "");
+  if (!youtubeFinalActionLabelMatches(options.visibility, finalAriaLabel, finalVisibleText)) {
+    throw new Error(`YouTube Studio did not expose the final ${options.visibility === "public" ? "Publish" : "Save"} action required by the dashboard visibility choice.`);
+  }
+  let platformPostUrl = await visibilityDialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
   reportProgress(`Final YouTube ${options.visibility} action authorized. Recording the irreversible action before clicking.`);
   await submitFinalAction(finalAction, finalLabel, signal, onFinalActionStarting);
   const confirmationDeadline = Date.now() + 120_000;
   let confirmed = false;
   while (Date.now() < confirmationDeadline) {
     signal.throwIfAborted();
-    const shareDialog = await firstVisible([page.locator("ytcp-video-share-dialog")]);
-    if (shareDialog) { confirmed = true; break; }
+    const shareConfirmation = await visibleYouTubeShareConfirmation(page);
+    if (shareConfirmation) {
+      platformPostUrl = shareConfirmation.url || platformPostUrl;
+      confirmed = true;
+      break;
+    }
     const notices = page.locator('[role="alert"], [role="status"], [aria-live], ytcp-video-share-dialog');
     for (let index = 0, count = Math.min(await notices.count().catch(() => 0), 20); index < count; index += 1) {
       const notice = notices.nth(index);
@@ -555,6 +660,10 @@ async function uploadVideo(
     ]);
     const failureText = (await failure?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
     if (failureText) throw new Error(`YouTube rejected the final action: ${failureText}`);
+    if (await visibleSavedYouTubeRow(page, platformPostUrl)) {
+      confirmed = true;
+      break;
+    }
     await page.waitForTimeout(750);
   }
   if (!confirmed) {

@@ -13,7 +13,11 @@ import { setServerLocalInputFile } from "./local-file-input.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
-import { exactYouTubeButtonLabelMatches, isYouTubePublishSuccessText } from "./youtube-live.ts";
+import {
+  exactYouTubeButtonLabelMatches,
+  isYouTubePublishSuccessText,
+  youtubeFinalActionLabelMatches,
+} from "./youtube-live.ts";
 import { interpretInstagramPublishResponse } from "./instagram-live.ts";
 import { isLinkedInPublishSuccessText } from "./linkedin-live.ts";
 
@@ -243,8 +247,11 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /Upload videos/);
   assert.match(source, /clickReversibleControl/);
   assert.match(source, /accepted the file but did not show its video metadata fields/);
-  assert.match(source, /ancestor::ytcp-uploads-dialog/);
+  assert.match(source, /resolveYouTubeUploadRoot/);
+  assert.match(source, /Never anchor\s*\n\s*\/\/ this locator to a field from one panel/);
+  assert.doesNotMatch(source, /title\.locator\("xpath=ancestor::ytcp-uploads-dialog/);
   assert.match(source, /advanceYouTubeUploadToVisibility/);
+  assert.match(source, /YOUTUBE_UPLOAD_STEP_TIMEOUT_MS/);
   assert.match(source, /monetization, ad-suitability, or rights screens/);
   assert.match(source, /fillVerifiedYouTubeField/);
   assert.match(source, /selectYouTubeRadio/);
@@ -259,6 +266,14 @@ test("YouTube exact buttons remain detectable when aria and visible labels are b
   assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next", "Next"), true);
   assert.equal(exactYouTubeButtonLabelMatches(/^Publish$/i, "Publish", "PUBLISH"), true);
   assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next step", "Continue"), false);
+});
+
+test("YouTube visibility choices require their exact final actions", () => {
+  assert.equal(youtubeFinalActionLabelMatches("public", "Publish", "Publish"), true);
+  assert.equal(youtubeFinalActionLabelMatches("public", "Save", "Save"), false);
+  assert.equal(youtubeFinalActionLabelMatches("unlisted", "Save", "Save"), true);
+  assert.equal(youtubeFinalActionLabelMatches("private", "Save", "Save"), true);
+  assert.equal(youtubeFinalActionLabelMatches("private", "Publish", "Publish"), false);
 });
 
 test("YouTube requires explicit positive publish evidence and rejects failure copy", () => {
