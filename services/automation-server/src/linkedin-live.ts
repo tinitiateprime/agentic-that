@@ -46,17 +46,6 @@ async function waitVisible(page: Page, locators: Locator[], signal: AbortSignal,
   return null;
 }
 
-async function waitAttached(page: Page, locators: Locator[], signal: AbortSignal, timeout: number) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    signal.throwIfAborted();
-    const item = await firstAttached(locators);
-    if (item) return item;
-    await page.waitForTimeout(500);
-  }
-  return null;
-}
-
 function linkedInComposerEditors(page: Page) {
   return LINKEDIN_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
 }
@@ -181,10 +170,34 @@ async function openLinkedInComposer(page: Page, signal: AbortSignal) {
 async function attachLinkedInMedia(page: Page, editor: Locator, filePath: string, signal: AbortSignal) {
   const dialog = editor.locator("xpath=ancestor::*[@role='dialog'][1]");
   const root = await dialog.count() ? dialog : page.locator("body");
-  let input = root.locator('input[type="file"]').last();
-  if (await input.count()) {
-    await setServerLocalInputFile(page, input, filePath);
-  } else {
+  const attachToCurrentInput = async (timeout = 2_000) => {
+    const deadline = Date.now() + timeout;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      const input = await firstAttached([
+        root.locator('input[type="file"]'),
+        page.locator('[role="dialog"] input[type="file"]'),
+      ]);
+      if (input) {
+        try {
+          await setServerLocalInputFile(page, input, filePath);
+          return true;
+        } catch (error) {
+          lastError = error;
+          // LinkedIn replaces the hidden React input while opening its media
+          // picker. Re-resolve the current node instead of retrying a detached
+          // element handle.
+        }
+      }
+      await page.waitForTimeout(250);
+    }
+    if (lastError) throw lastError;
+    return false;
+  };
+
+  let attached = await attachToCurrentInput();
+  if (!attached) {
     const button = await firstVisible([
       root.getByRole("button", { name: /Add media|Media|Photo|Video/i }),
       root.locator('button[aria-label*="media" i]'),
@@ -196,12 +209,12 @@ async function attachLinkedInMedia(page: Page, editor: Locator, filePath: string
     const chooser = await chooserPromise;
     if (chooser) {
       await setServerLocalFileChooserFile(page, chooser, filePath);
+      attached = true;
     } else {
-      input = await waitAttached(page, [page.locator('input[type="file"]').last()], signal, 10_000) ?? input;
-      if (!await input.count()) throw new Error("LinkedIn's media picker did not expose a file input.");
-      await setServerLocalInputFile(page, input, filePath);
+      attached = await attachToCurrentInput(10_000);
     }
   }
+  if (!attached) throw new Error("LinkedIn's media picker did not expose a stable file input.");
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     signal.throwIfAborted();

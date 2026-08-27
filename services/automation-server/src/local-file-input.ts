@@ -15,33 +15,42 @@ type FileInputTarget = Locator | ElementHandle<Node>;
 async function setServerLocalInputElementFile(page: Page, input: FileInputTarget, filePath: string) {
   const absolutePath = path.resolve(filePath);
   if (absolutePath !== filePath) throw new Error("The server media path must be absolute.");
-  const pageKey = `__agenticthat_server_upload_${randomUUID().replaceAll("-", "")}`;
+  const marker = `agenticthat_${randomUUID().replaceAll("-", "")}`;
   const evaluatable = input as unknown as {
-    evaluate(pageFunction: (element: HTMLElement, key: string) => void, key: string): Promise<void>;
+    evaluate(pageFunction: (element: HTMLElement, value: string) => void, value: string): Promise<void>;
   };
-  await evaluatable.evaluate((element, key) => {
+  await evaluatable.evaluate((element, value) => {
     if (element.tagName !== "INPUT" || element.getAttribute("type")?.toLowerCase() !== "file") {
       throw new Error("The selected browser control is not a file input.");
     }
-    Object.defineProperty(globalThis, key, { configurable: true, value: element });
-  }, pageKey);
+    element.setAttribute("data-agenticthat-server-upload", value);
+  }, marker);
 
   const client = await page.context().newCDPSession(page);
   try {
-    const remote = await client.send("Runtime.evaluate", {
-      expression: `globalThis[${JSON.stringify(pageKey)}]`,
-      objectGroup: pageKey,
-      returnByValue: false,
+    await client.send("DOM.enable");
+    // Locator.evaluate runs in Playwright's isolated world, while a new CDP
+    // session evaluates JavaScript in Chrome's main world. Passing a DOM node
+    // through globalThis therefore loses it. A temporary DOM attribute is
+    // visible in both worlds; the flattened document also finds inputs inside
+    // open shadow roots used by YouTube Studio.
+    const document = await client.send("DOM.getFlattenedDocument", { depth: -1, pierce: true });
+    const node = document.nodes.find(candidate => {
+      const attributes = candidate.attributes || [];
+      for (let index = 0; index < attributes.length; index += 2) {
+        if (attributes[index] === "data-agenticthat-server-upload" && attributes[index + 1] === marker) return true;
+      }
+      return false;
     });
-    const objectId = remote.result.objectId;
-    if (!objectId) throw new Error("The browser file input node was unavailable.");
-    await client.send("DOM.setFileInputFiles", { files: [absolutePath], objectId });
+    if (!node?.backendNodeId) throw new Error("The browser replaced its file input before the media could be attached.");
+    await client.send("DOM.setFileInputFiles", { files: [absolutePath], backendNodeId: node.backendNodeId });
   } finally {
-    await client.send("Runtime.evaluate", {
-      expression: `delete globalThis[${JSON.stringify(pageKey)}]`,
-      returnByValue: true,
-    }).catch(() => undefined);
-    await client.send("Runtime.releaseObjectGroup", { objectGroup: pageKey }).catch(() => undefined);
+    await evaluatable.evaluate((element, value) => {
+      if (element.getAttribute("data-agenticthat-server-upload") === value) {
+        element.removeAttribute("data-agenticthat-server-upload");
+      }
+    }, marker).catch(() => undefined);
+    await client.send("DOM.disable").catch(() => undefined);
     await client.detach().catch(() => undefined);
   }
 }

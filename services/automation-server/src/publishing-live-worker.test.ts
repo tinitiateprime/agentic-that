@@ -9,6 +9,7 @@ import { createAutomationDatabase } from "./database.ts";
 import type { PublishingDryRunValidator, ServerPublishingExecutor } from "./executor.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { AutomationJobStore } from "./job-store.ts";
+import { setServerLocalInputFile } from "./local-file-input.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
@@ -205,6 +206,7 @@ test("the LinkedIn live executor records its fence before one exact Post click",
   assert.match(source, /data-view-name\*="start-post"/);
   assert.match(source, /setServerLocalInputFile/);
   assert.match(source, /setServerLocalFileChooserFile/);
+  assert.match(source, /Re-resolve the current node instead of retrying a detached/);
   assert.match(source, /chromium\.launchPersistentContext/);
   assert.match(source, /isAuthenticatedLinkedInPage/);
   assert.match(source, /dismissLinkedInCookiePrompt/);
@@ -229,6 +231,9 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /clickReversibleControl/);
   assert.match(source, /accepted the file but did not show its video metadata fields/);
   assert.match(source, /ancestor::ytcp-uploads-dialog/);
+  assert.match(source, /advanceYouTubeUploadToVisibility/);
+  assert.match(source, /monetization, ad-suitability, or rights screens/);
+  assert.doesNotMatch(source, /for \(const step of \["Video elements", "Checks", "Visibility"\]\)/);
   assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
   assert.doesNotMatch(source, /finalAction\.click\(\{\s*force:/);
@@ -238,9 +243,48 @@ test("standard Chrome media uploads pass local paths directly through CDP", asyn
   const source = await readFile(new URL("./local-file-input.ts", import.meta.url), "utf8");
   assert.match(source, /DOM\.setFileInputFiles/);
   assert.match(source, /files: \[absolutePath\]/);
-  assert.match(source, /Runtime\.evaluate/);
+  assert.match(source, /DOM\.getFlattenedDocument/);
+  assert.match(source, /data-agenticthat-server-upload/);
+  assert.doesNotMatch(source, /Runtime\.evaluate/);
   assert.match(source, /chooser\.element\(\)/);
   assert.doesNotMatch(source, /readFile|arrayBuffer|base64/);
+});
+
+test("the local-file bridge resolves the marked DOM input in Chrome's CDP document", async () => {
+  const attributes = new Map<string, string>([["type", "file"]]);
+  const element = {
+    tagName: "INPUT",
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    removeAttribute: (name: string) => attributes.delete(name),
+  };
+  const input = {
+    async evaluate(callback: (target: typeof element, value: string) => void, value: string) {
+      callback(element, value);
+    },
+  };
+  const calls: Array<{ command: string; parameters?: Record<string, unknown> }> = [];
+  const client = {
+    async send(command: string, parameters?: Record<string, unknown>) {
+      calls.push({ command, parameters });
+      if (command === "DOM.getFlattenedDocument") {
+        return {
+          nodes: [{
+            backendNodeId: 42,
+            attributes: ["type", "file", "data-agenticthat-server-upload", attributes.get("data-agenticthat-server-upload")],
+          }],
+        };
+      }
+      return {};
+    },
+    async detach() { /* Test double. */ },
+  };
+  const page = { context: () => ({ newCDPSession: async () => client }) };
+
+  await setServerLocalInputFile(page as never, input as never, "/tmp/agenticthat-video.mp4");
+  const assignment = calls.find(call => call.command === "DOM.setFileInputFiles");
+  assert.deepEqual(assignment?.parameters, { files: ["/tmp/agenticthat-video.mp4"], backendNodeId: 42 });
+  assert.equal(attributes.has("data-agenticthat-server-upload"), false);
 });
 
 test("the live worker pool runs different accounts concurrently but serializes each account", async () => {

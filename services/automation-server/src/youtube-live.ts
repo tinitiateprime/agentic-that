@@ -97,19 +97,118 @@ async function enabledExactButton(page: Page, root: Locator, label: RegExp, sign
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const button = await firstEnabledVisible([
+    const candidates = [
       root.getByRole("button", { name: label }),
       root.locator("ytcp-button").filter({ hasText: label }),
+      root.locator('[role="button"]').filter({ hasText: label }),
       root.locator("button").filter({ hasText: label }),
-    ]);
-    if (button) {
-      const text = (await button.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || "";
-      const aria = (await button.getAttribute("aria-label").catch(() => ""))?.trim() || "";
-      if (label.test(text) || label.test(aria)) return button;
+    ];
+    for (const locator of candidates) {
+      for (let index = 0, count = Math.min(await locator.count().catch(() => 0), 20); index < count; index += 1) {
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        const state = await candidate.evaluate(element => {
+          const clickable = element.matches('button, [role="button"]')
+            ? element
+            : element.querySelector('button, [role="button"]') || element;
+          const text = `${clickable.getAttribute("aria-label") || ""} ${clickable.textContent || ""}`
+            .replace(/\s+/g, " ").trim();
+          const disabled = (clickable as HTMLButtonElement).disabled
+            || clickable.hasAttribute("disabled")
+            || clickable.getAttribute("aria-disabled") === "true"
+            || element.hasAttribute("disabled")
+            || element.getAttribute("aria-disabled") === "true";
+          return { text, nested: clickable !== element, disabled };
+        }).catch(() => null);
+        if (!state || state.disabled || !label.test(state.text)) continue;
+        if (state.nested) {
+          const clickable = candidate.locator('button, [role="button"]').first();
+          if (await clickable.isVisible().catch(() => false)) return clickable;
+        }
+        return candidate;
+      }
     }
     await page.waitForTimeout(750);
   }
   return null;
+}
+
+function youtubeUploadTransitionTimeout() {
+  const configured = Number(process.env.YOUTUBE_UPLOAD_TRANSITION_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 20 * 60_000;
+  return Math.max(60_000, Math.min(60 * 60_000, Math.floor(configured)));
+}
+
+async function currentYouTubeUploadStage(page: Page) {
+  if (await firstVisible([
+    page.getByText(/Choose when to publish|Save or publish/i),
+    page.getByRole("radio", { name: /^Public$|^Private$|^Unlisted$/i }),
+    page.locator('tp-yt-paper-radio-button[name="PUBLIC"], tp-yt-paper-radio-button[name="PRIVATE"], tp-yt-paper-radio-button[name="UNLISTED"]'),
+  ])) return "Visibility";
+  if (await firstVisible([
+    page.getByText(/check your video for issues|we['’]ll check your video|Copyright checks?/i),
+  ])) return "Checks";
+  if (await firstVisible([
+    page.getByText(/Use cards and an end screen|Add subtitles/i),
+  ])) return "Video elements";
+  if (await firstVisible([
+    page.locator("#title-textarea"),
+  ])) return "Details";
+  return "the current upload step";
+}
+
+async function visibleYouTubeUploadError(page: Page) {
+  const error = await firstVisible([
+    page.locator('[role="alert"]'),
+    page.locator("#error-message"),
+    page.getByText(/upload failed|processing abandoned|daily upload limit|invalid file|couldn['’]t upload/i),
+  ]);
+  const message = (await error?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || "";
+  return message.slice(0, 500);
+}
+
+async function advanceYouTubeUploadToVisibility(
+  page: Page,
+  signal: AbortSignal,
+  reportProgress: (message: string) => void,
+) {
+  const deadline = Date.now() + youtubeUploadTransitionTimeout();
+  for (let transitions = 0; transitions < 10 && Date.now() < deadline; transitions += 1) {
+    signal.throwIfAborted();
+    const stage = await currentYouTubeUploadStage(page);
+    if (stage === "Visibility") return;
+    reportProgress(`Waiting for YouTube's ${stage} step to become ready.`);
+    const next = await enabledExactButton(
+      page,
+      page.locator("body"),
+      /^Next$/i,
+      signal,
+      Math.max(1_000, deadline - Date.now()),
+    );
+    if (!next) {
+      const uploadError = await visibleYouTubeUploadError(page);
+      throw new Error(uploadError
+        ? `YouTube stopped at ${stage}: ${uploadError}`
+        : `YouTube's Next button did not become enabled on ${stage} before the upload timeout.`);
+    }
+    await clickReversibleControl(page, next, signal);
+    if (stage === "the current upload step") {
+      await page.waitForTimeout(1_500);
+      continue;
+    }
+    const transitionDeadline = Math.min(deadline, Date.now() + 30_000);
+    while (Date.now() < transitionDeadline) {
+      signal.throwIfAborted();
+      const nextStage = await currentYouTubeUploadStage(page);
+      if (nextStage === "Visibility" || nextStage !== stage) break;
+      await page.waitForTimeout(500);
+    }
+  }
+  const stage = await currentYouTubeUploadStage(page);
+  const uploadError = await visibleYouTubeUploadError(page);
+  throw new Error(uploadError
+    ? `YouTube stopped at ${stage}: ${uploadError}`
+    : `YouTube did not reach Visibility; it remained on ${stage}.`);
 }
 
 async function submitFinalAction(
@@ -300,12 +399,10 @@ async function uploadVideo(
   const selectedAudience = await audience.getAttribute("aria-checked").catch(() => null);
   if (selectedAudience === "false") throw new Error("YouTube did not retain the selected audience classification.");
 
-  for (const step of ["Video elements", "Checks", "Visibility"]) {
-    const next = await enabledExactButton(page, dialog, /^Next$/i, signal, 120_000);
-    if (!next) throw new Error(`YouTube's Next button did not become enabled before ${step}.`);
-    await next.click({ timeout: 15_000 });
-    await page.waitForTimeout(1_000);
-  }
+  // Channels can have extra monetization, ad-suitability, or rights screens.
+  // Follow the visible Studio state until Visibility instead of assuming that
+  // every account has exactly three Next transitions.
+  await advanceYouTubeUploadToVisibility(page, signal, reportProgress);
 
   const visibilityText = new RegExp(`^${options.visibility}$`, "i");
   const visibility = await waitVisible(page, [
@@ -319,7 +416,7 @@ async function uploadVideo(
   if (selectedVisibility === "false") throw new Error("YouTube did not retain the selected visibility.");
 
   const finalLabel = options.visibility === "public" ? /^(?:Publish|Save)$/i : /^Save$/i;
-  const finalAction = await enabledExactButton(page, dialog, finalLabel, signal, 180_000);
+  const finalAction = await enabledExactButton(page, page.locator("body"), finalLabel, signal, youtubeUploadTransitionTimeout());
   if (!finalAction) throw new Error("YouTube Studio's exact final Save or Publish button did not become enabled.");
   const platformPostUrl = await dialog.locator('a[href*="youtu.be"], a[href*="youtube.com/watch"]').first().getAttribute("href").catch(() => null);
   reportProgress(`Final YouTube ${options.visibility} action authorized. Recording the irreversible action before clicking.`);

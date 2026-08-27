@@ -1,4 +1,9 @@
 import bigInt from "big-integer";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { open, mkdtemp, rm } from "node:fs/promises";
+import { isIP } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { Api, TelegramClient } from "telegram";
 import { NewMessage } from "telegram/events/index.js";
 import { StringSession } from "telegram/sessions/index.js";
@@ -215,10 +220,9 @@ function extensionForMime(mimeType: string, mediaType = "") {
   return known[clean] || (mediaType === "video" ? "mp4" : mediaType === "image" ? "jpg" : "bin");
 }
 
-function mediaFileFromUrl(mediaUrl: string, mediaType = "") {
+function inlineMediaFile(mediaUrl: string, mediaType = "") {
   const trimmed = mediaUrl.trim();
   if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
 
   const dataUrl = /^data:([^;,]+);base64,(.+)$/i.exec(trimmed);
   if (!dataUrl) {
@@ -228,6 +232,163 @@ function mediaFileFromUrl(mediaUrl: string, mediaType = "") {
   const buffer = Buffer.from(dataUrl[2], "base64");
   if (!buffer.length) throw new Error("Media data is empty.");
   return new CustomFile(`telegram-post.${extensionForMime(mimeType, mediaType)}`, buffer.length, "", buffer);
+}
+
+type TelegramMediaDependencies = {
+  fetcher?: typeof fetch;
+  resolver?: (hostname: string, options: { all: true; verbatim: true }) => Promise<Array<{ address: string }>>;
+  tempRoot?: string;
+  maxBytes?: number;
+};
+
+type PreparedTelegramMedia = {
+  file: CustomFile;
+  cleanup: () => Promise<void>;
+};
+
+function telegramMediaMaxBytes() {
+  const configured = Number(process.env.TELEGRAM_MEDIA_MAX_BYTES);
+  if (!Number.isFinite(configured) || configured < 1) return 2 * 1024 * 1024 * 1024;
+  return Math.min(Math.floor(configured), 4 * 1024 * 1024 * 1024);
+}
+
+function telegramMediaDownloadTimeout() {
+  const configured = Number(process.env.TELEGRAM_MEDIA_DOWNLOAD_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 20 * 60_000;
+  return Math.max(30_000, Math.min(60 * 60_000, Math.floor(configured)));
+}
+
+function privateIpv4(address: string) {
+  const octets = address.split(".").map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [first, second] = octets;
+  return first === 0
+    || first === 10
+    || first === 127
+    || first >= 224
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && (second === 0 || second === 168))
+    || (first === 198 && (second === 18 || second === 19 || second === 51))
+    || (first === 203 && second === 0);
+}
+
+function privateNetworkAddress(address: string) {
+  const clean = address.toLowerCase().split("%")[0];
+  if (clean.startsWith("::ffff:")) return privateIpv4(clean.slice("::ffff:".length));
+  if (isIP(clean) === 4) return privateIpv4(clean);
+  if (isIP(clean) !== 6) return true;
+  return clean === "::"
+    || clean === "::1"
+    || clean.startsWith("fc")
+    || clean.startsWith("fd")
+    || /^fe[89ab]/.test(clean)
+    || clean.startsWith("2001:db8:");
+}
+
+async function assertPublicTelegramMediaUrl(
+  url: URL,
+  resolver: NonNullable<TelegramMediaDependencies["resolver"]>,
+) {
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error("Telegram media must use an http(s) URL or base64 data URL.");
+  if (url.username || url.password) throw new Error("Telegram media URLs cannot contain embedded credentials.");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new Error("Telegram media URLs must use a public host.");
+  }
+  const addresses = isIP(hostname) ? [{ address: hostname }] : await resolver(hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(result => privateNetworkAddress(result.address))) {
+    throw new Error("Telegram media URLs cannot point to this server or another private network.");
+  }
+}
+
+function safeTelegramMediaName(url: URL, mimeType: string, mediaType: string) {
+  let candidate = "telegram-post";
+  try { candidate = decodeURIComponent(path.basename(url.pathname)) || candidate; } catch { /* Keep the safe fallback. */ }
+  candidate = candidate.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 120) || "telegram-post";
+  if (!path.extname(candidate)) candidate += `.${extensionForMime(mimeType, mediaType)}`;
+  return candidate;
+}
+
+/**
+ * Downloads public media to this Ubuntu host before handing it to Telegram.
+ * This avoids Telegram's WEBPAGE_CURL_FAILED response for temporary tunnel
+ * URLs and ensures that the connected account uploads the actual file bytes.
+ */
+export async function prepareTelegramMedia(
+  mediaUrl: string,
+  mediaType = "",
+  dependencies: TelegramMediaDependencies = {},
+): Promise<PreparedTelegramMedia | null> {
+  const trimmed = mediaUrl.trim();
+  if (!trimmed) return null;
+  if (/^data:/i.test(trimmed)) {
+    const file = inlineMediaFile(trimmed, mediaType);
+    return file ? { file, cleanup: async () => undefined } : null;
+  }
+
+  let current: URL;
+  try { current = new URL(trimmed); } catch { throw new Error("Media URL must be a direct public http(s) URL or a base64 data URL."); }
+  const fetcher = dependencies.fetcher || fetch;
+  const resolver = dependencies.resolver || dnsLookup;
+  const maxBytes = dependencies.maxBytes || telegramMediaMaxBytes();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error("Telegram media download timed out.")), telegramMediaDownloadTimeout());
+  timeout.unref();
+  let directory = "";
+  try {
+    let response: Response | null = null;
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      await assertPublicTelegramMediaUrl(current, resolver);
+      response = await fetcher(current, { redirect: "manual", signal: controller.signal });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => undefined);
+      if (!location) throw new Error("The Telegram media URL returned an invalid redirect.");
+      if (redirects === 5) throw new Error("The Telegram media URL redirected too many times.");
+      current = new URL(location, current);
+      response = null;
+    }
+    if (!response?.ok) throw new Error(`The Telegram media URL returned HTTP ${response?.status || 502}.`);
+    if (!response.body) throw new Error("The Telegram media URL returned no file data.");
+    const declaredSize = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredSize) && declaredSize > maxBytes) {
+      throw new Error("The Telegram media exceeds the configured Telegram upload size.");
+    }
+    const mimeType = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (mimeType === "text/html") throw new Error("The Telegram media URL returned a web page instead of a media file.");
+
+    directory = await mkdtemp(path.join(dependencies.tempRoot || os.tmpdir(), "agenticthat-telegram-media-"));
+    const fileName = safeTelegramMediaName(current, mimeType, mediaType);
+    const filePath = path.join(directory, fileName);
+    const handle = await open(filePath, "wx", 0o600);
+    let size = 0;
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.byteLength;
+        if (size > maxBytes) throw new Error("The Telegram media exceeds the configured Telegram upload size.");
+        await handle.write(chunk.value);
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      await handle.close();
+    }
+    if (!size) throw new Error("The Telegram media URL returned an empty file.");
+    return {
+      file: new CustomFile(fileName, size, filePath),
+      cleanup: () => rm(directory, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    if (controller.signal.aborted) throw new Error("Telegram media download timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function shouldForceDocument(mediaType = "") {
@@ -369,8 +530,9 @@ async function resolveMessagePeer(client: TelegramClient, input: SendMessageInpu
 export async function sendTelegramMessage(credentials: TelegramApiCredentials, sessionString: string, input: SendMessageInput): Promise<SentMessage> {
   const recipient = input.recipient.trim();
   const message = input.message.trim();
-  const mediaFile = mediaFileFromUrl(input.mediaUrl || "", input.mediaType || "");
   if (!recipient) throw new Error("Recipient is required.");
+  const preparedMedia = await prepareTelegramMedia(input.mediaUrl || "", input.mediaType || "");
+  const mediaFile = preparedMedia?.file || null;
   if (!message && !mediaFile) throw new Error("Message or media is required.");
 
   const client = createClient(credentials, sessionString);
@@ -402,7 +564,11 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
     }
     return { recipient, messageId: sentIds.join(","), sentAt: new Date().toISOString() };
   } finally {
-    await client.disconnect();
+    try {
+      await client.disconnect();
+    } finally {
+      await preparedMedia?.cleanup();
+    }
   }
 }
 
