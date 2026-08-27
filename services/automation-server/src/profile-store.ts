@@ -194,12 +194,16 @@ export class AutomationFileStore {
     const extensions: Record<string, string> = {
       "image/jpeg": ".jpg",
       "image/png": ".png",
+      "image/webp": ".webp",
+      "image/gif": ".gif",
+      "image/avif": ".avif",
+      "image/tiff": ".tiff",
       "video/mp4": ".mp4",
       "video/quicktime": ".mov",
     };
     const normalizedMimeType = mimeType.toLowerCase();
     const extension = extensions[normalizedMimeType];
-    if (!extension) throw new Error("Choose one JPEG, PNG, MP4, or MOV file.");
+    if (!extension) throw new Error("Choose a JPEG, PNG, WebP, GIF, AVIF, TIFF, MP4, or MOV file.");
     const fileName = path.basename(originalName.trim());
     if (!fileName || fileName === "." || fileName.length > 255) throw new Error("The media filename is invalid.");
     return { extension, fileName, normalizedMimeType };

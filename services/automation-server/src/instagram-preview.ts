@@ -1,6 +1,7 @@
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core";
 import type { ClaimedPublishingJob, PublishingPreviewExecutor } from "./executor.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
+import { instagramMediaTypeSupported, prepareInstagramMedia } from "./instagram-media.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
@@ -287,8 +288,8 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     if (job.executionMode !== "DRY_RUN" || job.validationStage !== "INSTAGRAM_PREVIEW") {
       throw new Error("The preview executor refuses jobs outside the isolated preview stage.");
     }
-    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(media.mimeType.toLowerCase()))) {
-      throw new Error("The Instagram preview requires between 1 and 10 JPEG, PNG, MP4, or MOV files.");
+    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !instagramMediaTypeSupported(media.mimeType))) {
+      throw new Error("The Instagram preview requires between 1 and 10 supported image, MP4, or MOV files.");
     }
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for Instagram previews.");
@@ -310,6 +311,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
     let deadlineExpired = false;
     let stage = "opening the saved Instagram session";
     let page: Page | null = null;
+    let cleanupPreparedMedia = async () => {};
     const deadline = setTimeout(() => {
       deadlineExpired = true;
       reportProgress("Closing a preview that exceeded the 150-second browser limit.");
@@ -320,11 +322,17 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
       signal.throwIfAborted();
       page = context.pages()[0] || await context.newPage();
       page.setDefaultTimeout(10_000);
+      stage = "normalizing Instagram media without cropping";
+      const preparedMedia = await prepareInstagramMedia(this.files, job);
+      cleanupPreparedMedia = preparedMedia.cleanup;
+      if (preparedMedia.normalizedImages) {
+        reportProgress(`Prepared ${preparedMedia.normalizedImages} image${preparedMedia.normalizedImages === 1 ? "" : "s"} for Instagram without cropping.`);
+      }
       await prepareInstagramFinalComposer({
         page,
         context,
         job,
-        mediaPaths: job.media.map(media => this.files.mediaFilePath(media.storageKey)),
+        mediaPaths: preparedMedia.paths,
         signal,
         reportProgress,
         setStage: value => { stage = value; },
@@ -368,6 +376,7 @@ export class PlaywrightInstagramPreviewExecutor implements PublishingPreviewExec
         context.close({ reason: "Instagram private preview finished before Share." }).catch(() => undefined),
         new Promise<void>(resolve => setTimeout(resolve, 5_000)),
       ]);
+      await cleanupPreparedMedia().catch(() => undefined);
     }
   }
 }

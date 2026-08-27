@@ -643,8 +643,8 @@ export const api = {
 
   uploadServerAutomationMedia: async (file: File) => {
     if (!file.size) throw new Error("Choose a non-empty media file.");
-    if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
-      throw new Error("Choose one JPEG, PNG, MP4, or MOV file.");
+    if (!["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/tiff", "video/mp4", "video/quicktime"].includes(file.type)) {
+      throw new Error("Choose a JPEG, PNG, WebP, GIF, AVIF, TIFF, MP4, or MOV file.");
     }
     const started = await serverAutomationRequest<{ upload: { uploadId: string; chunkSize: number } }>("/media/uploads", {
       method: "POST",

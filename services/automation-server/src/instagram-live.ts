@@ -5,6 +5,7 @@ import {
   prepareInstagramFinalComposer,
 } from "./instagram-preview.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
+import { instagramMediaTypeSupported, prepareInstagramMedia } from "./instagram-media.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
 async function firstVisible(locators: Locator[]) {
@@ -143,8 +144,8 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
     if (job.executionMode !== "LIVE" || job.validationStage !== "LOCAL") {
       throw new Error("The live executor refuses jobs outside the authorized live stage.");
     }
-    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(media.mimeType.toLowerCase()))) {
-      throw new Error("Live Instagram publishing requires between 1 and 10 JPEG, PNG, MP4, or MOV files.");
+    if (job.media.length < 1 || job.media.length > 10 || job.media.some(media => !instagramMediaTypeSupported(media.mimeType))) {
+      throw new Error("Live Instagram publishing requires between 1 and 10 supported image, MP4, or MOV files.");
     }
     const executablePath = detectServerBrowserExecutable(this.configuredExecutablePath);
     if (!executablePath) throw new Error("Google Chrome or Microsoft Edge is required for Instagram publishing.");
@@ -167,6 +168,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
     let finalActionAttempted = false;
     let activePage: Page | null = null;
     let stage = "opening the saved Instagram session";
+    let cleanupPreparedMedia = async () => {};
     const deadline = setTimeout(() => {
       deadlineExpired = true;
       reportProgress("Closing a live publishing browser that exceeded its five-minute limit.");
@@ -178,11 +180,17 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
       const page = context.pages()[0] || await context.newPage();
       activePage = page;
       page.setDefaultTimeout(10_000);
+      stage = "normalizing Instagram media without cropping";
+      const preparedMedia = await prepareInstagramMedia(this.files, job);
+      cleanupPreparedMedia = preparedMedia.cleanup;
+      if (preparedMedia.normalizedImages) {
+        reportProgress(`Prepared ${preparedMedia.normalizedImages} image${preparedMedia.normalizedImages === 1 ? "" : "s"} for Instagram without cropping.`);
+      }
       await prepareInstagramFinalComposer({
         page,
         context,
         job,
-        mediaPaths: job.media.map(media => this.files.mediaFilePath(media.storageKey)),
+        mediaPaths: preparedMedia.paths,
         signal,
         reportProgress,
         setStage: value => { stage = value; },
@@ -248,6 +256,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
         context.close({ reason: "Instagram live publishing browser finished." }).catch(() => undefined),
         new Promise<void>(resolve => setTimeout(resolve, 5_000)),
       ]);
+      await cleanupPreparedMedia().catch(() => undefined);
     }
   }
 }

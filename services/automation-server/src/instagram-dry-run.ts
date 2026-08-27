@@ -7,8 +7,19 @@ import type {
 import type { AutomationFileStore } from "./profile-store.ts";
 import { open, stat } from "node:fs/promises";
 import sharp from "sharp";
+import {
+  INSTAGRAM_IMAGE_INPUT_TYPES,
+  instagramMediaTypeSupported,
+} from "./instagram-media.ts";
 
-const SUPPORTED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "video/mp4", "video/quicktime"]);
+const IMAGE_FORMATS: Record<string, string> = {
+  "image/jpeg": "jpeg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/avif": "heif",
+  "image/tiff": "tiff",
+};
 
 async function videoContainerLooksValid(filePath: string) {
   const handle = await open(filePath, "r");
@@ -62,7 +73,8 @@ export class InstagramPublishingDryRunValidator implements PublishingDryRunValid
 
     for (const media of job.media) {
       signal.throwIfAborted();
-      if (!SUPPORTED_MEDIA_TYPES.has(media.mimeType.toLowerCase())) {
+      const mimeType = media.mimeType.toLowerCase();
+      if (!instagramMediaTypeSupported(mimeType)) {
         issues.push(`${media.fileName} uses an unsupported Instagram media type.`);
         continue;
       }
@@ -76,10 +88,10 @@ export class InstagramPublishingDryRunValidator implements PublishingDryRunValid
         issues.push(`${media.fileName} cannot be empty.`);
         continue;
       }
-      if (media.mimeType.startsWith("image/")) {
+      if (INSTAGRAM_IMAGE_INPUT_TYPES.has(mimeType)) {
         try {
           const metadata = await sharp(filePath).metadata();
-          const expectedFormat = media.mimeType === "image/jpeg" ? "jpeg" : "png";
+          const expectedFormat = IMAGE_FORMATS[mimeType];
           if (metadata.format !== expectedFormat || !metadata.width || !metadata.height) {
             issues.push(`${media.fileName} does not match its declared image type.`);
             continue;

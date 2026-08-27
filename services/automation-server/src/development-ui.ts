@@ -100,7 +100,7 @@ export function developmentConnectPage(options: {
       <p>Upload one test image and validate the complete server queue path. This mode cannot open Instagram and cannot publish.</p>
       <form id="dry-run-form">
         <label>Connected account<select id="dry-run-account" required></select></label>
-        <label>Test image<input id="dry-run-media" type="file" accept="image/jpeg,image/png" required /></label>
+        <label>Test image<input id="dry-run-media" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/tiff" required /></label>
         <div class="dry-actions">
           <button id="dry-run-button" type="submit">Run safe check</button>
           <button id="preview-button" class="secondary" type="button">Prepare private preview</button>

@@ -964,9 +964,11 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-async function validateServerMedia(file: File, _targetPlatforms: Platform[]) {
-  if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
-    throw new Error("The server worker supports JPEG, PNG, MP4, or MOV media.");
+async function validateServerMedia(file: File, targetPlatforms: Platform[]) {
+  const standardMedia = ["image/jpeg", "image/png", "video/mp4", "video/quicktime"];
+  const instagramImage = ["image/webp", "image/gif", "image/avif", "image/tiff"];
+  if (!standardMedia.includes(file.type) && !(instagramImage.includes(file.type) && targetPlatforms.every(platform => platform === "instagram"))) {
+    throw new Error("The server worker supports JPEG, PNG, MP4, and MOV media. Instagram-only posts also support WebP, GIF, AVIF, and TIFF images.");
   }
   const video = file.type.startsWith("video/");
   if (file.size < 1) throw new Error(`The server ${video ? "video" : "image"} cannot be empty.`);

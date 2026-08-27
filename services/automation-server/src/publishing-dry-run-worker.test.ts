@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { loadAutomationConfig } from "./config.ts";
 import { createAutomationDatabase } from "./database.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
+import { prepareInstagramMedia } from "./instagram-media.ts";
 import { FacebookPublishingDryRunValidator } from "./facebook-dry-run.ts";
 import { XPublishingDryRunValidator } from "./x-dry-run.ts";
 import { LinkedInPublishingDryRunValidator } from "./linkedin-dry-run.ts";
@@ -113,9 +114,58 @@ test("the Instagram dry-run worker validates and cancels a job without publishin
     const wideImageCompleted = await worker.runOnce();
     assert.equal(wideImageCompleted?.state, "CANCELLED");
     assert.equal(wideImageCompleted?.errorCode, "DRY_RUN_COMPLETE");
+
+    const webpStorageKey = "media_instagram_webp_test.webp";
+    await sharp({ create: { width: 776, height: 370, channels: 3, background: "#167552" } })
+      .webp()
+      .toFile(files.mediaFilePath(webpStorageKey));
+    store.createPublishingJob({
+      ...job,
+      id: undefined,
+      scheduledAt: new Date(Date.now() - 60_000).toISOString(),
+      media: [{ storageKey: webpStorageKey, fileName: "wide.webp", mimeType: "image/webp" }],
+      idempotencyKey: "dry-run-validation-webp-001",
+    }, "DRY_RUN");
+    const webpCompleted = await worker.runOnce();
+    assert.equal(webpCompleted?.state, "CANCELLED");
+    assert.equal(webpCompleted?.errorCode, "DRY_RUN_COMPLETE");
   } finally {
     await worker.stop();
     database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Instagram image preparation preserves wide and tall images inside supported canvases", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-instagram-media-"));
+  const files = new AutomationFileStore(directory);
+  await files.initialize();
+  try {
+    const wideKey = "media_wide.webp";
+    const tallKey = "media_tall.tiff";
+    await sharp({ create: { width: 776, height: 370, channels: 3, background: "#167552" } })
+      .webp()
+      .toFile(files.mediaFilePath(wideKey));
+    await sharp({ create: { width: 300, height: 900, channels: 3, background: "#0a66c2" } })
+      .tiff()
+      .toFile(files.mediaFilePath(tallKey));
+
+    const prepared = await prepareInstagramMedia(files, {
+      media: [
+        { storageKey: wideKey, fileName: "wide.webp", mimeType: "image/webp" },
+        { storageKey: tallKey, fileName: "tall.tiff", mimeType: "image/tiff" },
+      ],
+    });
+    assert.equal(prepared.normalizedImages, 2);
+    const [wide, tall] = await Promise.all(prepared.paths.map(filePath => sharp(filePath).metadata()));
+    assert.equal(wide.format, "jpeg");
+    assert.ok((wide.width || 0) / (wide.height || 1) <= 1.91);
+    assert.equal(tall.format, "jpeg");
+    assert.ok((tall.width || 0) / (tall.height || 1) >= 0.8);
+    const temporaryDirectory = path.dirname(prepared.paths[0]!);
+    await prepared.cleanup();
+    await assert.rejects(access(temporaryDirectory));
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

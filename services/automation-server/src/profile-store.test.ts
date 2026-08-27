@@ -50,7 +50,7 @@ test("media storage keys cannot escape the isolated media directory", async () =
     assert.deepEqual(await readFile(store.mediaFilePath(video.storageKey)), videoBytes);
     await assert.rejects(
       () => store.storeDevelopmentMedia(Buffer.from("bad"), "bad.exe", "application/octet-stream"),
-      /JPEG, PNG, MP4, or MOV/,
+      /JPEG, PNG, WebP, GIF, AVIF, TIFF, MP4, or MOV/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
