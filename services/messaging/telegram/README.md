@@ -305,16 +305,16 @@ Stores local channel/invite notes for workflow planning. Channel records are loc
 
 ### Post Manager
 
-Create and manage posts with title, type, category, tags, status, schedule date/time, media URL, body/caption, manual target, saved contacts, and saved groups.
+Create and manage posts with title, type, category, tags, status, schedule date/time, a device-file upload, body/caption, manual target, saved contacts, and saved groups.
 
-Post types include text, image, video, document, audio, voice, link preview, poll text, forwarded style, announcement, campaign, and template style records. Actual Telegram sending supports text plus optional media URL/data URL.
+Post types include text, image, video, document, audio, voice, link preview, poll text, forwarded style, announcement, campaign, and template style records. The website uploads selected media privately to this server in 4 MB chunks before Telegram delivery.
 
 To send:
 
 1. Select the sender profile at the top of the app.
 2. Open `Post Manager`.
 3. Fill title and body/caption.
-4. Optionally add a direct public media URL or supported base64 data URL.
+4. Optionally choose an image, video, audio, or document from the device and wait for the private server upload to complete.
 5. Add a manual target, select contacts, select groups, or combine them.
 6. Click `Save post`.
 7. Check the preview.
@@ -542,6 +542,15 @@ DELETE /v1/telegram/accounts/<accountId>
 
 ### Messages
 
+The website stages device files through the authenticated, account-scoped media routes before sending:
+
+```text
+POST   /v1/media/uploads
+PUT    /v1/media/uploads/<uploadId>?accountId=<accountId>
+POST   /v1/media/uploads/<uploadId>/complete
+DELETE /v1/media/uploads/<uploadId>?accountId=<accountId>
+```
+
 Send from an account owned by the signed-in user:
 
 ```text
@@ -552,7 +561,7 @@ Content-Type: application/json
   "accountId": "connected-account-id",
   "recipient": "@telegram_username",
   "message": "Hello",
-  "mediaUrl": "https://example.com/image.jpg",
+  "mediaUploadId": "telegram_media_<opaque-id>",
   "mediaType": "image",
   "firstName": "Optional",
   "lastName": "Contact"
@@ -730,7 +739,7 @@ Use a public `@username` if possible. Phone numbers must include `+countrycode`,
 
 ### Media send fails
 
-Use a direct public `http(s)` media URL or a valid base64 data URL. Some hosts block Telegram from downloading files.
+Use **Upload from device** and wait for “uploaded and ready.” The file is stored in private server state and uploaded by the connected Telegram account; Telegram does not need to fetch a public URL.
 
 ### Inbox does not show incoming replies
 

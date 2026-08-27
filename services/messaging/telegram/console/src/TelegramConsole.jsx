@@ -2389,6 +2389,7 @@ export function TelegramConsole({ integrated = false }) {
                   ),
                   h("form", {"id":"post-form","className":"stack","noValidate":true},
                     h("input", {"id":"post-id","type":"hidden"}),
+                    h("input", {"id":"post-account-id","type":"hidden"}),
                     h("label", {"htmlFor":"post-title"},
                       "Post title"
                     ),
@@ -2456,10 +2457,18 @@ export function TelegramConsole({ integrated = false }) {
                       "Scheduled date"
                     ),
                     h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
-                    h("label", {"htmlFor":"post-media-url"},
-                      "Media URL"
+                    h("label", {"htmlFor":"post-media-file"},
+                      "Upload from device"
                     ),
-                    h("input", {"id":"post-media-url","type":"url","placeholder":"https://example.com/media.jpg"}),
+                    h("input", {"id":"post-media-file","type":"file","accept":"image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip"}),
+                    h("input", {"id":"post-media-url","type":"hidden"}),
+                    h("input", {"id":"post-media-upload-id","type":"hidden"}),
+                    h("input", {"id":"post-media-name","type":"hidden"}),
+                    h("input", {"id":"post-media-mime","type":"hidden"}),
+                    h("input", {"id":"post-media-size","type":"hidden"}),
+                    h("small", {"id":"post-media-status","className":"muted","role":"status","aria-live":"polite"},
+                      "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."
+                    ),
                     h("label", {"htmlFor":"post-body"},
                       "Text or caption"
                     ),

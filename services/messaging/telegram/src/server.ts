@@ -12,6 +12,7 @@ import {
   listenForAccount,
   fetchRecentTelegramMessages,
   normalizePhone,
+  telegramMediaMaxBytes,
   type TelegramApiCredentials
 } from "./account-client.ts";
 import { readConfig, type AppConfig } from "./config.ts";
@@ -21,6 +22,7 @@ import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserS
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
+import { TELEGRAM_MEDIA_CHUNK_BYTES, TelegramMediaStore } from "./media-store.ts";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonBody = Record<string, unknown>;
@@ -44,6 +46,7 @@ type ServerStartupOptions = {
 let config: AppConfig;
 let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
+let mediaStore: TelegramMediaStore;
 let limiter: RequestRateLimiter;
 const trialHourlyMessageLimiter = new RollingTrialUsageLimiter();
 const trialDailyMessageLimiter = new RollingTrialUsageLimiter();
@@ -111,8 +114,8 @@ function responseHeaders(request: IncomingMessage, contentType: string) {
   const origin = request.headers.origin;
   if (config.corsOrigin && origin === config.corsOrigin) {
     headers["access-control-allow-origin"] = config.corsOrigin;
-    headers["access-control-allow-methods"] = "GET,POST,DELETE,OPTIONS";
-    headers["access-control-allow-headers"] = "content-type,authorization,x-provisioning-key";
+    headers["access-control-allow-methods"] = "GET,POST,PUT,DELETE,OPTIONS";
+    headers["access-control-allow-headers"] = "content-type,authorization,x-provisioning-key,x-upload-offset";
     headers["access-control-allow-credentials"] = "true";
     headers.vary = "Origin";
   }
@@ -240,6 +243,37 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonBody> {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "Request body is not valid JSON.");
   }
+}
+
+async function readMediaChunk(request: IncomingMessage) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > TELEGRAM_MEDIA_CHUNK_BYTES) {
+    throw new HttpError(413, "Telegram media upload chunks must be 4 MB or smaller.");
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += buffer.length;
+    if (length > TELEGRAM_MEDIA_CHUNK_BYTES) throw new HttpError(413, "Telegram media upload chunks must be 4 MB or smaller.");
+    chunks.push(buffer);
+  }
+  if (!length) throw new HttpError(400, "Telegram media upload chunk is empty.");
+  return Buffer.concat(chunks, length);
+}
+
+function mediaUploadIdFromPath(pathname: string, suffix = "") {
+  const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^/v1/media/uploads/(telegram_media_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function telegramMediaHttpError(error: unknown) {
+  if (error instanceof HttpError) return error;
+  const message = error instanceof Error ? error.message : "Telegram media upload failed.";
+  if (/not found/i.test(message)) return new HttpError(404, message);
+  if (/between 1 byte|too large|exceeds/i.test(message)) return new HttpError(413, message);
+  return new HttpError(400, message);
 }
 
 function requiredString(body: JsonBody, name: string, maxLength = 1000) {
@@ -773,7 +807,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (await serveFrontendAsset(request, response, url.pathname)) return;
 
   const user = await requireUser(request);
-  enforceRateLimit(`api:${user.id}:${clientAddress(request)}`, config.rateLimitMaxRequests);
+  const isMediaChunk = request.method === "PUT" && Boolean(mediaUploadIdFromPath(url.pathname));
+  enforceRateLimit(
+    `${isMediaChunk ? "media-upload" : "api"}:${user.id}:${clientAddress(request)}`,
+    isMediaChunk ? Math.max(config.rateLimitMaxRequests, 2_000) : config.rateLimitMaxRequests,
+  );
   if (request.method !== "GET" && request.method !== "HEAD") ensureTrustedOrigin(request);
 
   if (request.method === "GET" && url.pathname === "/v1/me") {
@@ -904,12 +942,78 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const account = await store.deleteAccount(user.id, accountId);
     if (!account) throw new HttpError(404, "Telegram account was not found.");
     await stopTelegramListener(account.id);
+    await mediaStore.removeAccountUploads(user.id, account.id);
     try {
       await revokeTelegramSession(telegramApiCredentialsFromAccount(account), account.sessionString);
     } catch {
       // Local ownership is removed even if Telegram is temporarily unavailable.
     }
     sendJson(request, response, 200, { ok: true, status: "disconnected" });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/media/uploads") {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request);
+    const uploadAccountId = requiredString(body, "accountId", 64);
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    try {
+      const upload = await mediaStore.create(user.id, account.id, {
+        fileName: requiredString(body, "fileName", 200),
+        mimeType: optionalString(body, "mimeType", 120),
+        size: Number(body.size),
+      });
+      sendJson(request, response, 201, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  const mediaUploadId = mediaUploadIdFromPath(url.pathname);
+  if (request.method === "PUT" && mediaUploadId) {
+    requireUserLevel(user, "operate");
+    const uploadAccountId = url.searchParams.get("accountId") || "";
+    if (!uploadAccountId) throw new HttpError(400, "accountId is required.");
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    const offset = Number(request.headers["x-upload-offset"]);
+    try {
+      const upload = await mediaStore.append(user.id, account.id, mediaUploadId, offset, await readMediaChunk(request));
+      sendJson(request, response, 200, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  const completingMediaUploadId = mediaUploadIdFromPath(url.pathname, "/complete");
+  if (request.method === "POST" && completingMediaUploadId) {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request);
+    const uploadAccountId = requiredString(body, "accountId", 64);
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    try {
+      const upload = await mediaStore.complete(user.id, account.id, completingMediaUploadId);
+      sendJson(request, response, 200, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && mediaUploadId) {
+    requireUserLevel(user, "operate");
+    const uploadAccountId = url.searchParams.get("accountId") || "";
+    if (!uploadAccountId) throw new HttpError(400, "accountId is required.");
+    try {
+      await mediaStore.remove(user.id, uploadAccountId, mediaUploadId);
+      sendJson(request, response, 200, { ok: true });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
     return;
   }
 
@@ -921,15 +1025,25 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     enforceTrialTelegramMessageLimit(user);
     enforceRateLimit(`message:${user.id}:${account.id}`, config.messageRateLimitMax);
     const recipient = requiredString(body, "recipient", 256);
-    const text = requiredString(body, "message", 50000);
+    const text = optionalString(body, "message", 50000);
     const mediaUrl = optionalString(body, "mediaUrl", 900000);
+    const uploadedMediaId = optionalString(body, "mediaUploadId", 64);
     const mediaType = optionalString(body, "mediaType", 32);
+    let uploadedMedia;
+    if (uploadedMediaId) {
+      try {
+        uploadedMedia = await mediaStore.resolve(user.id, account.id, uploadedMediaId);
+      } catch (error) {
+        throw telegramMediaHttpError(error);
+      }
+    }
     let sent;
     try {
       sent = await sendTelegramMessage(telegramApiCredentialsFromAccount(account), account.sessionString, {
         recipient,
         message: text,
         mediaUrl,
+        mediaFile: uploadedMedia ? { name: uploadedMedia.fileName, path: uploadedMedia.path, size: uploadedMedia.size } : undefined,
         mediaType,
         firstName: optionalString(body, "firstName", 120),
         lastName: optionalString(body, "lastName", 120)
@@ -983,9 +1097,11 @@ export async function initializeTelegramApp() {
     config = readConfig();
     configuredLoginUsers = readConfiguredLoginUsers();
     store = new MultiUserStore(config.dataDir, config.sessionEncryptionKey);
+    mediaStore = new TelegramMediaStore(config.dataDir, telegramMediaMaxBytes());
     limiter = new RequestRateLimiter(config.rateLimitWindowSeconds * 1_000);
 
     await store.initialize();
+    await mediaStore.initialize();
     initialized = true;
   })();
   await initializing;

@@ -93,6 +93,15 @@ async function fillEditable(page: Page, locator: Locator, text: string) {
   if (text) await page.keyboard.insertText(text);
 }
 
+export function exactYouTubeButtonLabelMatches(label: RegExp, ...values: Array<string | null | undefined>) {
+  return values.some(value => {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return false;
+    label.lastIndex = 0;
+    return label.test(normalized);
+  });
+}
+
 async function enabledExactButton(page: Page, root: Locator, label: RegExp, signal: AbortSignal, timeout = 90_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -111,16 +120,19 @@ async function enabledExactButton(page: Page, root: Locator, label: RegExp, sign
           const clickable = element.matches('button, [role="button"]')
             ? element
             : element.querySelector('button, [role="button"]') || element;
-          const text = `${clickable.getAttribute("aria-label") || ""} ${clickable.textContent || ""}`
-            .replace(/\s+/g, " ").trim();
+          const ariaLabel = clickable.getAttribute("aria-label") || "";
+          const visibleText = clickable.textContent || "";
           const disabled = (clickable as HTMLButtonElement).disabled
             || clickable.hasAttribute("disabled")
             || clickable.getAttribute("aria-disabled") === "true"
             || element.hasAttribute("disabled")
             || element.getAttribute("aria-disabled") === "true";
-          return { text, nested: clickable !== element, disabled };
+          return { ariaLabel, visibleText, nested: clickable !== element, disabled };
         }).catch(() => null);
-        if (!state || state.disabled || !label.test(state.text)) continue;
+        // YouTube commonly exposes both aria-label="Next" and text "Next".
+        // Matching their concatenation produces "Next Next", which is not an
+        // exact label and made a ready upload wait until its long timeout.
+        if (!state || state.disabled || !exactYouTubeButtonLabelMatches(label, state.ariaLabel, state.visibleText)) continue;
         if (state.nested) {
           const clickable = candidate.locator('button, [role="button"]').first();
           if (await clickable.isVisible().catch(() => false)) return clickable;

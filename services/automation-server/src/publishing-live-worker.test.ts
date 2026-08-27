@@ -13,6 +13,7 @@ import { setServerLocalInputFile } from "./local-file-input.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } from "./publishing-live-worker.ts";
 import { migrateAutomationSchema } from "./schema.ts";
+import { exactYouTubeButtonLabelMatches } from "./youtube-live.ts";
 import { interpretInstagramPublishResponse } from "./instagram-live.ts";
 
 test("Instagram publish responses provide strong success and failure evidence", () => {
@@ -237,6 +238,12 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.doesNotMatch(source, /setInputFiles/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await finalAction.click"));
   assert.doesNotMatch(source, /finalAction\.click\(\{\s*force:/);
+});
+
+test("YouTube exact buttons remain detectable when aria and visible labels are both present", () => {
+  assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next", "Next"), true);
+  assert.equal(exactYouTubeButtonLabelMatches(/^Publish$/i, "Publish", "PUBLISH"), true);
+  assert.equal(exactYouTubeButtonLabelMatches(/^Next$/i, "Next step", "Continue"), false);
 });
 
 test("standard Chrome media uploads pass local paths directly through CDP", async () => {

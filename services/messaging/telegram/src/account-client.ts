@@ -34,6 +34,11 @@ export type SendMessageInput = {
   recipient: string;
   message: string;
   mediaUrl?: string;
+  mediaFile?: {
+    name: string;
+    path: string;
+    size: number;
+  };
   mediaType?: string;
   firstName?: string;
   lastName?: string;
@@ -246,7 +251,7 @@ type PreparedTelegramMedia = {
   cleanup: () => Promise<void>;
 };
 
-function telegramMediaMaxBytes() {
+export function telegramMediaMaxBytes() {
   const configured = Number(process.env.TELEGRAM_MEDIA_MAX_BYTES);
   if (!Number.isFinite(configured) || configured < 1) return 2 * 1024 * 1024 * 1024;
   return Math.min(Math.floor(configured), 4 * 1024 * 1024 * 1024);
@@ -531,7 +536,12 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
   const recipient = input.recipient.trim();
   const message = input.message.trim();
   if (!recipient) throw new Error("Recipient is required.");
-  const preparedMedia = await prepareTelegramMedia(input.mediaUrl || "", input.mediaType || "");
+  const preparedMedia = input.mediaFile
+    ? {
+        file: new CustomFile(input.mediaFile.name, input.mediaFile.size, input.mediaFile.path),
+        cleanup: async () => undefined,
+      }
+    : await prepareTelegramMedia(input.mediaUrl || "", input.mediaType || "");
   const mediaFile = preparedMedia?.file || null;
   if (!message && !mediaFile) throw new Error("Message or media is required.");
 

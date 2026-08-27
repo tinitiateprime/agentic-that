@@ -4,6 +4,7 @@ import {
   recipientFromGroupLine as normalizeTelegramRecipient,
   savedContactRecipient
 } from "./recipient-utils.js";
+import { uploadTelegramDeviceFile } from "./media-upload.js";
 
 export function initTelegramConsole(options = {}) {
 let centralServiceToken = String(options.serviceToken || "");
@@ -101,7 +102,9 @@ const state = {
   settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Browser session", proxy: "", storage: "Browser local workspace", theme: "Dark mode" }),
   activeView: "dashboard",
   inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} },
-  scheduledSending: new Set()
+  scheduledSending: new Set(),
+  mediaUploading: false,
+  mediaPreviewUrl: ""
 };
 
 const el = {
@@ -116,7 +119,7 @@ const el = {
   contactForm: $("contact-form"), contactCountryCode: $("contact-country-code"), contactList: $("contact-list"), contactCount: $("contact-count"), contactStatus: $("contact-status"),
   inboxSearch: $("inbox-search"), inboxShell: $("inbox-shell"), inboxViewButtons: $$(".inbox-view-control button[data-inbox-view]"), inboxThreadList: $("inbox-thread-list"), inboxActiveHeading: $("inbox-active-heading"), inboxThread: $("inbox-thread"), inboxMultiBoard: $("inbox-multi-board"), inboxForm: $("inbox-form"), inboxMessage: $("inbox-message"), inboxSendButton: $("inbox-send-button"), inboxRefresh: $("inbox-refresh"), inboxStatus: $("inbox-status"),
   groupForm: $("group-form"), groupList: $("group-list"), channelForm: $("channel-form"), channelList: $("channel-list"),
-  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
+  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postMediaFile: $("post-media-file"), postMediaStatus: $("post-media-status"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
   postHistorySent: $("post-history-sent"), postHistoryPending: $("post-history-pending"),
   globalSearch: $("global-search"), globalResults: $("global-results"), settingsForm: $("settings-form"), settingsStatus: $("settings-status"), backupJson: $("backup-json"), backupStatus: $("backup-status")
 };
@@ -149,14 +152,21 @@ function toggleTelegramGuide() {
 
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, options = {}) {
+  return apiRequest(path, options, true);
+}
+
+async function apiBinary(path, options = {}) {
+  return apiRequest(path, options, false);
+}
+
+async function apiRequest(path, options = {}, jsonBody = true) {
   const endpoint = apiBase
     ? apiBase + path.replace(/^\/v1/, "")
     : path;
 
   const makeRequest = async (forceRefresh = false) => {
-    const headers = options.body
-      ? { "content-type": "application/json" }
-      : {};
+    const headers = { ...(options.headers || {}) };
+    if (options.body && jsonBody) headers["content-type"] = "application/json";
 
     if (centralServiceToken) {
       try {
@@ -181,7 +191,7 @@ async function api(path, options = {}) {
       credentials: "same-origin",
       headers,
       body: options.body
-        ? JSON.stringify(options.body)
+        ? jsonBody ? JSON.stringify(options.body) : options.body
         : undefined,
     });
   };
@@ -506,9 +516,10 @@ function renderPostGroups(selectedIds = selectedPostGroupIds()) {
 }
 function postFromForm() {
   const existing = state.posts.find((item) => item.id === $("post-id").value);
-  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: currentAccount()?.id || existing?.accountId || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), mediaUploadId: $("post-media-upload-id").value.trim(), mediaName: $("post-media-name").value.trim(), mediaMimeType: $("post-media-mime").value.trim(), mediaSize: Number($("post-media-size").value || 0), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: $("post-account-id").value || existing?.accountId || currentAccount()?.id || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
 function savePost(statusOverride = "") {
+  if (state.mediaUploading) { status(el.postStatusMessage, "Wait for the device file upload to finish.", "error"); return null; }
   const post = postFromForm();
   if (!post.title) { status(el.postStatusMessage, "Post title is required.", "error"); return null; }
   if (statusOverride) post.status = statusOverride;
@@ -522,9 +533,10 @@ function savePost(statusOverride = "") {
   return post;
 }
 function fillPost(post) {
-  $("post-id").value = post.id; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
+  revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready.` : "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
 }
-function clearPost() { el.postForm.reset(); $("post-id").value = ""; $("post-status").value = "Draft"; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
+function revokePostMediaPreview() { if (state.mediaPreviewUrl) URL.revokeObjectURL(state.mediaPreviewUrl); state.mediaPreviewUrl = ""; }
+function clearPost() { revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaStatus.textContent = "Choose a file. It will be stored privately on the Ubuntu server for sending or scheduling."; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
 function formatDate(value) { const date = new Date(value); return value && !Number.isNaN(date.getTime()) ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : value; }
 function renderPostPreview() {
   const post = postFromForm();
@@ -532,9 +544,11 @@ function renderPostPreview() {
   const groupNames = (post.groups || []).map((id) => state.groups.find((group) => group.id === id)?.name).filter(Boolean);
   const tags = [postLabels[post.type], post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : "", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
   let media = "";
-  if (post.mediaUrl && post.type === "image") media = `<img src="${esc(post.mediaUrl)}" alt="">`;
-  else if (post.mediaUrl && post.type === "video") media = `<video src="${esc(post.mediaUrl)}" controls></video>`;
-  else if (post.mediaUrl) media = `<a href="${esc(post.mediaUrl)}" target="_blank" rel="noreferrer">${esc(post.mediaUrl)}</a>`;
+  const previewSource = state.mediaPreviewUrl && post.mediaUploadId ? state.mediaPreviewUrl : post.mediaUrl;
+  if (previewSource && post.type === "image") media = `<img src="${esc(previewSource)}" alt="">`;
+  else if (previewSource && post.type === "video") media = `<video src="${esc(previewSource)}" controls></video>`;
+  else if (post.mediaUploadId) media = `<div class="uploaded-media-summary"><strong>${esc(post.mediaName || "Uploaded file")}</strong><small>${post.mediaSize ? `${(post.mediaSize / 1024 / 1024).toFixed(2)} MB` : "Ready on server"}</small></div>`;
+  else if (post.mediaUrl) media = `<span class="uploaded-media-summary">Legacy media attachment</span>`;
   const body = (post.type === "poll" || post.type === "quiz")
     ? `<div class="poll-preview">${(lines(post.body).length ? lines(post.body) : ["Poll options will appear here."]).map((line) => `<span>${esc(line)}</span>`).join("")}</div>`
     : `<p class="preview-text">${esc(post.body || "Post text or caption will appear here.")}</p>`;
@@ -898,16 +912,18 @@ async function loadAccounts() { const data = await api("/v1/telegram/accounts");
 async function sendMessage(recipient, message, node, accountId = "", options = {}) {
   const account = state.accounts.find((item) => item.id === accountId) || currentAccount();
   const mediaUrl = (options.mediaUrl || "").trim();
-  if (!account || !recipient || (!message && !mediaUrl)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
-  return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
+  const mediaUploadId = (options.mediaUploadId || "").trim();
+  if (!account || !recipient || (!message && !mediaUrl && !mediaUploadId)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
+  return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaUploadId, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
 }
 function postMessage(post) { return (post.body || post.title || "").trim(); }
 function postMediaUrl(post) { return post.mediaUrl && post.type !== "text" ? post.mediaUrl.trim() : ""; }
 async function sendPostToTargets(post, node, options = {}) {
   const message = postMessage(post);
   const mediaUrl = postMediaUrl(post);
+  const mediaUploadId = post.type !== "text" ? (post.mediaUploadId || "").trim() : "";
   const targets = postTargets(post);
-  if (!targets.length || (!message && !mediaUrl)) {
+  if (!targets.length || (!message && !mediaUrl && !mediaUploadId)) {
     const messageText = "Choose a manual target, saved contact, or saved group, and add text or media.";
     if (options.throwOnError) throw new Error(messageText);
     status(node, messageText, "error");
@@ -936,12 +952,13 @@ async function sendPostToTargets(post, node, options = {}) {
       contactName: target.kind === "contact" ? target.source : "",
       groupName: target.kind === "group" ? target.source : "",
       source: target.source,
-      mediaType: mediaUrl ? post.type : "text",
-      mediaUrl,
+      mediaType: mediaUrl || mediaUploadId ? post.type : "text",
+      mediaUrl: mediaUploadId ? "" : mediaUrl,
+      mediaName: post.mediaName || "",
       messagePreview: message.slice(0, 240)
     };
     try {
-      const response = await sendMessage(target.recipient, message, node, sender.id, { mediaUrl, mediaType: mediaUrl ? post.type : "", firstName: target.firstName || target.source || "" });
+      const response = await sendMessage(target.recipient, message, node, sender.id, { mediaUrl, mediaUploadId, mediaType: mediaUrl || mediaUploadId ? post.type : "", firstName: target.firstName || target.source || "" });
       sentCount += 1;
       history.push({ ...baseHistory, deliveryStatus: "Sent", sentAt: response?.sent?.sentAt || new Date().toISOString(), telegramMessageId: response?.sent?.messageId || "", error: "" });
     } catch (error) {
@@ -1094,7 +1111,46 @@ el.channelForm.addEventListener("submit", (event) => {
   const index = state.channels.findIndex((row) => row.id === item.id); index === -1 ? state.channels.unshift(item) : state.channels[index] = item;
   write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
 });el.postForm.addEventListener("submit", (event) => { event.preventDefault(); savePost(); });
-["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-media-url", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
+["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
+el.postMediaFile.addEventListener("change", async () => {
+  const file = el.postMediaFile.files?.[0];
+  if (!file) return;
+  const account = currentAccount();
+  if (!account) { el.postMediaFile.value = ""; return status(el.postStatusMessage, "Select the sending Telegram profile first.", "error"); }
+  state.mediaUploading = true;
+  status(el.postStatusMessage, "Uploading the file privately to Ubuntu...");
+  try {
+    const upload = await uploadTelegramDeviceFile({
+      file,
+      accountId: account.id,
+      requestJson: api,
+      requestBinary: apiBinary,
+      onProgress: (sent, total) => { el.postMediaStatus.textContent = `Uploading ${file.name}: ${Math.round(sent / total * 100)}%`; },
+    });
+    revokePostMediaPreview();
+    state.mediaPreviewUrl = URL.createObjectURL(file);
+    $("post-media-url").value = "";
+    $("post-media-upload-id").value = upload.id;
+    $("post-account-id").value = account.id;
+    $("post-media-name").value = upload.fileName;
+    $("post-media-mime").value = upload.mimeType;
+    $("post-media-size").value = String(upload.size);
+    if (file.type.startsWith("image/")) $("post-type").value = "image";
+    else if (file.type.startsWith("video/")) $("post-type").value = "video";
+    else if (file.type.startsWith("audio/")) $("post-type").value = "audio";
+    else $("post-type").value = "document";
+    el.postMediaStatus.textContent = `${upload.fileName} uploaded and ready to send.`;
+    status(el.postStatusMessage, "File upload complete.", "success");
+    renderPostPreview();
+  } catch (error) {
+    ["post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; });
+    el.postMediaFile.value = "";
+    el.postMediaStatus.textContent = "Upload failed. Choose the file and try again.";
+    onError(error, el.postStatusMessage);
+  } finally {
+    state.mediaUploading = false;
+  }
+});
 el.postContactTargets.addEventListener("change", renderPostPreview);
 el.postGroupTargets.addEventListener("change", renderPostPreview);
 [el.numberSearch, el.numberStatusFilter].forEach((node) => node.addEventListener("input", renderAccounts));
@@ -1141,7 +1197,7 @@ document.addEventListener("click", async (event) => {
   if (button.id === "group-clear") { el.groupForm.reset(); $("group-id").value = ""; }
   if (button.id === "channel-clear") { el.channelForm.reset(); $("channel-id").value = ""; }
   if (button.id === "post-clear") clearPost();
-  if (button.id === "post-schedule") { if (!$("post-scheduled-at").value) return status(el.postStatusMessage, "Choose a scheduled date.", "error"); savePost("Scheduled"); status(el.postStatusMessage, "Post saved as scheduled.", "success"); }
+  if (button.id === "post-schedule") { if (!$("post-scheduled-at").value) return status(el.postStatusMessage, "Choose a scheduled date.", "error"); const post = savePost("Scheduled"); if (post) status(el.postStatusMessage, "Post saved as scheduled.", "success"); }
   if (button.id === "post-send-now") {
     if (postSendPending) return;
     postSendPending = true;
