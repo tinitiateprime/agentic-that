@@ -204,9 +204,41 @@ async function waitForChromeDevTools(port: number, process: ChildProcess) {
 function waitForProcessExit(process: ChildProcess, timeoutMs: number) {
   if (process.exitCode !== null) return Promise.resolve(true);
   return new Promise<boolean>(resolve => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    process.once("exit", () => { clearTimeout(timer); resolve(true); });
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    process.once("exit", onExit);
+    // Do not miss an exit that happened between the first check and listener
+    // registration.
+    if (process.exitCode !== null) finish(true);
   });
+}
+
+export async function gracefullyCloseStandardChrome(browser: Browser, process: ChildProcess) {
+  if (process.exitCode !== null) return;
+
+  // browser.close() only disconnects Playwright when the Browser came from
+  // connectOverCDP(). Ask Chrome itself to exit so its cookie database and
+  // profile preferences are flushed before another worker opens the profile.
+  try {
+    const session = await browser.newBrowserCDPSession();
+    await session.send("Browser.close");
+  } catch {
+    // The browser may already be exiting or its DevTools connection may have
+    // closed between the checks. The process-exit check below is authoritative.
+  }
+
+  if (await waitForProcessExit(process, 15_000)) return;
+  if (process.exitCode === null) process.kill("SIGTERM");
+  if (await waitForProcessExit(process, 5_000)) return;
+  throw new Error("The server browser did not close cleanly enough to save its login profile.");
 }
 
 export async function launchStandardXChrome(
@@ -253,15 +285,7 @@ export async function launchStandardXChrome(
       close: async () => {
         if (closed) return;
         closed = true;
-        await Promise.race([
-          browser.close().catch(() => undefined),
-          new Promise(resolve => setTimeout(resolve, 1_500)),
-        ]);
-        const exited = await waitForProcessExit(process, 3_000);
-        if (!exited && process.exitCode === null) {
-          process.kill("SIGTERM");
-          await waitForProcessExit(process, 2_000);
-        }
+        await gracefullyCloseStandardChrome(browser, process);
       },
     };
   } catch (error) {

@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import type { Page } from "playwright-core";
-import { isAuthenticatedLinkedInPage, isAuthenticatedLinkedInUrl } from "./login-browser.ts";
+import type { ChildProcess } from "node:child_process";
+import type { Browser, Page } from "playwright-core";
+import {
+  gracefullyCloseStandardChrome,
+  isAuthenticatedLinkedInPage,
+  isAuthenticatedLinkedInUrl,
+} from "./login-browser.ts";
 
 test("X and Google logins use standard Chrome while LinkedIn uses the normal persistent context", async () => {
   const source = await readFile(new URL("./login-browser.ts", import.meta.url), "utf8");
@@ -21,6 +27,32 @@ test("X and Google logins use standard Chrome while LinkedIn uses the normal per
   assert.match(source, /account\.platform === "x" \? 15_000 : 5_000/);
   assert.match(source, /authentication did not remain active during session stabilization/);
   assert.match(source, /verifySavedSession/);
+});
+
+test("standard Chrome is asked to exit gracefully so its saved session is flushed", async () => {
+  const child = new EventEmitter() as ChildProcess;
+  let exitCode: number | null = null;
+  Object.defineProperty(child, "exitCode", { get: () => exitCode });
+  let command = "";
+  let signal = "";
+  child.kill = ((value?: NodeJS.Signals | number) => {
+    signal = String(value);
+    return true;
+  }) as ChildProcess["kill"];
+  const browser = {
+    newBrowserCDPSession: async () => ({
+      send: async (value: string) => {
+        command = value;
+        exitCode = 0;
+        child.emit("exit", 0, null);
+      },
+    }),
+  } as unknown as Browser;
+
+  await gracefullyCloseStandardChrome(browser, child);
+
+  assert.equal(command, "Browser.close");
+  assert.equal(signal, "");
 });
 
 test("LinkedIn accepts authenticated app pages without depending on changing navigation CSS", () => {

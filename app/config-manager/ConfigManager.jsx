@@ -1297,7 +1297,7 @@ function ConfigServerLoginBrowser({ initialSession, accountName, publishingIdent
           sendInput({ type: "wheel", deltaX: event.deltaX, deltaY: event.deltaY });
         }}
       />{clickFeedback && <span className="config-server-login-click" style={{ left: clickFeedback.left + "%", top: clickFeedback.top + "%" }} aria-hidden="true" />}</div> : <div className="config-server-login-loading"><Loader2 className="spin" size={24} /><span>Starting the isolated {platformLabels[session.platform]} browser…</span></div>}
-      {(error || session.errorMessage) && <p className="config-server-login-error" role="alert">{error || session.errorMessage}</p>}
+      {(session.errorMessage || error) && <p className="config-server-login-error" role="alert">{session.errorMessage || error}</p>}
     </section>
   </div>;
 }

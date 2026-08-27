@@ -54,6 +54,13 @@ test("the authenticated website uses server-managed publishing accounts as its a
   assert.match(productStatus, /fetch\("\/api\/automation-server\/accounts"/);
 });
 
+test("the website login modal preserves the worker's terminal failure reason", () => {
+  const configManager = readFileSync(new URL("../../../../app/config-manager/ConfigManager.jsx", import.meta.url), "utf8");
+
+  assert.match(configManager, />\{session\.errorMessage \|\| error\}<\/p>/);
+  assert.doesNotMatch(configManager, />\{error \|\| session\.errorMessage\}<\/p>/);
+});
+
 test("the composer exposes YouTube video requirements before account selection", () => {
   const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
