@@ -247,23 +247,60 @@ async function activateExactLinkedInPost(post: Locator) {
     if (!/^post(?:\s+post)?$/i.test(label) || element.getAttribute("aria-disabled") === "true") {
       throw new Error("The final LinkedIn control was no longer an enabled exact Post action.");
     }
-    (element as HTMLElement).click();
   });
+  // Use Playwright's trusted pointer input after the exact-label guard.
+  // HTMLElement.click() produces a synthetic event that LinkedIn can dismiss
+  // optimistically without submitting the underlying publish request.
+  await post.scrollIntoViewIfNeeded({ timeout: 10_000 });
+  await post.focus({ timeout: 5_000 });
+  await post.click({ timeout: 15_000 });
+}
+
+export function isLinkedInPublishSuccessText(value: string | null | undefined) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return /(?:Post successful|Your post (?:has been|was) shared|Post (?:was )?published)/i.test(text)
+    && !/(?:not|wasn['’]t|couldn['’]t|failed|error)/i.test(text);
+}
+
+async function linkedInPublishSuccess(page: Page) {
+  const notices = page.locator([
+    '[role="alert"]',
+    '[role="status"]',
+    '[aria-live="polite"]',
+    '[aria-live="assertive"]',
+    '.artdeco-toast-item',
+    '.artdeco-toast-item__message',
+  ].join(", "));
+  for (let index = 0, count = Math.min(await notices.count().catch(() => 0), 20); index < count; index += 1) {
+    const candidate = notices.nth(index);
+    if (!await candidate.isVisible().catch(() => false)) continue;
+    const text = await candidate.textContent().catch(() => "");
+    if (!isLinkedInPublishSuccessText(text)) continue;
+    const viewPost = candidate.getByRole("link", { name: /View post/i }).first();
+    const href = await viewPost.getAttribute("href").catch(() => null);
+    return { platformPostUrl: href ? new URL(href, page.url()).href : undefined };
+  }
+  return null;
 }
 
 async function waitForLinkedInPublishConfirmation(page: Page, editor: Locator, dialog: Locator, signal: AbortSignal) {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    if (await dialog.count() && !await dialog.isVisible().catch(() => false)) return;
-    if (!await editor.isVisible().catch(() => false)) return;
-    if (!/linkedin\.com\/sharing\/compose/i.test(page.url()) && await firstVisible([
-      page.getByText(/Post successful|Your post has been shared|View post/i),
-      page.locator('[role="alert"]').filter({ hasText: /posted|shared/i }),
-    ])) return;
+    const dialogClosed = !await dialog.count().catch(() => 0) || !await dialog.isVisible().catch(() => false);
+    const editorClosed = !await editor.isVisible().catch(() => false);
+    const leftDedicatedComposer = !/linkedin\.com\/sharing\/compose/i.test(page.url());
+    const confirmation = await linkedInPublishSuccess(page);
+    if (confirmation && (dialogClosed || editorClosed || leftDedicatedComposer)) return confirmation;
+
+    const failure = await firstVisible([
+      page.locator('[role="alert"], [role="status"], [aria-live]').filter({ hasText: /couldn['’]t (?:post|share)|failed to (?:post|share)|post failed|try again/i }),
+    ]);
+    const failureText = (await failure?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
+    if (failureText) throw new Error(`LinkedIn rejected the post: ${failureText}`);
     await page.waitForTimeout(750);
   }
-  throw new Error("LinkedIn did not show a publish confirmation or close its composer.");
+  throw new Error("LinkedIn did not show an explicit publish confirmation. Composer closure alone is not proof that the post was delivered.");
 }
 
 export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExecutor {
@@ -316,8 +353,8 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
       signal.throwIfAborted();
       finalActionAttempted = true;
       await activateExactLinkedInPost(post);
-      await waitForLinkedInPublishConfirmation(page, editor, dialog, signal);
-      return { state: "PUBLISHED" as const };
+      const confirmation = await waitForLinkedInPublishConfirmation(page, editor, dialog, signal);
+      return { state: "PUBLISHED" as const, platformPostUrl: confirmation.platformPostUrl };
     } catch (error) {
       if (!page.isClosed()) {
         const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);

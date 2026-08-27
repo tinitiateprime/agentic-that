@@ -15,6 +15,7 @@ import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } fr
 import { migrateAutomationSchema } from "./schema.ts";
 import { exactYouTubeButtonLabelMatches } from "./youtube-live.ts";
 import { interpretInstagramPublishResponse } from "./instagram-live.ts";
+import { isLinkedInPublishSuccessText } from "./linkedin-live.ts";
 
 test("Instagram publish responses provide strong success and failure evidence", () => {
   assert.deepEqual(interpretInstagramPublishResponse(200, {
@@ -199,6 +200,9 @@ test("the X live executor records its fence before one exact Post click", async 
 
 test("the LinkedIn live executor records its fence before one exact Post click", async () => {
   const source = await readFile(new URL("./linkedin-live.ts", import.meta.url), "utf8");
+  const finalClickStart = source.indexOf("async function activateExactLinkedInPost");
+  const finalClickEnd = source.indexOf("export function isLinkedInPublishSuccessText", finalClickStart);
+  const finalClickSource = source.slice(finalClickStart, finalClickEnd);
   assert.equal(source.match(/async function activateExactLinkedInPost\s*\(/g)?.length, 1);
   assert.match(source, /final LinkedIn control was no longer an enabled exact Post action/);
   assert.match(source, /exact Post button did not become enabled/);
@@ -213,9 +217,17 @@ test("the LinkedIn live executor records its fence before one exact Post click",
   assert.match(source, /dismissLinkedInCookiePrompt/);
   assert.doesNotMatch(source, /launchStandardXChrome/);
   assert.doesNotMatch(source, /setInputFiles/);
-  assert.match(source, /did not show a publish confirmation or close its composer/);
+  assert.match(source, /Composer closure alone is not proof/);
   assert.ok(source.indexOf("await onFinalActionStarting()") < source.indexOf("await activateExactLinkedInPost(post)"));
-  assert.doesNotMatch(source, /post\.click\s*\(/);
+  assert.match(finalClickSource, /await post\.click\(\{ timeout: 15_000 \}\)/);
+  assert.doesNotMatch(finalClickSource, /\(element as HTMLElement\)\.click\(\)/);
+});
+
+test("LinkedIn requires explicit positive publish copy and rejects failure copy", () => {
+  assert.equal(isLinkedInPublishSuccessText("Post successful. View post"), true);
+  assert.equal(isLinkedInPublishSuccessText("Your post has been shared"), true);
+  assert.equal(isLinkedInPublishSuccessText("Your post couldn't be shared. Try again."), false);
+  assert.equal(isLinkedInPublishSuccessText("Post"), false);
 });
 
 test("the YouTube live executor requires explicit policy choices and fences one final click", async () => {
