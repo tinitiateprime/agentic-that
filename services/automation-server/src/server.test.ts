@@ -103,7 +103,7 @@ test("the local connection page contains a valid website-browser client and no p
   assert.match(html, /Type PUBLISH to continue/);
   assert.match(html, /Scheduled Instagram publishing/);
   assert.match(html, /type="datetime-local"/);
-  assert.match(html, /Instagram requires landscape images no wider than 1\.91:1/);
+  assert.doesNotMatch(html, /Instagram requires landscape images no wider than 1\.91:1/);
   assert.match(html, /Only a post that is still SCHEDULED can be cancelled|Cancel this scheduled post/);
   assert.doesNotMatch(html, /type=["']password["']/i);
 });

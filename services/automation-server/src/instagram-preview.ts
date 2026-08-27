@@ -259,7 +259,7 @@ export async function prepareInstagramFinalComposer(input: {
   const alreadyOnEditScreen = Boolean(await firstVisible([page.getByText(/^Edit video$/i)]));
   if (!alreadyOnEditScreen) {
     setStage("selecting Instagram's Original crop option");
-    reportProgress(`${mediaPaths.length > 1 ? "Carousel" : includesVideo ? "Video" : "Image"} accepted. Selecting Original to preserve its aspect ratio.`);
+    reportProgress(`${mediaPaths.length > 1 ? "Carousel" : includesVideo ? "Video" : "Image"} accepted. Selecting Instagram's Original framing.`);
     await selectOriginalAspect(page, signal);
   }
   setStage("advancing through Instagram's crop and edit screens");

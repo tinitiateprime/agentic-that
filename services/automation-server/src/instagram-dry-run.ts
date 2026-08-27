@@ -9,7 +9,6 @@ import { open, stat } from "node:fs/promises";
 import sharp from "sharp";
 
 const SUPPORTED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "video/mp4", "video/quicktime"]);
-const MAX_INSTAGRAM_LANDSCAPE_ASPECT_RATIO = 1.91;
 
 async function videoContainerLooksValid(filePath: string) {
   const handle = await open(filePath, "r");
@@ -83,14 +82,6 @@ export class InstagramPublishingDryRunValidator implements PublishingDryRunValid
           const expectedFormat = media.mimeType === "image/jpeg" ? "jpeg" : "png";
           if (metadata.format !== expectedFormat || !metadata.width || !metadata.height) {
             issues.push(`${media.fileName} does not match its declared image type.`);
-            continue;
-          }
-          const aspectRatio = metadata.width / metadata.height;
-          if (aspectRatio > MAX_INSTAGRAM_LANDSCAPE_ASPECT_RATIO + 0.001) {
-            issues.push(
-              `${media.fileName} is ${metadata.width}x${metadata.height} (${aspectRatio.toFixed(2)}:1). `
-              + "Instagram landscape images must be 1.91:1 or narrower; crop or resize it before scheduling.",
-            );
             continue;
           }
           checks.push(`${media.fileName} is a valid ${metadata.width}x${metadata.height} ${expectedFormat.toUpperCase()} image.`);

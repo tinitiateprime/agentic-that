@@ -964,25 +964,12 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-async function validateServerMedia(file: File, targetPlatforms: Platform[]) {
+async function validateServerMedia(file: File, _targetPlatforms: Platform[]) {
   if (!["image/jpeg", "image/png", "video/mp4", "video/quicktime"].includes(file.type)) {
     throw new Error("The server worker supports JPEG, PNG, MP4, or MOV media.");
   }
   const video = file.type.startsWith("video/");
   if (file.size < 1) throw new Error(`The server ${video ? "video" : "image"} cannot be empty.`);
-  if (video || !targetPlatforms.includes("instagram")) return;
-  const bitmap = await createImageBitmap(file);
-  try {
-    const aspectRatio = bitmap.width / bitmap.height;
-    if (aspectRatio > 1.911) {
-      throw new Error(
-        `This image is ${bitmap.width}×${bitmap.height} (${aspectRatio.toFixed(2)}:1). `
-        + "Instagram requires landscape images no wider than 1.91:1.",
-      );
-    }
-  } finally {
-    bitmap.close();
-  }
 }
 
 function ComposerPreviewMedia({ file, previewUrl, platform, postFormat }: { file: File | null; previewUrl: string; platform: Platform; postFormat: PostFormat }) {

@@ -81,3 +81,10 @@ test("server media uploads use small chunks instead of browser-side platform siz
   assert.match(api, /file\.slice\(offset/);
   assert.match(api, /\/media\/uploads/);
 });
+
+test("the publishing composer lets Instagram apply its existing framing flow to any readable image dimensions", () => {
+  const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(dashboard, /aspectRatio > 1\.911/);
+  assert.doesNotMatch(dashboard, /Instagram requires landscape images no wider than 1\.91:1/);
+});

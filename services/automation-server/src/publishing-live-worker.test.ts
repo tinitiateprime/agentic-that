@@ -15,6 +15,8 @@ import { AutomationPublishingLiveWorker, AutomationPublishingLiveWorkerPool } fr
 import { migrateAutomationSchema } from "./schema.ts";
 import {
   exactYouTubeButtonLabelMatches,
+  interpretYouTubeCommunityPublishResponse,
+  isYouTubeCommunityCreateRequest,
   isYouTubePublishSuccessText,
   youtubeClosedUploadConfirmsFinalAction,
   youtubeFinalActionLabelMatches,
@@ -49,6 +51,16 @@ test("Instagram publish responses provide strong success and failure evidence", 
   });
 });
 
+test("YouTube Community creation responses provide strong success and failure evidence", () => {
+  assert.equal(isYouTubeCommunityCreateRequest("https://www.youtube.com/youtubei/v1/backstage/create_post?prettyPrint=false"), true);
+  assert.equal(isYouTubeCommunityCreateRequest("https://www.youtube.com/youtubei/v1/backstage/get_posts"), false);
+  assert.deepEqual(interpretYouTubeCommunityPublishResponse(200, { responseContext: {} }), { state: "PUBLISHED" });
+  assert.deepEqual(interpretYouTubeCommunityPublishResponse(400, { error: { message: "Image upload rejected" } }), {
+    state: "FAILED",
+    message: "Image upload rejected",
+  });
+});
+
 test("the live worker requires authorization and fences Instagram's final action", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-live-publishing-"));
   const config = loadAutomationConfig({ SERVER_ARCHITECTURE_DATA_DIR: directory }, directory);
@@ -74,6 +86,11 @@ test("the live worker requires authorization and fences Instagram's final action
       finalActions += 1;
       assert.equal(store.getPublishingJob(job.workspaceId, job.id)?.state, "VERIFYING");
       if (job.caption === "Uncertain after final action") throw new Error("Fake confirmation was unavailable.");
+      if (job.caption === "Rejected after final action") return {
+        state: "FAILED",
+        errorCode: "FAKE_PLATFORM_REJECTED",
+        errorMessage: "The platform rejected the post.",
+      };
       return { state: "PUBLISHED" };
     },
   };
@@ -133,6 +150,17 @@ test("the live worker requires authorization and fences Instagram's final action
     assert.equal(uncertain?.errorCode, "LIVE_RESULT_UNCERTAIN");
     assert.equal(finalActions, 2);
 
+    const rejectedJob = store.createPublishingJob({
+      ...request,
+      caption: "Rejected after final action",
+      idempotencyKey: "authorized-live-publishing-rejected-001",
+    }, "LIVE", "LOCAL", true);
+    const rejected = await worker.runOnce();
+    assert.equal(rejected?.id, rejectedJob.id);
+    assert.equal(rejected?.state, "FAILED");
+    assert.equal(rejected?.errorCode, "FAKE_PLATFORM_REJECTED");
+    assert.equal(finalActions, 3);
+
     const unfencedJob = store.createPublishingJob({
       ...request,
       caption: "Missing final fence",
@@ -142,7 +170,7 @@ test("the live worker requires authorization and fences Instagram's final action
     assert.equal(unfenced?.id, unfencedJob.id);
     assert.equal(unfenced?.state, "FAILED");
     assert.equal(unfenced?.errorCode, "LIVE_FINAL_ACTION_NOT_RECORDED");
-    assert.equal(finalActions, 2);
+    assert.equal(finalActions, 3);
 
     const loginRequiredJob = store.createPublishingJob({
       ...request,
@@ -153,7 +181,7 @@ test("the live worker requires authorization and fences Instagram's final action
     assert.equal(loginRequired?.id, loginRequiredJob.id);
     assert.equal(loginRequired?.state, "LOGIN_REQUIRED");
     assert.equal(loginRequired?.errorCode, "FAKE_LOGIN_REQUIRED");
-    assert.equal(finalActions, 2);
+    assert.equal(finalActions, 3);
   } finally {
     await worker.stop();
     database.close();
@@ -248,6 +276,10 @@ test("the YouTube live executor requires explicit policy choices and fences one 
   assert.match(source, /Upload videos/);
   assert.match(source, /clickReversibleControl/);
   assert.match(source, /accepted the file but did not show its video metadata fields/);
+  assert.match(source, /Community image preview did not appear after upload\. Nothing was posted/);
+  assert.match(source, /YouTube rendered the selected Community image preview/);
+  assert.match(source, /isYouTubeCommunityCreateRequest/);
+  assert.doesNotMatch(source, /composer\.waitFor\(\{ state: "hidden", timeout: 90_000 \}\)/);
   assert.match(source, /resolveYouTubeUploadRoot/);
   assert.match(source, /Never anchor\s*\n\s*\/\/ this locator to a field from one panel/);
   assert.doesNotMatch(source, /title\.locator\("xpath=ancestor::ytcp-uploads-dialog/);

@@ -154,6 +154,16 @@ export class AutomationPublishingLiveWorker {
             errorMessage: `The ${platform} executor returned without recording its final publish action.`,
           });
         }
+        if (result.state === "FAILED") {
+          return this.store.finishPublishingJob({
+            jobId: job.id,
+            workerId: this.workerId,
+            fencingToken: job.fencingToken,
+            state: "FAILED",
+            errorCode: result.errorCode || "LIVE_PLATFORM_REJECTED",
+            errorMessage: result.errorMessage || `${platform} rejected the final publish action.`,
+          });
+        }
         if (result.state !== "PUBLISHED") {
           return this.store.finishPublishingJob({
             jobId: job.id,

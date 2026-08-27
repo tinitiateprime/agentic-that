@@ -1,4 +1,4 @@
-import type { BrowserContext, Locator, Page } from "playwright-core";
+import type { BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { ClaimedPublishingJob, ServerPublishingExecutor } from "./executor.ts";
 import { detectServerBrowserExecutable, launchStandardXChrome } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
@@ -127,6 +127,40 @@ export function exactYouTubeButtonLabelMatches(label: RegExp, ...values: Array<s
 export function isYouTubePublishSuccessText(value: string | null | undefined) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return /(?:Video published|Your video has been published|Video saved|Your video has been saved|public on YouTube)/i.test(text)
+    && !/(?:not|wasn['’]t|couldn['’]t|failed|error)/i.test(text);
+}
+
+type YouTubeCommunityPublishEvidence = {
+  state: "PUBLISHED";
+} | {
+  state: "FAILED";
+  message: string;
+};
+
+class YouTubeCommunityPublishRejectedError extends Error {}
+
+export function isYouTubeCommunityCreateRequest(value: string) {
+  try {
+    return /\/youtubei\/v1\/backstage\/(?:create_post|create_backstage_post)\/?$/i.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function interpretYouTubeCommunityPublishResponse(statusCode: number, body: unknown): YouTubeCommunityPublishEvidence {
+  const payload = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const error = payload.error && typeof payload.error === "object" ? payload.error as Record<string, unknown> : null;
+  const errorMessage = typeof error?.message === "string" ? error.message.replace(/\s+/g, " ").trim() : "";
+  if (statusCode >= 200 && statusCode < 300 && !error) return { state: "PUBLISHED" };
+  return {
+    state: "FAILED",
+    message: (errorMessage || `YouTube rejected the Community post request with HTTP ${statusCode}.`).slice(0, 700),
+  };
+}
+
+function isYouTubeCommunityPublishSuccessText(value: string | null | undefined) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return /(?:Post created|Post published|Your post (?:has been )?(?:created|published)|Successfully (?:created|published) post)/i.test(text)
     && !/(?:not|wasn['’]t|couldn['’]t|failed|error)/i.test(text);
 }
 
@@ -477,6 +511,165 @@ async function openCommunityComposer(page: Page, signal: AbortSignal) {
   return composer;
 }
 
+async function communityImagePreviewPresent(composer: Locator) {
+  if (await firstVisible([
+    composer.getByText(/Edit preview/i),
+    composer.getByRole("button", { name: /Remove image|Delete image/i }),
+  ])) return true;
+
+  const images = composer.locator("img");
+  for (let index = 0, count = Math.min(await images.count().catch(() => 0), 30); index < count; index += 1) {
+    const image = images.nth(index);
+    const preview = await image.evaluate(element => {
+      const candidate = element as HTMLImageElement;
+      const rect = candidate.getBoundingClientRect();
+      const source = candidate.currentSrc || candidate.src || "";
+      const visible = rect.width >= 90 && rect.height >= 90
+        && candidate.naturalWidth >= 40 && candidate.naturalHeight >= 40
+        && window.getComputedStyle(candidate).visibility !== "hidden";
+      const avatar = /avatar|profile|yt3\.ggpht|s32-|s48-|s88-/i.test(source);
+      return visible && !avatar;
+    }).catch(() => false);
+    if (preview) return true;
+  }
+  return false;
+}
+
+async function waitForCommunityImagePreview(page: Page, composer: Locator, signal: AbortSignal, timeout = 90_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    if (await communityImagePreviewPresent(composer)) return;
+    const uploadError = await firstVisible([
+      composer.locator('[role="alert"], [role="status"], [aria-live]').filter({ hasText: /failed|error|unsupported|try again/i }),
+      page.locator('[role="alert"], [role="status"], [aria-live]').filter({ hasText: /image.*(?:failed|error|unsupported)|(?:failed|unsupported).*image/i }),
+    ]);
+    const message = (await uploadError?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
+    if (message) throw new Error(`YouTube rejected the Community image: ${message}`);
+    await page.waitForTimeout(500);
+  }
+  throw new Error("YouTube's Community image preview did not appear after upload. Nothing was posted.");
+}
+
+async function clickCommunityImageControl(page: Page, composer: Locator, signal: AbortSignal) {
+  const control = await firstVisible([
+    composer.getByRole("button", { name: /^Image$|Add image/i }),
+    composer.locator('button, [role="button"], ytd-button-renderer').filter({ hasText: /^Image$/i }),
+    composer.getByText(/^Image$/i),
+  ]);
+  if (control) {
+    await clickReversibleControl(page, control, signal);
+    return;
+  }
+
+  // Some current Community composer builds expose the Image action only as
+  // an unlabeled visual slot. This is the same reversible control used by the
+  // older publishing flow; the final Post action is never clicked by position.
+  const box = await composer.boundingBox().catch(() => null);
+  if (!box) throw new Error("YouTube's Community image control was unavailable.");
+  await page.mouse.click(box.x + 74, box.y + Math.max(96, Math.min(166, box.height - 92)));
+  await page.waitForTimeout(700);
+}
+
+async function attachCommunityImage(
+  page: Page,
+  composer: Locator,
+  filePath: string,
+  signal: AbortSignal,
+) {
+  const inputCountBefore = await page.locator('input[type="file"]').count().catch(() => 0);
+  const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 }).catch(() => null);
+  await clickCommunityImageControl(page, composer, signal);
+  const chooser = await chooserPromise;
+  if (chooser) {
+    await setServerLocalFileChooserFile(page, chooser, filePath);
+  } else {
+    const imageInputs = () => [
+      composer.locator('input[type="file"][accept*="image" i]'),
+      page.locator('input[type="file"][accept*="image" i]'),
+      composer.locator('input[type="file"][accept*=".png" i], input[type="file"][accept*=".jpg" i], input[type="file"][accept*=".jpeg" i]'),
+      page.locator('input[type="file"][accept*=".png" i], input[type="file"][accept*=".jpg" i], input[type="file"][accept*=".jpeg" i]'),
+    ];
+    let input = await waitAttached(page, imageInputs(), signal, 8_000);
+    if (!input) {
+      const allInputs = page.locator('input[type="file"]');
+      const count = await allInputs.count().catch(() => 0);
+      if (count > inputCountBefore) input = allInputs.last();
+    }
+    if (!input) throw new Error("YouTube's Community image input was unavailable. Nothing was posted.");
+    await setServerLocalInputFile(page, input, filePath);
+  }
+  await waitForCommunityImagePreview(page, composer, signal);
+}
+
+async function communityComposerReset(
+  composer: Locator,
+  editor: Locator,
+  expectedCaption: string,
+  requiredImage: boolean,
+) {
+  if (!await composer.isVisible().catch(() => false)) return true;
+  const currentText = (await editableText(editor)).replace(/\s+/g, " ").trim();
+  const expectedText = expectedCaption.replace(/\s+/g, " ").trim();
+  if (expectedText && currentText.includes(expectedText)) return false;
+  if (requiredImage && await communityImagePreviewPresent(composer)) return false;
+  const enabledPost = await firstEnabledVisible([
+    composer.getByRole("button", { name: /^Post$/i }),
+    composer.locator('button, [role="button"]').filter({ hasText: /^Post$/i }),
+  ]);
+  return !enabledPost;
+}
+
+async function waitForCommunityPostConfirmation(input: {
+  page: Page;
+  composer: Locator;
+  editor: Locator;
+  expectedCaption: string;
+  requiredImage: boolean;
+  signal: AbortSignal;
+  getNetworkEvidence: () => YouTubeCommunityPublishEvidence | null;
+  getRequestFailure: () => string | null;
+}) {
+  const { page, composer, editor, expectedCaption, requiredImage, signal, getNetworkEvidence, getRequestFailure } = input;
+  const deadline = Date.now() + 120_000;
+  let resetAt = 0;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const networkEvidence = getNetworkEvidence();
+    if (networkEvidence?.state === "PUBLISHED") return;
+    if (networkEvidence?.state === "FAILED") throw new YouTubeCommunityPublishRejectedError(networkEvidence.message);
+
+    const failure = await firstVisible([
+      page.locator('[role="alert"], [role="status"], [aria-live]').filter({ hasText: /couldn['’]t (?:create|publish)|failed to (?:create|publish)|post failed|try again/i }),
+    ]);
+    const failureText = (await failure?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim();
+    if (failureText) throw new YouTubeCommunityPublishRejectedError(`YouTube rejected the Community post: ${failureText}`);
+
+    const notices = page.locator('[role="alert"], [role="status"], [aria-live]');
+    for (let index = 0, count = Math.min(await notices.count().catch(() => 0), 20); index < count; index += 1) {
+      const notice = notices.nth(index);
+      if (!await notice.isVisible().catch(() => false)) continue;
+      if (isYouTubeCommunityPublishSuccessText(await notice.textContent().catch(() => ""))) return;
+    }
+
+    // Current YouTube keeps ytd-backstage-post-dialog-renderer mounted after a
+    // successful post. Its cleared editor, removed attachment preview, and
+    // disabled Post control are the UI acknowledgement; require that reset to
+    // remain stable so a transient rerender cannot be mistaken for delivery.
+    if (await communityComposerReset(composer, editor, expectedCaption, requiredImage)) {
+      resetAt ||= Date.now();
+      if (Date.now() - resetAt >= 8_000) return;
+    } else {
+      resetAt = 0;
+    }
+    await page.waitForTimeout(500);
+  }
+  const requestFailure = getRequestFailure();
+  throw new Error(requestFailure
+    ? `YouTube's Community publish request failed: ${requestFailure}`
+    : "YouTube did not confirm the Community post after the final Post action.");
+}
+
 async function publishCommunityPost(
   page: Page,
   job: ClaimedPublishingJob,
@@ -495,24 +688,45 @@ async function publishCommunityPost(
   await fillEditable(page, editor, job.caption);
   if (job.media[0]) {
     reportProgress("Uploading the image to YouTube's Community composer.");
-    const input = composer.locator('input[type="file"]').last();
-    if (!await input.count()) {
-      const image = await firstVisible([
-        composer.getByRole("button", { name: /^Image$|Add image/i }),
-        composer.getByText(/^Image$/i),
-      ]);
-      if (!image) throw new Error("YouTube's Community image control was unavailable.");
-      await image.click({ timeout: 10_000 });
-    }
-    const target = await input.count() ? input : page.locator('input[type="file"]').last();
-    if (!await target.count()) throw new Error("YouTube's Community image input was unavailable.");
-    await setServerLocalInputFile(page, target, files.mediaFilePath(job.media[0].storageKey));
+    await attachCommunityImage(page, composer, files.mediaFilePath(job.media[0].storageKey), signal);
+    reportProgress("YouTube rendered the selected Community image preview.");
   }
   const post = await enabledExactButton(page, composer, /^Post$/i, signal, 120_000);
   if (!post) throw new Error("YouTube's exact Community Post button did not become enabled.");
+  if (job.media[0]) await waitForCommunityImagePreview(page, composer, signal, 30_000);
+
+  let publishEvidence: YouTubeCommunityPublishEvidence | null = null;
+  let publishRequestFailure: string | null = null;
+  const responseListener = (response: Response) => {
+    if (!isYouTubeCommunityCreateRequest(response.url())) return;
+    void response.json().catch(() => null).then(body => {
+      publishEvidence = interpretYouTubeCommunityPublishResponse(response.status(), body);
+    });
+  };
+  const requestFailedListener = (request: Request) => {
+    if (!isYouTubeCommunityCreateRequest(request.url())) return;
+    publishRequestFailure = request.failure()?.errorText || "the browser reported a network failure";
+  };
+  page.on("response", responseListener);
+  page.on("requestfailed", requestFailedListener);
   reportProgress("Final YouTube Community Post authorized. Recording the irreversible action before clicking.");
-  await submitFinalAction(post, /^Post$/i, signal, onFinalActionStarting);
-  await composer.waitFor({ state: "hidden", timeout: 90_000 });
+  try {
+    await submitFinalAction(post, /^Post$/i, signal, onFinalActionStarting);
+    reportProgress("YouTube Community Post submitted. Verifying platform delivery.");
+    await waitForCommunityPostConfirmation({
+      page,
+      composer,
+      editor,
+      expectedCaption: job.caption,
+      requiredImage: Boolean(job.media[0]),
+      signal,
+      getNetworkEvidence: () => publishEvidence,
+      getRequestFailure: () => publishRequestFailure,
+    });
+  } finally {
+    page.off("response", responseListener);
+    page.off("requestfailed", requestFailedListener);
+  }
 }
 
 async function uploadVideo(
@@ -756,6 +970,9 @@ export class PlaywrightYouTubePublishingExecutor implements ServerPublishingExec
       if (!page.isClosed()) {
         const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
         if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+      }
+      if (error instanceof YouTubeCommunityPublishRejectedError) {
+        return { state: "FAILED" as const, errorCode: "YOUTUBE_COMMUNITY_REJECTED", errorMessage: error.message };
       }
       if (finalActionAttempted) {
         return { state: "UNCERTAIN" as const, errorCode: "YOUTUBE_RESULT_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "YouTube confirmation was unavailable." };
