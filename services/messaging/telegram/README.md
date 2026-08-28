@@ -163,15 +163,11 @@ Account connections are centrally managed from the AgenticThat **Config Manager*
 
 The selected profile controls the sender for quick messages, inbox replies, and post sending.
 
-### 7. Optional: Start Incoming Message Listening
+### 7. Background Messaging and Scheduling
 
-Open a second terminal:
-
-```bash
-npm run listen
-```
-
-This starts one Telegram listener for each account already connected when the worker starts. Restart it after adding a new Telegram number.
+`npm run server` starts incoming-message listeners and the durable post
+scheduler automatically. Do not start a second listener beside the API.
+Newly connected accounts are picked up immediately.
 
 ## Daily Local Workflow
 
@@ -286,7 +282,7 @@ Contacts can be added, edited, deleted, searched, exported as JSON, and imported
 
 ### Inbox
 
-Shows saved contacts and backend message history for the selected Telegram account. Use `npm run listen` to save incoming Telegram replies. The inbox can send replies to a selected contact when that contact has a username or phone number.
+Shows saved contacts and backend message history for the selected Telegram account. The running Telegram API service saves incoming replies automatically. The inbox can send replies to a selected contact when that contact has a username or phone number.
 
 ### Groups
 
@@ -309,6 +305,8 @@ Create and manage posts with title, type, category, tags, status, schedule date/
 
 Post types include text, image, video, document, audio, voice, link preview, poll text, forwarded style, announcement, campaign, and template style records. The website uploads selected media privately to this server in 4 MB chunks before Telegram delivery.
 
+Posts, schedules, and per-recipient delivery checkpoints are stored on the server. The Ubuntu Telegram service polls and sends due posts even after the user closes the website. Deliveries from one connected sender are serialized, while different connected senders can be processed concurrently.
+
 To send:
 
 1. Select the sender profile at the top of the app.
@@ -320,11 +318,11 @@ To send:
 7. Check the preview.
 8. Click `Post now` or schedule a date/time.
 
-The app combines all targets, removes duplicates, and sends from the currently selected profile.
+The app combines all targets, removes duplicates, and queues the post for the currently selected sender. After the server accepts a post, the browser is no longer responsible for delivering it.
 
 ### Post History
 
-Shows sent, failed, pending, ready, draft, and scheduled post records from browser localStorage. Each send attempt records recipient, contact/group source, delivery status, sent date/time, Telegram message ID when available, and error text when failed.
+Shows posted, partially failed, failed, pending, draft, scheduled, and sending records from the server. Each recipient checkpoint records its contact/group source, delivery status, sent date/time, Telegram message ID when available, and error text when failed.
 
 Backend message history is also stored encrypted in `data/store.json` and exposed through `GET /v1/messages`.
 
@@ -359,8 +357,9 @@ The backend creates `data/store.json` automatically. It contains JSON arrays equ
 - `telegramAccounts`: connected Telegram account metadata and encrypted session strings.
 - `telegramLoginChallenges`: encrypted temporary login state.
 - `telegramMessages`: encrypted inbound/outbound message records.
+- `telegramPosts`: workspace-scoped drafts, schedules, encrypted post content and targets, and per-recipient delivery checkpoints.
 
-Encrypted fields in `data/store.json` use `SESSION_ENCRYPTION_KEY`. Keep this key stable. If it changes, existing encrypted Telegram sessions and messages cannot be decrypted.
+Encrypted fields in `data/store.json` use `SESSION_ENCRYPTION_KEY`. Keep this key stable. If it changes, existing encrypted Telegram sessions, posts, delivery records, and messages cannot be decrypted.
 
 ## Browser Local Data
 
@@ -372,12 +371,10 @@ telegramWorkflow:profiles
 telegramWorkflow:contacts
 telegramWorkflow:groups
 telegramWorkflow:channels
-telegramWorkflow:posts
-telegramWorkflow:postHistory
 telegramWorkflow:settings
 ```
 
-Use `Backup -> Export backup` before clearing browser data or moving browsers. Back up `data/store.json` separately if you need to preserve connected Telegram sessions and backend message history.
+Older `telegramWorkflow:posts` and `telegramWorkflow:postHistory` values are imported once into the server store and then removed. Backup export includes a snapshot of server posts; backup import restores those posts through the authenticated server API. Use `Backup -> Export backup` before clearing browser data or moving browsers. Back up `data/store.json` separately to preserve connected Telegram sessions, scheduled posts, delivery checkpoints, and backend message history.
 
 ## Environment Variables
 
@@ -606,7 +603,8 @@ Issue a fresh app access token for the user who owns a connected account:
 npm run issue-token -- ACCOUNT_ID
 ```
 
-Run incoming-message listener:
+Run the legacy standalone incoming-message listener for isolated CLI diagnostics
+only (do not run it alongside `npm run server`):
 
 ```bash
 npm run listen
@@ -701,13 +699,11 @@ Screenshots are in [docs/screenshots](docs/screenshots). Requirement coverage an
 
 ## Current Limitations
 
-- Contacts, groups, channels, posts, settings, and post history are browser-local workspace JSON, not shared server records.
+- Contacts, groups, channels, profile display metadata, and settings are browser-local workspace JSON. Posts, schedules, delivery checkpoints, Telegram sessions, and message history are server records.
 - Contacts and groups are not strictly scoped per selected profile yet.
 - Saved groups are local broadcast lists, not private Telegram group sync by `chatId`/`accessHash`.
-- Scheduled posts send only while the browser workspace is open and signed in. There is no server-side scheduler worker yet.
 - Channel records are local planning records and do not manage Telegram channel membership.
 - A dedicated QR Code tab is listed in requirements but is not implemented in the UI yet.
-- `npm run listen` loads accounts only at startup. Restart it after adding or deleting numbers.
 
 ## Troubleshooting
 
@@ -743,7 +739,9 @@ Use the **Drop a file here or choose from device** box and wait for “uploaded 
 
 ### Inbox does not show incoming replies
 
-Run `npm run listen` in a second terminal and restart it after connecting new numbers.
+Confirm `npm run server` or `agenticthat-telegram.service` is active and that
+`GET /health` succeeds. Restart that service if its Telegram session was
+revoked; do not run a second listener against the same connected account.
 
 ### Port already in use
 

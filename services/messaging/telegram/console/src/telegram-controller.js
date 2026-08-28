@@ -98,12 +98,14 @@ const state = {
   contacts: read(keys.contacts, []),
   groups: read(keys.groups, []),
   channels: read(keys.channels, []),
-  posts: read(keys.posts, []),
-  postHistory: read(keys.postHistory, []),
-  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Browser session", proxy: "", storage: "Browser local workspace", theme: "Dark mode" }),
+  posts: [],
+  postHistory: [],
+  legacyPosts: read(keys.posts, []),
+  formPost: null,
+  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Server session", proxy: "", storage: "Private Ubuntu server", theme: "Dark mode" }),
   activeView: "dashboard",
   inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} },
-  scheduledSending: new Set(),
+  postsLoading: false,
   mediaUploading: false,
   mediaPreviewUrl: ""
 };
@@ -318,7 +320,7 @@ function initials(value) {
 }
 function avatar(profile, fallback) { return profile?.avatar ? `<span class="account-avatar"><img src="${esc(profile.avatar)}" alt=""></span>` : `<span class="account-avatar">${esc(initials(fallback))}</span>`; }
 function chatAvatar(label, extraClass = "") { return `<span class="chat-avatar${extraClass ? ` ${extraClass}` : ""}" aria-hidden="true">${esc(initials(label))}</span>`; }
-function saveAll() { write(keys.profiles, state.profiles); write(keys.contacts, state.contacts); write(keys.groups, state.groups); write(keys.channels, state.channels); write(keys.posts, state.posts); write(keys.postHistory, state.postHistory); write(keys.settings, state.settings); }
+function saveAll() { write(keys.profiles, state.profiles); write(keys.contacts, state.contacts); write(keys.groups, state.groups); write(keys.channels, state.channels); write(keys.settings, state.settings); }
 function selectAccount(id) { state.selected = id || ""; state.selected ? localStorage.setItem(keys.selected, state.selected) : localStorage.removeItem(keys.selected); state.inbox.messages = []; state.inbox.selectedThread = ""; state.inbox.lastSyncAt = 0; state.inbox.drafts = {}; render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 function ensureSelected() { if (!state.accounts.some((account) => account.id === state.selected)) state.selected = state.accounts[0]?.id || ""; }
 
@@ -495,6 +497,15 @@ function postTargets(post) {
     if (!group) return;
     groupRecipients(group).forEach((recipient) => add(recipient, group.name || "Group", group.name || "Telegram Group", "group"));
   });
+  if (Array.isArray(post.targets)) {
+    const unresolvedContacts = (post.contacts || []).some((id) => !state.contacts.some((contact) => contact.id === id));
+    const unresolvedGroups = (post.groups || []).some((id) => !state.groups.some((group) => group.id === id));
+    post.targets.forEach((target) => {
+      if ((target.kind === "contact" && unresolvedContacts) || (target.kind === "group" && unresolvedGroups)) {
+        add(target.recipient, target.source, target.firstName, target.kind);
+      }
+    });
+  }
   return rows;
 }
 function renderPostContacts(selectedIds = selectedPostContactIds()) {
@@ -516,28 +527,56 @@ function renderPostGroups(selectedIds = selectedPostGroupIds()) {
   }).join("") : empty("No groups saved.");
 }
 function postFromForm() {
-  const existing = state.posts.find((item) => item.id === $("post-id").value);
-  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), mediaUploadId: $("post-media-upload-id").value.trim(), mediaName: $("post-media-name").value.trim(), mediaMimeType: $("post-media-mime").value.trim(), mediaSize: Number($("post-media-size").value || 0), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: $("post-account-id").value || existing?.accountId || currentAccount()?.id || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const existing = state.posts.find((item) => item.id === $("post-id").value) || state.formPost;
+  const selectedContacts = selectedPostContactIds();
+  const selectedGroups = selectedPostGroupIds();
+  const unavailableContacts = (existing?.contacts || []).filter((id) => !state.contacts.some((contact) => contact.id === id));
+  const unavailableGroups = (existing?.groups || []).filter((id) => !state.groups.some((group) => group.id === id));
+  return { id: $("post-id").value || "", title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), mediaUploadId: $("post-media-upload-id").value.trim(), mediaName: $("post-media-name").value.trim(), mediaMimeType: $("post-media-mime").value.trim(), mediaSize: Number($("post-media-size").value || 0), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: [...new Set([...selectedContacts, ...unavailableContacts])], groups: [...new Set([...selectedGroups, ...unavailableGroups])], targets: existing?.targets || [], accountId: $("post-account-id").value || existing?.accountId || currentAccount()?.id || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
-function savePost(statusOverride = "") {
+function scheduleIso(value) {
+  const date = new Date(value);
+  return value && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
+}
+function scheduleInputValue(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+function postApiPayload(post) {
+  return { ...post, scheduledAt: scheduleIso(post.scheduledAt), targets: postTargets(post) };
+}
+async function savePost() {
   if (state.mediaUploading) { status(el.postStatusMessage, "Wait for the device file upload to finish.", "error"); return null; }
   const post = postFromForm();
   if (!post.title) { status(el.postStatusMessage, "Post title is required.", "error"); return null; }
-  if (statusOverride) post.status = statusOverride;
-  const index = state.posts.findIndex((item) => item.id === post.id);
-  index === -1 ? state.posts.unshift(post) : state.posts[index] = post;
-  $("post-id").value = post.id;
-  $("post-status").value = post.status;
-  write(keys.posts, state.posts);
-  render();
-  status(el.postStatusMessage, "Post saved.", "success");
-  return post;
+  if (!post.accountId) { status(el.postStatusMessage, "Select a connected sending profile.", "error"); return null; }
+  const existing = post.id.startsWith("telegram_post_");
+  try {
+    const data = await api(existing ? `/v1/posts/${encodeURIComponent(post.id)}` : "/v1/posts", {
+      method: existing ? "PUT" : "POST",
+      body: postApiPayload(post),
+    });
+    const saved = data.post;
+    state.formPost = saved;
+    const index = state.posts.findIndex((item) => item.id === saved.id);
+    index === -1 ? state.posts.unshift(saved) : state.posts[index] = saved;
+    $("post-id").value = saved.id;
+    $("post-status").value = saved.status;
+    render();
+    status(el.postStatusMessage, "Post saved on the Ubuntu server.", "success");
+    return saved;
+  } catch (error) {
+    onError(error, el.postStatusMessage);
+    return null;
+  }
 }
 function fillPost(post) {
-  revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaDropzone.classList.toggle("has-file", Boolean(post.mediaUploadId)); el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready. ${telegramUploadTypeHint(post.type)}` : `Choose a file. ${telegramUploadTypeHint(post.type)}`; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
+  state.formPost = post; revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = scheduleInputValue(post.scheduledAt); $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaDropzone.classList.toggle("has-file", Boolean(post.mediaUploadId)); el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready. ${telegramUploadTypeHint(post.type)}` : `Choose a file. ${telegramUploadTypeHint(post.type)}`; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
 }
 function revokePostMediaPreview() { if (state.mediaPreviewUrl) URL.revokeObjectURL(state.mediaPreviewUrl); state.mediaPreviewUrl = ""; }
-function clearPost() { revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaDropzone.classList.remove("has-file", "is-uploading", "is-dragging"); el.postMediaStatus.textContent = `Choose a file. ${telegramUploadTypeHint("text")}`; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
+function clearPost() { state.formPost = null; revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaDropzone.classList.remove("has-file", "is-uploading", "is-dragging"); el.postMediaStatus.textContent = `Choose a file. ${telegramUploadTypeHint("text")}`; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
 function formatDate(value) { const date = new Date(value); return value && !Number.isNaN(date.getTime()) ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : value; }
 function renderPostPreview() {
   const post = postFromForm();
@@ -563,12 +602,10 @@ function renderPosts() {
   const sort = el.postSort.value;
   let posts = state.posts.filter((post) => (!type || post.type === type) && (!query || [post.title, post.type, post.category, (post.tags || []).join(" "), post.status, post.body, post.recipient].join(" ").toLowerCase().includes(query)));
   posts = posts.slice().sort((a, b) => sort === "created-asc" ? a.createdAt.localeCompare(b.createdAt) : sort === "category" ? (a.category || "").localeCompare(b.category || "") : sort === "scheduled" ? (a.scheduledAt || "9999").localeCompare(b.scheduledAt || "9999") : b.createdAt.localeCompare(a.createdAt));
-  el.postList.innerHTML = posts.length ? posts.map((post) => record(post.title, [postLabels[post.type] || post.type, post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : ""].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button><button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`)).join("") : empty("No posts found.");
-}
-function savePostHistory(records) {
-  if (!records.length) return;
-  state.postHistory = [...records, ...state.postHistory].slice(0, 1000);
-  write(keys.postHistory, state.postHistory);
+  el.postList.innerHTML = posts.length ? posts.map((post) => {
+    const cancel = post.status === "Scheduled" ? `<button class="mini-button" data-cancel-post="${esc(post.id)}" type="button">Cancel schedule</button>` : "";
+    return record(post.title, [postLabels[post.type] || post.type, post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : ""].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button>${cancel}<button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`);
+  }).join("") : empty("No posts found.");
 }
 function historyRow(item) {
   const meta = [
@@ -593,7 +630,7 @@ function renderPostHistory() {
   if (!el.postHistorySent || !el.postHistoryPending) return;
   const sent = state.postHistory.filter((item) => item.deliveryStatus === "Sent");
   const failed = state.postHistory.filter((item) => item.deliveryStatus === "Failed");
-  const pending = state.posts.filter((post) => post.status !== "Posted");
+  const pending = state.posts.filter((post) => ["Draft", "Scheduled", "Sending"].includes(post.status));
   el.postHistorySent.innerHTML = sent.length || failed.length
     ? [...sent, ...failed].map(historyRow).join("")
     : empty("No post sharing history yet.");
@@ -905,101 +942,79 @@ async function loadInboxMessages(options = {}) {
     renderInbox();
   }
 }
-function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Browser session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Browser local workspace"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
+function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private Ubuntu server"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
 function applyTheme() { document.body.classList.toggle("light-mode", state.settings.theme === "Light mode"); }
 function backupData() { return { version: 1, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
 function render() { renderProfileSelect(); renderDashboard(); renderAccounts(); renderProfileForm(); renderProfileList(); renderApplications(); renderContacts(); renderInbox(); renderGroups(); renderChannels(); renderPostContacts(); renderPostGroups(); renderPostPreview(); renderPosts(); renderPostHistory(); renderSearch(); renderSettings(); }
 function setView(view) { state.activeView = titles[view] ? view : "dashboard"; const [kicker, title] = titles[state.activeView] || titles.dashboard; el.viewKicker.textContent = kicker; el.viewTitle.textContent = title; $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === state.activeView)); $$(".view").forEach((section) => { const active = section.id === `view-${state.activeView}`; section.hidden = !active; section.classList.toggle("active-view", active); }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
-async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; state.accounts.forEach(profileFor); ensureSelected(); write(keys.profiles, state.profiles); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
+function deliveryHistoryFromPosts(posts) {
+  return posts.flatMap((post) => (post.deliveries || [])
+    .filter((delivery) => delivery.status === "Sent" || delivery.status === "Failed")
+    .map((delivery) => ({
+      id: delivery.id,
+      postId: post.id,
+      postTitle: post.title || "Untitled post",
+      accountId: post.accountId,
+      recipient: delivery.recipient,
+      contactName: delivery.kind === "contact" ? delivery.source : "",
+      groupName: delivery.kind === "group" ? delivery.source : "",
+      source: delivery.source,
+      mediaType: post.mediaUploadId || post.mediaUrl ? post.type : "text",
+      mediaName: post.mediaName || "",
+      messagePreview: (post.body || "").slice(0, 240),
+      deliveryStatus: delivery.status,
+      sentAt: delivery.sentAt || post.updatedAt,
+      telegramMessageId: delivery.telegramMessageId || "",
+      error: delivery.error || "",
+    })));
+}
+async function migrateLegacyPosts() {
+  if (!state.legacyPosts.length) return;
+  const remaining = [];
+  for (const legacy of state.legacyPosts) {
+    if (!state.accounts.some((account) => account.id === legacy.accountId)) { remaining.push(legacy); continue; }
+    try {
+      const created = await api("/v1/posts", { method: "POST", body: postApiPayload({ ...legacy, id: "" }) });
+      if (legacy.status === "Scheduled" && scheduleIso(legacy.scheduledAt)) {
+        await api(`/v1/posts/${encodeURIComponent(created.post.id)}/schedule`, { method: "POST", body: { scheduledAt: scheduleIso(legacy.scheduledAt) } });
+      }
+    } catch {
+      remaining.push(legacy);
+    }
+  }
+  state.legacyPosts = remaining;
+  if (remaining.length) write(keys.posts, remaining);
+  else {
+    localStorage.removeItem(keys.posts);
+    localStorage.removeItem(keys.postHistory);
+  }
+}
+async function loadServerPosts(options = {}) {
+  if (!state.user || state.postsLoading) return;
+  state.postsLoading = true;
+  try {
+    let data = await api("/v1/posts");
+    state.posts = data.posts || [];
+    if (options.migrate !== false) {
+      await migrateLegacyPosts();
+      data = await api("/v1/posts");
+      state.posts = data.posts || state.posts;
+    }
+    state.postHistory = deliveryHistoryFromPosts(state.posts);
+    render();
+  } catch (error) {
+    if (!options.quiet) onError(error, el.postStatusMessage);
+  } finally {
+    state.postsLoading = false;
+  }
+}
+async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; state.accounts.forEach(profileFor); ensureSelected(); write(keys.profiles, state.profiles); await loadServerPosts({ migrate: true, quiet: true }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 async function sendMessage(recipient, message, node, accountId = "", options = {}) {
   const account = state.accounts.find((item) => item.id === accountId) || currentAccount();
   const mediaUrl = (options.mediaUrl || "").trim();
   const mediaUploadId = (options.mediaUploadId || "").trim();
   if (!account || !recipient || (!message && !mediaUrl && !mediaUploadId)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
   return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaUploadId, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
-}
-function postMessage(post) { return (post.body || post.title || "").trim(); }
-function postMediaUrl(post) { return post.mediaUrl && post.type !== "text" ? post.mediaUrl.trim() : ""; }
-async function sendPostToTargets(post, node, options = {}) {
-  const message = postMessage(post);
-  const mediaUrl = postMediaUrl(post);
-  const mediaUploadId = post.type !== "text" ? (post.mediaUploadId || "").trim() : "";
-  const targets = postTargets(post);
-  if (!targets.length || (!message && !mediaUrl && !mediaUploadId)) {
-    const messageText = "Choose a manual target, saved contact, or saved group, and add text or media.";
-    if (options.throwOnError) throw new Error(messageText);
-    status(node, messageText, "error");
-    return { sentCount: 0, targets, failures: [messageText] };
-  }
-  const sender = state.accounts.find((account) => account.id === post.accountId) || currentAccount();
-  if (!sender) {
-    const messageText = "Select a connected profile first.";
-    if (options.throwOnError) throw new Error(messageText);
-    status(node, messageText, "error");
-    return { sentCount: 0, targets, failures: [messageText] };
-  }
-  if (node) status(node, `Sending to ${targets.length} recipient${targets.length === 1 ? "" : "s"}...`);
-  const senderProfile = profileFor(sender);
-  const history = [];
-  const failures = [];
-  let sentCount = 0;
-  for (const target of targets) {
-    const baseHistory = {
-      id: uid("share"),
-      postId: post.id,
-      postTitle: post.title || "Untitled post",
-      accountId: sender.id,
-      profileName: senderProfile?.profileName || sender.displayName || "Telegram profile",
-      recipient: target.recipient,
-      contactName: target.kind === "contact" ? target.source : "",
-      groupName: target.kind === "group" ? target.source : "",
-      source: target.source,
-      mediaType: mediaUrl || mediaUploadId ? post.type : "text",
-      mediaUrl: mediaUploadId ? "" : mediaUrl,
-      mediaName: post.mediaName || "",
-      messagePreview: message.slice(0, 240)
-    };
-    try {
-      const response = await sendMessage(target.recipient, message, node, sender.id, { mediaUrl, mediaUploadId, mediaType: mediaUrl || mediaUploadId ? post.type : "", firstName: target.firstName || target.source || "" });
-      sentCount += 1;
-      history.push({ ...baseHistory, deliveryStatus: "Sent", sentAt: response?.sent?.sentAt || new Date().toISOString(), telegramMessageId: response?.sent?.messageId || "", error: "" });
-    } catch (error) {
-      const errorText = error instanceof Error ? error.message : "failed";
-      failures.push(`${target.recipient}: ${errorText}`);
-      history.push({ ...baseHistory, deliveryStatus: "Failed", sentAt: new Date().toISOString(), telegramMessageId: "", error: errorText });
-    }
-  }
-  savePostHistory(history);
-  renderPostHistory();
-  return { sentCount, targets, failures };
-}
-async function sendScheduledPost(post) {
-  if (state.scheduledSending.has(post.id)) return;
-  state.scheduledSending.add(post.id);
-  try {
-    const result = await sendPostToTargets(post, el.postStatusMessage, { throwOnError: true });
-    const index = state.posts.findIndex((item) => item.id === post.id);
-    if (index === -1) return;
-    state.posts[index] = { ...state.posts[index], status: result.failures.length ? "Failed" : "Posted", sentAt: new Date().toISOString(), lastError: result.failures.join("; "), updatedAt: new Date().toISOString() };
-    write(keys.posts, state.posts);
-    render();
-    status(el.postStatusMessage, result.failures.length ? `Scheduled post failed: ${result.failures.slice(0, 3).join("; ")}` : `Scheduled post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, result.failures.length ? "error" : "success");
-  } catch (error) {
-    const index = state.posts.findIndex((item) => item.id === post.id);
-    if (index !== -1) {
-      state.posts[index] = { ...state.posts[index], status: "Failed", lastError: error instanceof Error ? error.message : "Scheduled send failed", updatedAt: new Date().toISOString() };
-      write(keys.posts, state.posts);
-      render();
-    }
-    status(el.postStatusMessage, error instanceof Error ? error.message : "Scheduled send failed.", "error");
-  } finally {
-    state.scheduledSending.delete(post.id);
-  }
-}
-function runScheduler() {
-  if (!state.user || !currentAccount()) return;
-  const now = Date.now();
-  state.posts.filter((post) => post.status === "Scheduled" && post.scheduledAt && new Date(post.scheduledAt).getTime() <= now).forEach((post) => { void sendScheduledPost(post); });
 }
 async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); delete state.profiles[account.id]; write(keys.profiles, state.profiles); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
 function setLoginStage(stage) {
@@ -1112,7 +1127,7 @@ el.channelForm.addEventListener("submit", (event) => {
   const item = { id: $("channel-id").value || uid("channel"), name, privacy: $("channel-privacy").value, invites: $("channel-invites").value.trim(), notes: $("channel-notes").value.trim(), updatedAt: new Date().toISOString() };
   const index = state.channels.findIndex((row) => row.id === item.id); index === -1 ? state.channels.unshift(item) : state.channels[index] = item;
   write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
-});el.postForm.addEventListener("submit", (event) => { event.preventDefault(); savePost(); });
+});el.postForm.addEventListener("submit", async (event) => { event.preventDefault(); await savePost(); });
 ["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
 $("post-type").addEventListener("change", () => {
   const uploadName = $("post-media-name").value.trim();
@@ -1235,29 +1250,36 @@ document.addEventListener("click", async (event) => {
   if (button.id === "group-clear") { el.groupForm.reset(); $("group-id").value = ""; }
   if (button.id === "channel-clear") { el.channelForm.reset(); $("channel-id").value = ""; }
   if (button.id === "post-clear") clearPost();
-  if (button.id === "post-schedule") { if (!$("post-scheduled-at").value) return status(el.postStatusMessage, "Choose a scheduled date.", "error"); const post = savePost("Scheduled"); if (post) status(el.postStatusMessage, "Post saved as scheduled.", "success"); }
+  if (button.id === "post-schedule") {
+    const scheduledAt = scheduleIso($("post-scheduled-at").value);
+    if (!scheduledAt) return status(el.postStatusMessage, "Choose a valid scheduled date.", "error");
+    const post = await savePost();
+    if (!post) return;
+    try {
+      await api(`/v1/posts/${encodeURIComponent(post.id)}/schedule`, { method: "POST", body: { scheduledAt } });
+      await loadServerPosts({ migrate: false, quiet: true });
+      status(el.postStatusMessage, "Scheduled on the Ubuntu server. You may close this browser.", "success");
+    } catch (error) { onError(error, el.postStatusMessage); }
+  }
   if (button.id === "post-send-now") {
     if (postSendPending) return;
     postSendPending = true;
     button.disabled = true;
     try {
-      const post = savePost();
+      const post = await savePost();
       if (!post) return;
-      const result = await sendPostToTargets(post, el.postStatusMessage);
-      if (result.failures.length) {
-        status(el.postStatusMessage, `Sent ${result.sentCount}/${result.targets.length}. Failed: ${result.failures.slice(0, 3).join("; ")}`, "error");
-        return;
-      }
-      $("post-status").value = "Posted";
-      savePost("Posted");
-      status(el.postStatusMessage, `Post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, "success");
+      await api(`/v1/posts/${encodeURIComponent(post.id)}/send-now`, { method: "POST", body: {} });
+      await loadServerPosts({ migrate: false, quiet: true });
+      status(el.postStatusMessage, "Queued on the Ubuntu server for immediate delivery.", "success");
+    } catch (error) {
+      onError(error, el.postStatusMessage);
     } finally {
       postSendPending = false;
       button.disabled = false;
     }
   }  if (button.id === "backup-export") { el.backupJson.value = JSON.stringify(backupData(), null, 2); status(el.backupStatus, "Backup exported.", "success"); }
   if (button.id === "backup-import") {
-    try { const data = JSON.parse(el.backupJson.value || "{}"); state.profiles = data.profiles && typeof data.profiles === "object" ? data.profiles : state.profiles; state.contacts = Array.isArray(data.contacts) ? data.contacts : state.contacts; state.groups = Array.isArray(data.groups) ? data.groups : state.groups; state.channels = Array.isArray(data.channels) ? data.channels : state.channels; state.posts = Array.isArray(data.posts) ? data.posts : state.posts; state.postHistory = Array.isArray(data.postHistory) ? data.postHistory : state.postHistory; state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings; saveAll(); applyTheme(); render(); status(el.backupStatus, "Backup restored.", "success"); }
+    try { const data = JSON.parse(el.backupJson.value || "{}"); state.profiles = data.profiles && typeof data.profiles === "object" ? data.profiles : state.profiles; state.contacts = Array.isArray(data.contacts) ? data.contacts : state.contacts; state.groups = Array.isArray(data.groups) ? data.groups : state.groups; state.channels = Array.isArray(data.channels) ? data.channels : state.channels; state.legacyPosts = Array.isArray(data.posts) ? data.posts : []; state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings; saveAll(); await migrateLegacyPosts(); await loadServerPosts({ migrate: false, quiet: true }); applyTheme(); render(); status(el.backupStatus, "Backup restored to the server workspace.", "success"); }
     catch (error) { status(el.backupStatus, error instanceof Error ? error.message : "Restore failed.", "error"); }
   }
   const inboxThread = button.dataset.inboxThread; if (inboxThread) { state.inbox.selectedThread = inboxThread; renderInbox(); if (state.inbox.view === "multi") requestAnimationFrame(() => el.inboxMultiBoard?.querySelector(".multi-chat-column.active textarea:not(:disabled)")?.focus()); }
@@ -1271,8 +1293,9 @@ document.addEventListener("click", async (event) => {
   const editChannel = button.dataset.editChannel; if (editChannel) { const item = state.channels.find((row) => row.id === editChannel); if (item) { $("channel-id").value = item.id; $("channel-name").value = item.name || ""; $("channel-privacy").value = item.privacy || "Private"; $("channel-invites").value = item.invites || ""; $("channel-notes").value = item.notes || ""; } }
   const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { state.channels = state.channels.filter((row) => row.id !== deleteChannel); write(keys.channels, state.channels); render(); }
   const editPost = button.dataset.editPost; if (editPost) { const item = state.posts.find((row) => row.id === editPost); if (item) fillPost(item); }
-  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { state.posts.unshift({ ...item, id: uid("post"), title: `${item.title} copy`, status: "Draft", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); write(keys.posts, state.posts); render(); } }
-  const deletePost = button.dataset.deletePost; if (deletePost) { state.posts = state.posts.filter((row) => row.id !== deletePost); write(keys.posts, state.posts); render(); }
+  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { fillPost({ ...item, id: "", title: `${item.title} copy`, status: "Draft", scheduledAt: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); status(el.postStatusMessage, "Copy is ready. Save or schedule it when finished.", "success"); } }
+  const cancelPost = button.dataset.cancelPost; if (cancelPost) { try { await api(`/v1/posts/${encodeURIComponent(cancelPost)}/cancel`, { method: "POST", body: {} }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Scheduled post cancelled.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
+  const deletePost = button.dataset.deletePost; if (deletePost) { try { await api(`/v1/posts/${encodeURIComponent(deletePost)}`, { method: "DELETE" }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Post deleted from the server.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -1289,8 +1312,7 @@ document.addEventListener("keydown", (event) => {
     signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again.");
   }
   setView("dashboard");
-  runScheduler();
-  setInterval(runScheduler, 30000);
+  setInterval(() => { if (state.user) void loadServerPosts({ migrate: false, quiet: true }); }, 5000);
   setInterval(() => { if (state.user && state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }, 10000);
 })();
 }

@@ -2443,19 +2443,31 @@ export function TelegramConsole({ integrated = false }) {
                       ),
                       h("label", null,
                         "Status",
-                        h("select", {"id":"post-status"},
+                        h("select", {"id":"post-status","disabled":true,"aria-describedby":"post-status-help"},
                           h("option", null,
                             "Draft"
-                          ),
-                          h("option", null,
-                            "Ready"
                           ),
                           h("option", null,
                             "Scheduled"
                           ),
                           h("option", null,
+                            "Sending"
+                          ),
+                          h("option", null,
                             "Posted"
+                          ),
+                          h("option", null,
+                            "Partially failed"
+                          ),
+                          h("option", null,
+                            "Failed"
+                          ),
+                          h("option", null,
+                            "Cancelled"
                           )
+                        ),
+                        h("small", {"id":"post-status-help"},
+                          "Managed by the Ubuntu server"
                         )
                       )
                     ),

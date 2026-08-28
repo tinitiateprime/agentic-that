@@ -5,6 +5,11 @@ Instagram/Facebook scrapers permanently on one Ubuntu machine. Remote users
 open one HTTPS website and install nothing. Nginx is the only public process;
 Next.js and every worker bind to `127.0.0.1`.
 
+The Telegram systemd service is also the durable post scheduler. Once a remote
+user queues a Telegram post, the service keeps its schedule and per-recipient
+delivery checkpoints under `/var/lib/agenticthat-telegram` and sends it even
+when that user's browser is closed.
+
 ## Required host safeguards
 
 Use Ubuntu 24.04 LTS (or a currently supported Ubuntu release), a static public
@@ -122,6 +127,10 @@ curl --fail http://127.0.0.1:4173/
 curl --fail https://app.example.com/
 sudo ss -ltnp
 ```
+
+The Telegram health response must include `"scheduler":"server"`. Schedule a
+small test message, close the browser before it is due, and confirm it is sent
+and appears in Delivery history after reopening the website.
 
 Only ports 22 (restricted), 80, and 443 should be publicly reachable. In the
 website, test two separate workspaces and verify neither can see the other's

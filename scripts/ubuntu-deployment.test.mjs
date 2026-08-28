@@ -80,3 +80,15 @@ test("the integrated Telegram console bundles its upload UI and styles with vers
   assert.match(consoleSource, /Images, videos, GIFs, audio, voice messages, video notes, and documents/);
   assert.match(controller, /uploadTelegramDeviceFile/);
 });
+
+test("the Telegram worker owns durable scheduling instead of the browser", async () => {
+  const server = await readFile(new URL("../services/messaging/telegram/src/server.ts", import.meta.url), "utf8");
+  const scheduler = await readFile(new URL("../services/messaging/telegram/src/post-scheduler.ts", import.meta.url), "utf8");
+  const controller = await readFile(new URL("../services/messaging/telegram/console/src/telegram-controller.js", import.meta.url), "utf8");
+
+  assert.match(server, /new TelegramPostScheduler/);
+  assert.match(server, /scheduler:\s*shouldRunBackgroundListeners\(\)\s*\?\s*"server"\s*:\s*"disabled"/);
+  assert.match(scheduler, /claimDuePost/);
+  assert.match(scheduler, /renewPostLease/);
+  assert.doesNotMatch(controller, /function runScheduler/);
+});

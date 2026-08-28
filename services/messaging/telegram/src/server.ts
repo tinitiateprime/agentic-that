@@ -18,7 +18,18 @@ import {
 import { readConfig, type AppConfig } from "./config.ts";
 import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, type ConfiguredLoginUser } from "./login-config.ts";
 import { RequestRateLimiter } from "./rate-limit.ts";
-import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserStore, type TelegramAccountWithSession } from "./store.ts";
+import {
+  AccountAlreadyLinkedError,
+  type AppUser,
+  type MessageRecord,
+  MultiUserStore,
+  type ClaimedTelegramPost,
+  type TelegramAccountWithSession,
+  type TelegramPostDelivery,
+  type TelegramPostInput,
+  type TelegramPostTarget,
+} from "./store.ts";
+import { TelegramPostScheduler } from "./post-scheduler.ts";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
@@ -48,6 +59,7 @@ let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
 let mediaStore: TelegramMediaStore;
 let limiter: RequestRateLimiter;
+let postScheduler: TelegramPostScheduler | null = null;
 const trialHourlyMessageLimiter = new RollingTrialUsageLimiter();
 const trialDailyMessageLimiter = new RollingTrialUsageLimiter();
 const TRIAL_TELEGRAM_MESSAGES_PER_HOUR = 20;
@@ -266,6 +278,82 @@ function mediaUploadIdFromPath(pathname: string, suffix = "") {
   const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`^/v1/media/uploads/(telegram_media_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
   return match?.[1] || "";
+}
+
+function telegramPostIdFromPath(pathname: string, suffix = "") {
+  const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^/v1/posts/(telegram_post_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function optionalStringArray(body: JsonBody, name: string, maximum: number, itemLength: number) {
+  const value = body[name];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > maximum) throw new HttpError(400, `${name} is invalid.`);
+  return value.map((item) => {
+    if (typeof item !== "string" || item.trim().length > itemLength) throw new HttpError(400, `${name} is invalid.`);
+    return item.trim();
+  }).filter(Boolean);
+}
+
+function postTargets(body: JsonBody): TelegramPostTarget[] {
+  const value = body.targets;
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 500) throw new HttpError(400, "targets is invalid.");
+  const seen = new Set<string>();
+  const targets: TelegramPostTarget[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, "targets is invalid.");
+    const target = item as Record<string, unknown>;
+    const recipient = typeof target.recipient === "string" ? target.recipient.trim() : "";
+    if (!recipient || recipient.length > 256) throw new HttpError(400, "Each Telegram target needs a valid recipient.");
+    const key = recipient.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rawKind = target.kind;
+    const kind = rawKind === "contact" || rawKind === "group" ? rawKind : "manual";
+    targets.push({
+      recipient,
+      source: typeof target.source === "string" ? target.source.trim().slice(0, 160) : "",
+      firstName: typeof target.firstName === "string" ? target.firstName.trim().slice(0, 120) : "",
+      kind,
+    });
+  }
+  return targets;
+}
+
+function telegramPostInput(body: JsonBody): TelegramPostInput {
+  const mediaSize = Number(body.mediaSize || 0);
+  if (!Number.isSafeInteger(mediaSize) || mediaSize < 0) throw new HttpError(400, "mediaSize is invalid.");
+  return {
+    accountId: requiredString(body, "accountId", 64),
+    title: requiredString(body, "title", 200),
+    type: optionalString(body, "type", 32) || "text",
+    category: optionalString(body, "category", 120),
+    tags: optionalStringArray(body, "tags", 50, 80),
+    scheduledAt: optionalString(body, "scheduledAt", 80),
+    body: optionalString(body, "body", 50_000),
+    mediaUrl: optionalString(body, "mediaUrl", 900_000),
+    mediaUploadId: optionalString(body, "mediaUploadId", 64),
+    mediaName: optionalString(body, "mediaName", 200),
+    mediaMimeType: optionalString(body, "mediaMimeType", 120),
+    mediaSize,
+    recipient: optionalString(body, "recipient", 256),
+    contacts: optionalStringArray(body, "contacts", 500, 100),
+    groups: optionalStringArray(body, "groups", 500, 100),
+    targets: postTargets(body),
+  };
+}
+
+async function verifyPostMedia(userId: string, input: TelegramPostInput) {
+  const account = await store.getAccountWithSession(userId, input.accountId);
+  if (!account) throw new HttpError(404, "Telegram account was not found.");
+  if (!input.mediaUploadId) return;
+  try {
+    await mediaStore.resolve(userId, account.id, input.mediaUploadId);
+  } catch (error) {
+    throw telegramMediaHttpError(error);
+  }
 }
 
 function telegramMediaHttpError(error: unknown) {
@@ -682,6 +770,45 @@ export function telegramSendError(error: unknown, recipient = "") {
   return new HttpError(502, message || "Telegram could not send this message right now.");
 }
 
+function telegramPostHttpError(error: unknown) {
+  if (error instanceof HttpError) return error;
+  const message = error instanceof Error ? error.message : "Telegram post operation failed.";
+  if (/not found/i.test(message)) return new HttpError(404, message);
+  if (/already sending|scheduled post before|only a waiting/i.test(message)) return new HttpError(409, message);
+  return new HttpError(400, message);
+}
+
+async function executeScheduledTelegramDelivery(
+  post: ClaimedTelegramPost,
+  delivery: TelegramPostDelivery,
+) {
+  const account = await store.getAccountWithSession(post.ownerId, post.accountId);
+  if (!account) throw new Error("The scheduled Telegram sender account is no longer connected.");
+  let uploadedMedia;
+  if (post.mediaUploadId) {
+    try {
+      uploadedMedia = await mediaStore.resolve(post.ownerId, account.id, post.mediaUploadId);
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+  }
+  try {
+    const sent = await sendTelegramMessage(telegramApiCredentialsFromAccount(account), account.sessionString, {
+      recipient: delivery.recipient,
+      message: post.body,
+      mediaUrl: post.mediaUrl,
+      mediaFile: uploadedMedia ? { name: uploadedMedia.fileName, path: uploadedMedia.path, size: uploadedMedia.size } : undefined,
+      mediaType: post.type,
+      firstName: delivery.firstName,
+      lastName: "",
+    });
+    if (shouldRunBackgroundListeners()) void startTelegramListener(account);
+    return sent;
+  } catch (error) {
+    throw telegramSendError(error, delivery.recipient);
+  }
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
@@ -704,6 +831,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ok: true,
       service: "telegram-multi-user",
       storage: process.env.DATA_STORE || "json",
+      scheduler: shouldRunBackgroundListeners() ? "server" : "disabled",
       configManagerUrl: config.corsOrigin
         ? config.corsOrigin.replace(/\/$/, "") + "/config-manager?service=messaging&platform=telegram"
         : "/config-manager?service=messaging&platform=telegram"
@@ -936,6 +1064,96 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/v1/posts") {
+    const postAccountId = url.searchParams.get("accountId") || "";
+    if (postAccountId && !await store.getAccountWithSession(user.id, postAccountId)) {
+      throw new HttpError(404, "Telegram account was not found.");
+    }
+    sendJson(request, response, 200, { ok: true, posts: await store.listPosts(user.id, postAccountId) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/posts") {
+    requireUserLevel(user, "operate");
+    const input = telegramPostInput(await readJsonBody(request));
+    await verifyPostMedia(user.id, input);
+    try {
+      sendJson(request, response, 201, { ok: true, post: await store.createPost(user.id, input) });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const updatingPostId = telegramPostIdFromPath(url.pathname);
+  if (request.method === "PUT" && updatingPostId) {
+    requireUserLevel(user, "operate");
+    const input = telegramPostInput(await readJsonBody(request));
+    await verifyPostMedia(user.id, input);
+    try {
+      const post = await store.updatePost(user.id, updatingPostId, input);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const schedulingPostId = telegramPostIdFromPath(url.pathname, "/schedule");
+  if (request.method === "POST" && schedulingPostId) {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request);
+    const scheduledAt = requiredString(body, "scheduledAt", 80);
+    try {
+      const post = await store.queuePost(user.id, schedulingPostId, scheduledAt);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      postScheduler?.wake();
+      sendJson(request, response, 202, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const sendingPostId = telegramPostIdFromPath(url.pathname, "/send-now");
+  if (request.method === "POST" && sendingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      const post = await store.queuePost(user.id, sendingPostId, new Date().toISOString());
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      postScheduler?.wake();
+      sendJson(request, response, 202, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const cancellingPostId = telegramPostIdFromPath(url.pathname, "/cancel");
+  if (request.method === "POST" && cancellingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      const post = await store.cancelPost(user.id, cancellingPostId);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && updatingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      if (!await store.deletePost(user.id, updatingPostId)) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
   const accountId = accountIdFromPath(url.pathname);
   if (request.method === "DELETE" && accountId) {
     requireUserLevel(user, "configure");
@@ -1135,7 +1353,11 @@ async function main() {
   const server = await createTelegramHttpServer();
   server.listen(config.servicePort, config.serviceHost, () => {
     console.log(`Telegram multi-user API listening on http://${config.serviceHost}:${config.servicePort}`);
-    if (shouldRunBackgroundListeners()) void startStoredTelegramListeners();
+    if (shouldRunBackgroundListeners()) {
+      void startStoredTelegramListeners();
+      postScheduler = new TelegramPostScheduler(store, executeScheduledTelegramDelivery);
+      postScheduler.start();
+    }
   });
 
   let stopping = false;
@@ -1143,6 +1365,7 @@ async function main() {
     if (stopping) return;
     stopping = true;
     server.close();
+    await postScheduler?.stop();
     await stopAllTelegramListeners();
     await store.close();
     process.exit(0);
