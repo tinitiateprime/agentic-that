@@ -4,15 +4,25 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="stylesheet" href="popup.css">
-    <title>AgenticThat Publishing Companion</title>
+    <title>AgenticThat Companion</title>
   </head>
   <body>
     <main>
       <p class="eyebrow">AgenticThat</p>
-      <h1>Publishing Companion</h1>
+      <h1>Companion</h1>
       <div id="status" class="status checking"><i></i><span>Checking local companion…</span></div>
       <p id="detail">The extension securely connects the publishing dashboard to this computer.</p>
       <button id="retry" type="button">Check again</button>
+      <section class="trust-panel">
+        <h2>Trusted website</h2>
+        <p>Add your AgenticThat HTTPS origin once, for example <code>https://app.example.com</code>.</p>
+        <form id="trust-form">
+          <input id="trusted-origin" type="url" placeholder="https://app.example.com" required>
+          <button type="submit">Trust website</button>
+        </form>
+        <p id="trust-message" role="status"></p>
+        <div id="trusted-list"></div>
+      </section>
     </main>
     <script src="popup.js"></script>
   </body>

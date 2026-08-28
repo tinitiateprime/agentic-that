@@ -275,6 +275,7 @@ function installFileLogging() {
 }
 
 async function startPublishingService() {
+  process.env.AGENTICTHAT_COMPANION_VERSION = APP_VERSION;
   const runtimeEntry = path.join(app.getAppPath(), "runtime", "server.mjs");
   publishingRuntime = await import(
     `${pathToFileURL(runtimeEntry).href}?v=${createHash("sha1").update(APP_VERSION).digest("hex")}`
@@ -485,7 +486,7 @@ function handleScrapingActivity(platform, state) {
     const active = scrapingActivityState.activeJob;
     tray.setToolTip(active && scrapingWorkActive
       ? `AgenticThat Companion - Scraping ${active.query}`
-      : "AgenticThat Publishing Companion");
+      : "AgenticThat Companion");
   }
   rebuildTrayMenu?.();
   if (mainWindow && !mainWindow.webContents.isDestroyed()) {
@@ -1084,7 +1085,7 @@ function createWindow() {
     minWidth: 980,
     minHeight: 680,
     show: false,
-    title: "AgenticThat Publishing Companion",
+    title: "AgenticThat Companion",
     icon: path.join(app.getAppPath(), "assets", "app-icon.ico"),
     backgroundColor: "#f4f6f9",
     webPreferences: {
@@ -1123,7 +1124,7 @@ function createWindow() {
 function createTray() {
   const trayImage = nativeImage.createFromPath(path.join(app.getAppPath(), "assets", "tray-icon.png"));
   tray = new Tray(trayImage);
-  tray.setToolTip("AgenticThat Publishing Companion");
+  tray.setToolTip("AgenticThat Companion");
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open AgenticThat Publishing", click: () => shell.openExternal(DASHBOARD_URL) },
     { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
@@ -1297,7 +1298,7 @@ if (started || !ownsSingleInstanceLock) {
       await configureServiceTokenVerifier();
       await desktopDebugEndpoint();
       await startPublishingService();
-      console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
+      console.log(`AgenticThat Companion ${APP_VERSION} is ready.`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const isPortConflict = /port 8792|EADDRINUSE|address already in use/i.test(errorMessage);

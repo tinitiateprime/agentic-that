@@ -30,6 +30,10 @@ import {
   subscribeFacebookCompanionActivity,
 } from "../../../scraping/facebook/src/companion-jobs.js";
 import {
+  companionResourceSchedulerState,
+  setCompanionPublishingBusyProvider,
+} from "../../../scraping/companion-resource-scheduler.js";
+import {
   createUserProfileSchema,
   loginInputSchema,
   platformLabels,
@@ -149,6 +153,8 @@ const configuredWebOrigins = new Set(
     .map(origin => origin.trim())
     .filter(Boolean),
 );
+
+setCompanionPublishingBusyProvider(() => isAutomationRunning());
 
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(stagedUploadDir, { recursive: true });
@@ -1229,12 +1235,14 @@ app.get("/api/health", async (_req, res) => {
       embeddedBrowser: browser.embeddedBrowser,
       engines: browser.engines,
       companionInstanceId: publishingCompanionId(),
+      companionVersion: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
       paired: Boolean(centralPairing),
       extensionBridge: true,
       capabilities: {
         publishing: true,
         instagramScraping: instagramCompanionQueueHealth(),
         facebookScraping: facebookCompanionQueueHealth(),
+        resourceScheduler: companionResourceSchedulerState(),
       },
       platforms,
     });
@@ -1694,7 +1702,7 @@ app.post("/api/automation/consent", requireRoles("operations_manager"), async (r
   try {
     const desktopHost = publishingDesktopHost();
     if (!desktopHost) {
-      res.status(409).json({ message: "Open Publishing Companion to approve protected unattended publishing." });
+      res.status(409).json({ message: "Open AgenticThat Companion to approve protected unattended publishing." });
       return;
     }
     await desktopHost.requestPersistentPublishingPermission();

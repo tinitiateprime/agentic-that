@@ -40,7 +40,7 @@ class CompanionFactory implements FacebookBrowserSessionFactory {
   async create(): Promise<FacebookBrowserSession> {
     if (this.signal.aborted) throw new FacebookCompanionCancelledError();
     const host = facebookCompanionDesktopHost();
-    if (!host) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
+    if (!host) throw new Error("Companion Facebook scraping is unavailable. Open or restart AgenticThat Companion.");
     const managed = await host.openBrowser({
       jobId: this.jobId,
       ownerKey: this.ownerKey,

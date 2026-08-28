@@ -1,4 +1,11 @@
-import { getFacebookScraperInfo, runFacebookScrape } from "./scraper.ts";
+import {
+  getFacebookScraperInfo,
+  runFacebookScrape,
+  type FacebookPost,
+  type FacebookProfileAnalysis,
+  type FacebookScrapeDiagnostics,
+  facebookUrlType,
+} from "./scraper.ts";
 import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./store.ts";
 import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
@@ -130,7 +137,72 @@ async function executeScrape(input: FacebookJobInput, store: FacebookRunStore, c
     discoveryStatus: scrape.discoveryStatus,
     diagnostics: scrape.diagnostics,
     dataSource: "live",
+    engine: "server",
   });
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function facebookDiscoveryStatus(value: unknown) {
+  return (["ok", "partial", "temporarily_unavailable", "login_required", "not_found"] as const)
+    .find(status => status === value) || "ok";
+}
+
+function facebookCompanionResults(value: unknown, maxResults: number): FacebookPost[] {
+  if (!Array.isArray(value)) throw new FacebookRequestError("Companion results are required.");
+  if (value.length > maxResults) throw new FacebookRequestError("Companion returned more results than requested.");
+  for (const result of value) {
+    const postUrl = objectValue(result).post_url;
+    if (typeof postUrl !== "string" || facebookUrlType(postUrl) !== "post") {
+      throw new FacebookRequestError("Companion returned an invalid Facebook post URL.");
+    }
+  }
+  return value as FacebookPost[];
+}
+
+export function prepareFacebookCompanionRun(
+  payload: Record<string, unknown>,
+  createdByUserId: string,
+) {
+  const input = prepareFacebookScrapeInput(objectValue(payload.input));
+  const companion = objectValue(payload.result);
+  const companionRun = objectValue(companion.run);
+  const results = facebookCompanionResults(
+    Array.isArray(companion.results) ? companion.results : companionRun.results,
+    input.maxResults,
+  );
+  const query = String(companionRun.query || input.requestedQuery).trim() || input.requestedQuery;
+  return {
+    createdByUserId,
+    requestedQuery: input.requestedQuery,
+    query,
+    inputMode: input.inputMode,
+    profileType: input.profileType,
+    maxResults: input.maxResults,
+    collectionMode: input.collectionMode,
+    recentDays: input.recentDays,
+    rangeType: input.rangeType,
+    rangeFrom: input.rangeFrom,
+    rangeTo: input.rangeTo,
+    results,
+    analysis: (companion.analysis || companionRun.analysis) as FacebookProfileAnalysis | undefined,
+    discoveryStatus: facebookDiscoveryStatus(companion.discoveryStatus || companion.discovery_status || companionRun.discoveryStatus),
+    diagnostics: (companion.diagnostics || companionRun.diagnostics || {}) as FacebookScrapeDiagnostics,
+    dataSource: "live" as const,
+    engine: "companion" as const,
+  };
+}
+
+async function importCompanionRun(
+  payload: Record<string, unknown>,
+  store: FacebookRunStore,
+  createdByUserId: string,
+) {
+  return store.saveRun(prepareFacebookCompanionRun(payload, createdByUserId));
 }
 
 async function jobResponse(job: FacebookJob, store: FacebookRunStore) {
@@ -185,6 +257,20 @@ export async function handleFacebookRequest(request: Request) {
     if (request.method === "GET" && route.startsWith("runs/")) {
       const run = await store.getRun(route.slice("runs/".length));
       return run ? json({ run }) : json({ message: "Run not found" }, 404);
+    }
+    if (request.method === "POST" && route === "runs/import-companion") {
+      const run = await importCompanionRun(await body(request), store, String(identity.sub));
+      return json({
+        run,
+        results: run.results,
+        analysis: run.analysis,
+        discoveryStatus: run.discoveryStatus,
+        discovery_status: run.discoveryStatus,
+        diagnostics: run.diagnostics,
+        dataSource: run.dataSource,
+        engine: run.engine,
+        message: `Saved ${run.results.length} Companion results to this workspace`,
+      }, 201);
     }
     if (request.method === "POST" && route === "jobs") {
       const input = prepareFacebookScrapeInput(await body(request));

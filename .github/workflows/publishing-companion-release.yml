@@ -56,7 +56,7 @@ jobs:
           $releaseArguments = @(
             "release", "create", $env:GITHUB_REF_NAME,
             "--verify-tag", "--generate-notes",
-            "--title", "AgenticThat Publishing Companion $env:GITHUB_REF_NAME"
+            "--title", "AgenticThat Companion $env:GITHUB_REF_NAME"
           )
           $releaseArguments += (Get-ChildItem -LiteralPath "artifacts" -File | ForEach-Object { $_.FullName })
           & gh @releaseArguments

@@ -1,15 +1,52 @@
 const COMPANION_ORIGIN = "http://127.0.0.1:8792";
 const REQUEST_TYPE = "agenticthat.publishing.proxy.request.v1";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD"]);
+const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
+const BUILT_IN_ORIGINS = new Set(["https://agentic-that.netlify.app"]);
 
-function isAllowedDashboard(urlText) {
+function trustedScriptId(origin) {
+  let hash = 2166136261;
+  for (const character of origin) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `agenticthat-dashboard-${(hash >>> 0).toString(16)}`;
+}
+
+async function savedTrustedOrigins() {
+  const stored = await chrome.storage.local.get(TRUSTED_ORIGINS_KEY);
+  return Array.isArray(stored[TRUSTED_ORIGINS_KEY])
+    ? stored[TRUSTED_ORIGINS_KEY].filter(origin => typeof origin === "string")
+    : [];
+}
+
+async function isAllowedDashboard(urlText) {
   try {
     const url = new URL(urlText || "");
-    if (url.origin === "https://agentic-that.netlify.app") return true;
-    return (url.hostname === "localhost" || url.hostname === "127.0.0.1")
-      && (url.protocol === "http:" || url.protocol === "https:");
+    if (BUILT_IN_ORIGINS.has(url.origin)) return true;
+    if ((url.hostname === "localhost" || url.hostname === "127.0.0.1")
+      && (url.protocol === "http:" || url.protocol === "https:")) return true;
+    return (await savedTrustedOrigins()).includes(url.origin);
   } catch {
     return false;
+  }
+}
+
+async function restoreTrustedContentScripts() {
+  const registrations = await chrome.scripting.getRegisteredContentScripts();
+  const registeredIds = new Set(registrations.map(item => item.id));
+  for (const origin of await savedTrustedOrigins()) {
+    const id = trustedScriptId(origin);
+    if (registeredIds.has(id)) continue;
+    const allowed = await chrome.permissions.contains({ origins: [`${origin}/*`] });
+    if (!allowed) continue;
+    await chrome.scripting.registerContentScripts([{
+      id,
+      matches: [`${origin}/*`],
+      js: ["dashboard-bridge.js"],
+      runAt: "document_start",
+      persistAcrossSessions: true
+    }]);
   }
 }
 
@@ -30,8 +67,8 @@ function base64ToBytes(value) {
 
 async function proxyRequest(message, sender) {
   const senderUrl = sender.url || sender.tab?.url || sender.origin;
-  if (!isAllowedDashboard(senderUrl)) {
-    return { ok: false, status: 403, error: "This page is not allowed to use the publishing companion." };
+  if (!(await isAllowedDashboard(senderUrl))) {
+    return { ok: false, status: 403, error: "This page is not a trusted AgenticThat dashboard." };
   }
 
   const path = safePath(message.path);
@@ -90,7 +127,7 @@ async function proxyRequest(message, sender) {
     return {
       ok: false,
       status: 503,
-      error: error instanceof Error ? error.message : "The local publishing companion is unavailable."
+      error: error instanceof Error ? error.message : "The local AgenticThat Companion is unavailable."
     };
   }
 }
@@ -106,3 +143,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   });
   return true;
 });
+
+chrome.runtime.onInstalled.addListener(() => { void restoreTrustedContentScripts(); });
+chrome.runtime.onStartup.addListener(() => { void restoreTrustedContentScripts(); });

@@ -1,8 +1,8 @@
-# AgenticThat Publishing Companion for Windows
+# AgenticThat Companion for Windows
 
-This Electron application packages the persistent Publish Queue API, local JSON
-store, media uploads, scheduler, and isolated Chrome profiles into a normal
-Windows desktop installer.
+This Electron application packages the publishing queue API, public Instagram
+and Facebook scraping engines, local JSON store, media uploads, scheduler, and
+isolated browser profiles into a normal Windows desktop installer.
 
 The Companion keeps AgenticThat itself in the user's normal browser. Account
 login opens by default in an isolated browser pane inside Companion. The user
@@ -24,7 +24,16 @@ launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 optional and used only for the system-browser login fallback.
 
-Version 1.6.7 provides the shared Instagram and Facebook Local Companion engines. Facebook profile analysis scans the public Reels grid for current views, correlates every loaded Reel with its exact reactions, comment count, and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most Discussed lists only after the full scanned set is verified. Comment bodies are not collected or displayed. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, with a fresh anonymous embedded browser as the browser-launch fallback.
+Version 1.7.0 provides the default Instagram and Facebook Companion engines,
+one shared scraping slot with publishing priority, durable authenticated
+workspace result history, version checks, and explicit custom-dashboard origin
+approval. Facebook profile analysis scans the public Reels grid for current
+views, correlates every loaded Reel with its exact reactions, comment count,
+and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most
+Discussed lists only after the full scanned set is verified. Comment bodies are
+not collected or displayed. Public Facebook collection runs in a fresh local
+Chrome or Edge session for reliable profile hydration, with a fresh anonymous
+embedded browser as the browser-launch fallback.
 Instagram and Facebook scraping use hidden temporary browser partitions and never reuse connected publishing/login sessions. See
 [`docs/instagram-companion-engine.md`](../../docs/instagram-companion-engine.md)
 for its API, isolation, queue, and failure behavior.
@@ -33,6 +42,10 @@ Companion shows Instagram and Facebook work on a shared live activity screen wit
 current profile, elapsed time, lifecycle stages, queue, recent results, and a
 scraping-only stop action. Windows notifications and the tray tooltip announce
 start and completion without taking over visible publishing browsers.
+
+Instagram and Facebook scraping share one browser-work slot. New scraping waits
+while publishing has priority, while provider/account publishing profiles and
+temporary anonymous scraper partitions remain isolated from each other.
 
 ## Development
 

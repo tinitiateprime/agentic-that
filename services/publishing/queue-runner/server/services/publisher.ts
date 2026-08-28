@@ -291,7 +291,7 @@ async function launchAccountBrowser(
   if (selectedEngine === "companion") {
     if (!desktopHost) {
       releaseAccount();
-      throw new Error("Publishing requires the Publishing Companion desktop app. Open Companion and try again; Chrome or Edge is available only as a login fallback.");
+      throw new Error("Publishing requires the AgenticThat Companion desktop app. Open Companion and try again; Chrome or Edge is available only as a login fallback.");
     }
     return launchCompanionEngineBrowser({
       account,

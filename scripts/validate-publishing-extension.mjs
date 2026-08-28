@@ -17,6 +17,12 @@ if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length 
 if ((manifest.host_permissions ?? []).some(permission => permission === "<all_urls>")) {
   throw new Error("Publishing extension must not request <all_urls>.");
 }
+if (!(manifest.permissions ?? []).includes("scripting") || !(manifest.permissions ?? []).includes("storage")) {
+  throw new Error("Companion extension must support explicitly trusted dashboard origins.");
+}
+if (!(manifest.optional_host_permissions ?? []).includes("https://*/*")) {
+  throw new Error("Companion extension must allow users to approve their exact HTTPS dashboard origin.");
+}
 const extensionPermissions = [
   ...(manifest.host_permissions ?? []),
   ...(manifest.content_scripts ?? []).flatMap(script => script.matches ?? []),
@@ -27,8 +33,8 @@ if (extensionPermissions.some(permission => /instagram\.com/i.test(permission)))
 if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
   throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
 }
-if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).includes(productionMatch))) {
-  throw new Error(`Publishing extension media resources must be available on ${productionMatch}.`);
+if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).includes("https://*/*"))) {
+  throw new Error("Companion extension media resources must support explicitly trusted HTTPS dashboards.");
 }
 
 const files = new Set([

@@ -1,15 +1,16 @@
-# AgenticThat Publishing Companion privacy policy
+# AgenticThat Companion privacy policy
 
 The extension connects the AgenticThat publishing dashboard at
-`https://agentic-that.netlify.app` to the AgenticThat Publishing Companion on
+`https://agentic-that.netlify.app` (or an HTTPS origin the user explicitly
+approves in the extension popup) to the AgenticThat Companion on
 `http://127.0.0.1:8792`.
 
 ## Data handled for the extension's single purpose
 
-To provide the local publishing bridge, the extension handles:
+To provide the local publishing and scraping bridge, the extension handles:
 
-- user-provided post text, selected images or videos, schedules, and publishing
-  actions;
+- user-provided post text, selected images or videos, schedules, publishing
+  actions, scraping queries, and public scraping results;
 - AgenticThat dashboard authentication information forwarded to the local
   companion; and
 - locally returned workspace and connected-account identifiers used by the
@@ -25,9 +26,10 @@ The extension does not receive or store social-network passwords, verification
 codes, or authentication cookies. Users enter social credentials directly on
 each social network's own Chrome page.
 
-Publishing metadata, uploaded media, schedules, and saved browser sessions are
-stored locally by the companion. Users can remove this local data from the
-companion's data directory.
+Publishing metadata, uploaded media, schedules, saved browser sessions, and
+temporary scraping jobs are stored locally by Companion. Completed scraping
+results are also saved to the authenticated AgenticThat workspace selected by
+the user.
 
 ## Sharing and limited use
 
@@ -36,5 +38,6 @@ for purposes unrelated to the extension's single purpose. Use of information
 handled by this extension complies with the Chrome Web Store User Data Policy,
 including the Limited Use requirements.
 
-The extension requests access only to the AgenticThat dashboard and the local
-companion address required for this function.
+The extension requests permanent access only to the primary AgenticThat
+dashboard and the local Companion address. Any additional HTTPS dashboard
+origin requires a separate user approval and can be removed at any time.

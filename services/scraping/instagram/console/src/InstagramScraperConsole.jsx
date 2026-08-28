@@ -45,8 +45,8 @@ const ANALYSIS_TABS = [
   { id: "patterns", label: "Content Patterns" }
 ];
 const SCRAPE_ENGINES = [
-  { id: "server", label: "Server", description: "Runs in the cloud" },
-  { id: "companion", label: "Local Companion", description: "Runs privately on this computer" }
+  { id: "companion", label: "Companion (recommended)", description: "Best results on this computer" },
+  { id: "server", label: "Ubuntu Server", description: "Runs on the shared server" }
 ];
 
 const inputModes = [
@@ -321,7 +321,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   const engagementMetricNote = platformConfig.engagementMetricNote || "From visible grid values";
   const commentsMetricNote = platformConfig.commentsMetricNote || "From visible grid values";
   const canRunScraper = capabilities === null || capabilities.includes("scraping.run");
-  const [scrapeEngine, setScrapeEngine] = useState("server");
+  const [scrapeEngine, setScrapeEngine] = useState("companion");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
   const [inputValue, setInputValue] = useState("");
@@ -342,7 +342,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   const [lastWorkflowLabel, setLastWorkflowLabel] = useState("Latest posts and reels");
   const [lastCollectionMode, setLastCollectionMode] = useState("latest");
   const [lastInputMode, setLastInputMode] = useState(null);
-  const [lastScrapeEngine, setLastScrapeEngine] = useState("server");
+  const [lastScrapeEngine, setLastScrapeEngine] = useState("companion");
   const [lastDiscoveryStatus, setLastDiscoveryStatus] = useState("ok");
   const [lastDiagnostics, setLastDiagnostics] = useState(null);
   const [cancelActiveScrape, setCancelActiveScrape] = useState(null);
@@ -388,8 +388,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       target: '[data-tour="engine"]',
       kicker: "Choose where it runs",
       title: "Pick your scraping engine",
-      copy: "Use Server for the simplest setup, or Local Companion to run privately on this computer.",
-      note: `${scrapeEngine === "companion" ? "Local Companion" : "Server"} is currently selected`,
+      copy: "Companion is recommended for the strongest results. Ubuntu Server remains available as a separate shared engine.",
+      note: `${scrapeEngine === "companion" ? "Companion" : "Ubuntu Server"} is currently selected`,
       pointerLabel: "Choose one",
       nextLabel: "Next"
     },
@@ -615,7 +615,14 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
     setCancelActiveScrape(() => () => controller.abort());
     try {
       const companionToken = await getClientServiceToken("scraping", publishingIdentityToken);
-      return normalizeJob(await companionJobRunner(payload, onStatus, controller.signal, companionToken));
+      const companionResult = await companionJobRunner(payload, onStatus, controller.signal, companionToken);
+      onStatus("Saving results to this workspace");
+      return normalizeJob(await apiPost(
+        "/runs/import-companion",
+        { input: payload, result: companionResult },
+        serviceUrl,
+        publishingIdentityToken,
+      ));
     } finally {
       setCancelActiveScrape(null);
     }
@@ -637,7 +644,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
     setLastQuery(run.query || run.requestedQuery || "Saved workspace run");
     setLastCollectionMode(run.collectionMode || "latest");
     setLastInputMode(run.inputMode || "profile");
-    setLastScrapeEngine("server");
+    setLastScrapeEngine(run.engine === "companion" ? "companion" : "server");
     setLastDiscoveryStatus(run.discoveryStatus || "ok");
     setLastDiagnostics(run.diagnostics || null);
     setLastWorkflowLabel(run.collectionMode === "engagement" ? "Profile analysis" : run.collectionMode === "range" ? "Saved range" : "Saved workspace run");
@@ -988,7 +995,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       <main className="instagram-scraper-app results-page">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">Dataset ready · {lastScrapeEngine === "companion" ? "Local Companion" : "Server"}</p>
+            <p className="eyebrow">Dataset ready · {lastScrapeEngine === "companion" ? "Companion" : "Ubuntu Server"}</p>
             <h1>{lastQuery}</h1>
             <p className="subtle">
               {lastWorkflowLabel}. {lastCollectionMode === "engagement"
@@ -1222,7 +1229,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       <div className="launch-panel-column">
         {workspaceRuns.length > 0 && <section className="workspace-run-history">
           <div><p className="eyebrow">Shared workspace results</p><h2>Recent scraping runs</h2></div>
-          <div>{workspaceRuns.slice(0, 8).map((run) => <button type="button" key={run.id} onClick={() => openWorkspaceRun(run)}><strong>{run.requestedQuery || run.query}</strong><span>{new Date(run.createdAt).toLocaleString()} · {Array.isArray(run.results) ? run.results.length : 0} results</span></button>)}</div>
+          <div>{workspaceRuns.slice(0, 8).map((run) => <button type="button" key={run.id} onClick={() => openWorkspaceRun(run)}><strong>{run.requestedQuery || run.query}</strong><span>{new Date(run.createdAt).toLocaleString()} · {Array.isArray(run.results) ? run.results.length : 0} results · {run.engine === "companion" ? "Companion" : "Ubuntu Server"}</span></button>)}</div>
         </section>}
         {userGuideAvailable && (
           <div className="launch-guide-row">

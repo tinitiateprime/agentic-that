@@ -8,9 +8,9 @@ if (Test-Path Env:AGENTICTHAT_COMPANION_PACKAGE_ROOT) {
 $packageRoot = if ($configuredPackageRoot) {
   [System.IO.Path]::GetFullPath($configuredPackageRoot)
 } else {
-  [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps\publishing-companion-desktop\out\AgenticThat Publishing Companion-win32-x64"))
+  [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps\publishing-companion-desktop\out\AgenticThat Companion-win32-x64"))
 }
-$executable = Join-Path $packageRoot "AgenticThat Publishing Companion.exe"
+$executable = Join-Path $packageRoot "AgenticThat Companion.exe"
 if (-not (Test-Path -LiteralPath $executable)) {
   throw "Build the packaged companion before running this smoke test."
 }

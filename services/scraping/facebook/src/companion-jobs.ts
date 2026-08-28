@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
 import { FacebookCompanionCancelledError, runFacebookCompanionScrape } from "./companion-runner.js";
 import type { FacebookScrapeInput } from "./scraper.js";
+import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 type Status = "queued" | "running" | "complete" | "failed" | "cancelled";
 type Failure = { code: string; message: string; retryable: boolean };
@@ -19,6 +20,7 @@ type Job = {
   result?: Awaited<ReturnType<typeof runFacebookCompanionScrape>>;
   error?: Failure;
   controller?: AbortController;
+  queueController?: AbortController;
   timedOut?: boolean;
 };
 
@@ -237,8 +239,19 @@ async function pump() {
   const job = jobs.get(nextId);
   if (!job || job.status !== "queued") { queueMicrotask(() => void pump()); return; }
   activeJobId = job.id;
-  try { await executeJob(job); }
+  const queueController = new AbortController();
+  job.queueController = queueController;
+  try {
+    await runCompanionScrapingTask("facebook", job.id, async () => {
+      job.queueController = undefined;
+      if (job.status !== "queued") return;
+      await executeJob(job);
+    }, queueController.signal);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+  }
   finally {
+    job.queueController = undefined;
     activeJobId = null;
     const terminal = [...jobs.values()].filter(item => ["complete", "failed", "cancelled"].includes(item.status)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     for (const item of terminal.slice(50)) jobs.delete(item.id);
@@ -248,7 +261,7 @@ async function pump() {
 }
 
 export function createFacebookCompanionJob(ownerKey: string, body: Record<string, unknown>) {
-  if (!facebookCompanionDesktopHost()) throw new Error("Local Companion Facebook scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
+  if (!facebookCompanionDesktopHost()) throw new Error("Companion Facebook scraping is unavailable. Open or restart AgenticThat Companion.");
   const input = prepareFacebookCompanionInput(body);
   const now = new Date().toISOString();
   const job: Job = { id: `fscrape_${randomUUID()}`, ownerKey, input, requestedQuery: input.query, status: "queued", progress: { stage: "queued", message: "Waiting for the local Facebook browser" }, createdAt: now, updatedAt: now };
@@ -271,6 +284,7 @@ export async function cancelFacebookCompanionJob(ownerKey: string, jobId: string
     const index = queue.indexOf(job.id);
     if (index >= 0) queue.splice(index, 1);
     job.status = "cancelled";
+    job.queueController?.abort();
     job.error = { code: "cancelled", message: "Facebook scraping was cancelled.", retryable: true };
     job.completedAt = new Date().toISOString();
     touch(job);
@@ -284,6 +298,7 @@ export async function cancelAllFacebookCompanionJobs(reason = "Facebook scraping
   let cancelled = false;
   for (const job of jobs.values()) {
     if (job.status === "queued") {
+      job.queueController?.abort();
       job.status = "cancelled";
       job.error = { code: "cancelled", message: reason, retryable: true };
       job.completedAt = new Date().toISOString();

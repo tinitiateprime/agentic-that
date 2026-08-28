@@ -107,7 +107,7 @@ Companion because a request-based Netlify Function cannot own persistent Chrome
 profiles or a continuously running scheduler. A Workspace Manager installs and
 pairs it once from Connections; other workspace users do not install it. After
 downloading the portable companion, the manager extracts the ZIP and opens
-`AgenticThat Publishing Companion.exe` from the extracted folder.
+`AgenticThat Companion.exe` from the extracted folder.
 
 After the Chrome Web Store approves the extension, set
 `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` to its public listing and redeploy. Keep

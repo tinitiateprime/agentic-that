@@ -1,4 +1,9 @@
 import { detectPublishingExtension, publishingExtensionFetch } from "../../../../../lib/publishing-extension-bridge.ts";
+import {
+  MINIMUM_COMPANION_EXTENSION_VERSION,
+  MINIMUM_COMPANION_VERSION,
+  versionAtLeast
+} from "../../../../../lib/companion-version.js";
 
 const PUBLISHING_SESSION_KEY = "agenticthat-publish-queue-session";
 const SCRAPING_SESSION_KEY = "agenticthat-facebook-companion-session";
@@ -74,11 +79,18 @@ async function companionFetch(path, init = {}, identityToken = "", retry = true)
 
 export async function getFacebookCompanionStatus(identityToken) {
   try {
+    const extension = await detectPublishingExtension();
+    if (!extension || !versionAtLeast(extension.version, MINIMUM_COMPANION_EXTENSION_VERSION)) {
+      return { ready: false, message: `Update the AgenticThat Companion extension to ${MINIMUM_COMPANION_EXTENSION_VERSION} or newer.` };
+    }
     const health = await extensionJson("/api/health");
+    if (!versionAtLeast(health?.companionVersion, MINIMUM_COMPANION_VERSION)) {
+      return { ready: false, message: `Update AgenticThat Companion to ${MINIMUM_COMPANION_VERSION} or newer.` };
+    }
     const capability = health?.capabilities?.facebookScraping;
     if (!capability?.available) return { ready: false, message: "Restart Companion to enable Facebook scraping." };
     await accessToken(identityToken);
-    return { ready: true, message: capability.activeJobs ? "Local scraper is busy; your job will be queued." : "Ready on this computer" };
+    return { ready: true, message: capability.activeJobs ? "Companion is busy; your job will be queued." : `Ready on this computer${health?.companionVersion ? ` · v${health.companionVersion}` : ""}` };
   } catch (error) {
     return { ready: false, message: error instanceof Error ? error.message : "Local Companion is unavailable." };
   }

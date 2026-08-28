@@ -1,4 +1,4 @@
-# Publishing Companion release guide
+# AgenticThat Companion release guide
 
 ## One-time owner setup
 
@@ -19,7 +19,7 @@
 Use Microsoft Store MSIX distribution as the primary public installation path:
 
 1. Register in Microsoft Partner Center and reserve the
-   **AgenticThat Publishing Companion** app name.
+   **AgenticThat Companion** app name.
 2. Open the reserved product's **Product identity** page and copy its
    **Package/Identity/Name**, **Package/Identity/Publisher**, and publisher
    display name exactly.

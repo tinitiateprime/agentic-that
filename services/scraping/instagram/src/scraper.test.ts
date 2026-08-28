@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleInstagramRequest } from "./api.ts";
+import { handleInstagramRequest, prepareInstagramCompanionRun } from "./api.ts";
 import {
   buildProfileAnalysis,
   canUpgradeCurrentReelsGridView,
@@ -47,6 +47,37 @@ test("prevents scraper API and polling responses from being cached", async () =>
   assert.equal(response.headers.get("cache-control"), "no-store, no-cache, must-revalidate");
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("expires"), "0");
+});
+
+test("prepares Companion results for durable workspace storage", () => {
+  const run = prepareInstagramCompanionRun({
+    input: { mode: "profile", keyword: "example", max_results: 10, collection_mode: "latest" },
+    result: {
+      run: { query: "@example" },
+      results: [{ post_url: "https://www.instagram.com/p/example/" }],
+      discoveryStatus: "partial",
+      diagnostics: { discoveredCandidates: 1 },
+    },
+  }, "user-1");
+  assert.equal(run.engine, "companion");
+  assert.equal(run.createdByUserId, "user-1");
+  assert.equal(run.query, "@example");
+  assert.equal(run.results.length, 1);
+  assert.equal(run.discoveryStatus, "partial");
+});
+
+test("rejects malformed or excessive Companion Instagram results", () => {
+  assert.throws(() => prepareInstagramCompanionRun({
+    input: { mode: "profile", keyword: "example", max_results: 1 },
+    result: { results: [{ post_url: "https://example.com/not-instagram" }] },
+  }, "user-1"), /invalid Instagram post URL/);
+  assert.throws(() => prepareInstagramCompanionRun({
+    input: { mode: "profile", keyword: "example", max_results: 1 },
+    result: { results: [
+      { post_url: "https://www.instagram.com/p/one/" },
+      { post_url: "https://www.instagram.com/p/two/" },
+    ] },
+  }, "user-1"), /more results than requested/);
 });
 
 test("bounds Latest profile discovery to a smaller reliability-focused pool", () => {

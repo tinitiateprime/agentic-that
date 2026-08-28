@@ -1,22 +1,25 @@
-# Instagram Local Companion Engine
+# AgenticThat Companion scraping engine
 
-The Instagram scraper has two explicit execution engines:
+The Instagram and Facebook scrapers have two explicit execution engines:
 
-- `server` keeps the existing cloud/Netlify scraping path unchanged.
-- `companion` runs the same public-data extraction and ranking contract on the customer's computer and network.
+- `companion` is the default and recommended engine. It runs the proven
+  public-data extraction and ranking contract on the customer's computer and
+  network.
+- `server` runs the separate Ubuntu service and remains explicitly selectable
+  for users who do not have Companion.
 
 The selected engine is exact. Neither engine silently falls back to the other. Companion results are produced by the current job only and are never replaced with a saved server run.
 
 ## Local API
 
-The existing Publishing Companion owns the authenticated loopback API on `127.0.0.1:8792`:
+AgenticThat Companion owns the authenticated loopback API on `127.0.0.1:8792`:
 
 - `GET /api/health` reports `capabilities.instagramScraping` availability, queue depth, and concurrency.
 - `POST /api/scraping/instagram/jobs` validates and queues a fresh public scrape.
 - `GET /api/scraping/instagram/jobs/:id` returns product-level progress and the normalized result.
 - `DELETE /api/scraping/instagram/jobs/:id` cancels queued or active work.
 
-Job routes use a short-lived scraping-only bearer session derived from the signed AgenticThat workspace identity and are scoped to the authenticated workspace and user. It is created automatically when Local Companion is selected; publishing permissions still require the separate Operations Manager session. The current Chrome extension transports these loopback requests; it retains only its `http://127.0.0.1:8792/*` host permission and receives no Instagram host permission.
+Job routes use a short-lived scraping-only bearer session derived from the signed AgenticThat workspace identity and are scoped to the authenticated workspace and user. It is created automatically when Companion is selected; publishing permissions still require the separate Operations Manager session. The Chrome extension transports these loopback requests; it retains only its `http://127.0.0.1:8792/*` permanent host permission and receives no Instagram or Facebook host permission. A custom AgenticThat HTTPS dashboard origin must be explicitly approved in the extension popup.
 
 ## Browser isolation
 
@@ -27,7 +30,10 @@ Each attempt uses a hidden Electron `BrowserWindow` with a unique non-persistent
 - permits top-level navigation only to HTTPS Instagram pages;
 - clears storage and cache and destroys the window after success, failure, cancellation, recovery, or shutdown.
 
-Recovery creates another fresh isolated worker. The local queue allows one active scrape so overlapping users cannot create an uncontrolled browser burst.
+Recovery creates another fresh isolated worker. Instagram and Facebook share one
+local scraping slot, so they cannot create simultaneous browser bursts. New
+scrapes wait while a local publishing automation run has priority; an active
+scrape is allowed to finish safely rather than being killed mid-collection.
 
 ## Collection behavior
 
@@ -35,6 +41,6 @@ The Companion engine reuses the server scraper's normalized output, parsing, sou
 
 ## Operational limits
 
-This engine improves reliability by moving requests away from shared server IPs, but Instagram can still change public markup, require login, rate-limit a network, remove a profile, or experience an outage. These conditions return typed failures instead of cached or cross-profile data. Product rate limits can be added above the existing one-job local concurrency without changing the scraping engine.
+This engine improves reliability by moving requests away from shared server IPs, but a provider can still change public markup, require login, rate-limit a network, remove a profile, or experience an outage. These conditions return typed failures instead of cached or cross-profile data. Completed Companion results are validated and saved to the authenticated workspace's server-side run history. The website never silently reruns a failed Companion request on the Server engine.
 
-Desktop release containing live scraping activity and the Electron multi-page compatibility fix: `1.4.3`.
+The website requires AgenticThat Companion `1.7.0` and extension `1.2.0` or newer for this engine contract.

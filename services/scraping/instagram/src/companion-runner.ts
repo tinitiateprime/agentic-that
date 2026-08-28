@@ -41,7 +41,7 @@ class CompanionSessionFactory implements InstagramBrowserSessionFactory {
     if (this.signal.aborted) throw new InstagramCompanionCancelledError();
     const desktopHost = instagramCompanionDesktopHost();
     if (!desktopHost) {
-      throw new Error("Local Companion scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
+      throw new Error("Companion scraping is unavailable. Open or restart AgenticThat Companion.");
     }
 
     const managed = await desktopHost.openBrowser({ jobId: this.jobId });

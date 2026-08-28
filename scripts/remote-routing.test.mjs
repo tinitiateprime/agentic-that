@@ -49,6 +49,19 @@ test("scraper consoles never expose configurable service origins to browsers", a
   }
 });
 
+test("Companion is the explicit default scraper engine and Server stays selectable", async () => {
+  const source = await readFile(new URL(
+    "services/scraping/instagram/console/src/InstagramScraperConsole.jsx",
+    root,
+  ), "utf8");
+  assert.match(source, /useState\("companion"\)/);
+  assert.match(source, /id: "companion"/);
+  assert.match(source, /id: "server"/);
+  assert.match(source, /runs\/import-companion/);
+  assert.match(source, /if \(scrapeEngine !== "companion"\) \{[\s\S]{0,180}runInstagramJob\(/);
+  assert.match(source, /companionResult[\s\S]{0,260}runs\/import-companion/);
+});
+
 test("development orchestration keeps internal service targets server-side", async () => {
   const source = await readFile(new URL("scripts/dev-all.mjs", root), "utf8");
   assert.match(source, /INSTAGRAM_API_URL: instagramApiUrl/);

@@ -436,7 +436,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
 
   const consentWithoutCompanion = await api("/api/automation/consent", { method: "POST" });
   assert.equal(consentWithoutCompanion.status, 409);
-  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open Publishing Companion/i);
+  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open AgenticThat Companion/i);
 
   const xAccountResponse = await api("/api/platforms/x/accounts", {
     method: "POST",

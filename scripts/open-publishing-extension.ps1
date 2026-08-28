@@ -24,6 +24,6 @@ Write-Host "Chrome and the extension folder are open." -ForegroundColor Green
 Write-Host "1. Turn on Developer mode in the top-right corner of chrome://extensions."
 Write-Host "2. Click Load unpacked."
 Write-Host "3. Choose this folder: $extensionPath"
-Write-Host "4. Pin AgenticThat Publishing Companion from Chrome's Extensions menu."
+Write-Host "4. Pin AgenticThat Companion from Chrome's Extensions menu."
 Write-Host ""
 Read-Host "Press Enter to close this helper"

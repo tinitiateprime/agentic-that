@@ -29,9 +29,6 @@ $productionMatch = "https://agentic-that.netlify.app/*"
 foreach ($contentScript in $stagedManifest.content_scripts) {
   $contentScript.matches = @($productionMatch)
 }
-foreach ($resource in $stagedManifest.web_accessible_resources) {
-  $resource.matches = @($productionMatch)
-}
 $manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText(
   $stagedManifestPath,

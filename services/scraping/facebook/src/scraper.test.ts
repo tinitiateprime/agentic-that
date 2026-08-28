@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleFacebookRequest, prepareFacebookScrapeInput } from "./api.ts";
+import { handleFacebookRequest, prepareFacebookCompanionRun, prepareFacebookScrapeInput } from "./api.ts";
 import {
   buildFacebookProfileAnalysis,
   classifyFacebookAccess,
@@ -83,6 +83,33 @@ test("normalizes Facebook Page, public profile, keyword, and post inputs", () =>
   });
   assert.equal(linkedProfile.startUrl, "https://www.facebook.com/peaktylerr");
   assert.equal(linkedProfile.targetProfileUrl, "https://www.facebook.com/peaktylerr");
+});
+
+test("prepares Companion results for durable workspace storage", () => {
+  const result = post();
+  const run = prepareFacebookCompanionRun({
+    input: { mode: "profile", query: "example", profile_type: "page" },
+    result: {
+      run: { query: "example" },
+      results: [result],
+      discoveryStatus: "ok",
+      diagnostics: { attempts: 1 },
+    },
+  }, "user-1");
+  assert.equal(run.engine, "companion");
+  assert.equal(run.createdByUserId, "user-1");
+  assert.equal(run.results[0], result);
+});
+
+test("rejects malformed or excessive Companion Facebook results", () => {
+  assert.throws(() => prepareFacebookCompanionRun({
+    input: { mode: "profile", query: "example", max_results: 1 },
+    result: { results: [post({ post_url: "https://example.com/not-facebook" })] },
+  }, "user-1"), /invalid Facebook post URL/);
+  assert.throws(() => prepareFacebookCompanionRun({
+    input: { mode: "profile", query: "example", max_results: 1 },
+    result: { results: [post(), post({ post_url: "https://www.facebook.com/example/posts/2" })] },
+  }, "user-1"), /more results than requested/);
 });
 
 test("recognizes supported Facebook URL families", () => {

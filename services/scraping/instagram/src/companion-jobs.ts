@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { runInstagramCompanionScrape, InstagramCompanionCancelledError } from "./companion-runner.js";
 import { instagramCompanionDesktopHost } from "./companion-desktop-host.js";
 import type { InstagramScrapeInput } from "./scraper.js";
+import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 export type InstagramCompanionJobStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type InstagramCompanionFailureCode =
@@ -37,6 +38,7 @@ type CompanionJob = {
   result?: Awaited<ReturnType<typeof runInstagramCompanionScrape>>;
   error?: InstagramCompanionFailure;
   controller?: AbortController;
+  queueController?: AbortController;
   timedOut?: boolean;
 };
 
@@ -192,7 +194,7 @@ function failureFor(error: unknown, job: CompanionJob): InstagramCompanionFailur
   if (/Companion scraping is unavailable|hidden Companion scraping browser|debugging endpoint/i.test(original)) {
     return {
       code: "companion_unavailable",
-      message: "Local Companion scraping is unavailable. Open or restart AgenticThat Publishing Companion.",
+      message: "Companion scraping is unavailable. Open or restart AgenticThat Companion.",
       retryable: true,
     };
   }
@@ -318,9 +320,18 @@ async function pumpQueue() {
     return;
   }
   activeJobId = job.id;
+  const queueController = new AbortController();
+  job.queueController = queueController;
   try {
-    await executeJob(job);
+    await runCompanionScrapingTask("instagram", job.id, async () => {
+      job.queueController = undefined;
+      if (job.status !== "queued") return;
+      await executeJob(job);
+    }, queueController.signal);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
   } finally {
+    job.queueController = undefined;
     activeJobId = null;
     pruneJobs();
     notifyInstagramCompanionActivity();
@@ -330,7 +341,7 @@ async function pumpQueue() {
 
 export function createInstagramCompanionJob(ownerKey: string, body: Record<string, unknown>) {
   if (!instagramCompanionDesktopHost()) {
-    throw new Error("Local Companion scraping is unavailable. Open or restart AgenticThat Publishing Companion.");
+    throw new Error("Companion scraping is unavailable. Open or restart AgenticThat Companion.");
   }
   const input = prepareInstagramCompanionInput(body);
   const now = new Date().toISOString();
@@ -363,6 +374,7 @@ export async function cancelInstagramCompanionJob(ownerKey: string, jobId: strin
     const index = queue.indexOf(job.id);
     if (index >= 0) queue.splice(index, 1);
     job.status = "cancelled";
+    job.queueController?.abort();
     job.error = { code: "cancelled", message: "Instagram scraping was cancelled.", retryable: true };
     job.completedAt = new Date().toISOString();
     touch(job);
@@ -380,6 +392,7 @@ export async function cancelAllInstagramCompanionJobs(reason = "Instagram scrapi
   let cancelled = 0;
   for (const job of jobs.values()) {
     if (job.status === "queued") {
+      job.queueController?.abort();
       job.status = "cancelled";
       job.error = { code: "cancelled", message: reason, retryable: true };
       job.completedAt = new Date().toISOString();

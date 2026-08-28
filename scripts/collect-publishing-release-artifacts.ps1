@@ -19,14 +19,19 @@ if (-not $portable) { throw "Windows companion portable ZIP was not produced." }
 
 $setup = $null
 if (-not $PortableOnly) {
-  $setup = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "AgenticThat-Publishing-Companion-Setup.exe" | Select-Object -First 1
+  $setup = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "AgenticThat-Companion-Setup.exe" | Select-Object -First 1
   if (-not $setup) { throw "Windows companion Setup executable was not produced." }
 }
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 if ($setup) {
+  Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Companion-Setup.exe") -Force
   Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Setup.exe") -Force
 }
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Companion-Portable.zip") -Force
+# Keep the previous public artifact names as compatibility aliases so existing
+# download URLs continue working during the product-name transition.
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Publishing-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Portable.zip") -Force
 

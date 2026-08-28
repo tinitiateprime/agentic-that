@@ -1,4 +1,10 @@
-import { getInstagramScraperInfo, runInstagramScrape } from "./scraper.ts";
+import {
+  getInstagramScraperInfo,
+  runInstagramScrape,
+  type InstagramPost,
+  type InstagramProfileAnalysis,
+  type InstagramScrapeDiagnostics,
+} from "./scraper.ts";
 import {
   InstagramRunStore,
   selectRecentRunFallback,
@@ -78,7 +84,7 @@ function requestError(message: string): never {
   throw new InstagramRequestError(message);
 }
 
-function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
+export function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
   const requestedMode = String(body.mode || body.inputMode || "").trim().toLowerCase();
   let requestedQuery = String(body.query || body.keyword || "").trim();
   if (requestedMode === "keyword" && requestedQuery && !requestedQuery.startsWith("#")) {
@@ -226,9 +232,73 @@ async function executeScrape(input: InstagramJobInput, store: InstagramRunStore,
     discoveryStatus,
     diagnostics: scrape.diagnostics,
     dataSource,
+    engine: "server",
     sourceRunId,
     sourceCreatedAt
   });
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function instagramDiscoveryStatus(value: unknown) {
+  return (["ok", "partial", "temporarily_unavailable", "login_required", "not_found"] as const)
+    .find(status => status === value) || "ok";
+}
+
+function instagramCompanionResults(value: unknown, maxResults: number): InstagramPost[] {
+  if (!Array.isArray(value)) requestError("Companion results are required.");
+  if (value.length > maxResults) requestError("Companion returned more results than requested.");
+  for (const result of value) {
+    const postUrl = objectValue(result).post_url;
+    if (typeof postUrl !== "string" || instagramUrlType(postUrl) !== "post") {
+      requestError("Companion returned an invalid Instagram post URL.");
+    }
+  }
+  return value as InstagramPost[];
+}
+
+export function prepareInstagramCompanionRun(
+  payload: Record<string, unknown>,
+  createdByUserId: string,
+) {
+  const input = prepareScrapeInput(objectValue(payload.input));
+  const companion = objectValue(payload.result);
+  const companionRun = objectValue(companion.run);
+  const results = instagramCompanionResults(
+    Array.isArray(companion.results) ? companion.results : companionRun.results,
+    input.maxResults,
+  );
+  const query = String(companionRun.query || input.requestedQuery).trim() || input.requestedQuery;
+  return {
+    createdByUserId,
+    query,
+    requestedQuery: input.requestedQuery,
+    maxResults: input.maxResults,
+    recentDays: input.recentDays,
+    collectionMode: input.collectionMode,
+    rangeType: input.rangeType,
+    rangeFrom: input.rangeFrom,
+    rangeTo: input.rangeTo,
+    sortBy: input.sortBy,
+    results,
+    analysis: (companion.analysis || companionRun.analysis) as InstagramProfileAnalysis | undefined,
+    discoveryStatus: instagramDiscoveryStatus(companion.discoveryStatus || companion.discovery_status || companionRun.discoveryStatus),
+    diagnostics: (companion.diagnostics || companionRun.diagnostics) as InstagramScrapeDiagnostics | undefined,
+    dataSource: "live" as const,
+    engine: "companion" as const,
+  };
+}
+
+async function importCompanionRun(
+  payload: Record<string, unknown>,
+  store: InstagramRunStore,
+  createdByUserId: string,
+) {
+  return store.saveRun(prepareInstagramCompanionRun(payload, createdByUserId));
 }
 
 async function jobResponse(job: InstagramJob, store: InstagramRunStore) {
@@ -296,6 +366,20 @@ export async function handleInstagramRequest(request: Request) {
     if (request.method === "GET" && route.startsWith("runs/")) {
       const run = await store.getRun(route.slice("runs/".length));
       return run ? json({ run }) : json({ message: "Run not found" }, 404);
+    }
+    if (request.method === "POST" && route === "runs/import-companion") {
+      const run = await importCompanionRun(await readBody(request), store, String(identity.sub));
+      return json({
+        run,
+        results: run.results,
+        analysis: run.analysis,
+        discoveryStatus: run.discoveryStatus,
+        discovery_status: run.discoveryStatus,
+        diagnostics: run.diagnostics,
+        dataSource: run.dataSource,
+        engine: run.engine,
+        message: `Saved ${run.results.length} Companion results to this workspace`,
+      }, 201);
     }
 
     if (request.method === "POST" && route === "jobs") {

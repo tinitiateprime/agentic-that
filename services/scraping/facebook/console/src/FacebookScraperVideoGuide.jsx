@@ -236,9 +236,9 @@ function FacebookScraperVideoGuide({ open, onClose }) {
                     <label>Choose scraping engine</label>
                     <div className="facebook-film-engine">
                       <button type="button" className={serverSelected ? "is-selected" : ""} tabIndex={-1}>
-                        <strong>Server</strong><span>Runs in the cloud</span>
+                        <strong>Companion (recommended)</strong><span>Best results on this computer</span>
                       </button>
-                      <button type="button" tabIndex={-1}><strong>Local Companion</strong><span>Runs privately here</span></button>
+                      <button type="button" tabIndex={-1}><strong>Ubuntu Server</strong><span>Runs on the shared server</span></button>
                     </div>
                   </section>
 

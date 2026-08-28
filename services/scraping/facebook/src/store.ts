@@ -48,6 +48,7 @@ export type FacebookRun = {
   discoveryStatus: FacebookDiscoveryStatus;
   diagnostics: FacebookScrapeDiagnostics;
   dataSource: "live";
+  engine?: "server" | "companion";
 };
 
 export type FacebookJob = {

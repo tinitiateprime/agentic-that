@@ -4,8 +4,8 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $desktopRoot = Join-Path $projectRoot "apps\publishing-companion-desktop"
 $outRoot = Join-Path $desktopRoot "out"
 
-$setup = Get-ChildItem -LiteralPath (Join-Path $outRoot "make") -Recurse -File -Filter "AgenticThat-Publishing-Companion-Setup.exe" | Select-Object -First 1
-$app = Get-ChildItem -LiteralPath $outRoot -Recurse -File -Filter "AgenticThat Publishing Companion.exe" |
+$setup = Get-ChildItem -LiteralPath (Join-Path $outRoot "make") -Recurse -File -Filter "AgenticThat-Companion-Setup.exe" | Select-Object -First 1
+$app = Get-ChildItem -LiteralPath $outRoot -Recurse -File -Filter "AgenticThat Companion.exe" |
   Where-Object { $_.FullName -notlike "*\make\*" } |
   Select-Object -First 1
 

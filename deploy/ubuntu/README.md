@@ -1,9 +1,12 @@
 # Single-Ubuntu website deployment
 
-This layout runs the website, publishing browsers, Telegram messaging, and the
-Instagram/Facebook scrapers permanently on one Ubuntu machine. Remote users
-open one HTTPS website and install nothing. Nginx is the only public process;
-Next.js and every worker bind to `127.0.0.1`.
+This layout runs the website, primary publishing, Telegram messaging, and the
+separately selectable Instagram/Facebook **Ubuntu Server** scraping engine
+permanently on one Ubuntu machine. Remote users can use those server services
+from one HTTPS website without installing anything. The recommended
+**Companion** scraping engine runs on a user's Windows computer and therefore
+requires AgenticThat Companion plus its extension. Nginx is the only public
+Ubuntu process; Next.js and every Ubuntu worker bind to `127.0.0.1`.
 
 The Telegram systemd service is also the durable post scheduler. Once a remote
 user queues a Telegram post, the service keeps its schedule and per-recipient
@@ -142,6 +145,13 @@ accounts, jobs, messages, or scraper runs. Then connect test accounts and
 verify one text and one media post per enabled destination. Social sites can
 change their web UI; keep the per-platform kill switches available and monitor
 failed/uncertain jobs rather than automatically retrying an irreversible post.
+
+For Companion scraping, install Companion `1.7.0` and extension `1.2.0` or
+newer. Open the extension and approve the exact production HTTPS origin once.
+Quick-tunnel origins change when restarted and must be approved again; a stable
+production domain is strongly preferred. Confirm Instagram and Facebook both
+default to Companion, Ubuntu Server remains selectable, and completed
+Companion runs appear in workspace history from a second browser session.
 
 ## Updates and operations
 

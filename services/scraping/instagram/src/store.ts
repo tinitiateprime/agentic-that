@@ -29,6 +29,7 @@ export type InstagramRun = {
   discoveryStatus?: InstagramDiscoveryStatus;
   diagnostics?: InstagramScrapeDiagnostics;
   dataSource?: "live" | "recent_cache";
+  engine?: "server" | "companion";
   sourceRunId?: string;
   sourceCreatedAt?: string;
 };

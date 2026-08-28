@@ -3,8 +3,8 @@
 AgenticThat publishing uses three coordinated components:
 
 1. The dashboard deployed on Netlify.
-2. The AgenticThat Publishing Companion extension from the Chrome Web Store.
-3. The AgenticThat Publishing Companion Windows application.
+2. The AgenticThat Companion extension from the Chrome Web Store.
+3. The AgenticThat Companion Windows application.
 
 The Netlify site remains the user interface. The Windows app owns the persistent
 queue, uploaded media, scheduler, Chrome profiles, and browser publishing. The

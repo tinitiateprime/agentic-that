@@ -1,7 +1,23 @@
 const COMPANION_ORIGIN = "http://127.0.0.1:8792";
 const container = document.querySelector("#media");
+const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
+
+async function trustedEmbeddingOrigin() {
+  const candidate = window.location.ancestorOrigins?.[0] || document.referrer;
+  if (!candidate) return false;
+  try {
+    const origin = new URL(candidate).origin;
+    if (origin === "https://agentic-that.netlify.app") return true;
+    if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)) return true;
+    const stored = await chrome.storage.local.get(TRUSTED_ORIGINS_KEY);
+    return Array.isArray(stored[TRUSTED_ORIGINS_KEY]) && stored[TRUSTED_ORIGINS_KEY].includes(origin);
+  } catch {
+    return false;
+  }
+}
 
 async function load() {
+  if (!(await trustedEmbeddingOrigin())) throw new Error("This website is not trusted for Companion previews.");
   const params = new URLSearchParams(window.location.search);
   const path = params.get("path") || "";
   const compact = params.get("compact") === "1";
