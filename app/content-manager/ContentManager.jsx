@@ -29,7 +29,7 @@ import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
+  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Companion-Portable.zip";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
   instagram: "Instagram",

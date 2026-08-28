@@ -141,10 +141,10 @@ type AutomationNotice = {
 
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip';
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Companion-Portable.zip';
 const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
 const extensionInstallUrl = configuredExtensionInstallUrl
-  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip';
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Companion-Extension.zip';
 const localCompanionHealthUrl = 'http://127.0.0.1:8792/api/health';
 
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [
