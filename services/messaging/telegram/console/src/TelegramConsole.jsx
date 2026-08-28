@@ -2317,7 +2317,8 @@ export function TelegramConsole({ integrated = false }) {
                       h("button", {"id":"group-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"group-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"group-list","className":"record-list"})
                 )
@@ -2368,7 +2369,8 @@ export function TelegramConsole({ integrated = false }) {
                       h("button", {"id":"channel-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"channel-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"channel-list","className":"record-list"})
                 )

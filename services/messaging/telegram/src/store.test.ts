@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -213,6 +213,99 @@ test("an interrupted Telegram delivery is not retried after its server lease exp
     assert.match(recovered?.deliveries[0]?.error || "", /not retried to prevent a duplicate/);
     const next = await store.claimNextPostDelivery(post.id, "replacement-worker");
     assert.equal(next?.recipient, "@second");
+  } finally {
+    await store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("Telegram workspace contacts, groups, channels, and profiles are encrypted and workspace scoped", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-workspace-"));
+  const encryptionKey = randomBytes(32).toString("base64url");
+  const store = new MultiUserStore(dataDir, encryptionKey);
+  try {
+    await store.initialize();
+    const owner = (await store.createUser("Workspace owner")).user;
+    const outsider = (await store.createUser("Other workspace")).user;
+    const account = (await store.saveTelegramAccount(owner.id, accountInput("workspace-session"))).account;
+    const contact = await store.createContact(owner.id, {
+      name: "Private contact",
+      handle: "@private_contact",
+      countryCode: "+91",
+      phone: "+919999999999",
+      group: "Customers",
+      notes: "Sensitive contact note",
+    });
+    const group = await store.createGroup(owner.id, {
+      name: "Launch list",
+      type: "Broadcast",
+      status: "Created",
+      members: "@private_contact\n+918888888888",
+      notes: "Sensitive group note",
+    });
+    const channel = await store.createChannel(owner.id, {
+      name: "Announcements",
+      privacy: "Private",
+      invites: "https://t.me/example",
+      notes: "Sensitive channel note",
+    });
+    const profile = await store.saveProfile(owner.id, account.id, {
+      profileName: "Support sender",
+      displayName: "Support",
+      username: "support_sender",
+      phone: "+917777777777",
+      status: "Active",
+      avatar: "",
+      configNumbers: "primary",
+      description: "Sensitive profile note",
+    });
+
+    assert.match(contact.id, /^contact_/);
+    assert.match(group.id, /^group_/);
+    assert.match(channel.id, /^channel_/);
+    assert.equal(profile.accountId, account.id);
+    assert.deepEqual(await store.listWorkspaceData(outsider.id), { contacts: [], groups: [], channels: [], profiles: [] });
+    assert.equal(await store.updateContact(outsider.id, contact.id, { ...contact, name: "Wrong workspace" }), null);
+    await assert.rejects(store.saveProfile(outsider.id, account.id, profile), /not found/);
+
+    const raw = await readFile(path.join(dataDir, "store.json"), "utf8");
+    assert.doesNotMatch(raw, /Sensitive contact note|Sensitive group note|Sensitive channel note|Sensitive profile note/);
+    await store.close();
+
+    const reopened = new MultiUserStore(dataDir, encryptionKey);
+    await reopened.initialize();
+    const workspace = await reopened.listWorkspaceData(owner.id);
+    assert.equal(workspace.contacts[0]?.phone, "+919999999999");
+    assert.equal(workspace.groups[0]?.members, "@private_contact\n+918888888888");
+    assert.equal(workspace.channels[0]?.name, "Announcements");
+    assert.equal(workspace.profiles[0]?.profileName, "Support sender");
+    await reopened.close();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy Telegram workspace import preserves IDs and does not overwrite server edits unless requested", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-import-"));
+  const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));
+  try {
+    await store.initialize();
+    const owner = (await store.createUser("Import owner")).user;
+    const account = (await store.saveTelegramAccount(owner.id, accountInput("import-session"))).account;
+    const importedAt = new Date().toISOString();
+    const backup = {
+      contacts: [{ id: "contact_legacy-one", name: "Legacy", handle: "@legacy", countryCode: "+91", phone: "", group: "", notes: "first", createdAt: importedAt, updatedAt: importedAt }],
+      groups: [{ id: "group_legacy-one", name: "Legacy group", type: "Broadcast", status: "Created", members: "@legacy", notes: "", createdAt: importedAt, updatedAt: importedAt }],
+      channels: [{ id: "channel_legacy-one", name: "Legacy channel", privacy: "Private", invites: "", notes: "", createdAt: importedAt, updatedAt: importedAt }],
+      profiles: [{ accountId: account.id, profileName: "Legacy profile", displayName: "", username: "", phone: "", status: "Active", avatar: "", configNumbers: "", description: "", updatedAt: importedAt }],
+    };
+    await store.importWorkspaceData(owner.id, backup);
+    await store.importWorkspaceData(owner.id, { ...backup, contacts: [{ ...backup.contacts[0], name: "Stale local copy" }] });
+    assert.equal((await store.listWorkspaceData(owner.id)).contacts[0]?.name, "Legacy");
+    await store.importWorkspaceData(owner.id, { ...backup, contacts: [{ ...backup.contacts[0], name: "Restored backup" }] }, true);
+    const restored = await store.listWorkspaceData(owner.id);
+    assert.equal(restored.contacts[0]?.id, "contact_legacy-one");
+    assert.equal(restored.contacts[0]?.name, "Restored backup");
   } finally {
     await store.close();
     await rm(dataDir, { recursive: true, force: true });

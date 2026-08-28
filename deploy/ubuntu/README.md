@@ -8,7 +8,9 @@ Next.js and every worker bind to `127.0.0.1`.
 The Telegram systemd service is also the durable post scheduler. Once a remote
 user queues a Telegram post, the service keeps its schedule and per-recipient
 delivery checkpoints under `/var/lib/agenticthat-telegram` and sends it even
-when that user's browser is closed.
+when that user's browser is closed. Telegram contacts, broadcast groups,
+channel records, and connected-account profile metadata are also encrypted in
+that server store and shared across devices only within the same workspace.
 
 ## Required host safeguards
 
@@ -130,7 +132,9 @@ sudo ss -ltnp
 
 The Telegram health response must include `"scheduler":"server"`. Schedule a
 small test message, close the browser before it is due, and confirm it is sent
-and appears in Delivery history after reopening the website.
+and appears in Delivery history after reopening the website. Create one
+contact, group, and channel record, then sign in from a second browser and
+confirm they appear only in the same workspace.
 
 Only ports 22 (restricted), 80, and 443 should be publicly reachable. In the
 website, test two separate workspaces and verify neither can see the other's

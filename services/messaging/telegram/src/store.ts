@@ -103,6 +103,64 @@ export type ClaimedTelegramPost = TelegramPost & {
   leaseOwner: string;
 };
 
+export type TelegramWorkspaceContact = {
+  id: string;
+  name: string;
+  handle: string;
+  countryCode: string;
+  phone: string;
+  group: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TelegramWorkspaceGroup = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  members: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TelegramWorkspaceChannel = {
+  id: string;
+  name: string;
+  privacy: string;
+  invites: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TelegramWorkspaceProfile = {
+  accountId: string;
+  profileName: string;
+  displayName: string;
+  username: string;
+  phone: string;
+  status: string;
+  avatar: string;
+  configNumbers: string;
+  description: string;
+  updatedAt: string;
+};
+
+export type TelegramWorkspaceData = {
+  contacts: TelegramWorkspaceContact[];
+  groups: TelegramWorkspaceGroup[];
+  channels: TelegramWorkspaceChannel[];
+  profiles: TelegramWorkspaceProfile[];
+};
+
+export type TelegramContactInput = Omit<TelegramWorkspaceContact, "id" | "createdAt" | "updatedAt">;
+export type TelegramGroupInput = Omit<TelegramWorkspaceGroup, "id" | "createdAt" | "updatedAt">;
+export type TelegramChannelInput = Omit<TelegramWorkspaceChannel, "id" | "createdAt" | "updatedAt">;
+export type TelegramProfileInput = Omit<TelegramWorkspaceProfile, "accountId" | "updatedAt">;
+
 type MessageRecordInput = Omit<MessageRecord, "id" | "createdAt"> & { createdAt?: Date | string };
 
 type AppUserRow = {
@@ -188,14 +246,33 @@ type TelegramPostRow = {
   lastErrorCiphertext: string;
 };
 
+type TelegramWorkspaceRecordRow = {
+  id: string;
+  userId: string;
+  payloadCiphertext: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type TelegramWorkspaceProfileRow = {
+  userId: string;
+  accountId: string;
+  payloadCiphertext: string;
+  updatedAt: string;
+};
+
 type JsonDatabase = {
-  version: 2;
+  version: 3;
   appUsers: AppUserRow[];
   appSessions: BrowserSessionRow[];
   telegramAccounts: TelegramAccountRow[];
   telegramLoginChallenges: LoginChallengeRow[];
   telegramMessages: MessageRow[];
   telegramPosts: TelegramPostRow[];
+  telegramContacts: TelegramWorkspaceRecordRow[];
+  telegramGroups: TelegramWorkspaceRecordRow[];
+  telegramChannels: TelegramWorkspaceRecordRow[];
+  telegramProfiles: TelegramWorkspaceProfileRow[];
 };
 
 export class AccountAlreadyLinkedError extends Error {}
@@ -210,6 +287,11 @@ const passwordKey = (username: string) => `password:${username.trim().toLowerCas
 const asIso = (value: Date) => value.toISOString();
 const nowIso = () => new Date().toISOString();
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const workspaceRecordId = (prefix: string, candidate = "") => (
+  new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,100}$`).test(candidate)
+    ? candidate
+    : `${prefix}_${randomUUID().replaceAll("-", "")}`
+);
 const shouldUseNetlifyBlobs = () => (
   process.env.DATA_STORE === "netlify-blobs" ||
   process.env.NETLIFY === "true" ||
@@ -232,13 +314,17 @@ function verifyPassword(password: string, storedHash = "") {
 
 function emptyDatabase(): JsonDatabase {
   return {
-    version: 2,
+    version: 3,
     appUsers: [],
     appSessions: [],
     telegramAccounts: [],
     telegramLoginChallenges: [],
     telegramMessages: [],
-    telegramPosts: []
+    telegramPosts: [],
+    telegramContacts: [],
+    telegramGroups: [],
+    telegramChannels: [],
+    telegramProfiles: []
   };
 }
 
@@ -257,7 +343,7 @@ function coerceDatabase(raw: unknown): JsonDatabase {
   if (!raw || typeof raw !== "object") return emptyDatabase();
   const input = raw as Partial<JsonDatabase>;
   return {
-    version: 2,
+    version: 3,
     appUsers: Array.isArray(input.appUsers) ? input.appUsers as AppUserRow[] : [],
     appSessions: Array.isArray(input.appSessions) ? input.appSessions as BrowserSessionRow[] : [],
     telegramAccounts: Array.isArray(input.telegramAccounts) ? input.telegramAccounts as TelegramAccountRow[] : [],
@@ -265,7 +351,11 @@ function coerceDatabase(raw: unknown): JsonDatabase {
       ? input.telegramLoginChallenges as LoginChallengeRow[]
       : [],
     telegramMessages: Array.isArray(input.telegramMessages) ? input.telegramMessages as MessageRow[] : [],
-    telegramPosts: Array.isArray(input.telegramPosts) ? input.telegramPosts as TelegramPostRow[] : []
+    telegramPosts: Array.isArray(input.telegramPosts) ? input.telegramPosts as TelegramPostRow[] : [],
+    telegramContacts: Array.isArray(input.telegramContacts) ? input.telegramContacts as TelegramWorkspaceRecordRow[] : [],
+    telegramGroups: Array.isArray(input.telegramGroups) ? input.telegramGroups as TelegramWorkspaceRecordRow[] : [],
+    telegramChannels: Array.isArray(input.telegramChannels) ? input.telegramChannels as TelegramWorkspaceRecordRow[] : [],
+    telegramProfiles: Array.isArray(input.telegramProfiles) ? input.telegramProfiles as TelegramWorkspaceProfileRow[] : []
   };
 }
 
@@ -628,6 +718,7 @@ export class MultiUserStore {
       database.telegramAccounts = database.telegramAccounts.filter((row) => row.id !== accountId);
       database.telegramMessages = database.telegramMessages.filter((message) => message.accountId !== accountId);
       database.telegramPosts = database.telegramPosts.filter((post) => post.accountId !== accountId);
+      database.telegramProfiles = database.telegramProfiles.filter((profile) => profile.accountId !== accountId);
       return null;
     });
     return deleted;
@@ -669,6 +760,181 @@ export class MultiUserStore {
       .sort((left, right) => parseIso(right.createdAt) - parseIso(left.createdAt))
       .slice(0, cappedLimit)
       .map((message) => this.toMessageRecord(message));
+  }
+
+  async listWorkspaceData(userId: string): Promise<TelegramWorkspaceData> {
+    const database = await this.readDatabase();
+    return {
+      contacts: database.telegramContacts
+        .filter((row) => row.userId === userId)
+        .sort((left, right) => parseIso(right.createdAt) - parseIso(left.createdAt))
+        .map((row) => this.toWorkspaceContact(row)),
+      groups: database.telegramGroups
+        .filter((row) => row.userId === userId)
+        .sort((left, right) => parseIso(right.createdAt) - parseIso(left.createdAt))
+        .map((row) => this.toWorkspaceGroup(row)),
+      channels: database.telegramChannels
+        .filter((row) => row.userId === userId)
+        .sort((left, right) => parseIso(right.createdAt) - parseIso(left.createdAt))
+        .map((row) => this.toWorkspaceChannel(row)),
+      profiles: database.telegramProfiles
+        .filter((row) => row.userId === userId)
+        .map((row) => this.toWorkspaceProfile(row)),
+    };
+  }
+
+  async createContact(userId: string, input: TelegramContactInput): Promise<TelegramWorkspaceContact> {
+    return this.updateDatabase((database) => {
+      const now = nowIso();
+      const row: TelegramWorkspaceRecordRow = {
+        id: workspaceRecordId("contact"), userId, payloadCiphertext: this.encryptWorkspacePayload(input), createdAt: now, updatedAt: now,
+      };
+      database.telegramContacts.push(row);
+      return this.toWorkspaceContact(row);
+    });
+  }
+
+  async updateContact(userId: string, id: string, input: TelegramContactInput): Promise<TelegramWorkspaceContact | null> {
+    return this.updateDatabase((database) => {
+      const row = database.telegramContacts.find((item) => item.userId === userId && item.id === id);
+      if (!row) return null;
+      row.payloadCiphertext = this.encryptWorkspacePayload(input);
+      row.updatedAt = nowIso();
+      return this.toWorkspaceContact(row);
+    });
+  }
+
+  async deleteContact(userId: string, id: string) {
+    return this.updateDatabase((database) => {
+      const found = database.telegramContacts.some((item) => item.userId === userId && item.id === id);
+      if (found) database.telegramContacts = database.telegramContacts.filter((item) => item.userId !== userId || item.id !== id);
+      return found;
+    });
+  }
+
+  async createGroup(userId: string, input: TelegramGroupInput): Promise<TelegramWorkspaceGroup> {
+    return this.updateDatabase((database) => {
+      const now = nowIso();
+      const row: TelegramWorkspaceRecordRow = {
+        id: workspaceRecordId("group"), userId, payloadCiphertext: this.encryptWorkspacePayload(input), createdAt: now, updatedAt: now,
+      };
+      database.telegramGroups.push(row);
+      return this.toWorkspaceGroup(row);
+    });
+  }
+
+  async updateGroup(userId: string, id: string, input: TelegramGroupInput): Promise<TelegramWorkspaceGroup | null> {
+    return this.updateDatabase((database) => {
+      const row = database.telegramGroups.find((item) => item.userId === userId && item.id === id);
+      if (!row) return null;
+      row.payloadCiphertext = this.encryptWorkspacePayload(input);
+      row.updatedAt = nowIso();
+      return this.toWorkspaceGroup(row);
+    });
+  }
+
+  async deleteGroup(userId: string, id: string) {
+    return this.updateDatabase((database) => {
+      const found = database.telegramGroups.some((item) => item.userId === userId && item.id === id);
+      if (found) database.telegramGroups = database.telegramGroups.filter((item) => item.userId !== userId || item.id !== id);
+      return found;
+    });
+  }
+
+  async createChannel(userId: string, input: TelegramChannelInput): Promise<TelegramWorkspaceChannel> {
+    return this.updateDatabase((database) => {
+      const now = nowIso();
+      const row: TelegramWorkspaceRecordRow = {
+        id: workspaceRecordId("channel"), userId, payloadCiphertext: this.encryptWorkspacePayload(input), createdAt: now, updatedAt: now,
+      };
+      database.telegramChannels.push(row);
+      return this.toWorkspaceChannel(row);
+    });
+  }
+
+  async updateChannel(userId: string, id: string, input: TelegramChannelInput): Promise<TelegramWorkspaceChannel | null> {
+    return this.updateDatabase((database) => {
+      const row = database.telegramChannels.find((item) => item.userId === userId && item.id === id);
+      if (!row) return null;
+      row.payloadCiphertext = this.encryptWorkspacePayload(input);
+      row.updatedAt = nowIso();
+      return this.toWorkspaceChannel(row);
+    });
+  }
+
+  async deleteChannel(userId: string, id: string) {
+    return this.updateDatabase((database) => {
+      const found = database.telegramChannels.some((item) => item.userId === userId && item.id === id);
+      if (found) database.telegramChannels = database.telegramChannels.filter((item) => item.userId !== userId || item.id !== id);
+      return found;
+    });
+  }
+
+  async saveProfile(userId: string, accountId: string, input: TelegramProfileInput): Promise<TelegramWorkspaceProfile> {
+    return this.updateDatabase((database) => {
+      const account = database.telegramAccounts.find((row) => row.userId === userId && row.id === accountId);
+      if (!account) throw new Error("Telegram account was not found.");
+      let row = database.telegramProfiles.find((item) => item.userId === userId && item.accountId === accountId);
+      if (!row) {
+        row = { userId, accountId, payloadCiphertext: "", updatedAt: nowIso() };
+        database.telegramProfiles.push(row);
+      }
+      row.payloadCiphertext = this.encryptWorkspacePayload(input);
+      row.updatedAt = nowIso();
+      return this.toWorkspaceProfile(row);
+    });
+  }
+
+  async importWorkspaceData(userId: string, input: TelegramWorkspaceData, overwrite = false): Promise<TelegramWorkspaceData> {
+    await this.updateDatabase((database) => {
+      const importRecords = <T extends { id: string; createdAt: string; updatedAt: string }>(
+        target: TelegramWorkspaceRecordRow[],
+        prefix: string,
+        records: T[],
+      ) => {
+        for (const record of records) {
+          const id = workspaceRecordId(prefix, record.id);
+          const existing = target.find((row) => row.userId === userId && row.id === id);
+          if (existing && !overwrite) continue;
+          const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...payload } = record;
+          if (existing) {
+            existing.payloadCiphertext = this.encryptWorkspacePayload(payload);
+            existing.updatedAt = normalizeCreatedAt(record.updatedAt);
+          } else {
+            target.push({
+              id,
+              userId,
+              payloadCiphertext: this.encryptWorkspacePayload(payload),
+              createdAt: normalizeCreatedAt(record.createdAt),
+              updatedAt: normalizeCreatedAt(record.updatedAt),
+            });
+          }
+        }
+      };
+
+      importRecords(database.telegramContacts, "contact", input.contacts);
+      importRecords(database.telegramGroups, "group", input.groups);
+      importRecords(database.telegramChannels, "channel", input.channels);
+      for (const profile of input.profiles) {
+        const ownsAccount = database.telegramAccounts.some((account) => account.userId === userId && account.id === profile.accountId);
+        if (!ownsAccount) continue;
+        const existing = database.telegramProfiles.find((row) => row.userId === userId && row.accountId === profile.accountId);
+        if (existing && !overwrite) continue;
+        const { accountId, updatedAt: _updatedAt, ...payload } = profile;
+        if (existing) {
+          existing.payloadCiphertext = this.encryptWorkspacePayload(payload);
+          existing.updatedAt = normalizeCreatedAt(profile.updatedAt);
+        } else {
+          database.telegramProfiles.push({
+            userId,
+            accountId,
+            payloadCiphertext: this.encryptWorkspacePayload(payload),
+            updatedAt: normalizeCreatedAt(profile.updatedAt),
+          });
+        }
+      }
+    });
+    return this.listWorkspaceData(userId);
   }
 
   async createPost(userId: string, input: TelegramPostInput): Promise<TelegramPost> {
@@ -1014,6 +1280,49 @@ export class MultiUserStore {
   private async getBlobStore(): Promise<BlobStore> {
     this.blobStorePromise ??= import("@netlify/blobs").then(({ getStore }) => getStore("agentic-that-telegram") as BlobStore);
     return this.blobStorePromise;
+  }
+
+  private encryptWorkspacePayload(value: object) {
+    return this.cipher.encrypt(JSON.stringify(value));
+  }
+
+  private decryptWorkspacePayload<T extends object>(value: string) {
+    return JSON.parse(this.cipher.decrypt(value)) as T;
+  }
+
+  private toWorkspaceContact(row: TelegramWorkspaceRecordRow): TelegramWorkspaceContact {
+    return {
+      ...this.decryptWorkspacePayload<TelegramContactInput>(row.payloadCiphertext),
+      id: row.id,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private toWorkspaceGroup(row: TelegramWorkspaceRecordRow): TelegramWorkspaceGroup {
+    return {
+      ...this.decryptWorkspacePayload<TelegramGroupInput>(row.payloadCiphertext),
+      id: row.id,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private toWorkspaceChannel(row: TelegramWorkspaceRecordRow): TelegramWorkspaceChannel {
+    return {
+      ...this.decryptWorkspacePayload<TelegramChannelInput>(row.payloadCiphertext),
+      id: row.id,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private toWorkspaceProfile(row: TelegramWorkspaceProfileRow): TelegramWorkspaceProfile {
+    return {
+      ...this.decryptWorkspacePayload<TelegramProfileInput>(row.payloadCiphertext),
+      accountId: row.accountId,
+      updatedAt: row.updatedAt,
+    };
   }
 
   private encryptPostDeliveries(targets: TelegramPostTarget[]) {

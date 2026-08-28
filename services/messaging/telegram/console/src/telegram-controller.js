@@ -94,10 +94,16 @@ const state = {
   accounts: [],
   selected: localStorage.getItem(keys.selected) || "",
   login: { challengeId: "", stage: "phone" },
-  profiles: read(keys.profiles, {}),
-  contacts: read(keys.contacts, []),
-  groups: read(keys.groups, []),
-  channels: read(keys.channels, []),
+  profiles: {},
+  contacts: [],
+  groups: [],
+  channels: [],
+  legacyWorkspace: {
+    profiles: read(keys.profiles, {}),
+    contacts: read(keys.contacts, []),
+    groups: read(keys.groups, []),
+    channels: read(keys.channels, []),
+  },
   posts: [],
   postHistory: [],
   legacyPosts: read(keys.posts, []),
@@ -121,7 +127,7 @@ const el = {
   profileForm: $("profile-form"), profileList: $("profile-list"), profileStatusMessage: $("profile-status-message"), applicationList: $("application-list"),
   contactForm: $("contact-form"), contactCountryCode: $("contact-country-code"), contactList: $("contact-list"), contactCount: $("contact-count"), contactStatus: $("contact-status"),
   inboxSearch: $("inbox-search"), inboxShell: $("inbox-shell"), inboxViewButtons: $$(".inbox-view-control button[data-inbox-view]"), inboxThreadList: $("inbox-thread-list"), inboxActiveHeading: $("inbox-active-heading"), inboxThread: $("inbox-thread"), inboxMultiBoard: $("inbox-multi-board"), inboxForm: $("inbox-form"), inboxMessage: $("inbox-message"), inboxSendButton: $("inbox-send-button"), inboxRefresh: $("inbox-refresh"), inboxStatus: $("inbox-status"),
-  groupForm: $("group-form"), groupList: $("group-list"), channelForm: $("channel-form"), channelList: $("channel-list"),
+  groupForm: $("group-form"), groupList: $("group-list"), groupStatusMessage: $("group-status-message"), channelForm: $("channel-form"), channelList: $("channel-list"), channelStatusMessage: $("channel-status-message"),
   postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postMediaDropzone: $("post-media-dropzone"), postMediaFile: $("post-media-file"), postMediaStatus: $("post-media-status"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
   postHistorySent: $("post-history-sent"), postHistoryPending: $("post-history-pending"),
   globalSearch: $("global-search"), globalResults: $("global-results"), settingsForm: $("settings-form"), settingsStatus: $("settings-status"), backupJson: $("backup-json"), backupStatus: $("backup-status")
@@ -301,6 +307,7 @@ function clearLocalWorkspace() {
   state.contacts = [];
   state.groups = [];
   state.channels = [];
+  state.legacyWorkspace = { profiles: {}, contacts: [], groups: [], channels: [] };
   state.posts = [];
   state.postHistory = [];
   state.inbox = { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: "split", drafts: {} };
@@ -310,8 +317,7 @@ function signedIn(user) { state.user = user; el.signInView.hidden = true; el.wor
 function currentAccount() { return state.accounts.find((account) => account.id === state.selected) || null; }
 function profileFor(account) {
   if (!account) return null;
-  state.profiles[account.id] ||= { profileName: account.displayName || "Telegram profile", displayName: account.displayName || "", username: account.username || "", phone: "", status: "Active", avatar: "", configNumbers: "", description: "" };
-  return state.profiles[account.id];
+  return state.profiles[account.id] || { profileName: account.displayName || "Telegram profile", displayName: account.displayName || "", username: account.username || "", phone: "", status: "Active", avatar: "", configNumbers: "", description: "" };
 }
 function initials(value) {
   const parts = String(value || "T").trim().split(/\s+/).filter(Boolean);
@@ -320,7 +326,7 @@ function initials(value) {
 }
 function avatar(profile, fallback) { return profile?.avatar ? `<span class="account-avatar"><img src="${esc(profile.avatar)}" alt=""></span>` : `<span class="account-avatar">${esc(initials(fallback))}</span>`; }
 function chatAvatar(label, extraClass = "") { return `<span class="chat-avatar${extraClass ? ` ${extraClass}` : ""}" aria-hidden="true">${esc(initials(label))}</span>`; }
-function saveAll() { write(keys.profiles, state.profiles); write(keys.contacts, state.contacts); write(keys.groups, state.groups); write(keys.channels, state.channels); write(keys.settings, state.settings); }
+function saveAll() { write(keys.settings, state.settings); }
 function selectAccount(id) { state.selected = id || ""; state.selected ? localStorage.setItem(keys.selected, state.selected) : localStorage.removeItem(keys.selected); state.inbox.messages = []; state.inbox.selectedThread = ""; state.inbox.lastSyncAt = 0; state.inbox.drafts = {}; render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 function ensureSelected() { if (!state.accounts.some((account) => account.id === state.selected)) state.selected = state.accounts[0]?.id || ""; }
 
@@ -340,7 +346,6 @@ function renderProfileSelect() {
   el.profileSelect.value = state.selected;
   el.profileSelect.disabled = false;
   el.quickSendButton.disabled = false;
-  write(keys.profiles, state.profiles);
 }
 
 function renderDashboard() {
@@ -944,9 +949,56 @@ async function loadInboxMessages(options = {}) {
 }
 function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private Ubuntu server"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
 function applyTheme() { document.body.classList.toggle("light-mode", state.settings.theme === "Light mode"); }
-function backupData() { return { version: 1, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
+function backupData() { return { version: 2, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
 function render() { renderProfileSelect(); renderDashboard(); renderAccounts(); renderProfileForm(); renderProfileList(); renderApplications(); renderContacts(); renderInbox(); renderGroups(); renderChannels(); renderPostContacts(); renderPostGroups(); renderPostPreview(); renderPosts(); renderPostHistory(); renderSearch(); renderSettings(); }
 function setView(view) { state.activeView = titles[view] ? view : "dashboard"; const [kicker, title] = titles[state.activeView] || titles.dashboard; el.viewKicker.textContent = kicker; el.viewTitle.textContent = title; $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === state.activeView)); $$(".view").forEach((section) => { const active = section.id === `view-${state.activeView}`; section.hidden = !active; section.classList.toggle("active-view", active); }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
+function workspaceImportPayload(source, overwrite = false) {
+  const now = new Date().toISOString();
+  const records = (items, prefix) => (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    id: new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,100}$`).test(item?.id || "") ? item.id : uid(prefix),
+    createdAt: item?.createdAt || item?.updatedAt || now,
+    updatedAt: item?.updatedAt || item?.createdAt || now,
+  }));
+  const profileEntries = Array.isArray(source?.profiles)
+    ? source.profiles.map((profile) => [profile.accountId, profile])
+    : Object.entries(source?.profiles || {});
+  return {
+    overwrite,
+    contacts: records(source?.contacts, "contact"),
+    groups: records(source?.groups, "group"),
+    channels: records(source?.channels, "channel"),
+    profiles: profileEntries.filter(([accountId]) => state.accounts.some((account) => account.id === accountId)).map(([accountId, profile]) => ({ ...profile, accountId, updatedAt: profile?.updatedAt || now })),
+  };
+}
+function hasLegacyWorkspaceData() {
+  return Object.keys(state.legacyWorkspace.profiles || {}).length > 0 ||
+    [state.legacyWorkspace.contacts, state.legacyWorkspace.groups, state.legacyWorkspace.channels]
+      .some((records) => Array.isArray(records) && records.length > 0);
+}
+function applyWorkspaceData(data) {
+  state.contacts = Array.isArray(data.contacts) ? data.contacts : [];
+  state.groups = Array.isArray(data.groups) ? data.groups : [];
+  state.channels = Array.isArray(data.channels) ? data.channels : [];
+  state.profiles = Object.fromEntries((Array.isArray(data.profiles) ? data.profiles : []).map((profile) => [profile.accountId, profile]));
+}
+async function migrateLegacyWorkspaceData() {
+  if (!hasLegacyWorkspaceData()) return;
+  const data = await api("/v1/workspace-data/import", { method: "POST", body: workspaceImportPayload(state.legacyWorkspace) });
+  applyWorkspaceData(data);
+  state.legacyWorkspace = { profiles: {}, contacts: [], groups: [], channels: [] };
+  [keys.profiles, keys.contacts, keys.groups, keys.channels].forEach((key) => localStorage.removeItem(key));
+}
+async function loadWorkspaceData(options = {}) {
+  const data = await api("/v1/workspace-data");
+  applyWorkspaceData(data);
+  if (options.migrate === false || state.user?.accessLevel === "view" || !hasLegacyWorkspaceData()) return;
+  try {
+    await migrateLegacyWorkspaceData();
+  } catch {
+    status(el.messageStatus, "Old browser records remain on this device because server migration could not finish.", "error");
+  }
+}
 function deliveryHistoryFromPosts(posts) {
   return posts.flatMap((post) => (post.deliveries || [])
     .filter((delivery) => delivery.status === "Sent" || delivery.status === "Failed")
@@ -1008,7 +1060,7 @@ async function loadServerPosts(options = {}) {
     state.postsLoading = false;
   }
 }
-async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; state.accounts.forEach(profileFor); ensureSelected(); write(keys.profiles, state.profiles); await loadServerPosts({ migrate: true, quiet: true }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
+async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; await loadWorkspaceData({ migrate: true }); ensureSelected(); await loadServerPosts({ migrate: true, quiet: true }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 async function sendMessage(recipient, message, node, accountId = "", options = {}) {
   const account = state.accounts.find((item) => item.id === accountId) || currentAccount();
   const mediaUrl = (options.mediaUrl || "").trim();
@@ -1016,7 +1068,7 @@ async function sendMessage(recipient, message, node, accountId = "", options = {
   if (!account || !recipient || (!message && !mediaUrl && !mediaUploadId)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
   return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaUploadId, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
 }
-async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); delete state.profiles[account.id]; write(keys.profiles, state.profiles); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
+async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
 function setLoginStage(stage) {
   state.login.stage = stage;
   const isPhone = stage === "phone", isCode = stage === "code", isPassword = stage === "password";
@@ -1092,12 +1144,19 @@ el.passwordForm.addEventListener("submit", async (event) => {
   finally { busy(el.passwordForm, false); el.telegramPassword.value = ""; }
 });
 
-el.profileForm.addEventListener("submit", (event) => {
+el.profileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const account = currentAccount();
   if (!account) return status(el.profileStatusMessage, "Select a profile first.", "error");
-  state.profiles[account.id] = { profileName: $("profile-name").value.trim() || account.displayName, displayName: $("profile-display-name").value.trim(), username: $("profile-username").value.trim(), phone: $("profile-phone").value.trim(), status: $("profile-status").value, avatar: $("profile-avatar").value.trim(), configNumbers: $("profile-config-numbers").value.trim(), description: $("profile-description").value.trim() };
-  write(keys.profiles, state.profiles); render(); status(el.profileStatusMessage, "Profile saved.", "success");
+  const body = { profileName: $("profile-name").value.trim() || account.displayName, displayName: $("profile-display-name").value.trim(), username: $("profile-username").value.trim(), phone: $("profile-phone").value.trim(), status: $("profile-status").value, avatar: $("profile-avatar").value.trim(), configNumbers: $("profile-config-numbers").value.trim(), description: $("profile-description").value.trim() };
+  busy(el.profileForm, true);
+  try {
+    const data = await api(`/v1/profiles/${encodeURIComponent(account.id)}`, { method: "PUT", body });
+    state.profiles[account.id] = data.profile;
+    render();
+    status(el.profileStatusMessage, "Profile saved on the server.", "success");
+  } catch (error) { onError(error, el.profileStatusMessage); }
+  finally { busy(el.profileForm, false); }
 });
 el.quickSendForm.addEventListener("submit", async (event) => {
   event.preventDefault(); busy(el.quickSendForm, true); status(el.messageStatus, "Sending from selected profile...");
@@ -1106,27 +1165,45 @@ el.quickSendForm.addEventListener("submit", async (event) => {
   finally { busy(el.quickSendForm, false); }
 });
 
-el.contactForm.addEventListener("submit", (event) => {
+el.contactForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = $("contact-name").value.trim(); if (!name) return status(el.contactStatus, "Contact name is required.", "error");
   const existingId = $("contact-id").value;
-  const existing = state.contacts.find((row) => row.id === existingId);
-  const now = new Date().toISOString();
-  const item = { id: existingId || uid("contact"), name, handle: $("contact-handle").value.trim(), countryCode: el.contactCountryCode.value || "+91", phone: contactPhoneFromForm(), group: $("contact-group").value.trim(), notes: $("contact-notes").value.trim(), createdAt: existing?.createdAt || now, updatedAt: now };
-  const index = state.contacts.findIndex((row) => row.id === item.id); index === -1 ? state.contacts.unshift(item) : state.contacts[index] = item;
-  write(keys.contacts, state.contacts); clearContactForm(); render(); status(el.contactStatus, "Contact saved.", "success");
+  const body = { name, handle: $("contact-handle").value.trim(), countryCode: el.contactCountryCode.value || "+91", phone: contactPhoneFromForm(), group: $("contact-group").value.trim(), notes: $("contact-notes").value.trim() };
+  busy(el.contactForm, true);
+  try {
+    const data = await api(existingId ? `/v1/contacts/${encodeURIComponent(existingId)}` : "/v1/contacts", { method: existingId ? "PUT" : "POST", body });
+    const index = state.contacts.findIndex((row) => row.id === data.contact.id);
+    index === -1 ? state.contacts.unshift(data.contact) : state.contacts[index] = data.contact;
+    clearContactForm(); render(); status(el.contactStatus, "Contact saved on the server.", "success");
+  } catch (error) { onError(error, el.contactStatus); }
+  finally { busy(el.contactForm, false); }
 });
-el.groupForm.addEventListener("submit", (event) => {
-  event.preventDefault(); const name = $("group-name").value.trim(); if (!name) return;
-  const item = { id: $("group-id").value || uid("group"), name, type: $("group-type").value, status: $("group-status").value, members: $("group-members").value.trim(), notes: $("group-notes").value.trim(), updatedAt: new Date().toISOString() };
-  const index = state.groups.findIndex((row) => row.id === item.id); index === -1 ? state.groups.unshift(item) : state.groups[index] = item;
-  write(keys.groups, state.groups); el.groupForm.reset(); $("group-id").value = ""; render();
+el.groupForm.addEventListener("submit", async (event) => {
+  event.preventDefault(); const name = $("group-name").value.trim(); if (!name) return status(el.groupStatusMessage, "Group name is required.", "error");
+  const existingId = $("group-id").value;
+  const body = { name, type: $("group-type").value, status: $("group-status").value, members: $("group-members").value.trim(), notes: $("group-notes").value.trim() };
+  busy(el.groupForm, true);
+  try {
+    const data = await api(existingId ? `/v1/groups/${encodeURIComponent(existingId)}` : "/v1/groups", { method: existingId ? "PUT" : "POST", body });
+    const index = state.groups.findIndex((row) => row.id === data.group.id);
+    index === -1 ? state.groups.unshift(data.group) : state.groups[index] = data.group;
+    el.groupForm.reset(); $("group-id").value = ""; render(); status(el.groupStatusMessage, "Group saved on the server.", "success");
+  } catch (error) { onError(error, el.groupStatusMessage); }
+  finally { busy(el.groupForm, false); }
 });
-el.channelForm.addEventListener("submit", (event) => {
-  event.preventDefault(); const name = $("channel-name").value.trim(); if (!name) return;
-  const item = { id: $("channel-id").value || uid("channel"), name, privacy: $("channel-privacy").value, invites: $("channel-invites").value.trim(), notes: $("channel-notes").value.trim(), updatedAt: new Date().toISOString() };
-  const index = state.channels.findIndex((row) => row.id === item.id); index === -1 ? state.channels.unshift(item) : state.channels[index] = item;
-  write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
+el.channelForm.addEventListener("submit", async (event) => {
+  event.preventDefault(); const name = $("channel-name").value.trim(); if (!name) return status(el.channelStatusMessage, "Channel name is required.", "error");
+  const existingId = $("channel-id").value;
+  const body = { name, privacy: $("channel-privacy").value, invites: $("channel-invites").value.trim(), notes: $("channel-notes").value.trim() };
+  busy(el.channelForm, true);
+  try {
+    const data = await api(existingId ? `/v1/channels/${encodeURIComponent(existingId)}` : "/v1/channels", { method: existingId ? "PUT" : "POST", body });
+    const index = state.channels.findIndex((row) => row.id === data.channel.id);
+    index === -1 ? state.channels.unshift(data.channel) : state.channels[index] = data.channel;
+    el.channelForm.reset(); $("channel-id").value = ""; render(); status(el.channelStatusMessage, "Channel saved on the server.", "success");
+  } catch (error) { onError(error, el.channelStatusMessage); }
+  finally { busy(el.channelForm, false); }
 });el.postForm.addEventListener("submit", async (event) => { event.preventDefault(); await savePost(); });
 ["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
 $("post-type").addEventListener("change", () => {
@@ -1279,7 +1356,18 @@ document.addEventListener("click", async (event) => {
     }
   }  if (button.id === "backup-export") { el.backupJson.value = JSON.stringify(backupData(), null, 2); status(el.backupStatus, "Backup exported.", "success"); }
   if (button.id === "backup-import") {
-    try { const data = JSON.parse(el.backupJson.value || "{}"); state.profiles = data.profiles && typeof data.profiles === "object" ? data.profiles : state.profiles; state.contacts = Array.isArray(data.contacts) ? data.contacts : state.contacts; state.groups = Array.isArray(data.groups) ? data.groups : state.groups; state.channels = Array.isArray(data.channels) ? data.channels : state.channels; state.legacyPosts = Array.isArray(data.posts) ? data.posts : []; state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings; saveAll(); await migrateLegacyPosts(); await loadServerPosts({ migrate: false, quiet: true }); applyTheme(); render(); status(el.backupStatus, "Backup restored to the server workspace.", "success"); }
+    try {
+      const data = JSON.parse(el.backupJson.value || "{}");
+      const restored = await api("/v1/workspace-data/import", { method: "POST", body: workspaceImportPayload(data, true) });
+      applyWorkspaceData(restored);
+      state.legacyPosts = Array.isArray(data.posts) ? data.posts : [];
+      state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings;
+      saveAll();
+      [keys.profiles, keys.contacts, keys.groups, keys.channels].forEach((key) => localStorage.removeItem(key));
+      await migrateLegacyPosts();
+      await loadServerPosts({ migrate: false, quiet: true });
+      applyTheme(); render(); status(el.backupStatus, "Backup restored to the server workspace.", "success");
+    }
     catch (error) { status(el.backupStatus, error instanceof Error ? error.message : "Restore failed.", "error"); }
   }
   const inboxThread = button.dataset.inboxThread; if (inboxThread) { state.inbox.selectedThread = inboxThread; renderInbox(); if (state.inbox.view === "multi") requestAnimationFrame(() => el.inboxMultiBoard?.querySelector(".multi-chat-column.active textarea:not(:disabled)")?.focus()); }
@@ -1287,11 +1375,11 @@ document.addEventListener("click", async (event) => {
   const editAccount = button.dataset.editAccount; if (editAccount) { selectAccount(editAccount); setView("profiles"); }
   const deleteAccountId = button.dataset.deleteAccount; if (deleteAccountId) { const account = state.accounts.find((item) => item.id === deleteAccountId); if (account) { try { await deleteAccount(account); status(el.messageStatus, "Profile deleted.", "success"); } catch (error) { onError(error, el.messageStatus); } } }
   const editContact = button.dataset.editContact; if (editContact) { const item = state.contacts.find((row) => row.id === editContact); if (item) fillContactForm(item); }
-  const deleteContact = button.dataset.deleteContact; if (deleteContact) { state.contacts = state.contacts.filter((row) => row.id !== deleteContact); write(keys.contacts, state.contacts); render(); }
+  const deleteContact = button.dataset.deleteContact; if (deleteContact) { try { await api(`/v1/contacts/${encodeURIComponent(deleteContact)}`, { method: "DELETE" }); state.contacts = state.contacts.filter((row) => row.id !== deleteContact); render(); status(el.contactStatus, "Contact deleted from the server.", "success"); } catch (error) { onError(error, el.contactStatus); } }
   const editGroup = button.dataset.editGroup; if (editGroup) { const item = state.groups.find((row) => row.id === editGroup); if (item) { $("group-id").value = item.id; $("group-name").value = item.name || ""; $("group-type").value = item.type || "Private"; $("group-status").value = item.status || "Created"; $("group-members").value = item.members || ""; $("group-notes").value = item.notes || ""; } }
-  const deleteGroup = button.dataset.deleteGroup; if (deleteGroup) { state.groups = state.groups.filter((row) => row.id !== deleteGroup); write(keys.groups, state.groups); render(); }
+  const deleteGroup = button.dataset.deleteGroup; if (deleteGroup) { try { await api(`/v1/groups/${encodeURIComponent(deleteGroup)}`, { method: "DELETE" }); state.groups = state.groups.filter((row) => row.id !== deleteGroup); render(); status(el.groupStatusMessage, "Group deleted from the server.", "success"); } catch (error) { onError(error, el.groupStatusMessage); } }
   const editChannel = button.dataset.editChannel; if (editChannel) { const item = state.channels.find((row) => row.id === editChannel); if (item) { $("channel-id").value = item.id; $("channel-name").value = item.name || ""; $("channel-privacy").value = item.privacy || "Private"; $("channel-invites").value = item.invites || ""; $("channel-notes").value = item.notes || ""; } }
-  const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { state.channels = state.channels.filter((row) => row.id !== deleteChannel); write(keys.channels, state.channels); render(); }
+  const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { try { await api(`/v1/channels/${encodeURIComponent(deleteChannel)}`, { method: "DELETE" }); state.channels = state.channels.filter((row) => row.id !== deleteChannel); render(); status(el.channelStatusMessage, "Channel deleted from the server.", "success"); } catch (error) { onError(error, el.channelStatusMessage); } }
   const editPost = button.dataset.editPost; if (editPost) { const item = state.posts.find((row) => row.id === editPost); if (item) fillPost(item); }
   const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { fillPost({ ...item, id: "", title: `${item.title} copy`, status: "Draft", scheduledAt: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); status(el.postStatusMessage, "Copy is ready. Save or schedule it when finished.", "success"); } }
   const cancelPost = button.dataset.cancelPost; if (cancelPost) { try { await api(`/v1/posts/${encodeURIComponent(cancelPost)}/cancel`, { method: "POST", body: {} }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Scheduled post cancelled.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }

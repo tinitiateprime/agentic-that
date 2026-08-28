@@ -25,9 +25,18 @@ import {
   MultiUserStore,
   type ClaimedTelegramPost,
   type TelegramAccountWithSession,
+  type TelegramChannelInput,
+  type TelegramContactInput,
+  type TelegramGroupInput,
   type TelegramPostDelivery,
   type TelegramPostInput,
   type TelegramPostTarget,
+  type TelegramProfileInput,
+  type TelegramWorkspaceChannel,
+  type TelegramWorkspaceContact,
+  type TelegramWorkspaceData,
+  type TelegramWorkspaceGroup,
+  type TelegramWorkspaceProfile,
 } from "./store.ts";
 import { TelegramPostScheduler } from "./post-scheduler.ts";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
@@ -234,13 +243,13 @@ async function serveFrontendAsset(request: IncomingMessage, response: ServerResp
   }
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<JsonBody> {
+async function readJsonBody(request: IncomingMessage, maximumBytes = 1024 * 1024): Promise<JsonBody> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > 1024 * 1024) throw new HttpError(413, "Request body is too large.");
+    if (length > maximumBytes) throw new HttpError(413, "Request body is too large.");
     chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -284,6 +293,99 @@ function telegramPostIdFromPath(pathname: string, suffix = "") {
   const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`^/v1/posts/(telegram_post_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
   return match?.[1] || "";
+}
+
+function workspaceRecordIdFromPath(pathname: string, collection: "contacts" | "groups" | "channels" | "profiles") {
+  const match = new RegExp(`^/v1/${collection}/([A-Za-z0-9_-]{1,110})$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function contactInput(body: JsonBody): TelegramContactInput {
+  return {
+    name: requiredString(body, "name", 200),
+    handle: optionalString(body, "handle", 256),
+    countryCode: optionalString(body, "countryCode", 8) || "+91",
+    phone: optionalString(body, "phone", 32),
+    group: optionalString(body, "group", 200),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function groupInput(body: JsonBody): TelegramGroupInput {
+  return {
+    name: requiredString(body, "name", 200),
+    type: optionalString(body, "type", 80) || "Private",
+    status: optionalString(body, "status", 80) || "Created",
+    members: optionalString(body, "members", 50_000),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function channelInput(body: JsonBody): TelegramChannelInput {
+  return {
+    name: requiredString(body, "name", 200),
+    privacy: optionalString(body, "privacy", 80) || "Private",
+    invites: optionalString(body, "invites", 50_000),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function profileInput(body: JsonBody): TelegramProfileInput {
+  return {
+    profileName: requiredString(body, "profileName", 200),
+    displayName: optionalString(body, "displayName", 200),
+    username: optionalString(body, "username", 256),
+    phone: optionalString(body, "phone", 32),
+    status: optionalString(body, "status", 80) || "Active",
+    avatar: optionalString(body, "avatar", 2_000),
+    configNumbers: optionalString(body, "configNumbers", 2_000),
+    description: optionalString(body, "description", 10_000),
+  };
+}
+
+function workspaceImportRecords<T>(
+  body: JsonBody,
+  name: string,
+  prefix: string,
+  parser: (value: JsonBody) => T,
+): Array<T & { id: string; createdAt: string; updatedAt: string }> {
+  const value = body[name];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 5_000) throw new HttpError(400, `${name} is invalid.`);
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, `${name} is invalid.`);
+    const record = item as JsonBody;
+    const id = requiredString(record, "id", 110);
+    if (!new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,100}$`).test(id)) throw new HttpError(400, `${name} contains an invalid record ID.`);
+    return {
+      ...parser(record),
+      id,
+      createdAt: optionalString(record, "createdAt", 80),
+      updatedAt: optionalString(record, "updatedAt", 80),
+    };
+  });
+}
+
+function workspaceImportInput(body: JsonBody): TelegramWorkspaceData {
+  const profilesValue = body.profiles;
+  if (profilesValue !== undefined && (!Array.isArray(profilesValue) || profilesValue.length > 500)) {
+    throw new HttpError(400, "profiles is invalid.");
+  }
+  const profiles: TelegramWorkspaceProfile[] = (profilesValue as unknown[] || []).map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, "profiles is invalid.");
+    const record = item as JsonBody;
+    return {
+      ...profileInput(record),
+      accountId: requiredString(record, "accountId", 110),
+      updatedAt: optionalString(record, "updatedAt", 80),
+    };
+  });
+  return {
+    contacts: workspaceImportRecords(body, "contacts", "contact", contactInput) as TelegramWorkspaceContact[],
+    groups: workspaceImportRecords(body, "groups", "group", groupInput) as TelegramWorkspaceGroup[],
+    channels: workspaceImportRecords(body, "channels", "channel", channelInput) as TelegramWorkspaceChannel[],
+    profiles,
+  };
 }
 
 function optionalStringArray(body: JsonBody, name: string, maximum: number, itemLength: number) {
@@ -1061,6 +1163,91 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   if (request.method === "GET" && url.pathname === "/v1/telegram/accounts") {
     sendJson(request, response, 200, { ok: true, accounts: await store.listAccounts(user.id) });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/workspace-data") {
+    sendJson(request, response, 200, { ok: true, ...await store.listWorkspaceData(user.id) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/workspace-data/import") {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request, 10 * 1024 * 1024);
+    const imported = await store.importWorkspaceData(user.id, workspaceImportInput(body), body.overwrite === true);
+    sendJson(request, response, 200, { ok: true, ...imported });
+    return;
+  }
+
+  const contactId = workspaceRecordIdFromPath(url.pathname, "contacts");
+  if (request.method === "POST" && url.pathname === "/v1/contacts") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, contact: await store.createContact(user.id, contactInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && contactId) {
+    requireUserLevel(user, "operate");
+    const contact = await store.updateContact(user.id, contactId, contactInput(await readJsonBody(request)));
+    if (!contact) throw new HttpError(404, "Telegram contact was not found.");
+    sendJson(request, response, 200, { ok: true, contact });
+    return;
+  }
+  if (request.method === "DELETE" && contactId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteContact(user.id, contactId)) throw new HttpError(404, "Telegram contact was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const groupId = workspaceRecordIdFromPath(url.pathname, "groups");
+  if (request.method === "POST" && url.pathname === "/v1/groups") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, group: await store.createGroup(user.id, groupInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && groupId) {
+    requireUserLevel(user, "operate");
+    const group = await store.updateGroup(user.id, groupId, groupInput(await readJsonBody(request)));
+    if (!group) throw new HttpError(404, "Telegram group was not found.");
+    sendJson(request, response, 200, { ok: true, group });
+    return;
+  }
+  if (request.method === "DELETE" && groupId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteGroup(user.id, groupId)) throw new HttpError(404, "Telegram group was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const channelId = workspaceRecordIdFromPath(url.pathname, "channels");
+  if (request.method === "POST" && url.pathname === "/v1/channels") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, channel: await store.createChannel(user.id, channelInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && channelId) {
+    requireUserLevel(user, "operate");
+    const channel = await store.updateChannel(user.id, channelId, channelInput(await readJsonBody(request)));
+    if (!channel) throw new HttpError(404, "Telegram channel was not found.");
+    sendJson(request, response, 200, { ok: true, channel });
+    return;
+  }
+  if (request.method === "DELETE" && channelId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteChannel(user.id, channelId)) throw new HttpError(404, "Telegram channel was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const profileAccountId = workspaceRecordIdFromPath(url.pathname, "profiles");
+  if (request.method === "PUT" && profileAccountId) {
+    requireUserLevel(user, "operate");
+    try {
+      const profile = await store.saveProfile(user.id, profileAccountId, profileInput(await readJsonBody(request)));
+      sendJson(request, response, 200, { ok: true, profile });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
     return;
   }
 

@@ -1,6 +1,6 @@
 # Telegram Workflow Dashboard
 
-This project is a local Node.js/TypeScript application for connecting one or more Telegram user accounts, sending messages from the selected account, saving workflow data in the browser workspace, and storing Telegram sessions/messages securely in an encrypted local JSON datastore.
+This project is a Node.js/TypeScript service for connecting one or more Telegram user accounts, sending messages from the selected account, and storing workspace records, schedules, Telegram sessions, and messages securely in an encrypted server-side JSON datastore.
 
 The current flow:
 
@@ -26,9 +26,9 @@ No PostgreSQL, pgAdmin, or separate database server is required. Backend data is
 - Connect Telegram phone numbers with verification code and optional Telegram 2FA password.
 - Select which connected profile/number should send messages.
 - Send quick messages to `@username` or `+countrycode` phone numbers.
-- Manage local profiles, contacts, inbox threads, groups, channels, posts, search, settings, and backup JSON.
+- Manage server-backed profiles, contacts, inbox threads, groups, channels, posts, search, settings, and backup JSON.
 - Create, preview, save, send, and schedule posts from the browser workspace.
-- Record sent-post history in browser JSON and backend message history in the JSON datastore.
+- Record scheduled-post delivery checkpoints and message history in the server datastore.
 - Run a separate listener worker to save incoming Telegram replies.
 - Run an optional Telegram Bot API auto-reply worker.
 
@@ -255,13 +255,11 @@ Opens the central AgenticThat Config Manager where Telegram phone numbers are co
 
 ### Manage Numbers
 
-Lists the Telegram accounts connected through Config Manager. You can search, filter, refresh, select, and edit local profile details here. Account disconnection is handled in Config Manager.
+Lists the Telegram accounts connected through Config Manager. You can search, filter, refresh, select, and edit server-backed profile details here. Account disconnection is handled in Config Manager.
 
 ### Profiles
 
-Stores local profile metadata such as profile name, display name, username, phone, avatar/image URL, status, description, and config numbers.
-
-Profile metadata is browser localStorage JSON. Telegram sessions are not stored in the browser.
+Stores workspace-scoped profile metadata such as profile name, display name, username, phone, avatar/image URL, status, description, and config numbers. The metadata is encrypted in the server store. Telegram sessions are also encrypted and are never stored in the browser.
 
 ### Applications
 
@@ -269,7 +267,7 @@ Shows the current Telegram workflow and placeholder slots for later workflow mod
 
 ### Contacts
 
-Stores local contact records with name, Telegram username, phone number, group label, and notes.
+Stores encrypted, workspace-scoped contact records with name, Telegram username, phone number, group label, and notes.
 
 Supported recipient formats:
 
@@ -286,7 +284,7 @@ Shows saved contacts and backend message history for the selected Telegram accou
 
 ### Groups
 
-Stores local broadcast-list style groups. Each group can have one recipient per line:
+Stores encrypted, workspace-scoped broadcast-list style groups. Each group can have one recipient per line:
 
 ```text
 @member_username
@@ -297,7 +295,7 @@ When selected in Post Manager, the app sends to each saved group member one by o
 
 ### Channels
 
-Stores local channel/invite notes for workflow planning. Channel records are local browser JSON and do not currently sync Telegram channel membership.
+Stores encrypted, workspace-scoped channel/invite notes for workflow planning. These records do not currently create or synchronize Telegram channel membership.
 
 ### Post Manager
 
@@ -328,7 +326,7 @@ Backend message history is also stored encrypted in `data/store.json` and expose
 
 ### Search
 
-Searches local profiles, contacts, groups, channels, and posts in the browser workspace.
+Searches profiles, contacts, groups, channels, and posts loaded from the authenticated server workspace.
 
 ### Configuration
 
@@ -336,7 +334,7 @@ Stores browser-side workflow settings such as API label, Telegram workflow label
 
 ### Backup
 
-Exports/imports browser workspace JSON:
+Exports/imports a portable workspace snapshot through authenticated server APIs:
 
 - profiles
 - contacts
@@ -358,23 +356,24 @@ The backend creates `data/store.json` automatically. It contains JSON arrays equ
 - `telegramLoginChallenges`: encrypted temporary login state.
 - `telegramMessages`: encrypted inbound/outbound message records.
 - `telegramPosts`: workspace-scoped drafts, schedules, encrypted post content and targets, and per-recipient delivery checkpoints.
+- `telegramContacts`: encrypted workspace contact records.
+- `telegramGroups`: encrypted broadcast-list records and recipients.
+- `telegramChannels`: encrypted channel planning records and invite notes.
+- `telegramProfiles`: encrypted display metadata for connected Telegram accounts.
 
-Encrypted fields in `data/store.json` use `SESSION_ENCRYPTION_KEY`. Keep this key stable. If it changes, existing encrypted Telegram sessions, posts, delivery records, and messages cannot be decrypted.
+Encrypted fields in `data/store.json` use `SESSION_ENCRYPTION_KEY`. Keep this key stable. If it changes, existing encrypted Telegram sessions, workspace records, posts, delivery records, and messages cannot be decrypted.
 
 ## Browser Local Data
 
-The workflow dashboard stores these localStorage keys:
+Only device preferences remain in browser localStorage:
 
 ```text
 telegramWorkflow:selectedAccount
-telegramWorkflow:profiles
-telegramWorkflow:contacts
-telegramWorkflow:groups
-telegramWorkflow:channels
+telegramWorkflow:inboxView
 telegramWorkflow:settings
 ```
 
-Older `telegramWorkflow:posts` and `telegramWorkflow:postHistory` values are imported once into the server store and then removed. Backup export includes a snapshot of server posts; backup import restores those posts through the authenticated server API. Use `Backup -> Export backup` before clearing browser data or moving browsers. Back up `data/store.json` separately to preserve connected Telegram sessions, scheduled posts, delivery checkpoints, and backend message history.
+Older `telegramWorkflow:profiles`, `telegramWorkflow:contacts`, `telegramWorkflow:groups`, `telegramWorkflow:channels`, `telegramWorkflow:posts`, and `telegramWorkflow:postHistory` values are imported once into the authenticated workspace and removed only after a successful server import. Backup export includes workspace records and server posts; backup import restores them through authenticated APIs. Back up `data/store.json` separately to preserve connected Telegram sessions, workspace records, scheduled posts, delivery checkpoints, and message history.
 
 ## Environment Variables
 
@@ -701,7 +700,7 @@ Screenshots are in [docs/screenshots](docs/screenshots). Requirement coverage an
 
 - Contacts, groups, channels, profile display metadata, and settings are browser-local workspace JSON. Posts, schedules, delivery checkpoints, Telegram sessions, and message history are server records.
 - Contacts and groups are not strictly scoped per selected profile yet.
-- Saved groups are local broadcast lists, not private Telegram group sync by `chatId`/`accessHash`.
+- Saved groups are server-backed broadcast lists, not private Telegram group sync by `chatId`/`accessHash`.
 - Channel records are local planning records and do not manage Telegram channel membership.
 - A dedicated QR Code tab is listed in requirements but is not implemented in the UI yet.
 

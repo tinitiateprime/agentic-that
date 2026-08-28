@@ -92,3 +92,20 @@ test("the Telegram worker owns durable scheduling instead of the browser", async
   assert.match(scheduler, /renewPostLease/);
   assert.doesNotMatch(controller, /function runScheduler/);
 });
+
+test("the Telegram worker owns workspace records instead of browser storage", async () => {
+  const server = await readFile(new URL("../services/messaging/telegram/src/server.ts", import.meta.url), "utf8");
+  const store = await readFile(new URL("../services/messaging/telegram/src/store.ts", import.meta.url), "utf8");
+  const controller = await readFile(new URL("../services/messaging/telegram/console/src/telegram-controller.js", import.meta.url), "utf8");
+
+  assert.match(server, /\/v1\/workspace-data/);
+  assert.match(server, /\/v1\/contacts/);
+  assert.match(server, /\/v1\/groups/);
+  assert.match(server, /\/v1\/channels/);
+  assert.match(server, /workspaceRecordIdFromPath\(url\.pathname, "profiles"\)/);
+  assert.match(store, /telegramContacts/);
+  assert.match(store, /telegramGroups/);
+  assert.match(store, /telegramChannels/);
+  assert.match(store, /telegramProfiles/);
+  assert.doesNotMatch(controller, /write\(keys\.(?:profiles|contacts|groups|channels)/);
+});
