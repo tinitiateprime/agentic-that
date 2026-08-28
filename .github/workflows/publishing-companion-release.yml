@@ -36,14 +36,19 @@ jobs:
           npm run publishing:brand-assets
           npm --prefix apps/publishing-companion-desktop run make
 
-      - name: Collect portable Companion ZIP
+      - name: Validate and package Companion extension
+        run: |
+          npm run publishing:extension:validate
+          npm run publishing:extension:package
+
+      - name: Collect release artifacts
         shell: pwsh
         run: ./scripts/collect-publishing-release-artifacts.ps1 -PortableOnly
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: publishing-companion-portable
+          name: agenticthat-companion-release
           path: artifacts/*
           if-no-files-found: error
 
