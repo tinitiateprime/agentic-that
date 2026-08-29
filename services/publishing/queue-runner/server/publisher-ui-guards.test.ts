@@ -40,17 +40,20 @@ test("X publishing retains initial file acceptance after X clears the input", ()
   assert.equal(hasReadyXMedia(initialFileSelectionCompleted, true), true);
 });
 
-test("the authenticated website uses server-managed publishing accounts as its authority", () => {
+test("the authenticated website keeps Server Worker and Companion accounts as separate authorities", () => {
   const dashboard = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   const configManager = readFileSync(new URL("../../../../app/config-manager/ConfigManager.jsx", import.meta.url), "utf8");
   const productStatus = readFileSync(new URL("../../../../src/platform/use-product-status.js", import.meta.url), "utf8");
 
-  assert.match(dashboard, /\.map\(serverAccountForComposer\) \?\? \[\]\)/);
+  assert.match(dashboard, /\.map\(serverAccountForComposer\) \?\? \[\];/);
   assert.match(dashboard, /platform: account\.platform/);
   assert.doesNotMatch(dashboard, /function serverAccountForComposer[\s\S]*?platform: 'instagram'[\s\S]*?\n}/);
-  assert.doesNotMatch(dashboard, /\.\.\.latestAccounts/);
+  assert.match(dashboard, /\.\.\.companionAccounts\.filter\(account => account\.executionEngine !== 'server_worker'\)/);
+  assert.match(dashboard, /\.\.\.availableServerAccounts/);
   assert.match(configManager, /\(serverAutomation\?\.accounts \|\| \[\]\)\.map\(serverAccountForConfig\)/);
-  assert.doesNotMatch(configManager, /Pair this device/);
+  assert.match(configManager, /Pair this device/);
+  assert.match(configManager, /setExecutionEngine\("companion"\)/);
+  assert.match(configManager, /setExecutionEngine\("server_worker"\)/);
   assert.match(productStatus, /fetch\("\/api\/automation-server\/accounts"/);
 });
 

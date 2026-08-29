@@ -34,6 +34,13 @@ The browser publisher is deliberately single-host: run exactly one automation
 service against its SQLite database. PostgreSQL on the same Ubuntu host is the
 multi-user authority for accounts, workspaces, roles, WhatsApp, and audit data.
 
+Publishing offers two explicit account engines. **Server Worker** is the
+default and needs no user download. **Local Companion** is optional: install
+Companion and the Chrome extension on the device that will publish, open
+Config Manager, pair that device, and choose Local Companion when adding the
+account. The engines are never automatic fallbacks for each other; this avoids
+submitting the same post twice when a platform confirmation is delayed.
+
 ## 1. Install software
 
 Install a supported Node.js LTS, PostgreSQL, Nginx, Certbot, Google Chrome

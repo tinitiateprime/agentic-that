@@ -76,6 +76,16 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     return fetch(`${origin}${route}`, { ...init, headers });
   }
 
+  const unpairedSyncResponse = await api("/api/companion/sync", {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(unpairedSyncResponse.status, 409);
+  assert.match(
+    ((await unpairedSyncResponse.json()) as { message: string }).message,
+    /Pair this workspace Companion/,
+  );
+
   const unavailableCompanionScrape = await api("/api/scraping/instagram/jobs", {
     method: "POST",
     body: JSON.stringify({ mode: "profile", keyword: "instagram" }),

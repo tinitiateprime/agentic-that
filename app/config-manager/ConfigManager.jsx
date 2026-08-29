@@ -33,6 +33,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
+import { publishingFetch } from "@/lib/publishing-endpoint";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
@@ -143,6 +144,14 @@ async function publishingRequest(path, token, init = {}) {
   return responsePayload(response);
 }
 
+async function companionPublishingRequest(path, identityToken, init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", identityToken));
+  const response = await publishingFetch(path, { ...init, headers, cache: "no-store" });
+  return responsePayload(response);
+}
+
 async function serverAutomationRequest(path, identityToken, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
@@ -237,6 +246,8 @@ export default function ConfigManager({
   const [publishingSession, setPublishingSession] = useState(null);
   const [serverAutomation, setServerAutomation] = useState(null);
   const [serverAutomationError, setServerAutomationError] = useState("");
+  const [companionPublishing, setCompanionPublishing] = useState({ accounts: [], companion: null });
+  const [companionPublishingError, setCompanionPublishingError] = useState("");
   const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
   const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
   const visibleServices = services.filter((service) => (
@@ -318,7 +329,6 @@ export default function ConfigManager({
       ]);
       const accounts = accountData.accounts || [];
       setServerAutomation({ health, accounts });
-      rememberPublishingAccounts(accounts.map(serverAccountForConfig));
       setServerAutomationError("");
     } catch (error) {
       setServerAutomation(null);
@@ -326,11 +336,33 @@ export default function ConfigManager({
     }
   }, [publishingIdentityToken]);
 
-  useEffect(() => {
-    void Promise.all([loadTelegram(), connectPublishing(), loadServerAutomation()]);
-  }, [connectPublishing, loadServerAutomation, loadTelegram]);
+  const loadCompanionPublishing = useCallback(async () => {
+    if (!publishingIdentityToken) return;
+    try {
+      const [accounts, status] = await Promise.all([
+        publishingRequest("/api/accounts", publishingIdentityToken),
+        publishingRequest("/api/companion", publishingIdentityToken)
+      ]);
+      setCompanionPublishing({ accounts: accounts || [], companion: status.companion || null });
+      setCompanionPublishingError("");
+    } catch (error) {
+      setCompanionPublishing({ accounts: [], companion: null });
+      setCompanionPublishingError(error.message || "Companion publishing status is unavailable.");
+    }
+  }, [publishingIdentityToken]);
 
-  const connectedCount = telegramAccounts.length + (serverAutomation?.accounts.length || 0);
+  useEffect(() => {
+    rememberPublishingAccounts([
+      ...(serverAutomation?.accounts || []).map(serverAccountForConfig),
+      ...(companionPublishing.accounts || [])
+    ]);
+  }, [companionPublishing.accounts, serverAutomation]);
+
+  useEffect(() => {
+    void Promise.all([loadTelegram(), connectPublishing(), loadServerAutomation(), loadCompanionPublishing()]);
+  }, [connectPublishing, loadCompanionPublishing, loadServerAutomation, loadTelegram]);
+
+  const connectedCount = telegramAccounts.length + (serverAutomation?.accounts.length || 0) + companionPublishing.accounts.length;
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
@@ -403,7 +435,7 @@ export default function ConfigManager({
               <button
                 type="button"
                 className="config-refresh"
-                onClick={() => activeService === "messaging" ? void loadTelegram() : void Promise.all([connectPublishing(), loadServerAutomation()])}
+                onClick={() => activeService === "messaging" ? void loadTelegram() : void Promise.all([connectPublishing(), loadServerAutomation(), loadCompanionPublishing()])}
               >
                 <RefreshCw size={16} />Refresh
               </button>
@@ -438,6 +470,8 @@ export default function ConfigManager({
               allowedPlatforms={allowedPublishingPlatforms}
               serverAutomation={serverAutomation}
               serverAutomationError={serverAutomationError}
+              companionPublishing={companionPublishing}
+              companionPublishingError={companionPublishingError}
               managerStatus={publishingManagerStatus}
               accountEmail={user.email}
               onSession={session => {
@@ -445,6 +479,7 @@ export default function ConfigManager({
                 void loadPublishing(session);
               }}
               onReloadServer={loadServerAutomation}
+              onReloadCompanion={loadCompanionPublishing}
               onReconnect={connectPublishing}
               setNotice={setNotice}
             />
@@ -841,6 +876,15 @@ function serverAccountForConfig(account) {
   };
 }
 
+function companionAccountForConfig(account) {
+  return {
+    ...account,
+    handle: account.handle || "Companion-managed account",
+    executionEngine: "companion",
+    serverManaged: false
+  };
+}
+
 function PublishingManager({
   status,
   session,
@@ -850,10 +894,13 @@ function PublishingManager({
   allowedPlatforms,
   serverAutomation,
   serverAutomationError,
+  companionPublishing,
+  companionPublishingError,
   managerStatus,
   accountEmail,
   onSession,
   onReloadServer,
+  onReloadCompanion,
   onReconnect,
   setNotice
 }) {
@@ -865,6 +912,7 @@ function PublishingManager({
   const [loginAccountId, setLoginAccountId] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [serverLogin, setServerLogin] = useState(null);
+  const [pairingCompanion, setPairingCompanion] = useState(false);
   const selectedServerPlatformAvailable = selectedPlatform === "instagram"
     ? Boolean(serverAutomation?.health?.features?.instagramPublishing)
     : selectedPlatform === "facebook"
@@ -879,8 +927,11 @@ function PublishingManager({
   const serverSupportedPlatforms = ["instagram", "facebook", "x", "linkedin", "youtube"];
 
   const combinedAccounts = useMemo(
-    () => (serverAutomation?.accounts || []).map(serverAccountForConfig),
-    [serverAutomation]
+    () => [
+      ...(serverAutomation?.accounts || []).map(serverAccountForConfig),
+      ...(companionPublishing?.accounts || []).map(companionAccountForConfig)
+    ],
+    [companionPublishing?.accounts, serverAutomation]
   );
 
   const platformAccounts = useMemo(
@@ -922,32 +973,151 @@ function PublishingManager({
     onSession(null);
   };
 
+  const syncCompanion = async () => {
+    try {
+      await companionPublishingRequest("/api/companion/sync", publishingIdentityToken, {
+        method: "POST",
+        body: "{}"
+      });
+      return true;
+    } catch (error) {
+      // Companion 1.7.3 and earlier synchronize automatically on their normal
+      // heartbeat interval and do not expose the immediate sync endpoint.
+      if (error.status === 404) return false;
+      throw error;
+    }
+  };
+
+  const reloadCompanionAfterSync = async (synced) => {
+    await onReloadCompanion();
+    if (!synced) window.setTimeout(() => void onReloadCompanion(), 13_000);
+  };
+
+  const ensureCompanionPaired = async () => {
+    const localHealth = await companionPublishingRequest("/api/health", publishingIdentityToken);
+    const current = companionPublishing?.companion;
+    const sameCompanion = Boolean(
+      localHealth.paired
+      && current
+      && current.workspaceId === session.user.workspaceId
+      && current.companionInstanceId
+      && current.companionInstanceId === localHealth.companionInstanceId
+    );
+    if (sameCompanion) {
+      try {
+        await syncCompanion();
+        return localHealth;
+      } catch (error) {
+        if (!/pair this workspace companion|pairing is no longer valid/i.test(error.message || "")) throw error;
+      }
+    }
+
+    if (current?.status === "online" && current.companionInstanceId && current.companionInstanceId !== localHealth.companionInstanceId) {
+      const replace = window.confirm("Another Companion is currently paired to this workspace. Pair this device instead?");
+      if (!replace) throw new Error("Companion pairing was cancelled.");
+    }
+
+    const pairing = await publishingRequest("/api/companion/pair", publishingIdentityToken, {
+      method: "POST",
+      body: JSON.stringify({
+        label: "Workspace Companion",
+        companionInstanceId: localHealth.companionInstanceId || ""
+      })
+    });
+    try {
+      await companionPublishingRequest("/api/companion/pair", publishingIdentityToken, {
+        method: "POST",
+        body: JSON.stringify({
+          serverOrigin: window.location.origin,
+          pairingToken: pairing.token,
+          companion: pairing.companion
+        })
+      });
+      const synced = await syncCompanion();
+      await reloadCompanionAfterSync(synced);
+    } catch (error) {
+      await publishingRequest("/api/companion", publishingIdentityToken, { method: "DELETE" }).catch(() => undefined);
+      throw error;
+    }
+    return localHealth;
+  };
+
+  const pairCompanion = async () => {
+    setPairingCompanion(true);
+    try {
+      await ensureCompanionPaired();
+      setNotice({ tone: "success", message: "This device is paired as the workspace Companion." });
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setPairingCompanion(false);
+    }
+  };
+
   const saveAccount = async (form) => {
     setBusy(true);
     try {
-      if (!serverSupportedPlatforms.includes(selectedPlatform)) throw new Error("Server Worker support for this platform is not available yet.");
-      if (!selectedServerPlatformAvailable) throw new Error(platformLabels[selectedPlatform] + " Server Worker is not enabled.");
-      const result = form.id
-        ? await serverAutomationRequest("/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
+      if (form.executionEngine === "companion") {
+        await ensureCompanionPaired();
+        const payload = {
+          displayName: form.displayName.trim(),
+          handle: form.handle.trim(),
+          loginIdentifier: form.loginIdentifier.trim(),
+          enabled: form.enabled,
+          executionEngine: "companion"
+        };
+        let account;
+        if (form.id) {
+          account = await companionPublishingRequest("/api/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
             method: "PATCH",
-            body: JSON.stringify({ displayName: form.displayName.trim(), enabled: form.enabled })
-          })
-        : await serverAutomationRequest("/accounts", publishingIdentityToken, {
-            method: "POST",
-            body: JSON.stringify({ platform: selectedPlatform, displayName: form.displayName.trim() })
+            body: JSON.stringify(payload)
           });
-      const account = result.account;
-      setEditing(null);
-      await onReloadServer();
-      if (!form.id) {
-        const loginResult = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
-          method: "POST",
-          body: "{}"
-        });
-        setServerLogin({ session: loginResult.session, accountName: account.displayName });
-        setNotice({ tone: "success", message: account.displayName + " was created. Complete " + platformLabels[selectedPlatform] + " login in the private server browser." });
+          await publishingRequest("/api/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
+            method: "PATCH",
+            body: JSON.stringify(payload)
+          });
+        } else {
+          account = await companionPublishingRequest("/api/platforms/" + selectedPlatform + "/accounts", publishingIdentityToken, {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+        }
+        await reloadCompanionAfterSync(await syncCompanion());
+        setEditing(null);
+        if (!form.id) {
+          const login = await companionPublishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", publishingIdentityToken, {
+            method: "POST",
+            body: JSON.stringify({ surface: "engine" })
+          });
+          setNotice({ tone: "success", message: login.message || account.displayName + " was added. Complete login in Companion." });
+        } else {
+          setNotice({ tone: "success", message: account.displayName + " Companion settings were updated." });
+        }
       } else {
-        setNotice({ tone: "success", message: account.displayName + " server settings were updated." });
+        if (!serverSupportedPlatforms.includes(selectedPlatform)) throw new Error("Server Worker support for this platform is not available yet.");
+        if (!selectedServerPlatformAvailable) throw new Error(platformLabels[selectedPlatform] + " Server Worker is not enabled.");
+        const result = form.id
+          ? await serverAutomationRequest("/accounts/" + encodeURIComponent(form.id), publishingIdentityToken, {
+              method: "PATCH",
+              body: JSON.stringify({ displayName: form.displayName.trim(), enabled: form.enabled })
+            })
+          : await serverAutomationRequest("/accounts", publishingIdentityToken, {
+              method: "POST",
+              body: JSON.stringify({ platform: selectedPlatform, displayName: form.displayName.trim() })
+            });
+        const account = result.account;
+        setEditing(null);
+        await onReloadServer();
+        if (!form.id) {
+          const loginResult = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
+            method: "POST",
+            body: "{}"
+          });
+          setServerLogin({ session: loginResult.session, accountName: account.displayName });
+          setNotice({ tone: "success", message: account.displayName + " was created. Complete " + platformLabels[selectedPlatform] + " login in the private server browser." });
+        } else {
+          setNotice({ tone: "success", message: account.displayName + " server settings were updated." });
+        }
       }
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -960,8 +1130,15 @@ function PublishingManager({
     if (!window.confirm("Delete " + account.displayName + "? Existing post history may prevent deletion.")) return;
     setBusy(true);
     try {
-      await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id), publishingIdentityToken, { method: "DELETE" });
-      await onReloadServer();
+      if (account.executionEngine === "companion") {
+        await ensureCompanionPaired();
+        await publishingRequest("/api/accounts/" + encodeURIComponent(account.id), publishingIdentityToken, { method: "DELETE" });
+        await companionPublishingRequest("/api/accounts/" + encodeURIComponent(account.id), publishingIdentityToken, { method: "DELETE" });
+        await reloadCompanionAfterSync(await syncCompanion());
+      } else {
+        await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id), publishingIdentityToken, { method: "DELETE" });
+        await onReloadServer();
+      }
       setNotice({ tone: "success", message: account.displayName + " was removed." });
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -973,11 +1150,20 @@ function PublishingManager({
   const startLogin = async (account) => {
     setLoginAccountId(account.id);
     try {
-      const result = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
-        method: "POST",
-        body: "{}"
-      });
-      setServerLogin({ session: result.session, accountName: account.displayName });
+      if (account.executionEngine === "companion") {
+        await ensureCompanionPaired();
+        const result = await companionPublishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", publishingIdentityToken, {
+          method: "POST",
+          body: JSON.stringify({ surface: "engine" })
+        });
+        setNotice({ tone: "success", message: result.message || "Complete login in Companion." });
+      } else {
+        const result = await serverAutomationRequest("/accounts/" + encodeURIComponent(account.id) + "/login", publishingIdentityToken, {
+          method: "POST",
+          body: "{}"
+        });
+        setServerLogin({ session: result.session, accountName: account.displayName });
+      }
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -1074,6 +1260,21 @@ function PublishingManager({
         <i>{serverAutomation?.health?.features?.publishing ? "ONLINE" : "OFFLINE"}</i>
       </section>
 
+      <section className={"config-server-worker-bar companion " + (companionPublishing?.companion?.status === "online" ? "online" : "offline")}>
+        <span><Smartphone size={19} /></span>
+        <div>
+          <strong>Local Companion</strong>
+          <small>{companionPublishing?.companion?.status === "online"
+            ? "Paired and online — selected accounts publish on this user device."
+            : companionPublishingError || "Optional second engine. Install Companion and the Chrome extension on the publishing device."}</small>
+        </div>
+        <i>{companionPublishing?.companion?.status === "online" ? "ONLINE" : companionPublishing?.companion ? "OFFLINE" : "NOT PAIRED"}</i>
+        <button className="config-secondary" type="button" onClick={() => void pairCompanion()} disabled={pairingCompanion}>
+          {pairingCompanion ? <Loader2 className="spin" size={15} /> : <Plug size={15} />}
+          {companionPublishing?.companion ? "Pair this device" : "Pair Companion"}
+        </button>
+      </section>
+
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
         {allowedPlatforms.map(platform => {
           const count = combinedAccounts.filter(account => account.platform === platform).length;
@@ -1098,8 +1299,8 @@ function PublishingManager({
       </div>
 
       <div className="config-publishing-toolbar">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>{serverSupportedPlatforms.includes(selectedPlatform) ? "Server accounts appear immediately in the publishing dashboard." : "Server Worker support for this platform is planned."}</p></div>
-        {!editing && serverSupportedPlatforms.includes(selectedPlatform) && <button className="config-primary" type="button" disabled={!selectedServerPlatformAvailable} onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Choose Server Worker for website-only service or Companion for publishing on the user's device.</p></div>
+        {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true, executionEngine: "server_worker" })}><Plus size={16} />Add account</button>}
       </div>
 
       {editing && (
@@ -1118,18 +1319,18 @@ function PublishingManager({
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
           copy={serverSupportedPlatforms.includes(selectedPlatform)
-            ? selectedServerPlatformAvailable ? "Add a Server Worker account and complete login entirely through the website." : "Enable this platform's Server Worker before adding an account."
-            : "This platform will become available after its server-side login and publishing worker is implemented."}
-          action={serverSupportedPlatforms.includes(selectedPlatform) && selectedServerPlatformAvailable ? <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button> : null}
+            ? "Add an account and choose Server Worker or Local Companion as its publishing engine."
+            : "Add this account through Local Companion."}
+          action={<button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true, executionEngine: "server_worker" })}><Plus size={16} />Add first account</button>}
         />
       ) : !editing && (
         <div className="config-account-list">
           {platformAccounts.map(account => (
-            <article className="config-account-row publishing" key={account.id}>
+            <article className="config-account-row publishing" key={account.executionEngine + ":" + account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
               <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Ready" : "Reconnect required"}</span>
-              <span className="config-account-meta config-account-engine"><Database size={14} /><span>Server worker</span></span>
+              <span className="config-account-meta config-account-engine">{account.executionEngine === "companion" ? <Smartphone size={14} /> : <Database size={14} />}<span>{account.executionEngine === "companion" ? "Local Companion" : "Server worker"}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
                 <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
@@ -1304,15 +1505,20 @@ function ConfigServerLoginBrowser({ initialSession, accountName, publishingIdent
 
 function PublishingAccountForm({ platform, account, busy, serverAvailable, onCancel, onSave }) {
   const [displayName, setDisplayName] = useState(account?.displayName || "");
+  const [handle, setHandle] = useState(account?.handle || "");
+  const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
+  const [executionEngine, setExecutionEngine] = useState(account?.executionEngine || "server_worker");
 
   const submit = (event) => {
     event.preventDefault();
     void onSave({
       id: account?.id,
       displayName,
+      handle,
+      loginIdentifier,
       enabled,
-      executionEngine: "server_worker"
+      executionEngine
     });
   };
 
@@ -1326,11 +1532,17 @@ function PublishingAccountForm({ platform, account, busy, serverAvailable, onCan
       <form onSubmit={submit}>
         <div className="config-form-grid">
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
+          {executionEngine === "companion" && <>
+            <label><span>Account handle or profile name</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
+            <label className="wide"><span>Login email or username (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} autoComplete="username" placeholder="Used only to help open the correct login" /></label>
+          </>}
           <fieldset className="config-engine-field wide">
             <legend>Publishing engine</legend>
             <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
-              <button type="button" disabled className="active" aria-pressed="true"><Database size={18} /><span><strong>Server Worker</strong><small>{serverAvailable ? "Website-only login and publishing; no download required" : "Not available in this environment"}</small></span></button>
+              <button type="button" disabled={Boolean(account) || !serverAvailable} className={executionEngine === "server_worker" ? "active" : ""} aria-pressed={executionEngine === "server_worker"} onClick={() => setExecutionEngine("server_worker")}><Database size={18} /><span><strong>Server Worker</strong><small>{serverAvailable ? "Website-only login and publishing; no download required" : "Not available in this environment"}</small></span></button>
+              <button type="button" disabled={Boolean(account)} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><Smartphone size={18} /><span><strong>Local Companion</strong><small>Optional device engine using the user's protected local browser sessions</small></span></button>
             </div>
+            {account && <p className="config-engine-warning"><ShieldCheck size={14} />The engine is fixed for this account so its saved login session cannot be moved accidentally.</p>}
           </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>

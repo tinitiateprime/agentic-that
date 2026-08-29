@@ -1687,6 +1687,21 @@ app.delete("/api/scraping/facebook/jobs/:id", authenticateFacebookScraping, asyn
 
 app.use("/api", authenticateApi);
 
+app.post("/api/companion/sync", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
+  try {
+    assertCentralCapability(req, "publishing.accounts.configure");
+    const pairing = await readCentralPairing();
+    if (!pairing || pairing.workspaceId !== currentUser(req).workspaceId) {
+      res.status(409).json({ message: "Pair this workspace Companion before synchronizing publishing accounts." });
+      return;
+    }
+    await heartbeatCentralPairing(pairing);
+    res.json({ synced: true, workspaceId: pairing.workspaceId, companionInstanceId: publishingCompanionId() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/companion/accounts/import", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const account = req.body?.account as PlatformAccount | undefined;

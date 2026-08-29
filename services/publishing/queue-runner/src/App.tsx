@@ -587,6 +587,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         api.uploads(),
         api.submissions(),
         api.schedules(),
+        api.accounts(),
       ] as const;
       const serverRequest = api.serverAutomationOverview()
         .then(overview => ({ overview, error: null as string | null }))
@@ -594,7 +595,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
           overview: null,
           error: serverError instanceof Error ? serverError.message : 'The server publishing worker is unavailable.',
         }));
-      const [health, latestUploads, latestSubmissions, latestSchedules, latestServer] = await Promise.all([
+      const [health, latestUploads, latestSubmissions, latestSchedules, companionAccounts, latestServer] = await Promise.all([
         ...baseRequests,
         serverRequest,
       ]);
@@ -604,14 +605,18 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       setSubmissions(latestSubmissions);
       setServerAutomation(latestServer.overview);
       setServerAutomationError(latestServer.error);
-      setAccounts(latestServer.overview?.accounts
+      const availableServerAccounts = latestServer.overview?.accounts
         .filter(account => account.platform === 'instagram'
           ? latestServer.overview?.health.features.instagramPublishing
           : account.platform === 'facebook' ? latestServer.overview?.health.features.facebookPublishing
           : account.platform === 'x' ? latestServer.overview?.health.features.xPublishing
           : account.platform === 'linkedin' ? latestServer.overview?.health.features.linkedinPublishing
           : account.platform === 'youtube' && latestServer.overview?.health.features.youtubePublishing)
-        .map(serverAccountForComposer) ?? []);
+        .map(serverAccountForComposer) ?? [];
+      setAccounts([
+        ...companionAccounts.filter(account => account.executionEngine !== 'server_worker'),
+        ...availableServerAccounts,
+      ]);
       setSchedules(latestSchedules);
       if (permissions.canManageUsers) {
         const [latestUsers, latestActivity] = await Promise.all([
