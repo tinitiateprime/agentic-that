@@ -7,30 +7,9 @@ import {
   MINIMUM_COMPANION_VERSION,
   versionAtLeast
 } from "../../../../../lib/companion-version.js";
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
 
-const SESSION_KEY = "agenticthat-publish-queue-session";
-const SCRAPING_SESSION_KEY = "agenticthat-instagram-companion-session";
 const JOBS_PATH = "/api/scraping/instagram/jobs";
-
-function readCompanionToken() {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || "null");
-    return typeof session?.token === "string" ? session.token : "";
-  } catch {
-    return "";
-  }
-}
-
-function readScrapingToken() {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(SCRAPING_SESSION_KEY) || "null");
-    return typeof session?.token === "string" && Number(session?.expiresAt) > Date.now() + 30_000
-      ? session.token
-      : "";
-  } catch {
-    return "";
-  }
-}
 
 async function responsePayload(response) {
   const data = await response.json().catch(() => ({}));
@@ -62,25 +41,10 @@ async function extensionJson(path, init = {}) {
 }
 
 async function scrapingAccessToken(publishingIdentityToken, force = false) {
-  const publishingToken = readCompanionToken();
-  if (publishingToken) return publishingToken;
-  if (!force) {
-    const existing = readScrapingToken();
-    if (existing) return existing;
-  }
   if (!publishingIdentityToken) {
     throw new Error("Refresh AgenticThat and try Local Companion again.");
   }
-  const session = await extensionJson("/api/auth/platform/instagram-scraping", {
-    method: "POST",
-    body: JSON.stringify({ token: publishingIdentityToken })
-  });
-  if (!session?.token) throw new Error("Companion could not create a local scraping session.");
-  window.sessionStorage.setItem(SCRAPING_SESSION_KEY, JSON.stringify({
-    token: session.token,
-    expiresAt: Date.now() + Math.max(300, Number(session.expiresInSeconds) || 7200) * 1000
-  }));
-  return session.token;
+  return getClientServiceToken("scraping", publishingIdentityToken, force);
 }
 
 async function companionFetch(path, init = {}, publishingIdentityToken = "", retry = true) {
@@ -90,8 +54,7 @@ async function companionFetch(path, init = {}, publishingIdentityToken = "", ret
   try {
     return await extensionJson(path, { ...init, headers });
   } catch (error) {
-    if (retry && error?.status === 401 && !readCompanionToken()) {
-      window.sessionStorage.removeItem(SCRAPING_SESSION_KEY);
+    if (retry && error?.status === 401) {
       await scrapingAccessToken(publishingIdentityToken, true);
       return companionFetch(path, init, publishingIdentityToken, false);
     }

@@ -56,7 +56,7 @@
     "seed": "node scripts/seed.js",
     "rbac:migrate:dry-run": "node scripts/migrate-central-rbac.mjs",
     "rbac:migrate:apply": "node scripts/migrate-central-rbac.mjs --apply",
-    "test:rbac": "node --import tsx --test src/platform/server/access-policy.test.js src/platform/server/billing-policy.test.js lib/service-access-token.test.js lib/team-testing-access.test.js lib/trial-usage-limit.test.ts",
+    "test:rbac": "node --import tsx --test src/platform/client-service-token.test.js src/platform/server/access-policy.test.js src/platform/server/billing-policy.test.js lib/service-access-token.test.js lib/team-testing-access.test.js lib/trial-usage-limit.test.ts",
     "preview": "next start -H 127.0.0.1 -p 4173",
     "smoke:ubuntu": "node scripts/smoke-ubuntu.mjs"
   },

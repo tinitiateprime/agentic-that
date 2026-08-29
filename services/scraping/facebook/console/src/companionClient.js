@@ -4,19 +4,9 @@ import {
   MINIMUM_COMPANION_VERSION,
   versionAtLeast
 } from "../../../../../lib/companion-version.js";
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
 
-const PUBLISHING_SESSION_KEY = "agenticthat-publish-queue-session";
-const SCRAPING_SESSION_KEY = "agenticthat-facebook-companion-session";
 const JOBS_PATH = "/api/scraping/facebook/jobs";
-
-function savedToken(key) {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(key) || "null");
-    if (typeof session?.token !== "string") return "";
-    if (key === SCRAPING_SESSION_KEY && Number(session.expiresAt) <= Date.now() + 30_000) return "";
-    return session.token;
-  } catch { return ""; }
-}
 
 async function payload(response) {
   const data = await response.json().catch(() => ({}));
@@ -43,23 +33,8 @@ async function extensionJson(path, init = {}) {
 }
 
 async function accessToken(identityToken, force = false) {
-  const publishingToken = savedToken(PUBLISHING_SESSION_KEY);
-  if (publishingToken) return publishingToken;
-  if (!force) {
-    const existing = savedToken(SCRAPING_SESSION_KEY);
-    if (existing) return existing;
-  }
   if (!identityToken) throw new Error("Refresh AgenticThat and try Local Companion again.");
-  const session = await extensionJson("/api/auth/platform/facebook-scraping", {
-    method: "POST",
-    body: JSON.stringify({ token: identityToken }),
-  });
-  if (!session?.token) throw new Error("Companion could not create a Facebook scraping session.");
-  window.sessionStorage.setItem(SCRAPING_SESSION_KEY, JSON.stringify({
-    token: session.token,
-    expiresAt: Date.now() + Math.max(300, Number(session.expiresInSeconds) || 7200) * 1000,
-  }));
-  return session.token;
+  return getClientServiceToken("scraping", identityToken, force);
 }
 
 async function companionFetch(path, init = {}, identityToken = "", retry = true) {
@@ -68,8 +43,7 @@ async function companionFetch(path, init = {}, identityToken = "", retry = true)
   headers.set("Authorization", `Bearer ${token}`);
   try { return await extensionJson(path, { ...init, headers }); }
   catch (error) {
-    if (retry && error?.status === 401 && !savedToken(PUBLISHING_SESSION_KEY)) {
-      window.sessionStorage.removeItem(SCRAPING_SESSION_KEY);
+    if (retry && error?.status === 401) {
       await accessToken(identityToken, true);
       return companionFetch(path, init, identityToken, false);
     }
