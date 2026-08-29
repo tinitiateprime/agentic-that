@@ -43,6 +43,8 @@ if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matche
 
 const files = new Set([
   manifest.background.service_worker,
+  "trusted-origins.js",
+  "popup.js",
   manifest.action?.default_popup,
   ...Object.values(manifest.icons ?? {}),
   ...Object.values(manifest.action?.default_icon ?? {}),

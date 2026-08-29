@@ -1,23 +1,23 @@
+importScripts("trusted-origins.js");
+
 const COMPANION_ORIGIN = "http://127.0.0.1:8792";
 const REQUEST_TYPE = "agenticthat.publishing.proxy.request.v1";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD"]);
 const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
 const BUILT_IN_ORIGINS = new Set(["https://agentic-that.netlify.app"]);
-
-function trustedScriptId(origin) {
-  let hash = 2166136261;
-  for (const character of origin) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `agenticthat-dashboard-${(hash >>> 0).toString(16)}`;
-}
+const {
+  normalizeDashboardOrigin,
+  hasStaticBridgeForOrigin,
+  trustedScriptId,
+} = globalThis.AgenticThatTrustedOrigins;
 
 async function savedTrustedOrigins() {
   const stored = await chrome.storage.local.get(TRUSTED_ORIGINS_KEY);
-  return Array.isArray(stored[TRUSTED_ORIGINS_KEY])
-    ? stored[TRUSTED_ORIGINS_KEY].filter(origin => typeof origin === "string")
-    : [];
+  if (!Array.isArray(stored[TRUSTED_ORIGINS_KEY])) return [];
+  const normalized = stored[TRUSTED_ORIGINS_KEY].flatMap(origin => {
+    try { return [normalizeDashboardOrigin(origin)]; } catch { return []; }
+  });
+  return [...new Set(normalized)];
 }
 
 async function isAllowedDashboard(urlText) {
@@ -37,6 +37,12 @@ async function restoreTrustedContentScripts() {
   const registeredIds = new Set(registrations.map(item => item.id));
   for (const origin of await savedTrustedOrigins()) {
     const id = trustedScriptId(origin);
+    if (hasStaticBridgeForOrigin(origin)) {
+      if (registeredIds.has(id)) {
+        await chrome.scripting.unregisterContentScripts({ ids: [id] }).catch(() => undefined);
+      }
+      continue;
+    }
     if (registeredIds.has(id)) continue;
     const allowed = await chrome.permissions.contains({ origins: [`${origin}/*`] });
     if (!allowed) continue;
@@ -48,6 +54,21 @@ async function restoreTrustedContentScripts() {
       persistAcrossSessions: true
     }]);
   }
+}
+
+async function companionFetch(path, options, attempts = 1) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetch(`${COMPANION_ORIGIN}${path}`, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+  }
+  throw lastError;
 }
 
 function safePath(value) {
@@ -91,13 +112,13 @@ async function proxyRequest(message, sender) {
   if (typeof message.bodyBase64 === "string") body = base64ToBytes(message.bodyBase64);
 
   try {
-    const response = await fetch(`${COMPANION_ORIGIN}${path}`, {
+    const response = await companionFetch(path, {
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : body,
       cache: "no-store",
       redirect: "manual"
-    });
+    }, method === "GET" && path === "/api/health" ? 3 : 1);
     const responseHeaders = [...response.headers.entries()];
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json") || contentType.startsWith("text/")) {
@@ -127,7 +148,9 @@ async function proxyRequest(message, sender) {
     return {
       ok: false,
       status: 503,
-      error: error instanceof Error ? error.message : "The local AgenticThat Companion is unavailable."
+      error: error instanceof Error
+        ? `Companion did not answer at 127.0.0.1:8792: ${error.message}`
+        : "Companion did not answer at 127.0.0.1:8792."
     };
   }
 }
@@ -144,5 +167,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => { void restoreTrustedContentScripts(); });
-chrome.runtime.onStartup.addListener(() => { void restoreTrustedContentScripts(); });
+chrome.runtime.onInstalled.addListener(() => { void restoreTrustedContentScripts().catch(console.error); });
+chrome.runtime.onStartup.addListener(() => { void restoreTrustedContentScripts().catch(console.error); });
