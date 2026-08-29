@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AgenticThat Companion",
   "description": "Connects AgenticThat publishing and scraping to the local Companion.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minimum_chrome_version": "120",
   "permissions": [
     "scripting",
@@ -35,6 +35,7 @@
     {
       "matches": [
         "https://agentic-that.netlify.app/*",
+        "https://*.trycloudflare.com/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],

@@ -8,6 +8,7 @@ const manifestPath = path.join(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const productionOrigin = "https://agentic-that.netlify.app";
 const productionMatch = `${productionOrigin}/*`;
+const quickTunnelMatch = "https://*.trycloudflare.com/*";
 
 if (manifest.manifest_version !== 3) throw new Error("Publishing extension must use Manifest V3.");
 if (!manifest.background?.service_worker) throw new Error("Publishing extension service worker is missing.");
@@ -32,6 +33,9 @@ if (extensionPermissions.some(permission => /instagram\.com/i.test(permission)))
 }
 if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
   throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
+}
+if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(quickTunnelMatch))) {
+  throw new Error(`Publishing extension must inject the dashboard bridge on ${quickTunnelMatch}.`);
 }
 if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).includes("https://*/*"))) {
   throw new Error("Companion extension media resources must support explicitly trusted HTTPS dashboards.");

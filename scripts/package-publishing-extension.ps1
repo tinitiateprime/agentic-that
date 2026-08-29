@@ -24,12 +24,17 @@ Get-ChildItem -LiteralPath $extensionRoot -Force | Where-Object { $_.Name -notin
 }
 
 # The source manifest supports unpacked local development. The Web Store build
-# exposes the dashboard bridge only to the production dashboard.
+# exposes the dashboard bridge to the production dashboard and Cloudflare's
+# temporary HTTPS testing domains. Requests from a temporary domain remain
+# blocked by the service worker until the user trusts that exact origin.
 $stagedManifestPath = Join-Path $stagingRoot "manifest.json"
 $stagedManifest = Get-Content -LiteralPath $stagedManifestPath -Raw | ConvertFrom-Json
-$productionMatch = "https://agentic-that.netlify.app/*"
+$packagedMatches = @(
+  "https://agentic-that.netlify.app/*",
+  "https://*.trycloudflare.com/*"
+)
 foreach ($contentScript in $stagedManifest.content_scripts) {
-  $contentScript.matches = @($productionMatch)
+  $contentScript.matches = $packagedMatches
 }
 $manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText(
