@@ -320,6 +320,25 @@ export async function metaListPhoneNumbers(creds = null) {
   }));
 }
 
+// Subscribe THIS app to a WABA's webhooks. Required after Embedded Signup:
+// until the app is subscribed, Meta delivers no message/reaction/status events
+// for that WABA, so a coexistence-connected number looks connected but never
+// receives anything. Idempotent on Meta's side (re-subscribing is a no-op).
+// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks
+export async function metaSubscribeApp(creds = null) {
+  const c = withCreds(creds);
+  if (!c.accessToken || !c.wabaId) {
+    throw new Error("Missing WABA id or access token to subscribe the app.");
+  }
+  const res = await fetch(metaGraphUrl(`/${c.wabaId}/subscribed_apps`, c), {
+    method: "POST",
+    headers: metaAuthHeaders(c),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.success === false) throw new Error(metaErrorMessage(data, res.status));
+  return true;
+}
+
 // --- Meta phone number registration / verification --------------------------
 // Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/reference/phone-numbers
 // A phone number is added to the WABA in Meta Business Manager first (which

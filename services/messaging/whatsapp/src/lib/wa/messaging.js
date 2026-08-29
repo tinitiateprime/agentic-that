@@ -221,6 +221,85 @@ export async function reactToMessage({ business, contact, targetMessage, emoji }
   });
 }
 
+// --- Automated welcome -----------------------------------------------------
+// The first time a brand-new contact messages one of the business's numbers,
+// greet them with an approved WhatsApp template (Settings > Welcome message).
+
+// Stored as a JSON array of values, one per template placeholder. Tolerates
+// the column being empty/legacy junk — a template with no placeholders is the
+// common case and needs no params at all.
+function parseWelcomeParams(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((v) => String(v ?? "")) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Fill an approved template's body with the values we're about to send, for
+// the chat-history preview. Meta templates are positional, so placeholders are
+// replaced in order regardless of whether they read {{1}} or {{name}}.
+function fillPlaceholders(body, values) {
+  let i = 0;
+  return String(body).replace(/\{\{\s*[^}]+?\s*\}\}/g, () => values[i++] ?? "");
+}
+
+// Send the configured welcome template if this inbound message opened a brand
+// new conversation. Returns the outbound message row, or null when no welcome
+// was due. Call AFTER the inbound message has been recorded.
+export async function maybeSendWelcome({ business, contact, phoneNumberId = null }) {
+  const templateName = (business?.welcome_template_name || "").trim();
+  if (!business?.welcome_enabled || !templateName) return null;
+
+  const sql = await getSql();
+
+  // "New" means this is the contact's first inbound message ever — the row
+  // that triggered this call is already stored, so a count above 1 is an
+  // ongoing conversation. This is also what keeps contacts that predate the
+  // feature (or were imported with history) from being greeted mid-thread;
+  // they're marked welcomed so the count is only paid once.
+  const [{ n: inboundCount }] = await sql`
+    SELECT COUNT(*)::int AS n FROM messages
+     WHERE contact_id = ${contact.id} AND direction = 'in'`;
+  if (inboundCount > 1) {
+    await sql`UPDATE contacts SET welcome_sent_at = CURRENT_TIMESTAMP
+               WHERE id = ${contact.id} AND welcome_sent_at IS NULL`;
+    return null;
+  }
+
+  // Claim the welcome before sending it. Providers retry webhooks and can
+  // deliver concurrently, so this conditional UPDATE — not a read-then-write —
+  // is what guarantees exactly one greeting per contact.
+  const claimed = await sql`
+    UPDATE contacts SET welcome_sent_at = CURRENT_TIMESTAMP
+     WHERE id = ${contact.id} AND welcome_sent_at IS NULL
+     RETURNING id`;
+  if (claimed.length === 0) return null;
+
+  const params = parseWelcomeParams(business.welcome_template_params).map((value) =>
+    renderTemplate(value, { contact, business })
+  );
+  const previewBody = business.welcome_template_body
+    ? fillPlaceholders(business.welcome_template_body, params)
+    : undefined;
+
+  // The claim stands even if the send fails: sendTemplateToContact records the
+  // provider's error on the thread for the admin to see, and un-claiming would
+  // mean a mis-configured template greets the contact again on every message
+  // they send afterwards.
+  return sendTemplateToContact({
+    business,
+    contact,
+    watiTemplate: templateName,
+    params,
+    language: business.welcome_template_language || undefined,
+    previewBody,
+    phoneNumberId,
+  });
+}
+
 // Record an inbound message (from a provider webhook). When the customer tapped
 // an interactive button, pass buttonReply=true so it's captured and linked to
 // the outbound button message it answered. `provider` (meta/baileys/wati/mock)
@@ -266,5 +345,16 @@ export async function recordInbound({
     VALUES (${business.id}, ${contact.id}, 'in', ${body}, ${kind}, 'delivered', ${providerId}, ${replyToId}, ${phoneNumberId}, ${provider})
     RETURNING *`;
   await sql`UPDATE contacts SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ${contact.id}`;
+
+  // Greet first-time contacts. Runs here rather than in each provider's
+  // webhook so every channel behaves the same, and never throws: the inbound
+  // message is already stored and a failed greeting must not stop the
+  // webhook from being acknowledged (which would make the provider retry).
+  try {
+    await maybeSendWelcome({ business, contact, phoneNumberId });
+  } catch (err) {
+    console.error("welcome template failed:", err?.message || err);
+  }
+
   return row;
 }

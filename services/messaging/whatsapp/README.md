@@ -9,6 +9,44 @@ The active AgenticThat deployment now serves WhatsApp from the root Next.js app:
 
 So the main Netlify site can deploy WhatsApp, Telegram, and Instagram together.
 
+## Upstream Sync
+
+This console is vendored from the standalone
+[tinitiate-wa-workflows](https://github.com/tinitiateprime/tinitiate-wa-workflows)
+repository. Upstream's flat layout is split across two roots here — its `app/`
+stays at `app/`, its `lib/` and `components/` move under
+`services/messaging/whatsapp/src/`, and `@/lib` imports become `@whatsapp/lib`.
+Identity is the other difference: `src/lib/auth.js` keeps upstream's exported
+API but resolves the signed-in user from the AgenticThat principal and enforces
+`messaging.whatsapp` access, so upstream route handlers work unchanged.
+
+`services/messaging/whatsapp/UPSTREAM.json` records the upstream commit this
+copy was last adapted from. To pull newer upstream work:
+
+```bash
+git remote add wa-upstream https://github.com/tinitiateprime/tinitiate-wa-workflows.git
+git fetch wa-upstream main
+npm run whatsapp:sync              # report what would change
+npm run whatsapp:sync:apply        # three-way merge into the working tree
+```
+
+The sync rebuilds both sides of the upstream change in local path and import
+space, then merges against the working tree, so local adaptations surface as
+conflicts rather than being overwritten. Files with no local counterpart
+(`package.json`, `app/layout.jsx`, `app/page.jsx`, upstream `scripts/`) are
+reported for review and never written. New route handlers are flagged when they
+still carry upstream's flat `401` instead of `whatsappAccessErrorResponse`.
+
+After resolving conflicts and carrying over review items, record the sync:
+
+```bash
+node scripts/sync-whatsapp-upstream.mjs --set-base
+```
+
+That step refuses to run while conflict markers remain. Until the base is
+recorded, re-running the sync reports the same range again, and files already
+resolved show as conflicts — they match neither upstream side any more.
+
 ## Local Start
 
 From the AgenticThat root:

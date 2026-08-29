@@ -13,8 +13,17 @@ export default function MetaEmbeddedSignupButton({ appId, configId, onSuccess })
   const [sdkReady, setSdkReady] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [result, setResult] = useState(null);
+  // Facebook's SDK refuses FB.login on non-HTTPS pages, so a plain
+  // http://localhost dev server can't run Embedded Signup. Assume secure during
+  // SSR and re-check on mount (localhost over http is the common trap).
+  // https://developers.facebook.com/blog/post/2018/06/08/enforce-https-facebook-login/
+  const [secure, setSecure] = useState(true);
   const signupInfo = useRef({ wabaId: null, phoneNumberId: null });
   const signupInfoWaiter = useRef(null);
+
+  useEffect(() => {
+    setSecure(window.location.protocol === "https:");
+  }, []);
 
   useEffect(() => {
     if (!appId) return;
@@ -113,13 +122,20 @@ export default function MetaEmbeddedSignupButton({ appId, configId, onSuccess })
       setResult({ error: body.error || "Save failed" });
       return;
     }
-    setResult({ numbers: body.numbers || [] });
+    setResult({ numbers: body.numbers || [], warning: body.warning || null });
     onSuccess?.(body);
     router.refresh();
   }
 
   function launch() {
     if (!window.FB) return;
+    if (window.location.protocol !== "https:") {
+      setResult({
+        error:
+          "Facebook login requires HTTPS — it can't run on http://localhost. Start the app over HTTPS (npm run dev:https) and reload, then try again.",
+      });
+      return;
+    }
     signupInfo.current = { wabaId: null, phoneNumberId: null };
     setResult(null);
     setConnecting(true);
@@ -157,10 +173,18 @@ export default function MetaEmbeddedSignupButton({ appId, configId, onSuccess })
 
   return (
     <div>
+      {!secure && (
+        <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+          Facebook login needs HTTPS and won&apos;t run on{" "}
+          <span className="font-mono">http://localhost</span>. Start the app with{" "}
+          <span className="font-mono">npm run dev:https</span> and open the{" "}
+          <span className="font-mono">https://</span> URL.
+        </div>
+      )}
       <button
         type="button"
         onClick={launch}
-        disabled={!sdkReady || connecting}
+        disabled={!sdkReady || connecting || !secure}
         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#1877F2] px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#166fe5] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
       >
         {connecting ? (
@@ -192,6 +216,9 @@ export default function MetaEmbeddedSignupButton({ appId, configId, onSuccess })
           {result.numbers.length} number{result.numbers.length === 1 ? "" : "s"} found:{" "}
           {result.numbers.map((n) => n.display_number || n.phone_number_id).join(", ")}
         </div>
+      )}
+      {result?.warning && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{result.warning}</p>
       )}
     </div>
   );

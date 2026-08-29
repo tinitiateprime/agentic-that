@@ -453,6 +453,24 @@ async function migrate(sql) {
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_temp BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,
     `CREATE INDEX IF NOT EXISTS idx_groups_temp ON groups(business_id, is_temp)`,
+    // Automated welcome message: the first time a brand-new contact messages
+    // one of the business's numbers, greet them with an APPROVED WhatsApp
+    // template (an inbound message opens the 24h window, but a template is
+    // what Meta expects for a business-authored greeting and is what survives
+    // if the window has already lapsed). Configured in Settings > Welcome
+    // message; welcome_template_params is a JSON array of values for the
+    // template's placeholders, each supporting the same {{name}}/{{business}}
+    // tokens as the CRM's canned templates. welcome_template_body is a cached
+    // copy of Meta's approved body text, used only to render the chat preview.
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS welcome_template_name TEXT`,
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS welcome_template_language TEXT`,
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS welcome_template_params TEXT`,
+    `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS welcome_template_body TEXT`,
+    // Set the moment a welcome is claimed for a contact (see maybeSendWelcome
+    // in lib/wa/messaging.js) so retried webhooks and concurrent deliveries
+    // can never greet the same person twice.
+    `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS welcome_sent_at TIMESTAMPTZ`,
     // Self-serve onboarding: null until the workspace finishes setup, which is
     // what the /onboarding guard checks. Existing installs are backfilled below
     // so they aren't bounced into the wizard.

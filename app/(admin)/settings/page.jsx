@@ -32,6 +32,8 @@ export default async function SettingsPage() {
         provider={provider}
         metaWabaId={metaCreds?.wabaId || ""}
         hasMetaToken={Boolean(metaCreds?.accessToken)}
+        metaAppSubscribed={Boolean(metaCreds?.appSubscribed)}
+        metaNumbers={phoneNumbers}
         baileysServiceUrl={baileysCreds?.serviceUrl || ""}
         hasBaileysSecret={Boolean(baileysCreds?.accessToken)}
         metaAppId={process.env.META_APP_ID || ""}

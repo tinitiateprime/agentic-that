@@ -12,15 +12,24 @@ const { migrateWhatsAppSchema } = await import("../services/messaging/whatsapp/s
 const sql = await migrateWhatsAppSchema();
 
 try {
+  const expected = {
+    messages: ["reaction", "reaction_at"],
+    businesses: ["welcome_enabled", "welcome_template_name", "welcome_template_language",
+                 "welcome_template_params", "welcome_template_body"],
+    contacts: ["welcome_sent_at"],
+    whatsapp_accounts: ["app_subscribed"],
+  };
   const columns = await sql`
-    SELECT column_name
+    SELECT table_name, column_name
       FROM information_schema.columns
      WHERE table_schema = 'public'
-       AND table_name = 'messages'
-       AND column_name IN ('reaction', 'reaction_at')`;
-  const names = new Set(columns.map((row) => row.column_name));
-  if (!names.has("reaction") || !names.has("reaction_at")) {
-    throw new Error("The WhatsApp migration did not create the reaction columns.");
+       AND table_name IN ${sql(Object.keys(expected))}`;
+  const present = new Set(columns.map((row) => `${row.table_name}.${row.column_name}`));
+  const missing = Object.entries(expected)
+    .flatMap(([table, names]) => names.map((name) => `${table}.${name}`))
+    .filter((column) => !present.has(column));
+  if (missing.length) {
+    throw new Error(`The WhatsApp migration did not create: ${missing.join(", ")}.`);
   }
   process.stdout.write("WhatsApp database migration is ready.\n");
 } finally {

@@ -13,12 +13,36 @@ import MetaEmbeddedSignupButton from "./MetaEmbeddedSignupButton";
 // dropped from the UI. The backend for it (lib/wa/provider.js's baileys
 // adapter, the /api/baileys/* routes, the webhook route, and the DB columns)
 // is left in place dormant, not deleted, in case it's wanted again.
-export default function WhatsAppConnectionCard({ metaWabaId, hasMetaToken, metaAppId, metaConfigId }) {
+export default function WhatsAppConnectionCard({
+  metaWabaId,
+  hasMetaToken,
+  appSubscribed = false,
+  numbers = [],
+  metaAppId,
+  metaConfigId,
+}) {
   const router = useRouter();
   const [wabaId, setWabaId] = useState(metaWabaId || "");
   const [accessToken, setAccessToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [subscribing, setSubscribing] = useState(false);
+  const [subscribeError, setSubscribeError] = useState("");
+
+  // Turn on inbound delivery for an already-connected WABA (Embedded Signup
+  // does this on connect; this retries it for older/failed connections).
+  async function enableReceiving() {
+    setSubscribing(true);
+    setSubscribeError("");
+    const res = await fetch("/api/meta/subscribe", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    setSubscribing(false);
+    if (!res.ok) {
+      setSubscribeError(body.error || "Couldn't enable receiving");
+      return;
+    }
+    router.refresh();
+  }
 
   async function saveMeta(e) {
     e.preventDefault();
@@ -56,6 +80,72 @@ export default function WhatsAppConnectionCard({ metaWabaId, hasMetaToken, metaA
           </span>
         )}
       </div>
+
+      {/* Connection status — what's actually wired up right now. */}
+      {hasMetaToken && (
+        <div className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Connected number{numbers.length === 1 ? "" : "s"}
+            </p>
+            {numbers.length === 0 ? (
+              <p className="mt-1 text-sm text-slate-500">
+                No numbers synced yet — reconnect below to pull them from Meta.
+              </p>
+            ) : (
+              <ul className="mt-1 space-y-1.5">
+                {numbers.map((n) => (
+                  <li key={n.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                    <span className="font-medium text-slate-800">{n.number || n.id}</span>
+                    {n.name && <span className="text-slate-500">· {n.name}</span>}
+                    {n.status && (
+                      <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                        {n.status}
+                      </span>
+                    )}
+                    {n.quality_rating && (
+                      <span className="text-[11px] text-slate-400">quality: {n.quality_rating}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {metaWabaId && (
+            <p className="text-xs text-slate-500">
+              WABA id: <span className="font-mono text-slate-600">{metaWabaId}</span>
+            </p>
+          )}
+
+          {/* Receiving status — the coexistence gotcha: connected but silent
+              until the app is subscribed to the WABA's webhooks. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3">
+            {appSubscribed ? (
+              <span className="inline-flex items-center gap-1.5 text-sm text-emerald-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Receiving messages — webhooks active
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-sm text-amber-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                Not receiving yet — replies &amp; reactions won&apos;t arrive
+              </span>
+            )}
+            {!appSubscribed && (
+              <button
+                type="button"
+                onClick={enableReceiving}
+                disabled={subscribing}
+                className="rounded-lg bg-[var(--brand-dark)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              >
+                {subscribing ? "Enabling…" : "Enable receiving"}
+              </button>
+            )}
+          </div>
+          {subscribeError && <p className="text-xs text-red-600">{subscribeError}</p>}
+        </div>
+      )}
 
       <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4">
         <div className="mb-3 flex items-start gap-3">

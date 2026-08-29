@@ -1,7 +1,7 @@
 import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
-import { updateMetaAccount, upsertAccount, syncNumbers, credsForProvider } from "@whatsapp/lib/tenant";
-import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
+import { updateMetaAccount, upsertAccount, syncNumbers, credsForProvider, setAppSubscribed } from "@whatsapp/lib/tenant";
+import { metaListPhoneNumbers, metaSubscribeApp } from "@whatsapp/lib/wa/provider";
 
 // Settings -> "Connect via Meta" button (Embedded Signup). The browser never
 // sees an access token or the app secret — it only hands us the short-lived
@@ -91,6 +91,22 @@ export async function POST(req) {
     const conflict = /already connected/i.test(String(err?.message));
     return Response.json({ error: err.message || "Could not save these phone numbers" }, { status: conflict ? 409 : 400 });
   }
+
+  // Subscribe our app to this WABA's webhooks — without it Meta delivers no
+  // inbound messages/reactions/statuses, so the number would connect but stay
+  // silent. Non-fatal: the connection is already saved, so on failure we keep
+  // it and surface a warning + an "Enable receiving" retry in Settings.
+  let appSubscribed = false;
+  let warning = null;
+  try {
+    await metaSubscribeApp({ accessToken, wabaId, apiVersion });
+    appSubscribed = true;
+    await setAppSubscribed(account.id, true);
+  } catch (err) {
+    await setAppSubscribed(account.id, false);
+    warning = `Connected, but couldn't turn on message receiving automatically (${err.message}). Retry with "Enable receiving" in Settings.`;
+  }
+
   const sql = await getSql();
   await sql`
     UPDATE businesses
@@ -101,5 +117,5 @@ export async function POST(req) {
            END
      WHERE id = ${user.business_id}`;
 
-  return Response.json({ ok: true, numbers });
+  return Response.json({ ok: true, numbers, appSubscribed, warning });
 }

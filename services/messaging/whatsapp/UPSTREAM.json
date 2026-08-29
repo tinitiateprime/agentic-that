@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/tinitiateprime/tinitiate-wa-workflows.git",
+  "remote": "wa-upstream",
+  "branch": "main",
+  "baseCommit": "f0b57377ba33903ac4fe13c4c1ed69a577b0ca77",
+  "baseSubject": "push welcome message",
+  "note": "Upstream commit this vendored copy was last adapted from. Run npm run whatsapp:sync to see what a newer upstream would change; scripts/sync-whatsapp-upstream.mjs --set-base records a finished sync."
+}

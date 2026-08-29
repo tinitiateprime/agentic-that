@@ -23,6 +23,9 @@ function credsFrom(account) {
     // Baileys only: base URL of the connection service (../baileys-wa-app).
     // accessToken doubles as its shared x-api-secret for that provider.
     serviceUrl: account.service_url || null,
+    // Whether this app is subscribed to the WABA's webhooks (Meta only). False
+    // means Meta won't deliver inbound events for it — see metaSubscribeApp.
+    appSubscribed: Boolean(account.app_subscribed),
     businessId: account.business_id,
     accountId: account.id,
   };
@@ -390,6 +393,16 @@ export async function syncNumbers(accountId, numbers, { defaultPhoneNumberId } =
 export async function listAccountNumbers(accountId) {
   const sql = await getSql();
   return sql`SELECT * FROM whatsapp_numbers WHERE whatsapp_account_id = ${accountId} ORDER BY is_default DESC, id ASC`;
+}
+
+// Record whether this app is subscribed to the account's WABA webhooks. Set
+// after a successful metaSubscribeApp so the UI can show receiving status and
+// stop nagging to re-enable it.
+export async function setAppSubscribed(accountId, subscribed = true) {
+  const sql = await getSql();
+  await sql`
+    UPDATE whatsapp_accounts SET app_subscribed = ${Boolean(subscribed)}, updated_at = now()
+     WHERE id = ${accountId}`;
 }
 
 // One-time migration: lift the env-configured WABA into the database as the

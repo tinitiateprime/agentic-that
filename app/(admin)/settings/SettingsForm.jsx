@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import WhatsAppConnectionCard from "@whatsapp/components/WhatsAppConnectionCard";
 import WhatsAppMonitoringCard from "@whatsapp/components/WhatsAppMonitoringCard";
 import WatiConnectionCard from "@whatsapp/components/WatiConnectionCard";
+import WelcomeTemplateCard from "@whatsapp/components/WelcomeTemplateCard";
 
 // Display labels only — never show the internal provider id (e.g. "baileys")
 // on screen.
@@ -20,6 +21,8 @@ export default function SettingsForm({
   provider,
   metaWabaId,
   hasMetaToken,
+  metaAppSubscribed,
+  metaNumbers,
   baileysServiceUrl,
   hasBaileysSecret,
   metaAppId,
@@ -123,9 +126,13 @@ export default function SettingsForm({
         )}
       </section>
 
+      <WelcomeTemplateCard business={business} provider={provider} />
+
       <WhatsAppConnectionCard
         metaWabaId={metaWabaId}
         hasMetaToken={hasMetaToken}
+        appSubscribed={metaAppSubscribed}
+        numbers={metaNumbers}
         metaAppId={metaAppId}
         metaConfigId={metaConfigId}
       />

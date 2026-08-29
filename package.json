@@ -42,6 +42,8 @@
     "build": "npm run publishing:css && node scripts/copy-telegram-console.mjs && node scripts/build-next.mjs",
     "db:migrate:platform": "node --import tsx scripts/migrate-platform-database.mjs",
     "db:migrate:whatsapp": "node scripts/migrate-whatsapp-database.mjs",
+    "whatsapp:sync": "node scripts/sync-whatsapp-upstream.mjs",
+    "whatsapp:sync:apply": "node scripts/sync-whatsapp-upstream.mjs --apply",
     "seed": "node scripts/seed.js",
     "rbac:migrate:dry-run": "node scripts/migrate-central-rbac.mjs",
     "rbac:migrate:apply": "node scripts/migrate-central-rbac.mjs --apply",
