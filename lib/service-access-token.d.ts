@@ -28,6 +28,16 @@ export type ServiceAccessTokenPayload = {
   jti: string;
 };
 
+export type ServiceAccessTokenVerifier = {
+  publicKey: string;
+  keyId: string;
+  issuer: string;
+};
+
 export function signServiceAccessToken(input: ServiceAccessTokenInput, ttlSeconds?: number): string;
-export function verifyServiceAccessToken(token: string, expectedAudience: string): ServiceAccessTokenPayload | null;
+export function verifyServiceAccessToken(
+  token: string,
+  expectedAudience: string,
+  verifier?: ServiceAccessTokenVerifier | null,
+): ServiceAccessTokenPayload | null;
 export function serviceTokenPublicKeyPem(): string;

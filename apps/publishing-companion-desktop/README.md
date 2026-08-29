@@ -24,10 +24,13 @@ launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 optional and used only for the system-browser login fallback.
 
-Version 1.7.0 provides the default Instagram and Facebook Companion engines,
+Version 1.7.3 provides the default Instagram and Facebook Companion engines,
 one shared scraping slot with publishing priority, durable authenticated
 workspace result history, version checks, and explicit custom-dashboard origin
-approval. Facebook profile analysis scans the public Reels grid for current
+approval. It also verifies short-lived workspace tokens against the signing key
+of the exact trusted dashboard that sent the request, allowing self-hosted
+AgenticThat websites to use Companion without sharing private signing keys.
+Facebook profile analysis scans the public Reels grid for current
 views, correlates every loaded Reel with its exact reactions, comment count,
 and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most
 Discussed lists only after the full scanned set is verified. Comment bodies are

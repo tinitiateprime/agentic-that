@@ -94,3 +94,12 @@ test("the publishing composer lets Instagram apply its existing framing flow to 
   assert.match(dashboard, /image\/tiff/);
   assert.match(api, /image\/webp/);
 });
+
+test("the extension bridge supplies the trusted dashboard's public token verifier", () => {
+  const bridge = readFileSync(new URL("../../../../lib/publishing-extension-bridge.ts", import.meta.url), "utf8");
+
+  assert.match(bridge, /\/api\/platform-auth\/service-token-public-key/);
+  assert.match(bridge, /X-AgenticThat-Dashboard-Verifier/);
+  assert.match(bridge, /origin: window\.location\.origin/);
+  assert.doesNotMatch(bridge, /SERVICE_TOKEN_PRIVATE_KEY/);
+});

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -190,6 +191,77 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   const scrapingSession = await scrapingSessionResponse.json() as { token: string; expiresInSeconds: number };
   assert.ok(scrapingSession.token);
   assert.ok(scrapingSession.expiresInSeconds >= 300);
+
+  const customKeyPair = crypto.generateKeyPairSync("ed25519");
+  const previousCustomKeyEnvironment = {
+    SERVICE_TOKEN_PRIVATE_KEY: process.env.SERVICE_TOKEN_PRIVATE_KEY,
+    SERVICE_TOKEN_PUBLIC_KEY: process.env.SERVICE_TOKEN_PUBLIC_KEY,
+    SERVICE_TOKEN_KEY_ID: process.env.SERVICE_TOKEN_KEY_ID,
+    SERVICE_TOKEN_ISSUER: process.env.SERVICE_TOKEN_ISSUER,
+  };
+  let customDashboardToken = "";
+  let customPublishingToken = "";
+  try {
+    process.env.SERVICE_TOKEN_PRIVATE_KEY = customKeyPair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    process.env.SERVICE_TOKEN_PUBLIC_KEY = customKeyPair.publicKey.export({ format: "pem", type: "spki" }).toString();
+    process.env.SERVICE_TOKEN_KEY_ID = "trusted-dashboard-test-key";
+    process.env.SERVICE_TOKEN_ISSUER = "trusted-dashboard-test";
+    customDashboardToken = signServiceAccessToken({
+      audience: "scraping",
+      subject: "custom-dashboard-user",
+      workspaceId: "custom-dashboard-workspace",
+      grants: { "scraping.instagram": "operate" },
+      capabilities: ["scraping.view", "scraping.run"],
+    });
+    customPublishingToken = signServiceAccessToken({
+      audience: "publishing",
+      subject: "custom-dashboard-user",
+      workspaceId: "custom-dashboard-workspace",
+      grants: { "publishing.instagram": "view" },
+      capabilities: ["publishing.view"],
+    });
+  } finally {
+    for (const [name, value] of Object.entries(previousCustomKeyEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  const dashboardVerifier = Buffer.from(JSON.stringify({
+    origin: "https://workspace.example.test",
+    publicKey: customKeyPair.publicKey.export({ format: "pem", type: "spki" }).toString(),
+    keyId: "trusted-dashboard-test-key",
+    issuer: "trusted-dashboard-test",
+  })).toString("base64url");
+  const customDashboardSessionResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-AgenticThat-Extension": "1.2.2",
+      "X-AgenticThat-Dashboard-Verifier": dashboardVerifier,
+    },
+    body: JSON.stringify({ token: customDashboardToken }),
+  });
+  const customDashboardSessionBody = await customDashboardSessionResponse.json() as { message?: string };
+  assert.equal(customDashboardSessionResponse.status, 200, customDashboardSessionBody.message);
+  const customPublishingResponse = await fetch(`${origin}/api/accounts?platform=instagram`, {
+    headers: {
+      "Authorization": `Bearer ${customPublishingToken}`,
+      "X-AgenticThat-Extension": "1.2.2",
+      "X-AgenticThat-Dashboard-Verifier": dashboardVerifier,
+    },
+  });
+  assert.equal(customPublishingResponse.status, 200);
+  const unproxiedCustomDashboardResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Origin": "https://untrusted.example.test",
+      "X-AgenticThat-Extension": "1.2.2",
+      "X-AgenticThat-Dashboard-Verifier": dashboardVerifier,
+    },
+    body: JSON.stringify({ token: customDashboardToken }),
+  });
+  assert.equal(unproxiedCustomDashboardResponse.status, 403);
   const scopedScrapeResponse = await fetch(`${origin}/api/scraping/instagram/jobs`, {
     method: "POST",
     headers: {

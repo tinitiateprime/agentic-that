@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
+import type { ServiceAccessTokenVerifier } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
 import {
@@ -153,6 +154,48 @@ const configuredWebOrigins = new Set(
     .map(origin => origin.trim())
     .filter(Boolean),
 );
+const dashboardVerifierSchema = z.object({
+  origin: z.string().min(1).max(512),
+  publicKey: z.string().min(1).max(2048),
+  keyId: z.string().min(1).max(128),
+  issuer: z.string().min(1).max(256),
+}).strict();
+
+function requestDashboardVerifier(req: express.Request): ServiceAccessTokenVerifier | null {
+  const rawHeader = req.headers["x-agenticthat-dashboard-verifier"];
+  if (typeof rawHeader !== "string" || !rawHeader || rawHeader.length > 4096) return null;
+  const proxyVersion = req.headers["x-agenticthat-extension"];
+  if (typeof proxyVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(proxyVersion)) {
+    return null;
+  }
+  // Browser pages cannot omit or forge their HTTP(S) Origin when making a
+  // cross-origin request with custom headers. Only the trusted Chrome
+  // extension or Companion's main-process proxy may introduce a dashboard
+  // verifier; both have already checked which dashboard initiated the call.
+  const requestOrigin = req.headers.origin;
+  if (typeof requestOrigin === "string" && /^https?:\/\//i.test(requestOrigin)) return null;
+  try {
+    const decoded = Buffer.from(rawHeader, "base64url");
+    if (decoded.toString("base64url") !== rawHeader) return null;
+    const value = dashboardVerifierSchema.parse(JSON.parse(decoded.toString("utf8")));
+    const publicKey = value.publicKey.trim();
+    const origin = new URL(value.origin);
+    const hostname = origin.hostname.toLowerCase();
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+    if (origin.origin !== value.origin || (origin.protocol !== "https:" && !(loopback && origin.protocol === "http:"))) {
+      return null;
+    }
+    if (!/^-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----$/.test(publicKey)) return null;
+    return { publicKey, keyId: value.keyId, issuer: value.issuer };
+  } catch {
+    return null;
+  }
+}
+
+function verifyRequestPublishingIdentity(req: express.Request, token: string) {
+  return verifyPublishingWorkspaceIdentity(token)
+    || verifyPublishingWorkspaceIdentity(token, requestDashboardVerifier(req));
+}
 
 setCompanionPublishingBusyProvider(() => isAutomationRunning());
 
@@ -732,7 +775,7 @@ async function authenticateApi(req: express.Request, res: express.Response, next
       return;
     }
 
-    const centralIdentity = verifyPublishingWorkspaceIdentity(token);
+    const centralIdentity = verifyRequestPublishingIdentity(req, token);
     if (centralIdentity) {
       const centralAccessLevel = publishingAccessLevel(centralIdentity.grants);
       if (!centralAccessLevel) {
@@ -752,7 +795,7 @@ async function authenticateApi(req: express.Request, res: express.Response, next
         res.status(403).json({ message: `Your workspace role does not include ${requiredCapability}.` });
         return;
       }
-      request.user = await upsertCentralWorkspaceActor(platformIdentity(token), centralAccessLevel, centralCapabilities);
+      request.user = await upsertCentralWorkspaceActor(platformIdentity(token, requestDashboardVerifier(req)), centralAccessLevel, centralCapabilities);
       request.centralAccessLevel = centralAccessLevel;
       request.centralGrants = centralIdentity.grants;
       request.centralCapabilities = centralCapabilities;
@@ -1260,7 +1303,7 @@ app.post("/api/companion/pair", async (req, res, next) => {
   try {
     const header = req.headers.authorization;
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
-    const identity = verifyPublishingWorkspaceIdentity(token);
+    const identity = verifyRequestPublishingIdentity(req, token);
     if (!identity || !Array.isArray(identity.capabilities) || !identity.capabilities.includes("publishing.accounts.configure")) {
       res.status(403).json({ message: "A Publishing Manager must pair the workspace Companion." });
       return;
@@ -1307,8 +1350,9 @@ app.post("/api/auth/login", async (req, res, next) => {
   }
 });
 
-function platformIdentity(token: string) {
-  const identity = verifyPublishingWorkspaceIdentity(token);
+function platformIdentity(token: string, verifier: ServiceAccessTokenVerifier | null = null) {
+  const identity = verifyPublishingWorkspaceIdentity(token)
+    || verifyPublishingWorkspaceIdentity(token, verifier);
   if (!identity) throw new Error("Your AgenticThat workspace session is invalid or expired.");
   return {
     platformUserId: identity.sub,
@@ -1323,8 +1367,10 @@ function scrapingIdentity(
   token: string,
   resource: "scraping.instagram" | "scraping.facebook",
   requiredCapability: "scraping.view" | "scraping.run" = "scraping.run",
+  verifier: ServiceAccessTokenVerifier | null = null,
 ) {
-  const identity = verifyServiceAccessToken(token, "scraping");
+  const identity = verifyServiceAccessToken(token, "scraping")
+    || verifyServiceAccessToken(token, "scraping", verifier);
   const level = identity?.grants?.[resource];
   if (!identity || !level || !["view", "operate", "configure"].includes(level)) return null;
   if (!Array.isArray(identity.capabilities) || !identity.capabilities.includes(requiredCapability)) return null;
@@ -1366,7 +1412,12 @@ async function authenticateInstagramScraping(
       return;
     }
 
-    const centralIdentity = scrapingIdentity(token, "scraping.instagram", req.method === "GET" ? "scraping.view" : "scraping.run");
+    const centralIdentity = scrapingIdentity(
+      token,
+      "scraping.instagram",
+      req.method === "GET" ? "scraping.view" : "scraping.run",
+      requestDashboardVerifier(req),
+    );
     if (centralIdentity) {
       (req as RequestWithInstagramOwner).instagramOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
       if (centralIdentity.billingStatus === "trialing") {
@@ -1417,7 +1468,12 @@ async function authenticateFacebookScraping(
       res.status(401).json({ message: "Sign in to AgenticThat to use Local Companion Facebook scraping." });
       return;
     }
-    const centralIdentity = scrapingIdentity(token, "scraping.facebook", req.method === "GET" ? "scraping.view" : "scraping.run");
+    const centralIdentity = scrapingIdentity(
+      token,
+      "scraping.facebook",
+      req.method === "GET" ? "scraping.view" : "scraping.run",
+      requestDashboardVerifier(req),
+    );
     if (centralIdentity) {
       (req as RequestWithFacebookOwner).facebookOwnerKey = `${centralIdentity.workspaceId}:${centralIdentity.sub}`;
       if (centralIdentity.billingStatus === "trialing") {
@@ -1461,7 +1517,7 @@ app.post("/api/auth/platform/status", async (req, res, next) => {
       return;
     }
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    res.json(await platformWorkspaceManagerStatus(platformIdentity(token)));
+    res.json(await platformWorkspaceManagerStatus(platformIdentity(token, requestDashboardVerifier(req))));
   } catch (error) {
     next(error);
   }
@@ -1474,7 +1530,7 @@ app.post("/api/auth/platform/setup", async (req, res, next) => {
       return;
     }
     const payload = platformPasswordSchema.parse(req.body);
-    const user = await setupPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
+    const user = await setupPlatformWorkspaceManager(platformIdentity(payload.token, requestDashboardVerifier(req)), payload.password);
     res.json({ user, token: signAuthToken(user) });
   } catch (error) {
     next(error);
@@ -1488,7 +1544,7 @@ app.post("/api/auth/platform/login", async (req, res, next) => {
       return;
     }
     const payload = platformPasswordSchema.parse(req.body);
-    const user = await loginPlatformWorkspaceManager(platformIdentity(payload.token), payload.password);
+    const user = await loginPlatformWorkspaceManager(platformIdentity(payload.token, requestDashboardVerifier(req)), payload.password);
     if (!user) {
       res.status(401).json({ message: "Incorrect Operations Manager password." });
       return;
@@ -1502,7 +1558,7 @@ app.post("/api/auth/platform/login", async (req, res, next) => {
 app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    const identity = scrapingIdentity(token, "scraping.instagram");
+    const identity = scrapingIdentity(token, "scraping.instagram", "scraping.run", requestDashboardVerifier(req));
     if (!identity) {
       res.status(403).json({ message: "Instagram scraping operate access is required." });
       return;
@@ -1519,7 +1575,7 @@ app.post("/api/auth/platform/instagram-scraping", (req, res, next) => {
 app.post("/api/auth/platform/facebook-scraping", (req, res, next) => {
   try {
     const token = z.object({ token: z.string().min(1) }).parse(req.body).token;
-    const identity = scrapingIdentity(token, "scraping.facebook");
+    const identity = scrapingIdentity(token, "scraping.facebook", "scraping.run", requestDashboardVerifier(req));
     if (!identity) {
       res.status(403).json({ message: "Facebook scraping operate access is required." });
       return;

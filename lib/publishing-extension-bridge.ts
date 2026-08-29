@@ -4,6 +4,8 @@ const PING_TYPE = "agenticthat.publishing.extension.ping.v1";
 const READY_TYPE = "agenticthat.publishing.extension.ready.v1";
 const REQUEST_TYPE = "agenticthat.publishing.page.request.v1";
 const RESPONSE_TYPE = "agenticthat.publishing.page.response.v1";
+const DASHBOARD_VERIFIER_HEADER = "X-AgenticThat-Dashboard-Verifier";
+const DASHBOARD_VERIFIER_CACHE_MS = 5 * 60_000;
 
 type ExtensionDetails = {
   version: string;
@@ -22,6 +24,8 @@ type ProxyResponse = {
 
 let cachedDetails: ExtensionDetails | null = null;
 let lastDetectionAt = 0;
+let cachedDashboardVerifier = "";
+let dashboardVerifierCachedAt = 0;
 
 function requestId() {
   return `publishing_${Date.now()}_${crypto.randomUUID()}`;
@@ -81,6 +85,32 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
+async function dashboardVerifierHeader() {
+  if (cachedDashboardVerifier && Date.now() - dashboardVerifierCachedAt < DASHBOARD_VERIFIER_CACHE_MS) {
+    return cachedDashboardVerifier;
+  }
+  const response = await fetch("/api/platform-auth/service-token-public-key", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  const payload = await response.json().catch(() => ({}));
+  const publicKey = typeof payload?.publicKey === "string" ? payload.publicKey.trim() : "";
+  const keyId = typeof payload?.keyId === "string" ? payload.keyId.trim() : "";
+  const issuer = typeof payload?.issuer === "string" ? payload.issuer.trim() : "";
+  if (!response.ok || !publicKey.includes("BEGIN PUBLIC KEY") || !keyId || !issuer) {
+    throw new Error("This AgenticThat website cannot provide its service-token verification key.");
+  }
+  const encoded = bytesToBase64(new TextEncoder().encode(JSON.stringify({
+    origin: window.location.origin,
+    publicKey,
+    keyId,
+    issuer,
+  }))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  cachedDashboardVerifier = encoded;
+  dashboardVerifierCachedAt = Date.now();
+  return encoded;
+}
+
 function base64ToBytes(value: string) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -106,7 +136,9 @@ export async function publishingExtensionFetch(path: string, init: RequestInit =
   if (!extension) return null;
 
   const id = requestId();
-  const headers = [...new Headers(init.headers).entries()];
+  const requestHeaders = new Headers(init.headers);
+  requestHeaders.set(DASHBOARD_VERIFIER_HEADER, await dashboardVerifierHeader());
+  const headers = [...requestHeaders.entries()];
   const body = await serializeBody(init.body);
   const responseMessage = await postAndWait<{
     response?: ProxyResponse;

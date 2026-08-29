@@ -1,4 +1,8 @@
-import { signServiceAccessToken, verifyServiceAccessToken } from "./service-access-token.js";
+import {
+  signServiceAccessToken,
+  verifyServiceAccessToken,
+  type ServiceAccessTokenVerifier,
+} from "./service-access-token.js";
 
 export type PublishingWorkspaceIdentity = {
   sub: string;
@@ -33,8 +37,11 @@ export function signPublishingWorkspaceIdentity(
   }, ttlSeconds);
 }
 
-export function verifyPublishingWorkspaceIdentity(token: string): PublishingWorkspaceIdentity | null {
-  const payload = verifyServiceAccessToken(token, "publishing");
+export function verifyPublishingWorkspaceIdentity(
+  token: string,
+  verifier: ServiceAccessTokenVerifier | null = null,
+): PublishingWorkspaceIdentity | null {
+  const payload = verifyServiceAccessToken(token, "publishing", verifier);
   if (!payload) return null;
   return {
     sub: String(payload.sub),
