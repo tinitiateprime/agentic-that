@@ -48,6 +48,11 @@ import {
   stopExternalPublishingBrowsers,
 } from "../engines/external-browser/index.js";
 import type { PublishingBrowserSession } from "../engines/types.js";
+import {
+  selectManualLoginSurface,
+  type ManualLoginRequest,
+  type ManualLoginSurface,
+} from "./login-surface.js";
 
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
@@ -592,9 +597,6 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   }
 }
 
-export type ManualLoginSurface = "embedded" | "external";
-export type ManualLoginRequest = ManualLoginSurface | "engine";
-
 async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
   const browser = await launchAccountBrowser(account, "login", "companion");
 
@@ -905,10 +907,14 @@ export async function startManualAccountSession(
 
   if (existing) return { account, started: false, surface: existing.surface };
 
-  const useExternal = requestedSurface === "external"
-    || (requestedSurface === "engine" && !account.credentialConfigured && hasExternalAccountProfile(account))
-    || !publishingDesktopHost();
-  const surface: ManualLoginSurface = useExternal ? "external" : "embedded";
+  const surface = selectManualLoginSurface({
+    platform: account.platform,
+    requestedSurface,
+    activeEngine: accountEngine(account),
+    credentialConfigured: account.credentialConfigured,
+    externalProfilePresent: hasExternalAccountProfile(account),
+    embeddedBrowserAvailable: Boolean(publishingDesktopHost()),
+  });
   if (!account.credentialConfigured) {
     if (surface === "external") {
       await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);

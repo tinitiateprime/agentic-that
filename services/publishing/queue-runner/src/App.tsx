@@ -2686,6 +2686,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
+  const externalLoginByDefault = platform === 'x' || platform === 'youtube';
 
   const openForm = (account?: PlatformAccount) => {
     setEditing(account ?? 'new');
@@ -2789,12 +2790,12 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
               <span className='storage-access-path'>{account.loginIdentifier || publishingEngineLabels[accountPublishingEngine(account)]}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
-              <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
-                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
+              <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled} title={externalLoginByDefault ? 'Open secure login in Chrome or Edge and save it through Companion' : 'Open secure login inside Companion'}>
+                {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : externalLoginByDefault ? <ExternalLink size={14} /> : <KeyRound size={14} />}{externalLoginByDefault ? 'Chrome login' : 'Login'}
               </button>
-              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with Chrome or Edge, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
+              {!externalLoginByDefault && <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with Chrome or Edge, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
                 <ExternalLink size={14} />Chrome
-              </button>
+              </button>}
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}
           </div>

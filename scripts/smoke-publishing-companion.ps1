@@ -204,6 +204,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $xManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($xAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $xManualLogin.started) { throw "The X manual-login smoke session did not start." }
+  if ($xManualLogin.surface -ne "external") { throw "The X login response did not select the external browser flow." }
 
   $youtubeAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/youtube/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
@@ -214,6 +215,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $youtubeManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($youtubeAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $youtubeManualLogin.started) { throw "The YouTube manual-login smoke session did not start." }
+  if ($youtubeManualLogin.surface -ne "external") { throw "The YouTube login response did not select the external browser flow." }
 
   $companionLog = Join-Path $smokeRoot "publishing-data\logs\publishing-companion.log"
   $loginNavigationReady = $false
@@ -224,8 +226,8 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
       $loginLog -match "Opening instagram login page .* using the embedded login surface" -and
       $loginLog -match "Opening facebook login page .* using the embedded login surface" -and
       $loginLog -match "Opening linkedin login page .* using the embedded login surface" -and
-      $loginLog -match "Opening x login page .* using the embedded login surface" -and
-      $loginLog -match "Opening youtube login page .* using the embedded login surface" -and
+      $loginLog -match "Opening x login page .* using the external login surface" -and
+      $loginLog -match "Opening youtube login page .* using the external login surface" -and
       $loginLog -match "Navigating to Instagram login page" -and
       $loginLog -match "Navigating to Facebook home page" -and
       $loginLog -match "Navigating to LinkedIn login page" -and
@@ -238,11 +240,11 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   }
   if (-not $loginNavigationReady) {
     $logTail = (Get-Content -LiteralPath $companionLog -Tail 24) -join [Environment]::NewLine
-    throw "The embedded Companion login panes did not all begin navigation.$([Environment]::NewLine)$logTail"
+    throw "The Companion login surfaces did not all begin navigation.$([Environment]::NewLine)$logTail"
   }
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
-    throw "An embedded manual-login browser connection failed."
+    throw "A manual-login browser connection failed."
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"

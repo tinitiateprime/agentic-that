@@ -4,12 +4,14 @@ This Electron application packages the publishing queue API, public Instagram
 and Facebook scraping engines, local JSON store, media uploads, scheduler, and
 isolated browser profiles into a normal Windows desktop installer.
 
-The Companion keeps AgenticThat itself in the user's normal browser. Account
-login opens by default in an isolated browser pane inside Companion. The user
-enters credentials and verification codes only on the provider page; Companion
-detects successful login, protects the resulting local session, and closes the
-login pane automatically. A dedicated Google Chrome or Microsoft Edge login is
-available as an explicit fallback for providers that reject embedded sign-in.
+The Companion keeps AgenticThat itself in the user's normal browser. Instagram,
+Facebook, and LinkedIn login open by default in an isolated browser pane inside
+Companion. X and YouTube login open in a dedicated Google Chrome or Microsoft
+Edge profile because those providers commonly reject embedded sign-in.
+Companion verifies the external login and transfers it into its protected
+partition when permitted; a provider-bound session remains in the isolated
+managed Chrome profile and that same profile performs publishing. The user
+enters credentials and verification codes only on the provider page.
 Publishing runs remain visible in Companion's live activity grid, and an
 emergency stop is always available.
 
@@ -22,9 +24,12 @@ storage when available, encrypts exported publishing session state with a
 separate OS-protected key, starts the service on loopback port 8792, and enables
 launch at Windows sign-in. Each account has an isolated sign-in profile and an
 isolated persistent publishing partition. Google Chrome or Microsoft Edge is
-optional and used only for the system-browser login fallback.
+required for X and YouTube login and remains an optional fallback for the
+other providers.
 
-Version 1.7.3 provides the default Instagram and Facebook Companion engines,
+Version 1.7.4 provides external-first X and YouTube login with encrypted
+session transfer, restart verification, and protected managed-Chrome fallback.
+It also includes the default Instagram and Facebook Companion engines,
 one shared scraping slot with publishing priority, durable authenticated
 workspace result history, version checks, and explicit custom-dashboard origin
 approval. It also verifies short-lived workspace tokens against the signing key

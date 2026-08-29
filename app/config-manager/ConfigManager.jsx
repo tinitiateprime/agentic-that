@@ -34,6 +34,7 @@ import { getClientServiceToken } from "@platform/client-service-token";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
 import { publishingFetch } from "@/lib/publishing-endpoint";
+import { MINIMUM_COMPANION_VERSION, versionAtLeast } from "@/lib/companion-version";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
@@ -995,6 +996,9 @@ function PublishingManager({
 
   const ensureCompanionPaired = async () => {
     const localHealth = await companionPublishingRequest("/api/health", publishingIdentityToken);
+    if (localHealth.companionVersion && !versionAtLeast(localHealth.companionVersion, MINIMUM_COMPANION_VERSION)) {
+      throw new Error("Update AgenticThat Companion to " + MINIMUM_COMPANION_VERSION + " or newer before using Companion publishing.");
+    }
     const current = companionPublishing?.companion;
     const sameCompanion = Boolean(
       localHealth.paired
