@@ -2,6 +2,29 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import {
+  Activity,
+  ArrowRight,
+  AtSign,
+  BarChart3,
+  CalendarRange,
+  CheckCircle2,
+  Cloud,
+  Download,
+  Database,
+  FileJson,
+  FileSpreadsheet,
+  Hash,
+  Globe2,
+  Laptop,
+  LayoutDashboard,
+  Link2,
+  Play,
+  Search,
+  Sparkles,
+  UserRound,
+  UsersRound,
+} from "lucide-react";
 import { getClientServiceToken } from "@platform/client-service-token";
 import {
   getInstagramCompanionStatus,
@@ -22,7 +45,7 @@ const InstagramScraperTour = dynamic(() => import("./InstagramScraperTour"), { s
 // private Ubuntu scraper service; remote users must never receive a localhost URL.
 const API_URL = "/api/scraping/instagram";
 const DEFAULT_MAX_RESULTS = 10;
-const INSTAGRAM_TOUR_STORAGE_KEY = "agenticthat-instagram-scraper-guide-v1";
+const INSTAGRAM_TOUR_STORAGE_KEY = "agenticthat-instagram-scraper-guide-v2";
 const TOUR_STEP = {
   welcome: 0,
   engine: 1,
@@ -48,6 +71,20 @@ const SCRAPE_ENGINES = [
   { id: "companion", label: "Companion (recommended)", description: "Best results on this computer" },
   { id: "server", label: "Ubuntu Server", description: "Runs on the shared server" }
 ];
+
+const INPUT_MODE_ICONS = {
+  profile: UserRound,
+  keyword: Hash,
+  profile_url: Link2,
+  post_url: Search,
+};
+
+const COLLECTION_MODE_ICONS = {
+  latest: Sparkles,
+  range: CalendarRange,
+  engagement: BarChart3,
+  compare: UsersRound,
+};
 
 const inputModes = [
   {
@@ -378,8 +415,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       id: "welcome",
       kicker: "Interactive walkthrough",
       title: "See the scraper in action",
-      copy: "A quick guided run will show you exactly what to choose, where to type, and how to start.",
-      note: "About 40 seconds. Nothing will scrape until you click Start Scraping.",
+      copy: "Follow the new workspace from engine selection to a ready-to-export dataset.",
+      note: "Four short steps. Nothing runs until you select Start scraping.",
       nextLabel: "Start guide"
     },
     {
@@ -388,7 +425,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       target: '[data-tour="engine"]',
       kicker: "Choose where it runs",
       title: "Pick your scraping engine",
-      copy: "Companion is recommended for the strongest results. Ubuntu Server remains available as a separate shared engine.",
+      copy: "Use Companion for the strongest local results, or Ubuntu Server for a shared cloud run.",
       note: `${scrapeEngine === "companion" ? "Companion" : "Ubuntu Server"} is currently selected`,
       pointerLabel: "Choose one",
       nextLabel: "Next"
@@ -399,7 +436,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       target: '[data-tour="input-type"]',
       kicker: "Tell us what to find",
       title: "Choose an input type",
-      copy: "Search by profile, keyword, profile link, or one specific post or Reel.",
+      copy: "Choose profile, keyword, profile link, or a specific public post. The input field adapts automatically.",
       pointerLabel: "Try Profile",
       nextLabel: "Show the input"
     },
@@ -420,7 +457,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       target: '[data-tour="collection"]',
       kicker: "Shape the result",
       title: "Choose what to collect",
-      copy: "Get the latest content, select a date range, analyze a profile, or compare profiles.",
+      copy: "Collect recent content, set a date range, analyze performance, or compare public profiles.",
       note: `${COLLECTION_MODES.find((item) => item.id === collectionMode)?.label || "Latest"} is selected`,
       pointerLabel: "Choose a view",
       nextLabel: "Next"
@@ -1008,9 +1045,9 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
             </p>
           </div>
           <div className="toolbar">
-            <button onClick={() => setPage("start")}>New Search</button>
-            <button onClick={exportJson} disabled={!results.length && !analysis}>JSON</button>
-            <button onClick={exportCsv} disabled={!results.length && !analysis}>CSV</button>
+            <button onClick={() => setPage("start")}><Search size={15} />New search</button>
+            <button onClick={exportJson} disabled={!results.length && !analysis}><FileJson size={15} />JSON</button>
+            <button onClick={exportCsv} disabled={!results.length && !analysis}><FileSpreadsheet size={15} />CSV</button>
           </div>
         </header>
 
@@ -1221,9 +1258,43 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   return (
     <main className={`instagram-scraper-app start-page platform-${platformLower} ${collectionMode === "compare" ? "compare-mode" : ""}`}>
       <section className="intro-panel">
-        <p className="eyebrow">{platformName} intelligence</p>
-        <h1>{platformName} scraper</h1>
-        <p>Public post and reel data.</p>
+        <div className="scraper-hero-copy">
+          <span className="scraper-product-icon"><LayoutDashboard size={22} /></span>
+          <p className="eyebrow">{platformName} intelligence</p>
+          <h1>Turn public {platformName} activity into useful data.</h1>
+          <p>Choose a source, collect the public content you need, and export a clean dataset from one focused workspace.</p>
+          <div className="scraper-benefit-list">
+            <span><CheckCircle2 size={15} />Public data only</span>
+            <span><CheckCircle2 size={15} />No account login required</span>
+            <span><Download size={15} />CSV and JSON exports</span>
+          </div>
+        </div>
+        <div className="scraper-hero-visual" aria-label={`${platformName} public intelligence dashboard preview`}>
+          <header><span><Globe2 size={16} />Public intelligence</span><em><i />Live workspace</em></header>
+          <div className="scraper-visual-profile">
+            <span><UserRound size={20} /></span>
+            <div><small>Selected source</small><strong>Public profile or topic</strong><p>Ready for collection</p></div>
+            <CheckCircle2 size={18} />
+          </div>
+          <div className="scraper-visual-metrics">
+            <article><Activity size={15} /><span><small>Content</small><strong>128</strong></span></article>
+            <article><BarChart3 size={15} /><span><small>Signals</small><strong>4.8%</strong></span></article>
+            <article><Database size={15} /><span><small>Dataset</small><strong>Ready</strong></span></article>
+          </div>
+          <div className="scraper-signal-list">
+            <span><i style={{ "--signal-width": "86%" }} /><strong>Recent content</strong><small>86%</small></span>
+            <span><i style={{ "--signal-width": "68%" }} /><strong>Engagement patterns</strong><small>68%</small></span>
+            <span><i style={{ "--signal-width": "92%" }} /><strong>Export readiness</strong><small>92%</small></span>
+          </div>
+          <footer><span><FileSpreadsheet size={14} />CSV</span><span><FileJson size={14} />JSON</span><b>Collect <ArrowRight size={14} /></b></footer>
+        </div>
+        <div className="scraper-workflow-preview" aria-label="Scraping workflow">
+          <article><span><Search size={17} /></span><div><small>01</small><strong>Choose source</strong><p>Profile, keyword, or URL</p></div></article>
+          <i />
+          <article><span><BarChart3 size={17} /></span><div><small>02</small><strong>Shape collection</strong><p>Latest, range, or analysis</p></div></article>
+          <i />
+          <article><span><Download size={17} /></span><div><small>03</small><strong>Use the data</strong><p>Review, JSON, or CSV</p></div></article>
+        </div>
       </section>
 
       <div className="launch-panel-column">
@@ -1234,7 +1305,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
         {userGuideAvailable && (
           <div className="launch-guide-row">
             <button type="button" className="user-guide-button" onClick={openUserGuide}>
-              <span aria-hidden="true">?</span>
+              <span aria-hidden="true"><Play size={13} /></span>
               {userGuideLabel}
             </button>
           </div>
@@ -1251,8 +1322,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
                 className={scrapeEngine === item.id ? "is-selected" : ""}
                 onClick={() => selectScrapeEngine(item.id)}
               >
-                <strong>{item.label}</strong>
-                <span>{item.description}</span>
+                <i>{item.id === "companion" ? <Laptop size={18} /> : <Cloud size={18} />}</i>
+                <span><strong>{item.label}</strong><small>{item.description}</small></span>
               </button>
             ))}
           </div>
@@ -1268,15 +1339,18 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
             <legend>Choose input type</legend>
             <div className="mode-options">
               {availableInputModes.map((item) => (
-                <button
+                (() => {
+                  const ModeIcon = INPUT_MODE_ICONS[item.id] || Search;
+                  return <button
                   key={item.id}
                   type="button"
                   className={`mode-button ${inputMode === item.id ? "is-selected" : ""}`}
                   onClick={() => selectInputMode(item.id)}
                 >
-                  <span className="mode-symbol">{item.symbol}</span>
+                  <span className="mode-symbol"><ModeIcon size={17} /></span>
                   <span>{item.label}</span>
-                </button>
+                </button>;
+                })()
               ))}
             </div>
           </fieldset>
@@ -1318,14 +1392,15 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
               {COLLECTION_MODES
                 .filter((item) => !["engagement", "compare"].includes(item.id) || isProfileInput(inputMode))
                 .map((item) => (
-                  <button
+                  (() => {
+                    const CollectionIcon = COLLECTION_MODE_ICONS[item.id] || Sparkles;
+                    return <button
                     key={item.id}
                     type="button"
                     className={collectionMode === item.id ? "is-selected" : ""}
                     onClick={() => selectCollectionMode(item.id)}
-                  >
-                    {item.label}
-                  </button>
+                  ><CollectionIcon size={15} />{item.label}</button>;
+                  })()
                 ))}
             </div>
           </fieldset>
@@ -1412,7 +1487,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
               />
             </div>
           )}
-          <button className="primary-button" onClick={() => startScrape()}>
+          <button className="primary-button" onClick={() => startScrape()}><Play size={16} />
             {isPostInput(inputMode) ? "Scrape Post" : "Start Scraping"}
           </button>
         </div>}

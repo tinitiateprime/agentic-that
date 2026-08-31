@@ -14,13 +14,13 @@ const SCENES = [
       {
         id: "engine",
         kicker: "First · Scraping engine",
-        copy: "Select Server for a quick cloud run.",
+        copy: "Choose Companion for a local run or Ubuntu Server for a shared cloud run.",
         cursor: { x: 76, y: 25 }
       },
       {
         id: "input",
         kicker: "Then · Input type",
-        copy: "Choose Profile to collect content from a public Facebook profile.",
+        copy: "Choose Profile, Keyword, Profile URL, or Post URL. The input field adapts to your selection.",
         cursor: { x: 65, y: 40 }
       }
     ]
@@ -39,7 +39,7 @@ const SCENES = [
       {
         id: "collection",
         kicker: "Then · Collection",
-        copy: "Choose Latest, Range, or Analyze Profile for the result you need.",
+        copy: "Choose Latest, Range, Analyze Profile, or Compare Profiles for the result you need.",
         cursor: { x: 70, y: 67 }
       }
     ]
@@ -225,8 +225,8 @@ function FacebookScraperVideoGuide({ open, onClose }) {
           <div className={`facebook-film-screen scene-${scene.id} phase-${phase.id}`} key={`${scene.id}-${sceneCycle}`}>
             <aside className="facebook-film-intro">
               <span>Facebook intelligence</span>
-              <h2>Facebook<br />scraper</h2>
-              <p>Public post and Reel data.</p>
+              <h2>Public activity.<br />Useful data.</h2>
+              <p>Collect, review, and export from one workspace.</p>
             </aside>
 
             <div className="facebook-film-demo">
@@ -263,6 +263,7 @@ function FacebookScraperVideoGuide({ open, onClose }) {
                       <button type="button" className={latestSelected ? "is-selected" : ""} tabIndex={-1}>Latest</button>
                       <button type="button" tabIndex={-1}>Range</button>
                       <button type="button" tabIndex={-1}>Analyze Profile</button>
+                      <button type="button" tabIndex={-1}>Compare Profiles</button>
                     </div>
                   </section>
 
@@ -274,7 +275,7 @@ function FacebookScraperVideoGuide({ open, onClose }) {
               ) : (
                 <div className="facebook-film-results facebook-film-results-step">
                   <header>
-                    <div><span>Dataset ready · Server</span><strong>@natgeo</strong></div>
+                    <div><span>Dataset ready · Companion</span><strong>@natgeo</strong></div>
                     <div className="is-film-focus"><button type="button" tabIndex={-1}>New Search</button><button type="button" tabIndex={-1}>JSON</button><button type="button" tabIndex={-1}>CSV</button></div>
                   </header>
                   <div className="facebook-film-metrics">

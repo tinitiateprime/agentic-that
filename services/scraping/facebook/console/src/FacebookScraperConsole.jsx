@@ -209,8 +209,8 @@ function normalizeFacebookJob(data = {}) {
 const facebookPlatformConfig = {
   name: "Facebook",
   userGuideComponent: FacebookScraperVideoGuide,
-  userGuideLabel: "Watch guide",
-  userGuideStorageKey: "agenticthat-facebook-scraper-film-v1",
+  userGuideLabel: "User guide",
+  userGuideStorageKey: "agenticthat-facebook-scraper-film-v2",
   apiUrl: FACEBOOK_API_URL,
   inputModes: facebookInputModes,
   cleanModeValue: cleanFacebookValue,

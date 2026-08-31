@@ -153,7 +153,7 @@ verify one text and one media post per enabled destination. Social sites can
 change their web UI; keep the per-platform kill switches available and monitor
 failed/uncertain jobs rather than automatically retrying an irreversible post.
 
-For Companion scraping, install Companion `1.7.0` and extension `1.2.0` or
+For Companion scraping, install Companion `1.7.5` and extension `1.2.0` or
 newer. Open the extension and approve the exact production HTTPS origin once.
 Quick-tunnel origins change when restarted and must be approved again; a stable
 production domain is strongly preferred. Confirm Instagram and Facebook both

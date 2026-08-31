@@ -4589,6 +4589,132 @@ button, input, textarea, select { font-family: inherit; }
   }
 }
 
+/* Publishing dashboard polish — aligned with the Store and Config workspaces. */
+.workboard-app {
+  --dashboard-ink: #111827;
+  --dashboard-muted: #64748b;
+  --dashboard-border: #e1e6eb;
+  --dashboard-accent: #0b7a66;
+  background: #f5f7f9;
+  color: var(--dashboard-ink);
+}
+
+.workboard-app .workboard-shell {
+  width: min(100%, 1500px);
+  padding-bottom: 48px;
+}
+
+.workboard-app .workboard-topbar {
+  min-height: 68px;
+  border-bottom: 1px solid var(--dashboard-border);
+  background: rgba(255, 255, 255, .94);
+  backdrop-filter: blur(16px);
+}
+
+.dashboard-overview {
+  grid-template-columns: minmax(300px, .78fr) minmax(600px, 1.22fr);
+  gap: 12px;
+  margin: 20px 0 12px;
+}
+
+.dashboard-welcome,
+.dashboard-stat-card,
+.unified-composer,
+.delivery-ledger,
+.platform-metrics,
+.status-board,
+.review-queue-board,
+.broadcast-mix-board,
+.calendar-board {
+  border: 1px solid var(--dashboard-border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .025) !important;
+}
+
+.dashboard-welcome {
+  min-height: 136px;
+  padding: 19px 20px;
+}
+
+.dashboard-welcome h1 {
+  font-size: clamp(26px, 2.3vw, 34px);
+  font-weight: 600;
+  letter-spacing: -.04em;
+}
+
+.dashboard-welcome > span {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dashboard-context {
+  min-height: 40px;
+  margin-top: 2px;
+  padding: 7px 9px;
+}
+
+.dashboard-stat-grid { gap: 8px; }
+
+.dashboard-stat-card {
+  min-height: 136px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+}
+
+.dashboard-stat-card > span {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.dashboard-stat-card strong { font-size: 26px; font-weight: 650; }
+.dashboard-stat-card small { font-size: 11px; }
+.dashboard-stat-card em { font-size: 9px; font-weight: 600; }
+
+.dashboard-workflow,
+.delivery-ledger,
+.handoff-queue,
+.platform-metrics,
+.workboard-focus-grid,
+.workboard-calendar-section {
+  margin-top: 12px !important;
+}
+
+.unified-composer,
+.delivery-ledger,
+.platform-metrics {
+  background: #fff;
+}
+
+.workboard-section-head h2,
+.delivery-ledger-head h2 {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+}
+
+.workboard-app .platform-metric-card {
+  min-height: 150px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.workboard-app .platform-metric-number strong { font-size: 28px; }
+.workboard-app .workboard-calendar { min-height: 400px; }
+.delivery-ledger-list { max-height: 430px; }
+
+@media (max-width: 1180px) {
+  .dashboard-overview { grid-template-columns: 1fr; }
+  .dashboard-stat-card { min-height: 112px; }
+}
+
+@media (max-width: 720px) {
+  .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-stat-card { min-height: 100px; }
+  .dashboard-welcome { min-height: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .composer-format-stage {
     animation: none;
@@ -4868,4 +4994,218 @@ button, input, textarea, select { font-family: inherit; }
   .server-worker-manage-link, .server-worker-panel > header > i { grid-column: 1 / -1; justify-self: start; }
   .server-worker-jobs article { grid-template-columns: minmax(0, 1fr) auto; }
   .server-worker-jobs article > button { grid-column: 1 / -1; }
+}
+
+/* Store-aligned publishing workspace. Keep this final so legacy queue styles cannot win. */
+.publish-queue-runner .workboard-app {
+  --dashboard-accent: #7857e8;
+  --dashboard-accent-dark: #6040ca;
+  min-height: 100vh;
+  background: transparent;
+}
+
+.publish-queue-runner .workboard-app .workboard-shell {
+  width: min(1600px, calc(100% - 28px));
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 28px 0 60px;
+  background: transparent;
+}
+
+.publish-queue-runner .workboard-app .workboard-topbar {
+  min-height: 62px;
+  grid-template-columns: auto minmax(380px, 1fr) auto;
+  gap: 18px;
+  position: relative;
+  top: auto;
+  margin: 0 0 18px;
+  padding: 8px 10px;
+  border: 1px solid #e1e6eb;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .9);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03), 0 10px 30px rgba(15, 23, 42, .035);
+}
+
+.publish-queue-runner .workboard-app .workboard-brand {
+  min-width: 168px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.publish-queue-runner .workboard-app .workboard-brand > span {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #8b6cf0, #6945d5);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(120, 87, 232, .24);
+}
+
+.publish-queue-runner .workboard-app .workboard-brand strong { color: #171c26; font-size: 14px; font-weight: 760; }
+.publish-queue-runner .workboard-app .workboard-brand small { color: #7a8491; font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+
+.publish-queue-runner .workboard-nav {
+  width: fit-content;
+  justify-self: center;
+  border-color: #e3e8ed;
+  border-radius: 10px;
+  background: #f4f6f8;
+}
+
+.publish-queue-runner .workboard-nav button { min-height: 36px; color: #65717d; font-size: 12px; font-weight: 720; }
+.publish-queue-runner .workboard-nav button:hover,
+.publish-queue-runner .workboard-nav button.active { color: #5638bd; }
+.publish-queue-runner .workboard-nav button.active svg { color: #7857e8; }
+
+.publish-queue-runner .workboard-app .workboard-status { color: #6545ce; font-size: 12px; }
+.publish-queue-runner .workboard-app .workboard-run { border-color: #7857e8; background: #7857e8; }
+.publish-queue-runner .workboard-app .workboard-run:hover { background: #6040ca; }
+
+.publish-queue-runner .dashboard-overview {
+  grid-template-columns: minmax(390px, .92fr) minmax(560px, 1.08fr);
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.publish-queue-runner .dashboard-welcome {
+  min-height: 176px;
+  position: relative;
+  overflow: hidden;
+  justify-content: center;
+  padding: 24px 26px;
+  border-color: #ded6fa !important;
+  background: linear-gradient(135deg, #fbfaff 0%, #f2edff 100%);
+}
+
+.publish-queue-runner .dashboard-welcome::after {
+  width: 210px;
+  height: 210px;
+  position: absolute;
+  top: -122px;
+  right: -72px;
+  border: 1px solid rgba(120, 87, 232, .16);
+  border-radius: 50%;
+  box-shadow: 0 0 0 34px rgba(120, 87, 232, .045), 0 0 0 70px rgba(120, 87, 232, .025);
+  content: "";
+}
+
+.publish-queue-runner .dashboard-welcome .section-kicker,
+.publish-queue-runner .workboard-section-head .section-kicker,
+.publish-queue-runner .composer-channel-title .section-kicker { color: #6b49d5; }
+
+.publish-queue-runner .dashboard-welcome h1 {
+  max-width: 480px;
+  position: relative;
+  z-index: 1;
+  font-size: clamp(31px, 3vw, 43px);
+  font-weight: 620;
+  letter-spacing: -.048em;
+  line-height: 1.02;
+}
+.publish-queue-runner .dashboard-welcome > span { max-width: 440px; position: relative; z-index: 1; color: #697483; font-size: 14px; line-height: 1.5; }
+.publish-queue-runner .dashboard-context { width: fit-content; position: relative; z-index: 1; border-color: #ddd6f7; background: rgba(255,255,255,.72); }
+
+.publish-queue-runner .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.publish-queue-runner .dashboard-stat-card { min-height: 83px; padding: 13px 15px; border-radius: 10px !important; }
+.publish-queue-runner .dashboard-stat-card > span { background: #f0ecff; color: #6c4bd3; }
+.publish-queue-runner .dashboard-stat-card strong { font-size: 24px; }
+.publish-queue-runner .dashboard-stat-card small { font-size: 12px; }
+.publish-queue-runner .dashboard-stat-card em { font-size: 10px; }
+
+.publish-queue-runner .unified-composer {
+  overflow: hidden;
+  border-color: #dddfea !important;
+  border-radius: 14px !important;
+}
+.publish-queue-runner .unified-composer-heading { border-bottom-color: #e8e7ee; background: linear-gradient(180deg, #fff, #fcfbff); }
+.publish-queue-runner .unified-composer-heading h1 { font-size: clamp(24px, 2.3vw, 34px); font-weight: 640; letter-spacing: -.038em; }
+.publish-queue-runner .composer-progress span.active { border-color: #7857e8; background: #7857e8; }
+.publish-queue-runner .composer-format-options button.selected { border-color: #7857e8; background: #f3efff; box-shadow: 0 0 0 2px rgba(120,87,232,.08); color: #6745d0; }
+.publish-queue-runner .composer-format-options button.selected > span,
+.publish-queue-runner .composer-format-options button > i,
+.publish-queue-runner .composer-publish-button { background: #7857e8; }
+.publish-queue-runner .composer-publish-button:hover { background: #6040ca; }
+
+.publish-queue-runner .delivery-ledger,
+.publish-queue-runner .platform-metrics,
+.publish-queue-runner .status-board,
+.publish-queue-runner .review-queue-board,
+.publish-queue-runner .broadcast-mix-board,
+.publish-queue-runner .calendar-board { border-radius: 12px !important; }
+
+.publish-queue-runner .platform-metric-card { border-color: #e2e7eb; }
+.publish-queue-runner .platform-metric-card:hover { border-color: #cfc4f4; box-shadow: 0 8px 20px rgba(70, 51, 135, .07); }
+.publish-queue-runner .calendar-day.selected-day { border-color: #7857e8; background: #eee9ff; box-shadow: inset 0 0 0 1px #7857e8; }
+
+.publish-queue-runner .schedule-manager-feature {
+  display: grid;
+  grid-template-columns: minmax(250px, .58fr) minmax(340px, .82fr) minmax(480px, 1.6fr);
+  align-items: center;
+  gap: 18px;
+  margin-top: 12px;
+  padding: 20px;
+  border: 1px solid #dedfea;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 0% 100%, rgba(120,87,232,.08), transparent 30%),
+    #fff;
+  box-shadow: 0 1px 2px rgba(15,23,42,.025), 0 12px 32px rgba(15,23,42,.04);
+}
+.publish-queue-runner .schedule-manager-feature .workboard-section-head { min-width: 0; display: grid; justify-items: start; gap: 12px; }
+.publish-queue-runner .schedule-manager-feature .workboard-section-head > div { display: grid; gap: 4px; }
+.publish-queue-runner .schedule-manager-feature .workboard-section-head h2 { font-size: 21px; }
+.publish-queue-runner .schedule-manager-feature .workboard-section-head small { max-width: 280px; color: #6c7783; font-size: 11px; line-height: 1.45; }
+.publish-queue-runner .schedule-manager-feature .btn-primary { min-height: 38px; display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; border: 0; border-radius: 8px; background: #7857e8; color: #fff; font-size: 11px; font-weight: 800; }
+.publish-queue-runner .schedule-feature-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid #e2e4eb; border-radius: 11px; background: #f7f7fa; }
+.publish-queue-runner .schedule-feature-summary > span { min-width: 0; display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 8px; padding: 14px 10px; border-left: 1px solid #e1e3e9; color: #7352df; }
+.publish-queue-runner .schedule-feature-summary > span:first-child { border-left: 0; }
+.publish-queue-runner .schedule-feature-summary div { min-width: 0; display: grid; gap: 2px; }
+.publish-queue-runner .schedule-feature-summary strong { color: #1f2732; font-size: 20px; line-height: 1; }
+.publish-queue-runner .schedule-feature-summary small { overflow: hidden; color: #737e89; font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .schedule-manager-feature .schedule-card-grid { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.publish-queue-runner .schedule-manager-feature .schedule-summary-card,
+.publish-queue-runner .schedule-manager-feature .schedule-empty-card { min-height: 70px; border-color: #e0e3e8; border-radius: 10px; background: #fbfbfd; }
+.publish-queue-runner .schedule-manager-feature .schedule-summary-card { grid-template-columns: 34px minmax(0, 1fr) auto auto 16px; }
+.publish-queue-runner .schedule-card-icon,
+.publish-queue-runner .schedule-empty-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #eee9ff; color: #6f4fda; }
+.publish-queue-runner .schedule-manager-feature .schedule-card-main strong { font-size: 12px; }
+.publish-queue-runner .schedule-manager-feature .schedule-card-main small { font-size: 9px; }
+.publish-queue-runner .schedule-manager-feature .schedule-empty-card { grid-column: 1 / -1; grid-template-columns: 42px minmax(0, 1fr) 18px; }
+.publish-queue-runner .schedule-manager-feature .schedule-empty-icon { width: 42px; height: 42px; }
+
+.publish-queue-runner .workboard-section-head h2,
+.publish-queue-runner .delivery-ledger-head h2 { font-size: 19px; }
+.publish-queue-runner .workboard-section-head > span,
+.publish-queue-runner .delivery-ledger-head > div:first-child > span { font-size: 11px; }
+.publish-queue-runner .platform-metric-card-top > span { font-size: 14px; }
+.publish-queue-runner .platform-account-summary { font-size: 11px; }
+.publish-queue-runner .review-queue-row span strong,
+.publish-queue-runner .delivery-ledger-destination strong,
+.publish-queue-runner .delivery-ledger-content strong { font-size: 12px; }
+
+@media (max-width: 1180px) {
+  .publish-queue-runner .workboard-app .workboard-topbar { grid-template-columns: auto 1fr; }
+  .publish-queue-runner .workboard-nav { grid-column: 1 / -1; grid-row: 2; width: 100%; justify-content: center; }
+  .publish-queue-runner .dashboard-overview { grid-template-columns: 1fr; }
+  .publish-queue-runner .schedule-manager-feature { grid-template-columns: 1fr; }
+  .publish-queue-runner .schedule-manager-feature .workboard-section-head { grid-template-columns: 1fr auto; align-items: center; }
+}
+
+@media (max-width: 720px) {
+  .publish-queue-runner .workboard-app .workboard-shell { width: min(100% - 20px, 1600px); padding-top: 12px; }
+  .publish-queue-runner .workboard-app .workboard-topbar { grid-template-columns: 1fr auto; }
+  .publish-queue-runner .workboard-nav { justify-content: flex-start; overflow-x: auto; }
+  .publish-queue-runner .dashboard-welcome { min-height: 0; padding: 22px 20px; }
+  .publish-queue-runner .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .publish-queue-runner .schedule-manager-feature { padding: 16px; }
+  .publish-queue-runner .schedule-manager-feature .workboard-section-head { grid-template-columns: 1fr; }
+  .publish-queue-runner .schedule-feature-summary { grid-template-columns: 1fr; }
+  .publish-queue-runner .schedule-feature-summary > span { border-top: 1px solid #e1e3e9; border-left: 0; }
+  .publish-queue-runner .schedule-feature-summary > span:first-child { border-top: 0; }
+  .publish-queue-runner .schedule-manager-feature .schedule-card-grid { grid-template-columns: 1fr; }
 }

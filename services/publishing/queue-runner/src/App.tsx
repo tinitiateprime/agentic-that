@@ -1951,11 +1951,6 @@ function Workboard({
     });
   }, [calendarMonth, eventByDay]);
 
-  const upcoming = useMemo(() => uploads
-    .filter(upload => upload.scheduledAt && upload.status !== 'posted')
-    .sort((a, b) => Date.parse(a.scheduledAt ?? '') - Date.parse(b.scheduledAt ?? ''))
-    .slice(0, 1), [uploads]);
-
   const statusMix = useMemo(() => [
     { id: 'scheduled', label: 'Scheduled', detail: 'Timed', value: uploads.filter(upload => upload.status === 'queued' && upload.scheduledAt).length, color: '#318EC2' },
     { id: 'queued', label: 'In queue', detail: 'Needs a time', value: uploads.filter(upload => upload.status === 'queued' && !upload.scheduledAt).length, color: '#B17A08' },
@@ -1972,7 +1967,6 @@ function Workboard({
 
   const selectedEvents = eventByDay[selectedDay] ?? [];
   const monthLabel = calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const nextAction = upcoming[0];
   const statusTotal = statusMix.reduce((total, status) => total + status.value, 0);
   const reviewQueue = useMemo(() => {
     const priority: Record<PlatformUpload['status'], number> = { failed: 0, queued: 1, processing: 2, posted: 3 };
@@ -2030,16 +2024,18 @@ function Workboard({
     <main className='workboard-app'>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/apps' title='Back to AgenticThat Store'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
+        <div className='workboard-brand'><span><Send size={18} /></span><div><strong>Publishing</strong><small>Campaign workspace</small></div></div>
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
           <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
-          <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
+          <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Calendar</button>
         </nav>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
           <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue with server-managed publishing accounts' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Server workspace' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
+          {permissions.canSchedulePosts && <button className='workboard-tool' title='Manage schedule templates' aria-label='Manage schedule templates' onClick={onOpenSchedules}><CalendarClock size={18} /></button>}
+          {permissions.canManageUsers && <button className='workboard-tool' title='Manage workspace users' aria-label='Manage workspace users' onClick={onOpenUsers}><UsersRound size={18} /></button>}
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
           {permissions.canRunAutomation && (isRunning
             ? <button className='workboard-stop' onClick={onStop}><X size={16} />Emergency stop</button>
@@ -2060,9 +2056,9 @@ function Workboard({
 
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>
-          <p className='section-kicker'>Operational overview</p>
-          <h1 id='dashboard-overview-heading'>Publishing workspace</h1>
-          <span>{user.fullName} · {userRoleLabels[user.role]}</span>
+          <p className='section-kicker'>Multi-channel publishing</p>
+          <h1 id='dashboard-overview-heading'>One workspace for every post.</h1>
+          <span>Create, schedule, and follow delivery across all connected channels.</span>
           <div className={`dashboard-context ${attentionCount ? 'needs-attention' : 'healthy'}`}>
             {attentionCount ? <CircleAlert size={17} /> : <CircleCheckBig size={17} />}
             <span><strong>{attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'item needs' : 'items need'} attention` : 'Publishing operations are clear'}</strong><small>{activeSchedulesCount} active {activeSchedulesCount === 1 ? 'schedule' : 'schedules'} · {healthyChannelCount} connected {healthyChannelCount === 1 ? 'channel' : 'channels'}</small></span>
@@ -2075,21 +2071,6 @@ function Workboard({
               <div><strong>{card.value}</strong><small>{card.label}</small><em>{card.detail}</em></div>
             </article>
           ))}
-        </div>
-      </section>
-
-      <section className='safety-control-strip' aria-labelledby='safety-controls-heading'>
-        <header>
-          <span><ShieldCheck size={20} /></span>
-          <div><strong id='safety-controls-heading'>Publishing safeguards active</strong><small>Checks run at the stage where they matter. They reduce avoidable risk, but no browser publisher can guarantee zero platform restrictions.</small></div>
-          <em>5 layers on</em>
-        </header>
-        <div className='safety-control-grid'>
-          <article><CircleCheckBig size={15} /><span><strong>Pre-flight checks</strong><small>Before a post enters the queue</small></span></article>
-          <article><TimerReset size={15} /><span><strong>Dynamic pacing</strong><small>Immediately before publishing</small></span></article>
-          <article><LockKeyhole size={15} /><span><strong>One job per account</strong><small>While a browser job is active</small></span></article>
-          <article><CircleAlert size={15} /><span><strong>Stop on risk</strong><small>CAPTCHA, warning, checkpoint or 429</small></span></article>
-          <article><ShieldCheck size={15} /><span><strong>No blind final retry</strong><small>Unclear results require inspection</small></span></article>
         </div>
       </section>
 
@@ -2148,7 +2129,7 @@ function Workboard({
         )}
       </section>
 
-      <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>
+      {submissions.length > 0 && <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>
         <header className='workboard-section-head'>
           <div><p className='section-kicker'>Uploader to scheduler</p><h2 id='handoff-queue-heading'>Content handoff queue</h2></div>
           <span>{awaitingSubmissions.length} awaiting schedule</span>
@@ -2167,7 +2148,7 @@ function Workboard({
             </article>
           ))}
         </div>
-      </section>
+      </section>}
 
       <section className='platform-metrics' id='channels' aria-labelledby='post-metrics-heading'>
         <header className='workboard-section-head'><div><p className='section-kicker'>Channel control</p><h2 id='post-metrics-heading'>Publishing channels</h2></div><span>{trackingSummary}</span></header>
@@ -2202,34 +2183,21 @@ function Workboard({
         </div>
       </section>
 
-      {permissions.canManageUsers && (
-        <section className='workboard-user-manager' aria-labelledby='user-manager-heading'>
-          <header className='workboard-section-head'>
-            <div><p className='section-kicker'>Workspace access</p><h2 id='user-manager-heading'>User management</h2></div>
-            <button className='btn-primary' onClick={onOpenUsers}><UsersRound size={16} />Manage users</button>
-          </header>
-          <div className='user-access-strip'>
-            {users.length === 0 ? <div className='user-access-empty'><UsersRound size={23} /><span>No users loaded</span></div> : users.slice(0, 4).map(item => (
-              <button key={item.id} type='button' className='user-access-chip' onClick={onOpenUsers}>
-                <span className='workboard-user'>{roleInitials[item.role]}</span>
-                <span><strong>{item.fullName}</strong><small>{userRoleLabels[item.role]}</small></span>
-              </button>
-            ))}
-            {users.length > 4 && <button type='button' className='user-access-more' onClick={onOpenUsers}>+{users.length - 4}</button>}
-          </div>
-        </section>
-      )}
-
-      <section className='workboard-schedule-manager' aria-labelledby='schedule-manager-heading'>
+      <section className='workboard-schedule-manager schedule-manager-feature' aria-labelledby='schedule-manager-heading'>
         <header className='workboard-section-head'>
-          <div><p className='section-kicker'>Reusable timing</p><h2 id='schedule-manager-heading'>Schedule manager</h2></div>
-          {permissions.canSchedulePosts && <button className='btn-primary' onClick={onOpenSchedules}><CalendarClock size={16} />Add or manage</button>}
+          <div><p className='section-kicker'>Reusable publishing plans</p><h2 id='schedule-manager-heading'>Schedule manager</h2><small>Create repeatable timing rules and see how many posts use each plan.</small></div>
+          {permissions.canSchedulePosts && <button className='btn-primary' onClick={onOpenSchedules}><CalendarClock size={16} />Manage schedules</button>}
         </header>
+        <div className='schedule-feature-summary'>
+          <span><CalendarDays size={18} /><div><strong>{activeSchedulesCount}</strong><small>Active plans</small></div></span>
+          <span><TimerReset size={18} /><div><strong>{metrics.scheduled}</strong><small>Scheduled posts</small></div></span>
+          <span><Clock3 size={18} /><div><strong>{schedules.length}</strong><small>Total templates</small></div></span>
+        </div>
         <div className='schedule-card-grid'>
-          {schedules.length === 0 ? <button className='schedule-empty-card' onClick={onOpenSchedules} disabled={!permissions.canSchedulePosts}><CalendarClock size={24} /><span><strong>No schedules yet</strong><small>Create schedules like Daily, Weekly, Monthly, One time, or Custom.</small></span><ChevronRight size={18} /></button> : schedules.map(schedule => {
+          {schedules.length === 0 ? <button className='schedule-empty-card' onClick={onOpenSchedules} disabled={!permissions.canSchedulePosts}><span className='schedule-empty-icon'><CalendarClock size={24} /></span><span><strong>Create your first publishing schedule</strong><small>Build daily, weekly, monthly, one-time, or custom timing templates.</small></span><ChevronRight size={18} /></button> : schedules.slice(0, 6).map(schedule => {
             const assignedPosts = uploads.filter(upload => upload.scheduleId === schedule.id).length;
             return <button className='schedule-summary-card' key={schedule.id} onClick={onOpenSchedules} disabled={!permissions.canSchedulePosts}>
-              <span className='schedule-card-id'>#{schedule.id}</span>
+              <span className='schedule-card-icon'><CalendarClock size={18} /></span>
               <span className='schedule-card-main'><strong>{schedule.name}</strong><small>{schedule.frequency === 'custom' ? schedule.customCronExpression : `${scheduleFrequencyLabels[schedule.frequency]} at ${schedule.time}`}{schedule.endDate ? ` until ${schedule.endDate}` : ''}</small></span>
               <span className={`schedule-card-state ${schedule.status}`}>{schedule.status}</span>
               <span className='schedule-card-accounts'><FileText size={14} />{assignedPosts}</span>
@@ -2280,16 +2248,6 @@ function Workboard({
           <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Delivery results will appear here as channels publish posts.'}</footer>
         </article>
 
-        <article className='legacy-next-action-board'>
-          <header className='workboard-section-head'><div><p className='section-kicker'>Next action</p><h2>{nextAction ? 'Ready for its moment' : 'Nothing scheduled yet'}</h2></div><CalendarClock size={20} /></header>
-          {nextAction ? (
-            <button className='next-action-content' onClick={() => canEditPosts && onEdit(nextAction)} disabled={!canEditPosts}>
-              <CustomIcon platform={nextAction.platform} size={29} />
-              <span><strong>{nextAction.title || nextAction.originalName}</strong><small>{accountById.get(nextAction.accountId)?.handle ?? platformLabels[nextAction.platform]} · {formatEventTime(nextAction.scheduledAt ?? nextAction.updatedAt)}</small></span>
-              <Pencil size={16} />
-            </button>
-          ) : <div className='next-action-empty'><CalendarDays size={24} /><span>Choose a post and set its date from the channel portfolio.</span></div>}
-        </article>
       </section>
 
       <section className='workboard-calendar-section' id='schedule'>
@@ -2304,25 +2262,6 @@ function Workboard({
           </div>
         </article>
 
-        <article className='legacy-broadcast-mix-board'>
-          <header className='workboard-section-head'><div><p className='section-kicker'>Broadcast output</p><h2>Channel distribution</h2></div><CircleCheckBig size={20} /></header>
-          <div className='broadcast-mix-content'>
-            <div className='broadcast-donut' role='img' aria-label={`${deliveredTotal} successful deliveries distributed across channels`}>
-              <svg viewBox='0 0 120 120' aria-hidden='true'>
-                <circle className='broadcast-donut-track' cx='60' cy='60' r='42' />
-                {broadcastSegments.map(channel => <circle key={channel.platform} className='broadcast-donut-segment' cx='60' cy='60' r='42' stroke={platformColor[channel.platform]} strokeDasharray={`${Math.max(0, channel.length - 3)} ${DONUT_CIRCUMFERENCE}`} strokeDashoffset={-channel.offset} />)}
-              </svg>
-              <div className='broadcast-donut-center'><strong>{deliveredTotal}</strong><span>delivered</span></div>
-            </div>
-            <div className='broadcast-legend' aria-label='Delivered posts by channel'>
-              {broadcastMix.map(channel => {
-                const share = deliveredTotal ? Math.round((channel.value / deliveredTotal) * 100) : 0;
-                return <div className={channel.value ? '' : 'inactive-channel'} key={channel.platform}><span style={{ backgroundColor: platformColor[channel.platform] }} /><strong>{channel.label}</strong><small>{channel.value} · {share}%</small></div>;
-              })}
-            </div>
-          </div>
-          <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Your broadcast mix will appear as channels complete deliveries.'}</footer>
-        </article>
       </section>
 
       {schedulePlatform && permissions.canSchedulePosts && (
