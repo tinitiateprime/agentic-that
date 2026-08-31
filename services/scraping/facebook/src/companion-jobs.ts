@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
 import { FacebookCompanionCancelledError, runFacebookCompanionScrape } from "./companion-runner.js";
-import type { FacebookScrapeInput } from "./scraper.js";
+import { facebookScrapeRange, type FacebookScrapeInput } from "./scraper.js";
 import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 type Status = "queued" | "running" | "complete" | "failed" | "cancelled";
@@ -113,7 +113,7 @@ export function prepareFacebookCompanionInput(body: Record<string, unknown>): Fa
   const rangeFrom = value(body.range_from ?? body.rangeFrom) || undefined;
   const rangeTo = value(body.range_to ?? body.rangeTo) || undefined;
   if (collectionMode === "range" && (!rangeType || !rangeFrom || !rangeTo)) throw new Error("Choose a valid range type, start, and end.");
-  return {
+  const input: FacebookScrapeInput = {
     query,
     inputMode,
     profileType,
@@ -126,6 +126,8 @@ export function prepareFacebookCompanionInput(body: Record<string, unknown>): Fa
     timezoneOffsetMinutes: Math.max(-840, Math.min(840, Number(body.timezone_offset_minutes ?? body.timezoneOffsetMinutes) || 0)),
     skipComments: body.comparison_mode === true || body.skip_comments === true,
   };
+  if (collectionMode === "range") facebookScrapeRange(input);
+  return input;
 }
 
 export function setFacebookCompanionScrapeExecutorForTests(next: Executor | null) {

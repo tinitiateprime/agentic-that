@@ -1,5 +1,6 @@
 import {
   getFacebookScraperInfo,
+  facebookScrapeRange,
   runFacebookScrape,
   type FacebookPost,
   type FacebookProfileAnalysis,
@@ -78,7 +79,7 @@ export function prepareFacebookScrapeInput(value: Record<string, unknown>): Face
   if (collectionMode === "range" && (!rangeType || !rangeFrom || !rangeTo)) {
     throw new FacebookRequestError("Choose a valid range type, start, and end.");
   }
-  return {
+  const input: FacebookJobInput = {
     inputMode,
     profileType,
     requestedQuery,
@@ -91,6 +92,14 @@ export function prepareFacebookScrapeInput(value: Record<string, unknown>): Face
     timezoneOffsetMinutes: Math.max(-840, Math.min(840, Number(value.timezone_offset_minutes ?? value.timezoneOffsetMinutes) || 0)),
     skipComments: value.comparison_mode === true || value.skip_comments === true,
   };
+  if (collectionMode === "range") {
+    try {
+      facebookScrapeRange({ ...input, query: input.requestedQuery });
+    } catch (error) {
+      throw new FacebookRequestError(error instanceof Error ? error.message : "Choose a valid Facebook post range.");
+    }
+  }
+  return input;
 }
 
 function friendlyError(error: unknown) {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { runInstagramCompanionScrape, InstagramCompanionCancelledError } from "./companion-runner.js";
 import { instagramCompanionDesktopHost } from "./companion-desktop-host.js";
-import type { InstagramScrapeInput } from "./scraper.js";
+import { instagramScrapeRange, type InstagramScrapeInput } from "./scraper.js";
 import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 export type InstagramCompanionJobStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
@@ -162,7 +162,7 @@ export function prepareInstagramCompanionInput(body: Record<string, unknown>): I
   }
 
   const recentDays = Math.max(1, Math.min(365, Number(body.recent_days || body.recentDays) || 7));
-  return {
+  const input: InstagramScrapeInput = {
     query,
     maxResults: singlePost ? 1 : Math.max(1, Math.min(50, Number(body.max_results || body.maxResults) || 10)),
     collectionMode,
@@ -181,6 +181,8 @@ export function prepareInstagramCompanionInput(body: Record<string, unknown>): I
     ),
     sortBy: collectionMode === "engagement" ? "engagement" : "recent",
   };
+  if (collectionMode === "range") instagramScrapeRange(input);
+  return input;
 }
 
 function failureFor(error: unknown, job: CompanionJob): InstagramCompanionFailure {

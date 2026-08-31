@@ -80,6 +80,7 @@ export type InstagramScrapeDiagnostics = {
   extractionAttempts: number;
   extractionSuccesses: number;
   fallbackResults: number;
+  rangeCoverage?: InstagramRangeCoverage;
   rejections: {
     navigation: number;
     unexpectedPost: number;
@@ -87,6 +88,17 @@ export type InstagramScrapeDiagnostics = {
     outOfRange: number;
     extraction: number;
   };
+};
+
+export type InstagramRangeCoverage = {
+  requestedStart: string;
+  requestedEnd: string;
+  oldestSeen: string | null;
+  newestSeen: string | null;
+  inRangeCandidates: number;
+  reachedRangeStart: boolean;
+  fulfilledRequestedCount: boolean;
+  complete: boolean;
 };
 
 export type InstagramProfileAnalysis = {
@@ -657,7 +669,7 @@ function timestampValue(timestamp?: string | null) {
   return Number.isFinite(value) ? value : 0;
 }
 
-type ScrapeRange = {
+export type ScrapeRange = {
   start: Date;
   end: Date;
   strict: boolean;
@@ -717,7 +729,7 @@ function explicitScrapeRange(input: InstagramScrapeInput): ScrapeRange | null {
   };
 }
 
-function scrapeRangeFromInput(input: InstagramScrapeInput): ScrapeRange {
+export function instagramScrapeRange(input: InstagramScrapeInput): ScrapeRange {
   const collectionMode = input.collectionMode || (input.rangeFrom || input.rangeTo ? "range" : "latest");
   const explicit = explicitScrapeRange(input);
   if (collectionMode === "range") {
@@ -747,6 +759,35 @@ function timestampInRange(timestamp: string | null | undefined, range: ScrapeRan
   const value = timestampValue(timestamp);
   if (!value) return !range.strict;
   return value >= range.start.getTime() && value <= range.end.getTime();
+}
+
+export function instagramRangeCoverage(
+  timestamps: Array<string | null | undefined>,
+  range: ScrapeRange,
+  maxResults: number,
+): InstagramRangeCoverage {
+  const values = timestamps.map(timestampValue).filter(value => value > 0);
+  const oldest = values.length ? Math.min(...values) : null;
+  const newest = values.length ? Math.max(...values) : null;
+  const inRangeCandidates = values.filter(value => (
+    value >= range.start.getTime() && value <= range.end.getTime()
+  )).length;
+  // A pinned old post can appear before newer posts. Treat the lower boundary
+  // as reached only when discovery itself has progressed to old tail items,
+  // rather than trusting a single minimum timestamp from anywhere in the set.
+  const reachedRangeStart = values.length >= 2
+    && values.slice(-2).every(value => value <= range.start.getTime());
+  const fulfilledRequestedCount = inRangeCandidates >= maxResults;
+  return {
+    requestedStart: range.start.toISOString(),
+    requestedEnd: range.end.toISOString(),
+    oldestSeen: oldest === null ? null : new Date(oldest).toISOString(),
+    newestSeen: newest === null ? null : new Date(newest).toISOString(),
+    inRangeCandidates,
+    reachedRangeStart,
+    fulfilledRequestedCount,
+    complete: reachedRangeStart || fulfilledRequestedCount,
+  };
 }
 
 export function engagementValues(post: Pick<
@@ -3989,7 +4030,7 @@ async function scrapePublicBrowser(
         reelsDiagnostics = verified.diagnostics;
         visualCandidates.unshift(...verified.candidates);
       }
-      if (sortBy === "engagement" || visualCandidates.length < desiredCandidates) {
+      if (sortBy === "engagement" || range.collectionMode === "range" || visualCandidates.length < desiredCandidates) {
         const knownUserId = cleanText(visualCandidates.find((candidate) => candidate._owner_id)?._owner_id) || null;
         visualCandidates.push(...await collectPublicProfileFeedCandidates(
           page,
@@ -4134,17 +4175,26 @@ async function scrapePublicBrowser(
         return range.direction === "ascending" ? byTime : -byTime;
       });
     diagnostics.discoveredCandidates = candidates.length;
+    if (range.collectionMode === "range") {
+      diagnostics.rangeCoverage = instagramRangeCoverage(
+        candidates.map(candidate => candidate.timestamp),
+        range,
+        maxResults,
+      );
+    }
     if (!candidatesInRange.length) {
       return {
         query: normalized.label,
         results: [],
-        discoveryStatus: range.collectionMode === "range"
-          ? "ok"
-          : reelsDiagnostics?.loginRequired
+        discoveryStatus: reelsDiagnostics?.loginRequired
             ? "login_required"
             : reelsDiagnostics?.notFound
               ? "not_found"
-              : "temporarily_unavailable",
+              : range.collectionMode === "range" && diagnostics.rangeCoverage?.complete
+                ? "ok"
+                : range.collectionMode === "range"
+                  ? "partial"
+                  : "temporarily_unavailable",
         diagnostics
       };
     }
@@ -4447,13 +4497,17 @@ async function scrapePublicBrowser(
     const hasFreshCurrentViews = results.some((post) => (
       post.views_fresh === true && isCurrentReelsViewSource(post.views_source) && typeof post.views === "number"
     ));
+    const incompleteRange = range.collectionMode === "range" && (
+      diagnostics.rangeCoverage?.complete !== true
+      || results.length < Math.min(maxResults, diagnostics.rangeCoverage.inRangeCandidates)
+    );
     const discoveryStatus: InstagramDiscoveryStatus = results.length === 0
       ? reelsDiagnostics?.loginRequired
         ? "login_required"
         : reelsDiagnostics?.notFound
           ? "not_found"
           : "temporarily_unavailable"
-      : diagnostics.fallbackResults > 0
+      : incompleteRange || diagnostics.fallbackResults > 0
         ? "partial"
         : sortBy === "engagement" && normalized.mode === "profile" && !hasFreshCurrentViews
           ? "partial"
@@ -4493,7 +4547,7 @@ export async function runInstagramScrapeWithSessionFactory(
   }
 
   const effectiveInput = { ...input, collectionMode };
-  const range = scrapeRangeFromInput(effectiveInput);
+  const range = instagramScrapeRange(effectiveInput);
   const sortBy = collectionMode === "engagement" ? "engagement" : "recent";
 
   let discoveryQuery = input.query;
@@ -4519,13 +4573,15 @@ export async function runInstagramScrapeWithSessionFactory(
     discoveryQuery = `@${handle}`;
   }
 
-  const needsDeepHistory = range.end.getTime() < Date.now() - 31 * 86_400_000 || range.direction === "ascending";
+  const needsDeepHistory = range.collectionMode === "range"
+    || range.end.getTime() < Date.now() - 31 * 86_400_000
+    || range.direction === "ascending";
   const candidateCount = normalized.mode === "post"
     ? 1
     : sortBy === "engagement"
       ? profileAnalysisCandidateTarget(maxResults)
       : needsDeepHistory
-        ? 150
+        ? normalized.mode === "profile" ? profileAnalysisCandidateTarget(maxResults) : 150
       : normalized.mode === "profile"
         ? latestProfileCandidateTarget(maxResults)
         : Math.min(Math.max(maxResults * 6, 20), 150);

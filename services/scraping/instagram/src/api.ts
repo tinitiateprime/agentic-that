@@ -1,5 +1,6 @@
 import {
   getInstagramScraperInfo,
+  instagramScrapeRange,
   runInstagramScrape,
   type InstagramPost,
   type InstagramProfileAnalysis,
@@ -139,7 +140,7 @@ export function prepareScrapeInput(body: Record<string, unknown>): InstagramJobI
   );
   const sortBy = collectionMode === "engagement" ? "engagement" as const : "recent" as const;
 
-  return {
+  const input: InstagramJobInput = {
     requestedMode,
     requestedQuery,
     maxResults,
@@ -154,6 +155,14 @@ export function prepareScrapeInput(body: Record<string, unknown>): InstagramJobI
     timezoneOffsetMinutes,
     sortBy
   };
+  if (collectionMode === "range") {
+    try {
+      instagramScrapeRange({ ...input, query: input.requestedQuery });
+    } catch (error) {
+      requestError(error instanceof Error ? error.message : "Choose a valid range.");
+    }
+  }
+  return input;
 }
 
 function friendlyScrapeMessage(error: unknown) {

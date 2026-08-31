@@ -27,7 +27,10 @@ isolated persistent publishing partition. Google Chrome or Microsoft Edge is
 required for X and YouTube login and remains an optional fallback for the
 other providers.
 
-Version 1.7.4 provides external-first X and YouTube login with encrypted
+Version 1.7.5 adds timezone-aware date, month, and year range validation for
+Instagram and Facebook, deeper range discovery, pinned-post-safe stopping, and
+explicit coverage diagnostics so incomplete history is reported as partial
+instead of complete. It retains the external-first X and YouTube login with encrypted
 session transfer, restart verification, and protected managed-Chrome fallback.
 It also includes the default Instagram and Facebook Companion engines,
 one shared scraping slot with publishing priority, durable authenticated
