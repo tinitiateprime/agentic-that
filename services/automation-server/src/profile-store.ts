@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { AutomationRemoteStorage, RemoteProfileVersion } from "./remote-storage.ts";
+import { operationalLog } from "./operational-log.ts";
 
 type DevelopmentMediaUpload = {
   id: string;
@@ -25,8 +27,17 @@ export class AutomationFileStore {
   readonly resultsRoot: string;
   readonly temporaryRoot: string;
   private readonly mediaUploads = new Map<string, DevelopmentMediaUpload>();
+  private readonly preparedProfiles = new Map<string, RemoteProfileVersion & { workspaceId: string }>();
+  private readonly preparedMedia = new Map<string, Set<string>>();
+  private readonly mediaReferenceCounts = new Map<string, number>();
+  private readonly mediaWorkspaceOwners = new Map<string, string>();
+  private readonly mediaHydrations = new Map<string, Promise<void>>();
 
-  constructor(root: string, readonly mediaUploadMaxBytes = 10 * 1024 * 1024 * 1024) {
+  constructor(
+    root: string,
+    readonly mediaUploadMaxBytes = 10 * 1024 * 1024 * 1024,
+    readonly remote?: AutomationRemoteStorage,
+  ) {
     this.root = path.resolve(root);
     this.mediaRoot = path.join(this.root, "media");
     this.profilesRoot = path.join(this.root, "profiles");
@@ -53,6 +64,21 @@ export class AutomationFileStore {
     await Promise.all(mediaEntries
       .filter(entry => /^upload_[a-f0-9]{32}[.]part$/.test(entry))
       .map(entry => rm(this.mediaFilePath(entry), { force: true })));
+    if (this.remote) {
+      await this.remote.assertReady();
+      const [profileEntries, mediaEntries, resultEntries, temporaryEntries] = await Promise.all([
+        readdir(this.profilesRoot).catch(() => []),
+        readdir(this.mediaRoot).catch(() => []),
+        readdir(this.resultsRoot).catch(() => []),
+        readdir(this.temporaryRoot).catch(() => []),
+      ]);
+      await Promise.all([
+        ...profileEntries.map(entry => rm(path.join(this.profilesRoot, entry), { recursive: true, force: true })),
+        ...mediaEntries.map(entry => rm(path.join(this.mediaRoot, entry), { recursive: true, force: true })),
+        ...resultEntries.map(entry => rm(path.join(this.resultsRoot, entry), { recursive: true, force: true })),
+        ...temporaryEntries.map(entry => rm(path.join(this.temporaryRoot, entry), { recursive: true, force: true })),
+      ]);
+    }
   }
 
   profileStorageKey(accountId: string) {
@@ -71,10 +97,77 @@ export class AutomationFileStore {
     return directory;
   }
 
-  async removeDevelopmentProfile(accountId: string) {
+  async prepareProfile(workspaceId: string, accountId: string, expectedVersion?: number) {
+    const directory = this.profileDirectory(accountId);
+    if (!this.remote) return await this.ensureDevelopmentProfile(accountId);
+    if (this.preparedProfiles.has(accountId)) throw new Error("The browser profile is already prepared by this automation process.");
+    await rm(directory, { recursive: true, force: true });
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    try {
+      const version = await this.remote.restoreProfile(
+        workspaceId,
+        accountId,
+        this.profileStorageKey(accountId),
+        directory,
+      );
+      if (expectedVersion !== undefined && version.version !== expectedVersion) {
+        throw new Error(`Browser profile version mismatch; database expects ${expectedVersion}, storage has ${version.version}.`);
+      }
+      this.preparedProfiles.set(accountId, { ...version, workspaceId });
+      return directory;
+    } catch (error) {
+      operationalLog("error", "profile.download_failed", {
+        workspaceId,
+        accountId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  async persistProfile(workspaceId: string, accountId: string) {
+    if (!this.remote) return null;
+    const prepared = this.preparedProfiles.get(accountId);
+    if (!prepared || prepared.workspaceId !== workspaceId) throw new Error("The browser profile was not prepared for this workspace.");
+    let saved: RemoteProfileVersion;
+    try {
+      saved = await this.remote.saveProfile(
+        workspaceId,
+        accountId,
+        this.profileStorageKey(accountId),
+        this.profileDirectory(accountId),
+        prepared,
+      );
+    } catch (error) {
+      operationalLog("error", "profile.upload_failed", {
+        workspaceId,
+        accountId,
+        expectedVersion: prepared.version,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    this.preparedProfiles.set(accountId, { ...saved, workspaceId });
+    return saved;
+  }
+
+  async discardPreparedProfile(accountId: string) {
+    if (!this.remote) return;
+    await this.releasePreparedMedia(accountId);
+    this.preparedProfiles.delete(accountId);
+    await rm(this.profileDirectory(accountId), { recursive: true, force: true });
+  }
+
+  async removeDevelopmentProfile(accountId: string, workspaceId = "") {
     const directory = this.profileDirectory(accountId);
     if (directory === this.profilesRoot) throw new Error("Refusing to remove the profiles root.");
     await rm(directory, { recursive: true, force: true });
+    this.preparedProfiles.delete(accountId);
+    if (this.remote) {
+      if (!workspaceId.trim()) throw new Error("A workspace is required to remove a production browser profile.");
+      await this.remote.removeProfile(workspaceId, accountId, this.profileStorageKey(accountId));
+    }
   }
 
   mediaFilePath(storageKey: string) {
@@ -93,13 +186,18 @@ export class AutomationFileStore {
     }
   }
 
-  async storeDevelopmentMedia(bytes: Buffer, originalName: string, mimeType: string) {
+  async storeDevelopmentMedia(bytes: Buffer, originalName: string, mimeType: string, workspaceId = "") {
     const { extension, fileName, normalizedMimeType } = this.mediaMetadata(originalName, mimeType);
     if (!bytes.length || bytes.length > this.mediaUploadMaxBytes) {
       throw new Error(`Publishing media must be between 1 byte and the configured server storage ceiling.`);
     }
     const storageKey = `media_${randomUUID().replaceAll("-", "")}${extension}`;
     await writeFile(this.mediaFilePath(storageKey), bytes, { flag: "wx", mode: 0o600 });
+    if (this.remote) {
+      if (!workspaceId.trim()) throw new Error("A workspace is required to store production publishing media.");
+      await this.remote.uploadMedia(workspaceId, storageKey, this.mediaFilePath(storageKey), normalizedMimeType);
+      await rm(this.mediaFilePath(storageKey), { force: true });
+    }
     return { storageKey, fileName, mimeType: normalizedMimeType, size: bytes.length };
   }
 
@@ -180,8 +278,48 @@ export class AutomationFileStore {
     if (actualSize !== upload.declaredSize) throw new Error("The staged media size does not match the declared file size.");
     const storageKey = `media_${randomUUID().replaceAll("-", "")}${upload.extension}`;
     await rename(partPath, this.mediaFilePath(storageKey));
+    if (this.remote) {
+      await this.remote.uploadMedia(upload.workspaceId, storageKey, this.mediaFilePath(storageKey), upload.mimeType);
+      await rm(this.mediaFilePath(storageKey), { force: true });
+    }
     this.mediaUploads.delete(upload.id);
     return { storageKey, fileName: upload.fileName, mimeType: upload.mimeType, size: actualSize };
+  }
+
+  async prepareJobFiles(
+    workspaceId: string,
+    accountId: string,
+    media: ReadonlyArray<{ storageKey: string }>,
+    expectedProfileVersion?: number,
+  ) {
+    await this.prepareProfile(workspaceId, accountId, expectedProfileVersion);
+    if (!this.remote) return;
+    const retained = new Set<string>();
+    this.preparedMedia.set(accountId, retained);
+    for (const item of media) {
+      if (retained.has(item.storageKey)) continue;
+      const currentWorkspace = this.mediaWorkspaceOwners.get(item.storageKey);
+      if (currentWorkspace && currentWorkspace !== workspaceId) {
+        throw new Error("Publishing media is already prepared for another workspace.");
+      }
+      retained.add(item.storageKey);
+      this.mediaWorkspaceOwners.set(item.storageKey, workspaceId);
+      this.mediaReferenceCounts.set(item.storageKey, (this.mediaReferenceCounts.get(item.storageKey) || 0) + 1);
+      const target = this.mediaFilePath(item.storageKey);
+      let hydration = this.mediaHydrations.get(item.storageKey);
+      if (!hydration) {
+        hydration = (async () => {
+          try {
+            const exists = await stat(target).then(value => value.isFile()).catch(() => false);
+            if (!exists) await this.remote!.downloadMedia(workspaceId, item.storageKey, target);
+          } finally {
+            this.mediaHydrations.delete(item.storageKey);
+          }
+        })();
+        this.mediaHydrations.set(item.storageKey, hydration);
+      }
+      await hydration;
+    }
   }
 
   async cancelDevelopmentMediaUpload(workspaceId: string, uploadId: string) {
@@ -232,16 +370,28 @@ export class AutomationFileStore {
     return this.inside(this.resultsRoot, this.publishingPreviewStorageKey(jobId));
   }
 
-  async storePublishingPreview(jobId: string, screenshot: Buffer) {
+  async storePublishingPreview(jobId: string, screenshot: Buffer, workspaceId = "") {
     if (!screenshot.length || screenshot.length > 10 * 1024 * 1024) {
       throw new Error("The publishing preview screenshot must be between 1 byte and 10 MB.");
     }
     const storageKey = this.publishingPreviewStorageKey(jobId);
     await writeFile(this.publishingPreviewPath(jobId), screenshot, { mode: 0o600 });
+    if (this.remote) {
+      if (!workspaceId.trim()) throw new Error("A workspace is required to store a production diagnostic artifact.");
+      await this.remote.uploadArtifact(workspaceId, storageKey, this.publishingPreviewPath(jobId), "image/jpeg");
+    }
     return storageKey;
   }
 
-  async readPublishingPreview(jobId: string) {
+  async readPublishingPreview(jobId: string, workspaceId = "") {
+    if (this.remote) {
+      if (!workspaceId.trim()) throw new Error("A workspace is required to read a production diagnostic artifact.");
+      await this.remote.downloadArtifact(
+        workspaceId,
+        this.publishingPreviewStorageKey(jobId),
+        this.publishingPreviewPath(jobId),
+      );
+    }
     return readFile(this.publishingPreviewPath(jobId));
   }
 
@@ -250,10 +400,48 @@ export class AutomationFileStore {
     return mkdtemp(path.join(this.temporaryRoot, "scrape-"));
   }
 
+  scrapingResultStorageKey(jobId: string) {
+    if (!jobId.trim()) throw new Error("A scraping job id is required for result storage.");
+    return `scrape_${createHash("sha256").update(jobId).digest("hex").slice(0, 32)}.json`;
+  }
+
+  async storeScrapingResult(workspaceId: string, jobId: string, result: unknown) {
+    const storageKey = this.scrapingResultStorageKey(jobId);
+    const target = this.inside(this.resultsRoot, storageKey);
+    const serialized = Buffer.from(JSON.stringify(result), "utf8");
+    if (serialized.length > 256 * 1024 * 1024) throw new Error("The scraping result exceeds the 256 MB storage limit.");
+    await writeFile(target, serialized, { mode: 0o600 });
+    if (this.remote) await this.remote.uploadArtifact(workspaceId, storageKey, target, "application/json");
+    return storageKey;
+  }
+
+  async readScrapingResult(workspaceId: string, jobId: string) {
+    const storageKey = this.scrapingResultStorageKey(jobId);
+    const target = this.inside(this.resultsRoot, storageKey);
+    if (this.remote) await this.remote.downloadArtifact(workspaceId, storageKey, target);
+    return JSON.parse(await readFile(target, "utf8")) as unknown;
+  }
+
   async removeTemporaryDirectory(directory: string) {
     const safeDirectory = this.inside(this.temporaryRoot, path.relative(this.temporaryRoot, path.resolve(directory)));
     if (safeDirectory === this.temporaryRoot) throw new Error("Refusing to remove the temporary storage root.");
     await rm(safeDirectory, { recursive: true, force: true });
+  }
+
+  private async releasePreparedMedia(accountId: string) {
+    const retained = this.preparedMedia.get(accountId);
+    this.preparedMedia.delete(accountId);
+    if (!retained) return;
+    for (const storageKey of retained) {
+      const remaining = Math.max(0, (this.mediaReferenceCounts.get(storageKey) || 1) - 1);
+      if (remaining) {
+        this.mediaReferenceCounts.set(storageKey, remaining);
+      } else {
+        this.mediaReferenceCounts.delete(storageKey);
+        this.mediaWorkspaceOwners.delete(storageKey);
+        await rm(this.mediaFilePath(storageKey), { force: true });
+      }
+    }
   }
 
   private inside(root: string, child: string) {

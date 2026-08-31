@@ -481,3 +481,76 @@ test("the live worker pool runs different accounts concurrently but serializes e
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("graceful worker shutdown stops claiming and lets active work finish within its grace period", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "agenticthat-live-shutdown-"));
+  const config = loadAutomationConfig({ SERVER_ARCHITECTURE_DATA_DIR: directory }, directory);
+  const files = new AutomationFileStore(config.dataDirectory);
+  await files.initialize();
+  const database = createAutomationDatabase(config);
+  migrateAutomationSchema(database);
+  const store = new AutomationJobStore(database, files);
+  let releaseExecution: () => void = () => undefined;
+  let worker: AutomationPublishingLiveWorker | null = null;
+
+  try {
+    const account = await store.createAccount({
+      workspaceId: "shutdown-workspace",
+      platform: "facebook",
+      displayName: "Graceful shutdown account",
+    });
+    database.prepare("UPDATE social_accounts SET status = 'CONNECTED' WHERE id = ?").run(account.id);
+    const job = store.createPublishingJob({
+      workspaceId: "shutdown-workspace",
+      accountId: account.id,
+      scheduledAt: new Date(Date.now() - 60_000).toISOString(),
+      originalTimezone: "UTC",
+      caption: "Intentional graceful shutdown test",
+      media: [],
+      idempotencyKey: "graceful-shutdown-job",
+    }, "LIVE", "LOCAL", true);
+    let signalEntered: () => void = () => undefined;
+    const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+    const release = new Promise<void>(resolve => { releaseExecution = resolve; });
+    const validator: PublishingDryRunValidator = {
+      platform: "facebook",
+      async validate() { return { valid: true, checks: ["safe test"], issues: [] }; },
+    };
+    const executor: ServerPublishingExecutor = {
+      platform: "facebook",
+      async publish(_job, _signal, onFinalActionStarting) {
+        await onFinalActionStarting();
+        signalEntered();
+        await release;
+        return { state: "PUBLISHED" };
+      },
+    };
+    worker = new AutomationPublishingLiveWorker(
+      store,
+      new Map([["facebook", validator]]),
+      new Map([["facebook", executor]]),
+      1_000,
+      "graceful_shutdown_worker",
+      undefined,
+      60_000,
+      1_000,
+    );
+    worker.start();
+    await Promise.race([
+      entered,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("Worker did not start.")), 2_000)),
+    ]);
+    let stopped = false;
+    const stopping = worker.stop().then(() => { stopped = true; });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal(stopped, false, "shutdown must wait for the active fenced job");
+    releaseExecution();
+    await stopping;
+    assert.equal(store.getPublishingJob("shutdown-workspace", job.id)?.state, "PUBLISHED");
+  } finally {
+    releaseExecution();
+    await worker?.stop();
+    database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

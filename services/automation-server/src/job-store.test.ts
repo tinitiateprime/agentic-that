@@ -94,6 +94,44 @@ test("SQLite stores accounts and safely leases publishing jobs", async () => {
     assert.equal(finished.state, "PUBLISHED");
     assert.equal(store.heartbeatPublishingJob(job.id, "worker-a", claimed!.fencingToken!, 60), false);
 
+    const uncertainJob = store.createPublishingJob({
+      ...request,
+      idempotencyKey: "sqlite-uncertain-resolution",
+    }, "LIVE", "LOCAL", true);
+    const uncertainClaim = store.claimDuePublishingJob("uncertain-worker", 60)!;
+    assert.equal(uncertainClaim.id, uncertainJob.id);
+    store.markPublishingFinalActionStarting(uncertainJob.id, "uncertain-worker", uncertainClaim.fencingToken!);
+    store.finishPublishingJob({
+      jobId: uncertainJob.id,
+      workerId: "uncertain-worker",
+      fencingToken: uncertainClaim.fencingToken!,
+      state: "UNCERTAIN",
+      errorCode: "TEST_CONFIRMATION_MISSING",
+      errorMessage: "Verify the platform before retrying.",
+    });
+    assert.equal(store.resolveUncertainPublishingJob(uncertainJob.id, {
+      workspaceId: "another-workspace",
+      resolvedBy: "operator-one",
+      resolution: "PUBLISHED",
+      note: "Verified in platform history.",
+    }).status, "NOT_FOUND");
+    const resolution = store.resolveUncertainPublishingJob(uncertainJob.id, {
+      workspaceId: "test-workspace",
+      resolvedBy: "operator-one",
+      resolution: "PUBLISHED",
+      note: "Verified in platform history.",
+      platformPostId: "verified-sqlite-post",
+    });
+    assert.equal(resolution.status, "RESOLVED");
+    assert.equal(resolution.job?.resolvedBy, "operator-one");
+    assert.equal(resolution.job?.state, "PUBLISHED");
+    assert.equal(store.resolveUncertainPublishingJob(uncertainJob.id, {
+      workspaceId: "test-workspace",
+      resolvedBy: "operator-two",
+      resolution: "FAILED",
+      note: "A second resolution must not overwrite the first.",
+    }).status, "CONFLICT");
+
     const validationClaimed = store.claimDuePublishingJob("validation-worker", 60, "DRY_RUN", "LOCAL");
     assert.equal(validationClaimed?.validationStage, "LOCAL");
     const expiredAt = new Date(0).toISOString();

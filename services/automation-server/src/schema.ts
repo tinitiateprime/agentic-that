@@ -29,6 +29,11 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         account_id       TEXT PRIMARY KEY REFERENCES social_accounts(id) ON DELETE CASCADE,
         storage_key      TEXT NOT NULL UNIQUE,
         version          INTEGER NOT NULL DEFAULT 0,
+        blob_etag        TEXT,
+        content_sha256   TEXT,
+        encrypted_size_bytes INTEGER,
+        encryption_key_id TEXT,
+        encryption_key_version TEXT,
         encryption_state TEXT NOT NULL DEFAULT 'LOCAL_DEVELOPMENT_ONLY'
                          CHECK (encryption_state IN ('LOCAL_DEVELOPMENT_ONLY', 'ENCRYPTED')),
         last_saved_at    TEXT,
@@ -80,6 +85,9 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         error_code        TEXT,
         error_message     TEXT,
         progress_message  TEXT,
+        resolved_by       TEXT,
+        resolved_at       TEXT,
+        resolution_note   TEXT,
         created_at        TEXT NOT NULL,
         updated_at        TEXT NOT NULL,
         UNIQUE (workspace_id, idempotency_key)
@@ -114,9 +122,16 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
         workspace_id  TEXT NOT NULL,
         platform      TEXT NOT NULL CHECK (platform IN ('instagram', 'facebook')),
         public_url    TEXT NOT NULL,
+        input         TEXT NOT NULL DEFAULT '{}',
+        idempotency_key TEXT,
         state         TEXT NOT NULL DEFAULT 'SCHEDULED'
                       CHECK (state IN ('SCHEDULED', 'RUNNING', 'COMPLETE', 'FAILED', 'CANCELLED')),
         result_key    TEXT,
+        scheduled_at  TEXT,
+        lease_owner   TEXT,
+        lease_expires_at TEXT,
+        fencing_token INTEGER,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
         error_code    TEXT,
         error_message TEXT,
         created_at    TEXT NOT NULL,
@@ -178,6 +193,51 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
       `);
     }
     const publishingColumns = database.prepare("PRAGMA table_info(publishing_jobs)").all() as Array<{ name: string }>;
+    const scrapingColumns = database.prepare("PRAGMA table_info(scraping_jobs)").all() as Array<{ name: string }>;
+    if (!scrapingColumns.some(column => column.name === "input")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN input TEXT NOT NULL DEFAULT '{}'`);
+    }
+    if (!scrapingColumns.some(column => column.name === "idempotency_key")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN idempotency_key TEXT`);
+    }
+    if (!scrapingColumns.some(column => column.name === "scheduled_at")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN scheduled_at TEXT`);
+      database.exec(`UPDATE scraping_jobs SET scheduled_at = created_at WHERE scheduled_at IS NULL`);
+    }
+    if (!scrapingColumns.some(column => column.name === "lease_owner")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN lease_owner TEXT`);
+    }
+    if (!scrapingColumns.some(column => column.name === "lease_expires_at")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN lease_expires_at TEXT`);
+    }
+    if (!scrapingColumns.some(column => column.name === "fencing_token")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN fencing_token INTEGER`);
+    }
+    if (!scrapingColumns.some(column => column.name === "attempt_count")) {
+      database.exec(`ALTER TABLE scraping_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`);
+    }
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS scraping_jobs_workspace_idempotency_idx
+      ON scraping_jobs (workspace_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS scraping_jobs_due_idx
+      ON scraping_jobs (state, scheduled_at, created_at)
+    `);
+    const profileColumns = database.prepare("PRAGMA table_info(browser_profiles)").all() as Array<{ name: string }>;
+    if (!profileColumns.some(column => column.name === "blob_etag")) {
+      database.exec(`ALTER TABLE browser_profiles ADD COLUMN blob_etag TEXT`);
+    }
+    if (!profileColumns.some(column => column.name === "content_sha256")) {
+      database.exec(`ALTER TABLE browser_profiles ADD COLUMN content_sha256 TEXT`);
+    }
+    if (!profileColumns.some(column => column.name === "encrypted_size_bytes")) {
+      database.exec(`ALTER TABLE browser_profiles ADD COLUMN encrypted_size_bytes INTEGER`);
+    }
+    if (!profileColumns.some(column => column.name === "encryption_key_id")) {
+      database.exec(`ALTER TABLE browser_profiles ADD COLUMN encryption_key_id TEXT`);
+    }
+    if (!profileColumns.some(column => column.name === "encryption_key_version")) {
+      database.exec(`ALTER TABLE browser_profiles ADD COLUMN encryption_key_version TEXT`);
+    }
     if (!publishingColumns.some(column => column.name === "execution_mode")) {
       database.exec(`
         ALTER TABLE publishing_jobs
@@ -203,6 +263,15 @@ export function migrateAutomationSchema(database: AutomationDatabase) {
     }
     if (!publishingColumns.some(column => column.name === "platform_options")) {
       database.exec(`ALTER TABLE publishing_jobs ADD COLUMN platform_options TEXT NOT NULL DEFAULT '{}'`);
+    }
+    if (!publishingColumns.some(column => column.name === "resolved_by")) {
+      database.exec(`ALTER TABLE publishing_jobs ADD COLUMN resolved_by TEXT`);
+    }
+    if (!publishingColumns.some(column => column.name === "resolved_at")) {
+      database.exec(`ALTER TABLE publishing_jobs ADD COLUMN resolved_at TEXT`);
+    }
+    if (!publishingColumns.some(column => column.name === "resolution_note")) {
+      database.exec(`ALTER TABLE publishing_jobs ADD COLUMN resolution_note TEXT`);
     }
     database.exec(`
       CREATE INDEX IF NOT EXISTS publishing_jobs_mode_due_idx

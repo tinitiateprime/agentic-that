@@ -32,7 +32,7 @@
     "server-architecture:preflight": "node --env-file-if-exists=services/automation-server/.env.local --import tsx services/automation-server/src/preflight.ts",
     "server-architecture:status": "node --env-file-if-exists=services/automation-server/.env.local --import tsx services/automation-server/src/status.ts",
     "server-architecture:build": "tsc --noEmit -p services/automation-server/tsconfig.json",
-    "test:server-architecture": "node --import tsx --test services/automation-server/src/config.test.ts services/automation-server/src/contracts.test.ts services/automation-server/src/database.test.ts services/automation-server/src/job-store.test.ts services/automation-server/src/login-browser.test.ts services/automation-server/src/login-manager.test.ts services/automation-server/src/profile-store.test.ts services/automation-server/src/publishing-dry-run-worker.test.ts services/automation-server/src/publishing-preview-worker.test.ts services/automation-server/src/publishing-live-worker.test.ts services/automation-server/src/server.test.ts",
+    "test:server-architecture": "node --import tsx --test services/automation-server/src/config.test.ts services/automation-server/src/contracts.test.ts services/automation-server/src/database.test.ts services/automation-server/src/job-store.test.ts services/automation-server/src/login-browser.test.ts services/automation-server/src/login-manager.test.ts services/automation-server/src/profile-encryption.test.ts services/automation-server/src/profile-store.test.ts services/automation-server/src/remote-storage-orchestration.test.ts services/automation-server/src/publishing-dry-run-worker.test.ts services/automation-server/src/publishing-preview-worker.test.ts services/automation-server/src/publishing-live-worker.test.ts services/automation-server/src/scraping-worker.test.ts services/automation-server/src/server.test.ts services/automation-server/src/postgres-integration.test.ts",
     "server-architecture:check": "npm run test:server-architecture && npm run server-architecture:build",
     "test:publishing": "node --import tsx --test lib/companion-version.test.js lib/database-document-store.test.js scripts/publishing-dual-engine.test.mjs scripts/publishing-extension-trust.test.mjs src/platform/server/automation-server-bridge.test.js src/platform/server/publishing-central-store.test.js src/platform/server/service-request-auth.test.js services/publishing/queue-runner/server/content-preflight.test.ts services/publishing/queue-runner/server/external-browser-layout.test.ts services/publishing/queue-runner/server/manual-login.test.ts services/publishing/queue-runner/server/publisher-ui-guards.test.ts services/publishing/queue-runner/server/publishing-api.test.ts services/publishing/queue-runner/server/risk-classifier.test.ts services/publishing/queue-runner/server/safety-governor.test.ts services/publishing/queue-runner/server/session-storage.test.ts && npm run publishing:extension:validate && node scripts/build-publishing-companion-runtime.mjs",
     "test:instagram": "node --import tsx --test services/scraping/background-jobs.test.ts services/scraping/browser-runtime.test.ts services/scraping/companion-resource-scheduler.test.ts services/scraping/instagram/src/scraper.test.ts services/scraping/instagram/src/companion-jobs.test.ts services/scraping/instagram/src/growth-advisor.test.ts services/scraping/instagram/src/growth-advisor-jobs.test.ts services/scraping/instagram/console/src/profileComparison.test.js",
@@ -61,6 +61,9 @@
     "smoke:ubuntu": "node scripts/smoke-ubuntu.mjs"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.2",
+    "@azure/keyvault-keys": "^4.10.2",
+    "@azure/storage-blob": "^12.33.0",
     "@fontsource/roboto": "^5.3.0",
     "@netlify/blobs": "^10.7.12",
     "@netlify/functions": "^5.3.0",
@@ -101,6 +104,7 @@
     "@types/react": "19.2.17",
     "concurrently": "^9.2.4",
     "sharp": "^0.35.3",
+    "tar": "^7.5.22",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.23.0",
     "typescript": "5.8.2"

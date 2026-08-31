@@ -62,6 +62,33 @@ export const publishingJobStateSchema = z.enum([
 ]);
 export type PublishingJobState = z.infer<typeof publishingJobStateSchema>;
 
+export const scrapingPlatformSchema = z.enum(["instagram", "facebook"]);
+export const scrapingJobStateSchema = z.enum(["SCHEDULED", "RUNNING", "COMPLETE", "FAILED", "CANCELLED"]);
+export type ScrapingJobState = z.infer<typeof scrapingJobStateSchema>;
+
+export const scrapingInputSchema = z.object({
+  query: z.string().trim().min(1).max(2_000),
+  inputMode: z.enum(["profile", "keyword", "profile_url", "post_url"]).optional(),
+  profileType: z.enum(["page", "public_profile"]).optional(),
+  maxResults: z.number().int().min(1).max(50).default(10),
+  collectionMode: z.enum(["latest", "range", "engagement"]).default("latest"),
+  recentDays: z.number().int().min(1).max(365).default(7),
+  rangeType: z.enum(["date", "month", "year"]).optional(),
+  rangeFrom: z.string().trim().max(40).optional(),
+  rangeTo: z.string().trim().max(40).optional(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840).default(0),
+  skipComments: z.boolean().optional(),
+  autoExpandDays: z.boolean().optional(),
+  maxAutoExpandDays: z.number().int().min(1).max(365).optional(),
+}).strict();
+
+export const createScrapingJobSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(160),
+  platform: scrapingPlatformSchema,
+  input: scrapingInputSchema,
+  idempotencyKey: z.string().trim().min(8).max(200),
+});
+
 export const createAccountSchema = z.object({
   workspaceId: z.string().trim().min(1).max(160),
   platform: socialPlatformSchema,
@@ -102,6 +129,15 @@ export const createPublishingJobSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(200),
 }).refine(value => value.caption.trim() || value.media.length > 0, {
   message: "A publishing job requires a caption or media.",
+});
+
+export const resolveUncertainPublishingJobSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(160),
+  resolvedBy: z.string().trim().min(1).max(200),
+  resolution: z.enum(["PUBLISHED", "FAILED"]),
+  note: z.string().trim().min(3).max(1_000),
+  platformPostId: z.string().trim().max(500).optional(),
+  platformPostUrl: z.string().url().max(2_000).optional(),
 });
 
 const allowedTransitions: Record<PublishingJobState, ReadonlySet<PublishingJobState>> = {

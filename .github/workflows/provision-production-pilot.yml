@@ -1,0 +1,79 @@
+name: Provision Production Pilot Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment and isolated Azure target
+        required: true
+        type: choice
+        options: [staging, production]
+      backups_verified:
+        description: Supabase backup and restore drill is verified
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infrastructure-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse unverified production recovery
+        if: inputs.environment == 'production' && !inputs.backups_verified
+        run: |
+          echo "Production provisioning requires a completed Supabase backup/restore drill." >&2
+          exit 1
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate Bicep
+        run: az bicep build --file deploy/azure/main.bicep
+      - name: Create isolated resource group
+        run: |
+          az group create \
+            --name "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --tags application=agenticthat environment="${{ inputs.environment }}" managed-by=bicep
+      - name: Provision Azure resources
+        id: deploy
+        env:
+          WEBSITE_DATABASE_URL: ${{ secrets.WEBSITE_DATABASE_URL }}
+          AUTOMATION_DATABASE_URL: ${{ secrets.SERVER_AUTOMATION_DATABASE_URL }}
+          AUTOMATION_TOKEN: ${{ secrets.SERVER_AUTOMATION_INTERNAL_TOKEN }}
+          WEBSITE_SETTINGS: ${{ secrets.WEBSITE_SECRET_SETTINGS_JSON }}
+          ALERT_EMAIL: ${{ vars.OPERATIONS_ALERT_EMAIL }}
+        run: |
+          az deployment group create \
+            --name "agenticthat-${{ inputs.environment }}-${{ github.run_id }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file deploy/azure/main.bicep \
+            --parameters environmentName="${{ inputs.environment }}" \
+              backupsConfigured="${{ inputs.backups_verified }}" \
+              websiteDatabaseUrl="$WEBSITE_DATABASE_URL" \
+              automationDatabaseUrl="$AUTOMATION_DATABASE_URL" \
+              automationInternalToken="$AUTOMATION_TOKEN" \
+              websiteSecretSettings="$WEBSITE_SETTINGS" \
+              alertEmail="$ALERT_EMAIL" \
+            --query properties.outputs \
+            --output json > deployment-outputs.json
+      - name: Publish non-secret resource outputs
+        run: |
+          {
+            echo '### Azure resources'
+            echo '```json'
+            cat deployment-outputs.json
+            echo '```'
+            echo 'Copy these names/URLs into the matching GitHub environment variables before running deploy workflows.'
+          } >> "$GITHUB_STEP_SUMMARY"

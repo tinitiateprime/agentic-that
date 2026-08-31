@@ -250,7 +250,7 @@ export class PlaywrightInstagramPublishingExecutor implements ServerPublishingEx
       if (signal.aborted || error instanceof InstagramPreviewLoginRequiredError) throw error;
       if (finalActionAttempted && activePage) {
         const screenshot = await activePage.screenshot({ type: "jpeg", quality: 75 }).catch(() => null);
-        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot, job.workspaceId).catch(() => undefined);
       }
       if (deadlineExpired) throw new Error(`Instagram did not finish ${stage} within five minutes.`);
       throw error;

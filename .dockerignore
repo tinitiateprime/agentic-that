@@ -1,0 +1,15 @@
+.git
+.github
+.next
+.netlify
+.server-data
+artifacts
+node_modules
+apps/publishing-companion-desktop/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+coverage
+deploy/ubuntu
+docs

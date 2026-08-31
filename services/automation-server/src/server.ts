@@ -9,6 +9,24 @@ import { AutomationLoginManager } from "./login-manager.ts";
 import { AutomationLoginStore } from "./login-store.ts";
 import { AutomationFileStore } from "./profile-store.ts";
 import { automationSchemaReady, migrateAutomationSchema } from "./schema.ts";
+import { AzureAutomationRemoteStorage } from "./remote-storage.ts";
+import {
+  automationPostgresReady,
+  closeAutomationPostgres,
+  createAutomationPostgres,
+  migrateAutomationPostgres,
+  type AutomationPostgres,
+} from "./postgres-database.ts";
+import { PostgresAutomationJobStore } from "./postgres-job-store.ts";
+import { PostgresAutomationLoginStore } from "./postgres-login-store.ts";
+import type { AutomationJobStoreContract, AutomationLoginStoreContract } from "./store-contracts.ts";
+import type { AutomationDatabase } from "./database.ts";
+import {
+  AutomationScrapingWorker,
+  FacebookServerScrapingExecutor,
+  InstagramServerScrapingExecutor,
+  type ServerScrapingExecutor,
+} from "./scraping-worker.ts";
 import { InstagramPublishingDryRunValidator } from "./instagram-dry-run.ts";
 import { PlaywrightInstagramPreviewExecutor } from "./instagram-preview.ts";
 import { PlaywrightInstagramPublishingExecutor } from "./instagram-live.ts";
@@ -27,22 +45,45 @@ import type { PublishingDryRunValidator, ServerPublishingExecutor } from "./exec
 
 export async function startAutomationServer() {
   const config = loadAutomationConfig();
-  const files = new AutomationFileStore(config.dataDirectory, config.mediaUploadMaxBytes);
+  const remoteStorage = config.storageBackend === "azure"
+    ? AzureAutomationRemoteStorage.fromConfig(config, config.dataDirectory)
+    : undefined;
+  const files = new AutomationFileStore(config.dataDirectory, config.mediaUploadMaxBytes, remoteStorage);
   await files.initialize();
+  await remoteStorage?.assertReady();
 
-  assertSafeAutomationDatabase(config);
-  const database = createAutomationDatabase(config);
-  if (config.autoMigrate) migrateAutomationSchema(database);
-  const databaseReady = automationSchemaReady(database);
-  const store = databaseReady ? new AutomationJobStore(database, files) : null;
+  let sqlite: AutomationDatabase | null = null;
+  let postgres: AutomationPostgres | null = null;
+  let store: AutomationJobStoreContract | null = null;
+  let loginStore: AutomationLoginStoreContract | null = null;
+  let databaseReady = false;
+  if (config.databaseEngine === "postgres") {
+    postgres = createAutomationPostgres(config);
+    if (config.autoMigrate) await migrateAutomationPostgres(postgres);
+    databaseReady = await automationPostgresReady(postgres);
+    if (databaseReady) {
+      store = new PostgresAutomationJobStore(postgres, files);
+      loginStore = new PostgresAutomationLoginStore(postgres);
+    }
+  } else {
+    assertSafeAutomationDatabase(config);
+    sqlite = createAutomationDatabase(config);
+    if (config.autoMigrate) migrateAutomationSchema(sqlite);
+    databaseReady = automationSchemaReady(sqlite);
+    if (databaseReady) {
+      store = new AutomationJobStore(sqlite, files);
+      loginStore = new AutomationLoginStore(sqlite);
+    }
+  }
   const loginManager = databaseReady
     ? new AutomationLoginManager(
-        new AutomationLoginStore(database),
+        loginStore!,
         files,
         new PlaywrightLoginBrowserLauncher(config.browserExecutablePath, config.loginTimeoutMs),
+        config.loginMaxConcurrent,
       )
     : null;
-  loginManager?.recoverInterruptedSessions();
+  await loginManager?.recoverInterruptedSessions();
   const publishingDryRunWorker = store && config.publishingDryRunEnabled
     ? new AutomationPublishingDryRunWorker(
         store,
@@ -54,6 +95,10 @@ export async function startAutomationServer() {
           ["youtube", new YouTubePublishingDryRunValidator(files)],
         ]),
         config.workerPollMs,
+        undefined,
+        files,
+        config.jobTimeoutMs,
+        config.shutdownGraceMs,
       )
     : null;
   const publishingPreviewWorker = store && config.publishingPreviewEnabled
@@ -63,6 +108,9 @@ export async function startAutomationServer() {
         new Map([["instagram", new InstagramPublishingDryRunValidator(files)]]),
         new Map([["instagram", new PlaywrightInstagramPreviewExecutor(files, config.browserExecutablePath)]]),
         config.workerPollMs,
+        undefined,
+        config.jobTimeoutMs,
+        config.shutdownGraceMs,
       )
     : null;
   const publishingLiveWorkerPool = store && livePublishingEnabled(config)
@@ -84,10 +132,45 @@ export async function startAutomationServer() {
         ]),
         config.workerPollMs,
         config.liveWorkerCount,
+        files,
+        config.jobTimeoutMs,
+        config.shutdownGraceMs,
+      )
+    : null;
+  const scrapingWorker = store && config.scrapingEnabled
+    ? new AutomationScrapingWorker(
+        store,
+        files,
+        new Map<string, ServerScrapingExecutor>([
+          ["instagram", new InstagramServerScrapingExecutor()],
+          ["facebook", new FacebookServerScrapingExecutor()],
+        ]),
+        config.workerPollMs,
+        config.jobTimeoutMs,
+        config.shutdownGraceMs,
       )
     : null;
 
-  const app = createAutomationApp({ config, databaseReady, store, loginManager, files });
+  let draining = false;
+  let drainPromise: Promise<void> | null = null;
+  const drain = () => {
+    if (drainPromise) return drainPromise;
+    draining = true;
+    drainPromise = Promise.all([
+      publishingDryRunWorker?.stop(),
+      publishingPreviewWorker?.stop(),
+      publishingLiveWorkerPool?.stop(),
+      scrapingWorker?.stop(),
+      loginManager?.shutdown(),
+    ]).then(() => undefined);
+    return drainPromise;
+  };
+  const lifecycle = { isDraining: () => draining, drain };
+  const dependencyReady = async () => {
+    if (postgres) return automationPostgresReady(postgres);
+    return databaseReady;
+  };
+  const app = createAutomationApp({ config, databaseReady, dependencyReady, store, loginManager, files, lifecycle });
   const server = await new Promise<Server>((resolve, reject) => {
     const listener = app.listen(config.port, config.host, () => resolve(listener));
     listener.once("error", reject);
@@ -95,19 +178,18 @@ export async function startAutomationServer() {
   publishingDryRunWorker?.start();
   publishingPreviewWorker?.start();
   publishingLiveWorkerPool?.start();
+  scrapingWorker?.start();
 
   const shutdown = async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
-    await publishingDryRunWorker?.stop();
-    await publishingPreviewWorker?.stop();
-    await publishingLiveWorkerPool?.stop();
-    await loginManager?.shutdown();
-    database.close();
+    await drain();
+    sqlite?.close();
+    if (postgres) await closeAutomationPostgres(postgres);
   };
 
   process.stdout.write(
     `AgenticThat automation server listening on http://${config.host}:${config.port} ` +
-      `(publishing ${livePublishingEnabled(config) ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, database ${databaseReady ? "ready" : "not ready"}).\n`,
+      `(publishing ${livePublishingEnabled(config) ? `enabled with ${config.liveWorkerCount} worker${config.liveWorkerCount === 1 ? "" : "s"}` : "disabled"}, ${config.databaseEngine} database ${databaseReady ? "ready" : "not ready"}).\n`,
   );
   return { server, config, shutdown };
 }

@@ -5,10 +5,13 @@ import {
   automationId,
   createAccountSchema,
   createPublishingJobSchema,
+  createScrapingJobSchema,
   publishingJobStateSchema,
+  resolveUncertainPublishingJobSchema,
   updateAccountSchema,
   type PublishingJobState,
   type SocialPlatform,
+  type ScrapingJobState,
 } from "./contracts.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
 
@@ -47,8 +50,32 @@ type PublishingJobRow = {
   error_code: string | null;
   error_message: string | null;
   progress_message: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  resolution_note: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type ScrapingJobRow = {
+  id: string;
+  workspace_id: string;
+  platform: "instagram" | "facebook";
+  public_url: string;
+  input: string;
+  idempotency_key: string;
+  state: ScrapingJobState;
+  result_key: string | null;
+  scheduled_at: string;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  fencing_token: number | null;
+  attempt_count: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
 };
 
 class PublishingLeaseLostError extends Error {}
@@ -103,8 +130,32 @@ function publicJob(row: PublishingJobRow) {
     errorCode: row.error_code,
     errorMessage: row.error_message,
     progressMessage: row.progress_message,
+    resolvedBy: row.resolved_by,
+    resolvedAt: timestamp(row.resolved_at),
+    resolutionNote: row.resolution_note,
     createdAt: timestamp(row.created_at),
     updatedAt: timestamp(row.updated_at),
+  };
+}
+
+function publicScrapingJob(row: ScrapingJobRow) {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    platform: row.platform,
+    input: JSON.parse(row.input) as unknown,
+    state: row.state,
+    resultKey: row.result_key,
+    scheduledAt: timestamp(row.scheduled_at),
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: timestamp(row.lease_expires_at),
+    fencingToken: row.fencing_token,
+    attemptCount: row.attempt_count,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+    completedAt: timestamp(row.completed_at),
   };
 }
 
@@ -192,7 +243,7 @@ export class AutomationJobStore {
       }
       return { ok: true, archived: history > 0 };
     });
-    await this.files.removeDevelopmentProfile(accountId);
+    await this.files.removeDevelopmentProfile(accountId, workspaceId);
     return result;
   }
 
@@ -534,6 +585,52 @@ export class AutomationJobStore {
     return row ? { version: row.version, lastSavedAt: row.last_saved_at } : null;
   }
 
+  recordPublishingProfileSaved(input: {
+    jobId: string;
+    workerId: string;
+    fencingToken: number;
+    expectedVersion: number;
+    savedVersion: number;
+    blobEtag?: string | null;
+    contentSha256?: string;
+    encryptedSizeBytes?: number;
+    encryptionKeyId?: string;
+    encryptionKeyVersion?: string;
+  }) {
+    if (input.savedVersion !== input.expectedVersion + 1) {
+      throw new Error("The saved browser profile version is not the next expected version.");
+    }
+    return withImmediateTransaction(this.database, () => {
+      const job = this.database.prepare(`
+        SELECT account_id FROM publishing_jobs
+        WHERE id = ? AND lease_owner = ? AND fencing_token = ?
+          AND state IN ('PUBLISHING', 'VERIFYING')
+      `).get(input.jobId, input.workerId, input.fencingToken) as { account_id: string } | undefined;
+      if (!job) throw new Error("The publishing lease was lost before the browser profile was saved.");
+      const updatedAt = now();
+      const updated = this.database.prepare(`
+        UPDATE browser_profiles
+        SET version = ?, blob_etag = ?, content_sha256 = ?, encrypted_size_bytes = ?,
+            encryption_key_id = ?, encryption_key_version = ?, encryption_state = 'ENCRYPTED',
+            last_saved_at = ?, updated_at = ?
+        WHERE account_id = ? AND version = ?
+      `).run(
+        input.savedVersion,
+        input.blobEtag || null,
+        input.contentSha256 || null,
+        input.encryptedSizeBytes ?? null,
+        input.encryptionKeyId || null,
+        input.encryptionKeyVersion || null,
+        updatedAt,
+        updatedAt,
+        job.account_id,
+        input.expectedVersion,
+      );
+      if (updated.changes !== 1) throw new Error("The browser profile database version changed before it was saved.");
+      return { version: input.savedVersion, lastSavedAt: updatedAt };
+    });
+  }
+
   completePublishingDryRun(input: {
     jobId: string;
     workerId: string;
@@ -776,6 +873,66 @@ export class AutomationJobStore {
     });
   }
 
+  resolveUncertainPublishingJob(jobId: string, input: unknown) {
+    const value = resolveUncertainPublishingJobSchema.parse(input);
+    return withImmediateTransaction(this.database, () => {
+      const current = this.database.prepare(`
+        SELECT job.*, account.platform AS platform
+        FROM publishing_jobs job
+        JOIN social_accounts account ON account.id = job.account_id
+        WHERE job.id = ? AND job.workspace_id = ?
+      `).get(jobId, value.workspaceId) as PublishingJobRow | undefined;
+      if (!current) return { status: "NOT_FOUND" as const, job: null };
+      if (current.state !== "UNCERTAIN") {
+        return { status: "CONFLICT" as const, job: publicJob(current) };
+      }
+      assertPublishingJobTransition(current.state, value.resolution);
+      const resolvedAt = now();
+      this.database.prepare(`
+        UPDATE publishing_jobs
+        SET state = ?, platform_post_id = COALESCE(?, platform_post_id),
+            platform_post_url = COALESCE(?, platform_post_url), error_code = NULL,
+            error_message = NULL, resolved_by = ?, resolved_at = ?,
+            resolution_note = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND state = 'UNCERTAIN'
+      `).run(
+        value.resolution,
+        value.platformPostId || null,
+        value.platformPostUrl || null,
+        value.resolvedBy,
+        resolvedAt,
+        value.note,
+        resolvedAt,
+        jobId,
+        value.workspaceId,
+      );
+      this.database.prepare(`
+        INSERT INTO job_events
+          (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'publishing', 'uncertain_resolved', ?, ?)
+      `).run(
+        automationId("event"),
+        value.workspaceId,
+        jobId,
+        JSON.stringify({
+          resolution: value.resolution,
+          resolvedBy: value.resolvedBy,
+          note: value.note,
+          platformPostId: value.platformPostId || null,
+          platformPostUrl: value.platformPostUrl || null,
+        }),
+        resolvedAt,
+      );
+      const row = this.database.prepare(`
+        SELECT job.*, account.platform AS platform
+        FROM publishing_jobs job
+        JOIN social_accounts account ON account.id = job.account_id
+        WHERE job.id = ?
+      `).get(jobId) as PublishingJobRow;
+      return { status: "RESOLVED" as const, job: publicJob(row) };
+    });
+  }
+
   quarantineExpiredPublishingJobs() {
     return withImmediateTransaction(this.database, () => {
       const checkedAt = now();
@@ -833,5 +990,146 @@ export class AutomationJobStore {
         return publicJob(current);
       });
     });
+  }
+
+  getOperationalMetrics() {
+    const publishing = this.database.prepare(`
+      SELECT state, COUNT(*) AS count FROM publishing_jobs GROUP BY state
+    `).all() as unknown as Array<{ state: PublishingJobState; count: number }>;
+    const oldest = this.database.prepare(`
+      SELECT scheduled_at FROM publishing_jobs
+      WHERE state = 'SCHEDULED' ORDER BY scheduled_at LIMIT 1
+    `).get() as { scheduled_at: string } | undefined;
+    const accounts = this.database.prepare(`
+      SELECT status, COUNT(*) AS count FROM social_accounts GROUP BY status
+    `).all() as unknown as Array<{ status: string; count: number }>;
+    const scraping = this.database.prepare(`
+      SELECT state, COUNT(*) AS count FROM scraping_jobs GROUP BY state
+    `).all() as unknown as Array<{ state: ScrapingJobState; count: number }>;
+    return {
+      publishing: Object.fromEntries(publishing.map(item => [item.state, Number(item.count)])),
+      scraping: Object.fromEntries(scraping.map(item => [item.state, Number(item.count)])),
+      accounts: Object.fromEntries(accounts.map(item => [item.status, Number(item.count)])),
+      oldestScheduledAt: oldest?.scheduled_at || null,
+      collectedAt: now(),
+    };
+  }
+
+  createScrapingJob(input: unknown) {
+    const value = createScrapingJobSchema.parse(input);
+    const serialized = JSON.stringify(value.input);
+    const existing = this.database.prepare(`
+      SELECT * FROM scraping_jobs WHERE workspace_id = ? AND idempotency_key = ?
+    `).get(value.workspaceId, value.idempotencyKey) as ScrapingJobRow | undefined;
+    if (existing) {
+      if (existing.platform !== value.platform || existing.input !== serialized) {
+        throw new Error("The scraping idempotency key is already used by a different request.");
+      }
+      return publicScrapingJob(existing);
+    }
+    const id = automationId("scrape");
+    const createdAt = now();
+    this.database.prepare(`
+      INSERT INTO scraping_jobs
+        (id, workspace_id, platform, public_url, input, idempotency_key, scheduled_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, value.workspaceId, value.platform, value.input.query, serialized, value.idempotencyKey, createdAt, createdAt, createdAt);
+    return publicScrapingJob(this.database.prepare("SELECT * FROM scraping_jobs WHERE id = ?").get(id) as ScrapingJobRow);
+  }
+
+  listScrapingJobs(workspaceId: string, limit = 30) {
+    if (!workspaceId.trim()) throw new Error("A workspace id is required to list scraping jobs.");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Scraping job list limits must be between 1 and 100.");
+    return (this.database.prepare(`
+      SELECT * FROM scraping_jobs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?
+    `).all(workspaceId, limit) as unknown as ScrapingJobRow[]).map(publicScrapingJob);
+  }
+
+  getScrapingJob(workspaceId: string, jobId: string) {
+    const found = this.database.prepare(`SELECT * FROM scraping_jobs WHERE id = ? AND workspace_id = ?`)
+      .get(jobId, workspaceId) as ScrapingJobRow | undefined;
+    return found ? publicScrapingJob(found) : null;
+  }
+
+  claimDueScrapingJob(workerId: string, leaseSeconds = 600) {
+    if (!workerId.trim()) throw new Error("A worker id is required to claim scraping work.");
+    return withImmediateTransaction(this.database, () => {
+      const claimedAt = now();
+      const candidate = this.database.prepare(`
+        SELECT * FROM scraping_jobs
+        WHERE state = 'SCHEDULED' AND scheduled_at <= ?
+        ORDER BY scheduled_at, created_at LIMIT 1
+      `).get(claimedAt) as ScrapingJobRow | undefined;
+      if (!candidate) return null;
+      const fencingToken = (candidate.fencing_token || 0) + 1;
+      const updated = this.database.prepare(`
+        UPDATE scraping_jobs
+        SET state = 'RUNNING', lease_owner = ?, lease_expires_at = ?, fencing_token = ?,
+            attempt_count = attempt_count + 1, updated_at = ?
+        WHERE id = ? AND state = 'SCHEDULED'
+      `).run(workerId, leaseExpiry(leaseSeconds), fencingToken, claimedAt, candidate.id);
+      if (updated.changes !== 1) return null;
+      this.database.prepare(`
+        INSERT INTO job_events (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'scraping', 'claimed', ?, ?)
+      `).run(automationId("event"), candidate.workspace_id, candidate.id, JSON.stringify({ workerId, fencingToken }), claimedAt);
+      return publicScrapingJob(this.database.prepare("SELECT * FROM scraping_jobs WHERE id = ?").get(candidate.id) as ScrapingJobRow);
+    });
+  }
+
+  heartbeatScrapingJob(jobId: string, workerId: string, fencingToken: number, leaseSeconds = 600) {
+    const updatedAt = now();
+    const result = this.database.prepare(`
+      UPDATE scraping_jobs SET lease_expires_at = ?, updated_at = ?
+      WHERE id = ? AND state = 'RUNNING' AND lease_owner = ? AND fencing_token = ? AND lease_expires_at > ?
+    `).run(leaseExpiry(leaseSeconds), updatedAt, jobId, workerId, fencingToken, updatedAt);
+    return result.changes === 1;
+  }
+
+  finishScrapingJob(input: {
+    jobId: string;
+    workerId: string;
+    fencingToken: number;
+    state: "COMPLETE" | "FAILED";
+    resultKey?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }) {
+    return withImmediateTransaction(this.database, () => {
+      const current = this.database.prepare(`
+        SELECT * FROM scraping_jobs
+        WHERE id = ? AND state = 'RUNNING' AND lease_owner = ? AND fencing_token = ? AND lease_expires_at > ?
+      `).get(input.jobId, input.workerId, input.fencingToken, now()) as ScrapingJobRow | undefined;
+      if (!current) throw new Error("The scraping lease is no longer owned by this worker.");
+      const completedAt = now();
+      this.database.prepare(`
+        UPDATE scraping_jobs
+        SET state = ?, result_key = ?, error_code = ?, error_message = ?,
+            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?, completed_at = ?
+        WHERE id = ?
+      `).run(input.state, input.resultKey || null, input.errorCode || null, input.errorMessage || null, completedAt, completedAt, input.jobId);
+      this.database.prepare(`
+        INSERT INTO job_events (id, workspace_id, job_id, job_type, event_type, detail, created_at)
+        VALUES (?, ?, ?, 'scraping', ?, ?, ?)
+      `).run(automationId("event"), current.workspace_id, current.id, input.state.toLowerCase(), JSON.stringify({ fencingToken: input.fencingToken }), completedAt);
+      return publicScrapingJob(this.database.prepare("SELECT * FROM scraping_jobs WHERE id = ?").get(input.jobId) as ScrapingJobRow);
+    });
+  }
+
+  quarantineExpiredScrapingJobs() {
+    const checkedAt = now();
+    const expired = this.database.prepare(`
+      SELECT * FROM scraping_jobs WHERE state = 'RUNNING' AND lease_expires_at <= ?
+    `).all(checkedAt) as unknown as ScrapingJobRow[];
+    for (const job of expired) {
+      this.database.prepare(`
+        UPDATE scraping_jobs
+        SET state = 'FAILED', error_code = 'SCRAPING_LEASE_EXPIRED',
+            error_message = 'The scraping worker stopped before completing this job.',
+            lease_owner = NULL, lease_expires_at = NULL, updated_at = ?, completed_at = ?
+        WHERE id = ? AND state = 'RUNNING'
+      `).run(checkedAt, checkedAt, job.id);
+    }
+    return expired.length;
   }
 }

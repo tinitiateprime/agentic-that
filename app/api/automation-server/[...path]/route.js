@@ -17,7 +17,7 @@ const SERVER_MEDIA_LIMITS = new Map([
 ]);
 
 function unavailable() {
-  return Response.json({ message: "Server publishing integration is disabled." }, { status: 404 });
+  return Response.json({ message: "Server automation integration is disabled." }, { status: 404 });
 }
 
 function failure(error) {
@@ -57,20 +57,33 @@ export async function GET(request, context) {
     const config = automationServerBridgeConfig();
     if (!config) return unavailable();
     const route = await parts(context);
-    const principal = await authorizeApiCapabilityForRequest(request, "publishing.view", "publishing");
     let endpoint;
-    if (route.length === 1 && route[0] === "health") endpoint = "/health";
-    else if (route.length === 1 && route[0] === "accounts") endpoint = `/v1/accounts?${workspaceQuery(principal.workspaceId)}`;
-    else if (route.length === 1 && route[0] === "jobs") endpoint = `/v1/publishing/jobs?${workspaceQuery(principal.workspaceId, { limit: "50" })}`;
-    else if (route.length === 2 && route[0] === "sessions") {
-      await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
-      endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`;
-    } else if (route.length === 3 && route[0] === "sessions" && route[2] === "frame") {
-      await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
-      endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}/frame?${workspaceQuery(principal.workspaceId)}`;
-    } else if (route.length === 3 && route[0] === "jobs" && route[2] === "diagnostic-frame") {
-      endpoint = `/v1/publishing/jobs/${encodeURIComponent(route[1])}/diagnostic-frame?${workspaceQuery(principal.workspaceId)}`;
-    } else return unavailable();
+    if (route.length === 1 && route[0] === "health") {
+      await authorizeApiCapabilityForRequest(request, "publishing.view", "publishing");
+      endpoint = "/health";
+    } else if (route.length >= 1 && route[0] === "scraping") {
+      const principal = await authorizeApiCapabilityForRequest(request, "scraping.view", "scraping");
+      if (route.length === 1) endpoint = `/v1/scraping/jobs?${workspaceQuery(principal.workspaceId, { limit: "50" })}`;
+      else if (route.length === 2) endpoint = `/v1/scraping/jobs/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`;
+      else if (route.length === 3 && route[2] === "result") {
+        await authorizeApiCapabilityForRequest(request, "scraping.analyze", "scraping");
+        endpoint = `/v1/scraping/jobs/${encodeURIComponent(route[1])}/result?${workspaceQuery(principal.workspaceId)}`;
+      }
+    } else {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.view", "publishing");
+      if (route.length === 1 && route[0] === "accounts") endpoint = `/v1/accounts?${workspaceQuery(principal.workspaceId)}`;
+      else if (route.length === 1 && route[0] === "jobs") endpoint = `/v1/publishing/jobs?${workspaceQuery(principal.workspaceId, { limit: "50" })}`;
+      else if (route.length === 2 && route[0] === "sessions") {
+        await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
+        endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}?${workspaceQuery(principal.workspaceId)}`;
+      } else if (route.length === 3 && route[0] === "sessions" && route[2] === "frame") {
+        await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
+        endpoint = `/v1/login-sessions/${encodeURIComponent(route[1])}/frame?${workspaceQuery(principal.workspaceId)}`;
+      } else if (route.length === 3 && route[0] === "jobs" && route[2] === "diagnostic-frame") {
+        endpoint = `/v1/publishing/jobs/${encodeURIComponent(route[1])}/diagnostic-frame?${workspaceQuery(principal.workspaceId)}`;
+      }
+    }
+    if (!endpoint) return unavailable();
     return upstreamResponse(await automationServerRequest(config, endpoint));
   } catch (error) {
     return failure(error);
@@ -82,6 +95,20 @@ export async function POST(request, context) {
     const config = automationServerBridgeConfig();
     if (!config) return unavailable();
     const route = await parts(context);
+    if (route.length === 1 && route[0] === "scraping") {
+      const principal = await authorizeApiCapabilityForRequest(request, "scraping.run", "scraping");
+      const body = await jsonBody(request);
+      return upstreamResponse(await automationServerRequest(config, "/v1/scraping/jobs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: principal.workspaceId,
+          platform: body.platform,
+          input: body.input,
+          idempotencyKey: body.idempotencyKey,
+        }),
+      }));
+    }
     if (route.length === 1 && route[0] === "accounts") {
       const principal = await authorizeApiCapabilityForRequest(request, "publishing.accounts.configure", "publishing");
       const body = await jsonBody(request);
@@ -172,6 +199,26 @@ export async function POST(request, context) {
           liveConfirmation: "PUBLISH",
         }),
       }));
+    }
+    if (route.length === 3 && route[0] === "jobs" && route[2] === "resolve") {
+      const principal = await authorizeApiCapabilityForRequest(request, "publishing.schedule.manage", "publishing");
+      const body = await jsonBody(request);
+      return upstreamResponse(await automationServerRequest(
+        config,
+        `/v1/publishing/jobs/${encodeURIComponent(route[1])}/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            workspaceId: principal.workspaceId,
+            resolvedBy: principal.userId,
+            resolution: body.resolution,
+            note: body.note,
+            platformPostId: body.platformPostId,
+            platformPostUrl: body.platformPostUrl,
+          }),
+        },
+      ));
     }
     return unavailable();
   } catch (error) {

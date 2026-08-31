@@ -136,7 +136,7 @@ export class PlaywrightXPublishingExecutor implements ServerPublishingExecutor {
     } catch (error) {
       if (page && !page.isClosed()) {
         const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
-        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot, job.workspaceId).catch(() => undefined);
       }
       if (finalActionAttempted) return { state: "UNCERTAIN" as const, errorCode: "X_RESULT_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "X confirmation was unavailable." };
       throw error;

@@ -1,21 +1,27 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError } from "zod";
 import { loginBrowserInputBatchSchema, loginSurfaceSchema } from "./contracts.ts";
 import type { AutomationConfig } from "./config.ts";
-import type { AutomationJobStore } from "./job-store.ts";
+import type { AutomationJobStoreContract } from "./store-contracts.ts";
 import type { AutomationLoginManager } from "./login-manager.ts";
 import { developmentConnectPage } from "./development-ui.ts";
 import { isLoopbackHost, livePublishingEnabled, publishingPlatformEnabled } from "./config.ts";
 import { detectServerBrowserExecutable } from "./login-browser.ts";
 import type { AutomationFileStore } from "./profile-store.ts";
+import { operationalLog } from "./operational-log.ts";
 
 type AppDependencies = {
   config: AutomationConfig;
   databaseReady: boolean;
-  store: AutomationJobStore | null;
+  dependencyReady?: () => Promise<boolean>;
+  store: AutomationJobStoreContract | null;
   loginManager: AutomationLoginManager | null;
   files?: AutomationFileStore;
+  lifecycle?: {
+    isDraining(): boolean;
+    drain(): Promise<void>;
+  };
 };
 
 function safeEqual(left: string, right: string) {
@@ -24,11 +30,26 @@ function safeEqual(left: string, right: string) {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-export function createAutomationApp({ config, databaseReady, store, loginManager, files }: AppDependencies) {
+export function createAutomationApp({ config, databaseReady, dependencyReady, store, loginManager, files, lifecycle }: AppDependencies) {
   const app = express();
   const publishingLiveEnabled = livePublishingEnabled(config);
   app.disable("x-powered-by");
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
+    const suppliedCorrelationId = String(req.headers["x-correlation-id"] || "").trim();
+    const correlationId = /^[a-zA-Z0-9._:-]{8,128}$/.test(suppliedCorrelationId)
+      ? suppliedCorrelationId
+      : randomUUID();
+    res.set("x-correlation-id", correlationId);
+    const startedAt = Date.now();
+    res.once("finish", () => {
+      operationalLog(res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info", "http.request", {
+        correlationId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
+    });
     res.set({
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
@@ -37,6 +58,13 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     next();
   });
   app.use(express.json({ limit: "128kb" }));
+  app.use((req, res, next) => {
+    if (lifecycle?.isDraining() && req.method !== "GET" && req.path !== "/v1/admin/drain") {
+      res.status(503).json({ error: "The automation service is draining for deployment." });
+      return;
+    }
+    next();
+  });
 
   const browserRequired = config.loginEnabled
     || config.publishingPreviewEnabled
@@ -52,11 +80,13 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     }
   }
 
-  const readiness = () => {
+  const readiness = (dependenciesReachable: boolean) => {
     const issues: string[] = [];
     if (!databaseReady || !store) issues.push("database");
+    if (!dependenciesReachable) issues.push("dependencies");
     if (!config.internalToken) issues.push("internal-token");
     if (!browserReady) issues.push("browser");
+    if (lifecycle?.isDraining()) issues.push("draining");
     return { ready: issues.length === 0, issues };
   };
 
@@ -83,6 +113,10 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.get("/health", (_req, res) => {
+    if (config.deploymentMode === "production") {
+      res.json({ ok: true, service: "agenticthat-automation-server" });
+      return;
+    }
     res.json({
       ok: true,
       service: "agenticthat-automation-server",
@@ -90,16 +124,13 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       deploymentMode: config.deploymentMode,
       databaseConfigured: true,
       databaseReady,
-      databaseEngine: "sqlite",
-      storage: config.deploymentMode === "development"
-        ? "local-development-only"
-        : config.deploymentMode === "production"
-          ? "encrypted-single-server-production"
-          : "local-single-server-staging",
+      databaseEngine: config.databaseEngine,
+      storage: config.storageBackend === "azure" ? "azure-encrypted" : "local-development-only",
       browserReady,
       livePublishingWorkerCount: publishingLiveEnabled
         ? config.liveWorkerCount
         : 0,
+      draining: lifecycle?.isDraining() || false,
       features: {
         publishing: publishingLiveEnabled,
         instagramPublishing: publishingPlatformEnabled(config, "instagram"),
@@ -115,14 +146,25 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     });
   });
 
-  app.get("/ready", (_req, res) => {
-    const state = readiness();
+  app.get("/ready", async (_req, res) => {
+    const dependenciesReachable = dependencyReady
+      ? await dependencyReady().catch(() => false)
+      : true;
+    const state = readiness(dependenciesReachable);
+    if (config.deploymentMode === "production") {
+      res.status(state.ready ? 200 : 503).json({
+        ok: state.ready,
+        service: "agenticthat-automation-server",
+      });
+      return;
+    }
     res.status(state.ready ? 200 : 503).json({
       ok: state.ready,
       service: "agenticthat-automation-server",
       deploymentMode: config.deploymentMode,
       checks: {
         database: databaseReady && Boolean(store),
+        dependenciesReachable,
         internalToken: Boolean(config.internalToken),
         browser: browserReady,
       },
@@ -152,6 +194,26 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     next();
   };
 
+  app.get("/v1/admin/metrics", requireInternalToken, requireStore, async (_req, res) => {
+    res.json({ metrics: await store!.getOperationalMetrics() });
+  });
+
+  app.post("/v1/admin/drain", requireInternalToken, async (_req, res) => {
+    if (!lifecycle) {
+      res.status(501).json({ error: "Worker draining is unavailable in this runtime." });
+      return;
+    }
+    try {
+      await lifecycle.drain();
+      res.status(200).json({ draining: true, drained: true });
+    } catch (error) {
+      operationalLog("error", "runtime.drain_failed", {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ error: "The automation service could not drain safely." });
+    }
+  });
+
   app.get("/v1/accounts", requireInternalToken, requireStore, async (req, res) => {
     const workspaceId = String(req.query.workspaceId || "").trim();
     if (!workspaceId) {
@@ -171,7 +233,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
   });
 
   app.patch("/v1/accounts/:accountId", requireInternalToken, requireStore, async (req, res) => {
-    const account = store!.updateAccount(String(req.params.accountId), req.body);
+    const account = await store!.updateAccount(String(req.params.accountId), req.body);
     res.json({ account });
   });
 
@@ -195,7 +257,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     const surface = loginSurfaceSchema.parse(req.body?.surface || "website");
-    const session = loginManager.start(workspaceId, String(req.params.accountId), surface);
+    const session = await loginManager.start(workspaceId, String(req.params.accountId), surface);
     res.status(202).json({ session });
   });
 
@@ -247,7 +309,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       res.status(400).json({ error: "workspaceId is required." });
       return;
     }
-    const session = loginManager.get(workspaceId, String(req.params.sessionId));
+    const session = await loginManager.get(workspaceId, String(req.params.sessionId));
     if (!session) {
       res.status(404).json({ error: "Login session not found." });
       return;
@@ -288,7 +350,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       res.status(400).json({ error: "limit must be an integer between 1 and 100." });
       return;
     }
-    res.json({ jobs: store!.listPublishingJobs(workspaceId, limit) });
+    res.json({ jobs: await store!.listPublishingJobs(workspaceId, limit) });
   });
 
   app.post("/v1/publishing/jobs", requireInternalToken, requireStore, async (req, res) => {
@@ -299,7 +361,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     const workspaceId = String(req.body?.workspaceId || "").trim();
     const accountId = String(req.body?.accountId || "").trim();
     const account = workspaceId && accountId
-      ? store!.listAccounts(workspaceId).find(candidate => candidate.id === accountId)
+      ? (await store!.listAccounts(workspaceId)).find(candidate => candidate.id === accountId)
       : null;
     if (account && !publishingPlatformEnabled(config, account.platform as Parameters<typeof publishingPlatformEnabled>[1])) {
       res.status(409).json({ error: `${account.platform} server publishing is not enabled.` });
@@ -359,7 +421,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
         res.status(400).json({ error: "Workspace and filename headers are required." });
         return;
       }
-      const media = await files.storeDevelopmentMedia(req.body, fileName, mimeType);
+      const media = await files.storeDevelopmentMedia(req.body, fileName, mimeType, workspaceId);
       res.status(201).json({ media });
     },
   );
@@ -443,7 +505,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       res.status(400).json({ error: "workspaceId is required." });
       return;
     }
-    const result = store!.cancelScheduledPublishingJob(workspaceId, String(req.params.jobId));
+    const result = await store!.cancelScheduledPublishingJob(workspaceId, String(req.params.jobId));
     if (result.status === "NOT_FOUND") {
       res.status(404).json({ error: "Scheduled publishing job not found." });
       return;
@@ -453,6 +515,19 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
         error: "Only a post that is still SCHEDULED can be cancelled.",
         job: result.job,
       });
+      return;
+    }
+    res.json({ job: result.job });
+  });
+
+  app.post("/v1/publishing/jobs/:jobId/resolve", requireInternalToken, requireStore, async (req, res) => {
+    const result = await store!.resolveUncertainPublishingJob(String(req.params.jobId), req.body);
+    if (result.status === "NOT_FOUND") {
+      res.status(404).json({ error: "Publishing job not found." });
+      return;
+    }
+    if (result.status === "CONFLICT") {
+      res.status(409).json({ error: "Only an UNCERTAIN publishing job can be manually resolved.", job: result.job });
       return;
     }
     res.json({ job: result.job });
@@ -474,7 +549,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     try {
-      const screenshot = await files.readPublishingPreview(job.id);
+      const screenshot = await files.readPublishingPreview(job.id, workspaceId);
       res.set("cache-control", "no-store");
       res.type("jpeg").send(screenshot);
     } catch (error) {
@@ -502,7 +577,7 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
       return;
     }
     try {
-      const screenshot = await files.readPublishingPreview(job.id);
+      const screenshot = await files.readPublishingPreview(job.id, workspaceId);
       res.set("cache-control", "no-store");
       res.type("jpeg").send(screenshot);
     } catch (error) {
@@ -514,13 +589,69 @@ export function createAutomationApp({ config, databaseReady, store, loginManager
     }
   });
 
+  app.get("/v1/scraping/jobs", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.scrapingEnabled) {
+      res.status(409).json({ error: "Server scraping is disabled." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    const limit = Number(req.query.limit || 30);
+    if (!workspaceId) {
+      res.status(400).json({ error: "workspaceId is required." });
+      return;
+    }
+    res.json({ jobs: await store!.listScrapingJobs(workspaceId, limit) });
+  });
+
+  app.post("/v1/scraping/jobs", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.scrapingEnabled) {
+      res.status(409).json({ error: "Server scraping is disabled." });
+      return;
+    }
+    const job = await store!.createScrapingJob(req.body);
+    res.status(201).json({ job });
+  });
+
+  app.get("/v1/scraping/jobs/:jobId", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.scrapingEnabled) {
+      res.status(409).json({ error: "Server scraping is disabled." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    const job = workspaceId ? await store!.getScrapingJob(workspaceId, String(req.params.jobId)) : null;
+    if (!job) {
+      res.status(404).json({ error: "Scraping job not found." });
+      return;
+    }
+    res.json({ job });
+  });
+
+  app.get("/v1/scraping/jobs/:jobId/result", requireInternalToken, requireStore, async (req, res) => {
+    if (!config.scrapingEnabled || !files) {
+      res.status(409).json({ error: "Server scraping is disabled." });
+      return;
+    }
+    const workspaceId = String(req.query.workspaceId || "").trim();
+    const job = workspaceId ? await store!.getScrapingJob(workspaceId, String(req.params.jobId)) : null;
+    if (!job || job.state !== "COMPLETE" || !job.resultKey) {
+      res.status(404).json({ error: "Scraping result not found." });
+      return;
+    }
+    res.json({ result: await files.readScrapingResult(workspaceId, job.id) });
+  });
+
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof ZodError) {
       res.status(400).json({ error: error.issues[0]?.message || "The automation request is invalid." });
       return;
     }
     const message = error instanceof Error ? error.message : "The automation request failed.";
-    res.status(500).json({ error: message });
+    const correlationId = res.getHeader("x-correlation-id");
+    operationalLog("error", "http.unhandled_error", { correlationId, errorMessage: message });
+    res.status(500).json({
+      error: config.deploymentMode === "production" ? "The automation request failed." : message,
+      correlationId,
+    });
   });
 
   return app;

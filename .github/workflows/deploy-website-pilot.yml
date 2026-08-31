@@ -1,0 +1,94 @@
+name: Deploy Website Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment and Azure target
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: website-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run test:rbac
+      - run: npm run test:publishing
+      - run: npm run build
+      - name: Run explicit website PostgreSQL migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.WEBSITE_MIGRATION_DATABASE_URL }}
+        run: |
+          npm run db:migrate:platform
+          npm run db:migrate:whatsapp
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - run: az acr login --name "${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}"
+      - name: Build and push immutable image
+        env:
+          IMAGE: ${{ vars.AZURE_CONTAINER_REGISTRY_SERVER }}/agenticthat-website:${{ github.sha }}
+        run: |
+          docker build --file deploy/azure/Dockerfile.website --tag "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Record current website image
+        id: current
+        run: |
+          current_image="$(az webapp config show \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_WEBSITE_APP_NAME }}" \
+            --query linuxFxVersion --output tsv)"
+          current_image="${current_image#DOCKER|}"
+          echo "image=$current_image" >> "$GITHUB_OUTPUT"
+      - name: Deploy website image
+        env:
+          IMAGE: ${{ vars.AZURE_CONTAINER_REGISTRY_SERVER }}/agenticthat-website:${{ github.sha }}
+        run: |
+          az webapp config container set \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_WEBSITE_APP_NAME }}" \
+            --container-image-name "$IMAGE"
+          az webapp restart \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_WEBSITE_APP_NAME }}"
+      - name: Verify website health
+        env:
+          WEBSITE_URL: ${{ vars.AZURE_WEBSITE_URL }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 15 "$WEBSITE_URL/api/health"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Restore previous website image after a failed rollout
+        if: failure() && steps.current.outputs.image != ''
+        env:
+          PREVIOUS_IMAGE: ${{ steps.current.outputs.image }}
+        run: |
+          az webapp config container set \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_WEBSITE_APP_NAME }}" \
+            --container-image-name "$PREVIOUS_IMAGE"
+          az webapp restart \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_WEBSITE_APP_NAME }}"

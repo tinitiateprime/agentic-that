@@ -969,7 +969,7 @@ export class PlaywrightYouTubePublishingExecutor implements ServerPublishingExec
       const page = browserSession.page;
       if (!page.isClosed()) {
         const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
-        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot, job.workspaceId).catch(() => undefined);
       }
       if (error instanceof YouTubeCommunityPublishRejectedError) {
         return { state: "FAILED" as const, errorCode: "YOUTUBE_COMMUNITY_REJECTED", errorMessage: error.message };

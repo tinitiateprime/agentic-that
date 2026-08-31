@@ -358,7 +358,7 @@ export class PlaywrightLinkedInPublishingExecutor implements ServerPublishingExe
     } catch (error) {
       if (!page.isClosed()) {
         const screenshot = await page.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
-        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot, job.workspaceId).catch(() => undefined);
       }
       if (finalActionAttempted) return { state: "UNCERTAIN" as const, errorCode: "LINKEDIN_RESULT_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "LinkedIn confirmation was unavailable." };
       throw error;

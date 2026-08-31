@@ -1,0 +1,57 @@
+name: Production Pilot Validation
+
+on:
+  pull_request:
+    branches: [server-architecture]
+  push:
+    branches: [server-architecture]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-pilot-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_USER: automation_test
+          POSTGRES_PASSWORD: automation_test_password
+          POSTGRES_DB: automation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U automation_test -d automation_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_AUTOMATION_POSTGRES_URL: postgres://automation_test:automation_test_password@127.0.0.1:5432/automation_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run server-architecture:check
+      - run: npm run test:publishing
+      - run: npm run build
+      - name: Compile Azure infrastructure
+        uses: azure/cli@v2
+        with:
+          inlineScript: az bicep build --file deploy/azure/main.bicep
+
+  container-builds:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build website container
+        run: docker build --file deploy/azure/Dockerfile.website --tag agenticthat-website:test .
+      - name: Build automation container
+        run: docker build --file deploy/azure/Dockerfile.automation --tag agenticthat-automation:test .

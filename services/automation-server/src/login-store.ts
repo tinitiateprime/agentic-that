@@ -45,6 +45,17 @@ export type PublicLoginSession = ReturnType<typeof publicSession>;
 export class AutomationLoginStore {
   constructor(private readonly database: AutomationDatabase) {}
 
+  getProfileVersion(workspaceId: string, accountId: string) {
+    const profile = this.database.prepare(`
+      SELECT profile.version
+      FROM browser_profiles profile
+      JOIN social_accounts account ON account.id = profile.account_id
+      WHERE profile.account_id = ? AND account.workspace_id = ?
+    `).get(accountId, workspaceId) as { version: number } | undefined;
+    if (!profile) throw new Error("The login account browser profile metadata is missing.");
+    return profile.version;
+  }
+
   recoverInterruptedSessions() {
     return withImmediateTransaction(this.database, () => {
       const recoveredAt = new Date().toISOString();
@@ -131,7 +142,14 @@ export class AutomationLoginStore {
     this.transitionActive(sessionId, "AWAITING_USER");
   }
 
-  markConnected(sessionId: string) {
+  markConnected(sessionId: string, savedProfile?: {
+    version: number;
+    etag: string | null;
+    contentSha256?: string;
+    encryptedSizeBytes?: number;
+    encryptionKeyId?: string;
+    encryptionKeyVersion?: string;
+  } | null) {
     return withImmediateTransaction(this.database, () => {
       const completedAt = new Date().toISOString();
       const session = this.activeSession(sessionId);
@@ -144,11 +162,32 @@ export class AutomationLoginStore {
       this.database.prepare(`
         UPDATE social_accounts SET status = 'CONNECTED', updated_at = ? WHERE id = ?
       `).run(completedAt, session.account_id);
-      this.database.prepare(`
+      const profile = this.database.prepare(`SELECT version FROM browser_profiles WHERE account_id = ?`)
+        .get(session.account_id) as { version: number } | undefined;
+      if (!profile) throw new Error("The login account browser profile metadata is missing.");
+      const nextVersion = savedProfile?.version ?? profile.version + 1;
+      if (nextVersion !== profile.version + 1) throw new Error("The saved login profile version is not the next expected version.");
+      const updated = this.database.prepare(`
         UPDATE browser_profiles
-        SET version = version + 1, last_saved_at = ?, updated_at = ?
-        WHERE account_id = ?
-      `).run(completedAt, completedAt, session.account_id);
+        SET version = ?, blob_etag = ?, content_sha256 = ?, encrypted_size_bytes = ?,
+            encryption_key_id = ?, encryption_key_version = ?,
+            encryption_state = CASE WHEN ? IS NULL THEN encryption_state ELSE 'ENCRYPTED' END,
+            last_saved_at = ?, updated_at = ?
+        WHERE account_id = ? AND version = ?
+      `).run(
+        nextVersion,
+        savedProfile?.etag || null,
+        savedProfile?.contentSha256 || null,
+        savedProfile?.encryptedSizeBytes ?? null,
+        savedProfile?.encryptionKeyId || null,
+        savedProfile?.encryptionKeyVersion || null,
+        savedProfile ? 1 : null,
+        completedAt,
+        completedAt,
+        session.account_id,
+        profile.version,
+      );
+      if (updated.changes !== 1) throw new Error("The browser profile changed before login completion.");
       return this.getRequiredSession(sessionId);
     });
   }

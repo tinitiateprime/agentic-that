@@ -5,9 +5,11 @@
 - `main` and the current Netlify site continue using Companion.
 - New work is isolated on `server-architecture`.
 - Server publishing, login, and scraping default to disabled.
-- The new service uses its own local SQLite file and cannot read the existing production database variable.
+- The new service uses SQLite only in development/test and a dedicated
+  PostgreSQL connection in production.
 - Local data stays in the ignored `.server-data/` directory.
-- No Docker or additional cloud provider is required during local development.
+- No Docker or cloud account is required during local development; production
+  container and Azure templates are prepared separately.
 
 ## Implemented foundation
 
@@ -36,24 +38,32 @@
 18. Server-managed Instagram accounts are the authoritative account source for
     the authenticated Config Manager, product status, and publishing dashboard;
     legacy Companion records remain stored but are not offered in the main flow.
+19. PostgreSQL production store with atomic skip-locked claiming and parity for
+    leases, fences, attempts, events, scraping, and manual reconciliation.
+20. Private Azure Blob storage with Key Vault envelope-encrypted, checksummed,
+    conditionally versioned browser-profile archives.
+21. Dedicated Facebook, X, LinkedIn, YouTube live worker paths and separate
+    disabled-by-default flags for every platform.
+22. Azure Web App containers/IaC, manual OIDC deployment workflows, managed
+    identities, monitoring, graceful drain, rollout rollback, and operational
+    metrics.
+23. Separately bounded interactive-login browsers plus dynamic PostgreSQL,
+    private-Blob, and Key Vault crypto readiness checks.
 
 ## Next development work
 
-1. Integrate the browser surface into an authenticated AgenticThat website page.
-2. Replace local frame polling with an efficient TLS/WSS streaming transport.
-3. Add short-lived login-stream authorization and strict origin checks.
-4. Add remote-server viewport resizing and reconnect handling.
-5. Expand `ServerPublishingExecutor` beyond Instagram feed posts, Reels, and
-   carousels, Facebook text/image/video, and X text/single-media posts to
-   LinkedIn, YouTube, and richer Facebook/X multi-media posts.
-6. Add the profile-version write guard to the future live executor.
-7. Expand the server-authoritative account model to each additional platform.
-8. Add temporary-browser scraping workers.
+1. Run Azure/Supabase staging validation and a browser-memory soak test.
+2. Replace frame polling with efficient short-lived TLS/WSS login streaming if
+   the staging UX requires it.
+3. Tune queue/lease/uncertain alert thresholds from staging observations.
+4. Add richer multi-media support only after each basic platform worker is stable.
+5. Consider Azure identity/private networking for website-to-automation auth
+   after the single-instance pilot; do not add distributed infrastructure yet.
 
 ## Requirements before live production
 
-1. A fixed staging Netlify site and isolated managed PostgreSQL staging database.
-2. A separate always-on automation server; Netlify remains the website host.
+1. Separate Azure staging Web Apps and isolated managed PostgreSQL staging database.
+2. One always-on, single-instance automation Web App and a separate website Web App.
 3. Encrypted browser-profile and media storage with managed keys.
 4. Website authentication for login streams instead of the local internal token.
 5. TLS/WSS, strict origin checks, rate limits, audit logs, and admin-access controls.

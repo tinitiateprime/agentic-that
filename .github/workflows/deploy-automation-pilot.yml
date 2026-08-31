@@ -1,0 +1,119 @@
+name: Deploy Automation Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment and Azure target
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: automation-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_USER: automation_test
+          POSTGRES_PASSWORD: automation_test_password
+          POSTGRES_DB: automation_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U automation_test -d automation_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_AUTOMATION_POSTGRES_URL: postgres://automation_test:automation_test_password@127.0.0.1:5432/automation_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run server-architecture:check
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Log in to registry
+        run: az acr login --name "${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}"
+      - name: Build and push immutable image
+        env:
+          IMAGE: ${{ vars.AZURE_CONTAINER_REGISTRY_SERVER }}/agenticthat-automation:${{ github.sha }}
+        run: |
+          docker build --file deploy/azure/Dockerfile.automation --tag "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Run explicit PostgreSQL migrations
+        env:
+          SERVER_DATABASE_ENGINE: postgres
+          SERVER_AUTOMATION_DATABASE_URL: ${{ secrets.SERVER_AUTOMATION_MIGRATION_DATABASE_URL }}
+        run: npm run server-architecture:db:migrate
+      - name: Record current automation image
+        id: current
+        run: |
+          current_image="$(az webapp config show \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_AUTOMATION_APP_NAME }}" \
+            --query linuxFxVersion --output tsv)"
+          current_image="${current_image#DOCKER|}"
+          echo "image=$current_image" >> "$GITHUB_OUTPUT"
+      - name: Drain current workers when present
+        env:
+          WEBSITE_URL: ${{ vars.AZURE_WEBSITE_URL }}
+          AUTOMATION_TOKEN: ${{ secrets.SERVER_AUTOMATION_INTERNAL_TOKEN }}
+        run: |
+          if curl --silent --show-error --fail --max-time 15 "$WEBSITE_URL/api/health?automation=1" >/dev/null; then
+            curl --silent --show-error --fail --max-time 180 \
+              --request POST --header "x-agenticthat-deployment-token: $AUTOMATION_TOKEN" \
+              "$WEBSITE_URL/api/internal/automation/drain"
+          else
+            echo "No healthy previous automation deployment was found; skipping drain."
+          fi
+      - name: Deploy automation image
+        env:
+          IMAGE: ${{ vars.AZURE_CONTAINER_REGISTRY_SERVER }}/agenticthat-automation:${{ github.sha }}
+        run: |
+          az webapp config container set \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_AUTOMATION_APP_NAME }}" \
+            --container-image-name "$IMAGE"
+          az webapp restart \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_AUTOMATION_APP_NAME }}"
+      - name: Verify readiness
+        env:
+          WEBSITE_URL: ${{ vars.AZURE_WEBSITE_URL }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 15 "$WEBSITE_URL/api/health?automation=1"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+      - name: Restore previous automation image after a failed rollout
+        if: failure() && steps.current.outputs.image != ''
+        env:
+          PREVIOUS_IMAGE: ${{ steps.current.outputs.image }}
+        run: |
+          az webapp config container set \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_AUTOMATION_APP_NAME }}" \
+            --container-image-name "$PREVIOUS_IMAGE"
+          az webapp restart \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_AUTOMATION_APP_NAME }}"

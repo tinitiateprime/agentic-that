@@ -86,6 +86,58 @@ test("readiness fails closed and staging never exposes the development token pag
   }
 });
 
+test("readiness detects a dependency that became unreachable after startup", async () => {
+  const config = loadAutomationConfig({ SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token" });
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: true,
+    dependencyReady: async () => false,
+    store: {} as AutomationJobStore,
+    loginManager: null,
+  }));
+  try {
+    const readiness = await fetch(`${runtime.url}/ready`);
+    assert.equal(readiness.status, 503);
+    const body = await readiness.json();
+    assert.equal(body.checks.dependenciesReachable, false);
+    assert.deepEqual(body.issues, ["dependencies"]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("production health and readiness expose only minimal status", async () => {
+  const config = loadAutomationConfig({
+    SERVER_ARCHITECTURE_DEPLOYMENT: "production",
+    SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a".repeat(32),
+    SERVER_ARCHITECTURE_DATA_DIR: process.platform === "win32" ? "C:\\agenticthat-data" : "/var/lib/agenticthat-automation",
+    SERVER_DATABASE_ENGINE: "postgres",
+    SERVER_AUTOMATION_DATABASE_URL: "postgresql://automation:secret@example.invalid/postgres",
+    SERVER_STORAGE_BACKEND: "azure",
+    AZURE_STORAGE_ACCOUNT_URL: "https://example.blob.core.windows.net",
+    AZURE_KEY_VAULT_URL: "https://example.vault.azure.net",
+    AZURE_PROFILE_KEY_NAME: "automation-profile-key",
+    SERVER_PROFILE_STORAGE_ENCRYPTED: "true",
+    SERVER_BACKUPS_CONFIGURED: "true",
+    SERVER_SINGLE_HOST_ACKNOWLEDGED: "true",
+  });
+  const runtime = await listen(createAutomationApp({
+    config,
+    databaseReady: false,
+    store: null,
+    loginManager: null,
+  }));
+  try {
+    const health = await (await fetch(`${runtime.url}/health`)).json();
+    assert.deepEqual(health, { ok: true, service: "agenticthat-automation-server" });
+    const readiness = await fetch(`${runtime.url}/ready`);
+    assert.equal(readiness.status, 503);
+    assert.deepEqual(await readiness.json(), { ok: false, service: "agenticthat-automation-server" });
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("the local connection page contains a valid website-browser client and no password field", () => {
   const html = developmentConnectPage({
     internalToken: "local-test-token",
@@ -147,7 +199,7 @@ test("enabled local login routes start a workspace-scoped session", async () => 
       startedWith = [workspaceId, accountId];
       return { id: "login_test", workspaceId, accountId, state: "STARTING" };
     },
-  } as AutomationLoginManager;
+  } as unknown as AutomationLoginManager;
   const runtime = await listen(createAutomationApp({
     config,
     databaseReady: true,
@@ -316,6 +368,45 @@ test("scheduled publishing jobs can be listed and cancelled only while queued", 
     );
     assert.equal(conflict.status, 409);
     assert.equal((await conflict.json()).job.state, "PUBLISHING");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("manual uncertain resolution is authenticated and workspace-scoped", async () => {
+  const config = loadAutomationConfig({ SERVER_ARCHITECTURE_INTERNAL_TOKEN: "a-long-local-test-token" });
+  let received: unknown;
+  const fakeStore = {
+    resolveUncertainPublishingJob(jobId: string, input: unknown) {
+      received = { jobId, input };
+      return { status: "RESOLVED", job: { id: jobId, state: "PUBLISHED", resolvedBy: "operator_test" } };
+    },
+  } as unknown as AutomationJobStore;
+  const runtime = await listen(createAutomationApp({ config, databaseReady: true, store: fakeStore, loginManager: null }));
+  try {
+    const body = {
+      workspaceId: "workspace_test",
+      resolvedBy: "operator_test",
+      resolution: "PUBLISHED",
+      note: "Verified in the platform history.",
+    };
+    const unauthorized = await fetch(`${runtime.url}/v1/publishing/jobs/job_uncertain/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assert.equal(unauthorized.status, 401);
+    const resolved = await fetch(`${runtime.url}/v1/publishing/jobs/job_uncertain/resolve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-agenticthat-internal-token": config.internalToken,
+      },
+      body: JSON.stringify(body),
+    });
+    assert.equal(resolved.status, 200);
+    assert.deepEqual(received, { jobId: "job_uncertain", input: body });
+    assert.equal((await resolved.json()).job.state, "PUBLISHED");
   } finally {
     await runtime.close();
   }

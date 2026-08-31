@@ -137,7 +137,7 @@ export class PlaywrightFacebookPublishingExecutor implements ServerPublishingExe
     } catch (error) {
       if (activePage && !activePage.isClosed()) {
         const screenshot = await activePage.screenshot({ type: "jpeg", quality: 75, animations: "disabled" }).catch(() => null);
-        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot).catch(() => undefined);
+        if (screenshot) await this.files.storePublishingPreview(job.id, screenshot, job.workspaceId).catch(() => undefined);
       }
       if (finalActionAttempted) return { state: "UNCERTAIN" as const, errorCode: "FACEBOOK_RESULT_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "Facebook confirmation was unavailable." };
       throw error;

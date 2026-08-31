@@ -1,0 +1,21 @@
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV SERVER_BROWSER_EXECUTABLE_PATH=/usr/local/bin/agenticthat-chromium
+RUN set -eu; \
+  browser_path="$(find /ms-playwright -type f \( -path '*/chrome-linux/chrome' -o -path '*/chrome-linux64/chrome' \) | head -n 1)"; \
+  test -n "$browser_path"; \
+  ln -s "$browser_path" /usr/local/bin/agenticthat-chromium
+COPY package.json package-lock.json ./
+# TypeScript is intentionally executed through tsx in this pilot image, so the
+# runtime loader must be included even though it is a development dependency.
+RUN npm ci --include=dev --ignore-scripts
+COPY --chown=pwuser:pwuser . .
+RUN mkdir -p /var/lib/agenticthat-automation \
+  && chown -R pwuser:pwuser /var/lib/agenticthat-automation /app
+USER pwuser
+EXPOSE 8800
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8800/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "--import", "tsx", "services/automation-server/src/server.ts"]

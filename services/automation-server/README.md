@@ -2,15 +2,17 @@
 
 This service is the isolated starting point for website-only publishing and
 scraping. It does not replace or import the current Companion. Every execution
-feature is disabled by default, it binds to loopback by default, and it uses
-an isolated local SQLite file under `.server-data`.
+feature is disabled by default. Development binds to loopback and uses an
+isolated SQLite file under `.server-data`; production fails closed unless it is
+configured for PostgreSQL, Azure Blob Storage, and Azure Key Vault encryption.
 
 ## Current capabilities
 
 - Local health API on `127.0.0.1:8800`.
 - Separate local media, browser-profile, result, and temporary directories.
-- Local SQLite schema for accounts, browser profiles, publishing jobs,
-  attempts, account locks, scraping jobs, and activity events.
+- Interchangeable local SQLite and production PostgreSQL stores for accounts,
+  browser profiles, publishing jobs, attempts, account locks, scraping jobs,
+  and activity events.
 - Transactional due-job claiming with one active lease per social account.
 - Monotonic fencing tokens so an expired worker cannot complete a newer job.
 - Expired live publishing work moves to `UNCERTAIN` for verification instead
@@ -46,7 +48,8 @@ an isolated local SQLite file under `.server-data`.
   the worker token out of browser JavaScript, forces the signed-in workspace on
   every request, supports website login frames, and routes single-media Instagram
   posts to server-managed accounts behind a disabled-by-default production flag.
-- No Electron or Docker dependency.
+- No Electron dependency. The production image uses fixed Playwright/Chromium
+  versions; local development does not require Docker.
 
 The local milestone can run Chrome/Edge headlessly and show it inside the local
 connection page. The authenticated AgenticThat website now uses the same
@@ -69,6 +72,8 @@ and supports standard text posts plus one JPEG/PNG image or MP4/MOV video.
 `SERVER_LIVE_WORKER_COUNT` controls live publishing concurrency from 1 through
 8 and defaults to 1. Increase it gradually because each active job can launch
 its own Chromium process.
+`SERVER_LOGIN_MAX_CONCURRENT` independently limits interactive login browsers
+from 1 through 4 and defaults to 1 for the production pilot.
 
 ## Local setup
 
@@ -133,6 +138,20 @@ The migration is intentionally absent from `netlify.toml` and the root build.
 The database safety check refuses to open a SQLite file outside the isolated
 server data directory.
 
+## Production pilot
+
+The prepared pilot is one Next.js Azure Web App plus one single-instance
+automation Web App, Supabase PostgreSQL, private Azure Blob containers, and
+Azure Key Vault envelope encryption. Production DDL is explicit and never runs
+during server startup. Profile archives use AES-256-GCM with per-archive data
+keys wrapped by a versioned RSA Key Vault key; conditional Blob writes prevent
+stale workers from overwriting a newer account profile.
+
+Use [`deploy/azure/README.md`](../../deploy/azure/README.md) for provisioning,
+deployment, staged enablement, recovery, and rollback. The current readiness
+record is [`docs/production-pilot-readiness.md`](../../docs/production-pilot-readiness.md).
+Do not enable a live platform until its staging test-account checklist passes.
+
 ## Ubuntu staging foundation
 
 Run `npm run server-architecture:preflight` before starting the worker. The
@@ -146,9 +165,11 @@ path when browser features are enabled. Staging also removes the local
 `/development/connect` page so its development-only embedded token cannot be
 exposed through the reverse proxy.
 
-`SERVER_ARCHITECTURE_DEPLOYMENT=production` is intentionally rejected for now.
-Customer production must not start until managed PostgreSQL and encrypted
-browser-profile storage replace the single-server staging stores.
+`SERVER_ARCHITECTURE_DEPLOYMENT=production` requires PostgreSQL, Azure storage,
+Key Vault configuration, encrypted profile storage, explicit migrations, a
+strong internal token, and an acknowledged/tested backup configuration. It
+refuses SQLite, local profile storage, automatic migrations, or missing safety
+configuration.
 
 ## Checks
 
@@ -158,8 +179,7 @@ npm run test:publishing
 npm run build
 ```
 
-Local browser profiles are development-only and unencrypted. Do not put real
-customer sessions in `.server-data`. Production requires encrypted profile
-storage, a managed key service, and PostgreSQL before any customer rollout.
-SQLite is intentionally limited to development on this computer; it is not the
-future multi-server production database.
+Local browser profiles remain development-only and unencrypted; do not put real
+customer sessions in `.server-data`. SQLite is intentionally limited to local
+development/test. PostgreSQL and encrypted Azure profile storage are the only
+accepted production implementations.
