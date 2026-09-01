@@ -135,6 +135,7 @@ export type FacebookScrapeDiagnostics = {
   page_title: string;
   discovery_path?: string[];
   stage_failures?: Partial<Record<"all" | "timeline" | "reels" | "details" | "comments", string>>;
+  range_coverage?: FacebookRangeCoverage;
 };
 
 export type FacebookScrapeResult = {
@@ -179,11 +180,22 @@ type RawCandidate = Partial<FacebookPost> & {
   _source?: FacebookMetricSource;
 };
 
-type RangeWindow = {
+export type FacebookRangeWindow = {
   active: boolean;
   start: number;
   end: number;
   direction: "ascending" | "descending";
+};
+
+export type FacebookRangeCoverage = {
+  requested_start: string;
+  requested_end: string;
+  oldest_seen: string | null;
+  newest_seen: string | null;
+  in_range_candidates: number;
+  reached_range_start: boolean;
+  fulfilled_requested_count: boolean;
+  complete: boolean;
 };
 
 export type FacebookDiscoveryPlan = {
@@ -612,11 +624,32 @@ function mergePosts(current: FacebookPost, incoming: FacebookPost) {
   } satisfies FacebookPost;
 }
 
-function rangeBoundary(type: FacebookRangeType, value: string, end: boolean, timezoneOffsetMinutes: number) {
-  const parts = value.split("-").map(Number);
-  const year = parts[0];
-  const month = type === "year" ? (end ? 12 : 1) : parts[1];
-  let day = type === "date" ? parts[2] : 1;
+function facebookRangePart(type: FacebookRangeType, value: string) {
+  const patterns = {
+    date: /^(\d{4})-(\d{2})-(\d{2})$/,
+    month: /^(\d{4})-(\d{2})$/,
+    year: /^(\d{4})$/,
+  };
+  const match = value.match(patterns[type]);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = type === "year" ? 1 : Number(match[2]);
+  const day = type === "date" ? Number(match[3]) : 1;
+  if (year < 2004 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+  return { year, month, day };
+}
+
+function rangeBoundary(
+  type: FacebookRangeType,
+  part: { year: number; month: number; day: number },
+  end: boolean,
+  timezoneOffsetMinutes: number,
+) {
+  const year = part.year;
+  const month = type === "year" ? (end ? 12 : 1) : part.month;
+  let day = type === "date" ? part.day : 1;
   if (end && type !== "date") day = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const hour = end ? 23 : 0;
   const minute = end ? 59 : 0;
@@ -625,7 +658,7 @@ function rangeBoundary(type: FacebookRangeType, value: string, end: boolean, tim
   return valueMs + timezoneOffsetMinutes * 60_000;
 }
 
-function scrapeRange(input: FacebookScrapeInput): RangeWindow {
+export function facebookScrapeRange(input: FacebookScrapeInput): FacebookRangeWindow {
   if (input.collectionMode !== "range") {
     const end = Date.now();
     return { active: false, start: end - Math.max(1, input.recentDays || 7) * 86_400_000, end, direction: "descending" };
@@ -634,18 +667,48 @@ function scrapeRange(input: FacebookScrapeInput): RangeWindow {
   const from = text(input.rangeFrom);
   const to = text(input.rangeTo);
   if (!type || !from || !to) throw new Error("Choose a valid range type, start, and end.");
+  const fromPart = facebookRangePart(type, from);
+  const toPart = facebookRangePart(type, to);
+  if (!fromPart || !toPart) throw new Error("Choose a valid Facebook post range.");
   const offset = Math.max(-840, Math.min(840, Number(input.timezoneOffsetMinutes) || 0));
-  const first = rangeBoundary(type, from, false, offset);
-  const second = rangeBoundary(type, to, false, offset);
-  if (!Number.isFinite(first) || !Number.isFinite(second)) throw new Error("Choose a valid Facebook post range.");
+  const first = rangeBoundary(type, fromPart, false, offset);
+  const second = rangeBoundary(type, toPart, false, offset);
   const direction = first <= second ? "ascending" : "descending";
-  const earlier = direction === "ascending" ? from : to;
-  const later = direction === "ascending" ? to : from;
+  const earlier = direction === "ascending" ? fromPart : toPart;
+  const later = direction === "ascending" ? toPart : fromPart;
   return {
     active: true,
     start: rangeBoundary(type, earlier, false, offset),
     end: rangeBoundary(type, later, true, offset),
     direction,
+  };
+}
+
+export function facebookRangeCoverage(
+  timestamps: Array<string | null | undefined>,
+  range: FacebookRangeWindow,
+  maxResults: number,
+): FacebookRangeCoverage {
+  const values = timestamps
+    .map(timestamp => timestamp ? new Date(timestamp).getTime() : NaN)
+    .filter(Number.isFinite);
+  const oldest = values.length ? Math.min(...values) : null;
+  const newest = values.length ? Math.max(...values) : null;
+  const inRangeCandidates = values.filter(value => value >= range.start && value <= range.end).length;
+  // Pinned posts can be old outliers. Require the discovery tail itself to
+  // cross the lower boundary before declaring the requested history complete.
+  const reachedRangeStart = values.length >= 2
+    && values.slice(-2).every(value => value <= range.start);
+  const fulfilledRequestedCount = inRangeCandidates >= maxResults;
+  return {
+    requested_start: new Date(range.start).toISOString(),
+    requested_end: new Date(range.end).toISOString(),
+    oldest_seen: oldest === null ? null : new Date(oldest).toISOString(),
+    newest_seen: newest === null ? null : new Date(newest).toISOString(),
+    in_range_candidates: inRangeCandidates,
+    reached_range_start: reachedRangeStart,
+    fulfilled_requested_count: fulfilledRequestedCount,
+    complete: reachedRangeStart || fulfilledRequestedCount,
   };
 }
 
@@ -1573,6 +1636,7 @@ async function scrapeAttempt(
     }
 
     const maxResults = normalized.mode === "post" ? 1 : Math.max(1, Math.min(50, Number(input.maxResults) || 10));
+    const range = facebookScrapeRange(input);
     const configuredProfileLimit = Number(process.env.FACEBOOK_PROFILE_DISCOVERY_LIMIT);
     const profileLimit = Number.isFinite(configuredProfileLimit)
       ? Math.max(50, Math.min(500, Math.trunc(configuredProfileLimit)))
@@ -1583,16 +1647,29 @@ async function scrapeAttempt(
         : profileLimit
       : Math.min(100, Math.max(20, maxResults * 3));
     const candidateMap = new Map<string, FacebookPost>();
+    const candidateRangeCoverage = () => facebookRangeCoverage(
+      [...candidateMap.values()]
+        .filter(post => normalized.mode !== "profile" || candidateMatchesProfile(post, normalized.targetProfileUrl))
+        .map(post => post.timestamp),
+      range,
+      maxResults,
+    );
     let stableRounds = 0;
     const configuredTimeout = Number(process.env.FACEBOOK_DISCOVERY_TIMEOUT_MS);
     const timeoutMs = Number.isFinite(configuredTimeout)
       ? Math.max(30_000, Math.min(300_000, configuredTimeout))
-      : normalized.mode === "profile" && input.collectionMode === "engagement" ? 180_000 : 75_000;
+      : normalized.mode === "profile" && input.collectionMode === "engagement"
+        ? 180_000
+        : normalized.mode === "profile" && input.collectionMode === "range"
+          ? 120_000
+          : 75_000;
     const discoveryDeadline = Date.now() + timeoutMs;
     const allPhaseBudget = normalized.mode === "profile"
       ? input.collectionMode === "engagement"
         ? Math.min(60_000, Math.round(timeoutMs * .4))
-        : Math.min(30_000, Math.round(timeoutMs * .45))
+        : input.collectionMode === "range"
+          ? Math.min(60_000, Math.round(timeoutMs * .55))
+          : Math.min(30_000, Math.round(timeoutMs * .45))
       : timeoutMs;
     const allDeadline = Math.min(discoveryDeadline, Date.now() + allPhaseBudget);
     const maxRounds = normalized.mode === "post"
@@ -1627,7 +1704,12 @@ async function scrapeAttempt(
         const directReady = normalized.mode === "post"
           && candidateMap.size > 0
           && ([...candidateMap.values()].some(post => post.reactions_count !== null || post.comments_count !== null) || round === maxRounds - 1);
-        if (normalized.mode === "post" ? directReady : candidateMap.size >= discoveryTarget || stableRounds >= 6) break;
+        const rangeReady = range.active && candidateRangeCoverage().complete;
+        if (normalized.mode === "post"
+          ? directReady
+          : range.active
+            ? rangeReady || stableRounds >= 6
+            : candidateMap.size >= discoveryTarget || stableRounds >= 6) break;
         if (normalized.mode === "post") await page.waitForTimeout(900);
         else await scrollFacebookProfile(page);
       }
@@ -1773,7 +1855,14 @@ async function scrapeAttempt(
         const directMatched = directPost
           ? candidateMap.get(facebookPostIdentity(directPost))?.views_count !== null
           : false;
-        if (directMatched || reelsMap.size >= reelsTarget || staleReelsRounds >= 6) break;
+        const reelsRangeReady = range.active && facebookRangeCoverage(
+          [...reelsMap.values()].map(post => post.timestamp),
+          range,
+          maxResults,
+        ).complete;
+        if (directMatched || (range.active
+          ? reelsRangeReady || staleReelsRounds >= 6
+          : reelsMap.size >= reelsTarget || staleReelsRounds >= 6)) break;
         await scrollFacebookProfile(page);
       }
       diagnostics.final_url = page.url() || diagnostics.final_url;
@@ -1796,7 +1885,7 @@ async function scrapeAttempt(
     }
 
     diagnostics.unique_candidates = new Set([...candidateMap.keys(), ...reelsMap.keys()]).size;
-    const range = scrapeRange(input);
+    if (range.active) diagnostics.range_coverage = candidateRangeCoverage();
     const accepted: FacebookPost[] = [];
     const directTarget = normalized.mode === "post" ? canonicalPostUrl(page.url()) || canonicalPostUrl(normalized.startUrl) : null;
     for (const post of candidateMap.values()) {
@@ -1904,12 +1993,18 @@ async function scrapeAttempt(
     diagnostics.accepted_results = results.length;
     const finalSnapshot = await accessSnapshot(page).catch(() => null);
     const finalAccess = finalSnapshot ? classifyFacebookAccess(finalSnapshot) : "unknown";
+    const incompleteRange = range.active && (
+      diagnostics.range_coverage?.complete !== true
+      || results.length < Math.min(maxResults, diagnostics.range_coverage.in_range_candidates)
+    );
     const discoveryStatus: FacebookDiscoveryStatus = results.length
-      ? (!plan.reelsArePrimary && (results.some(post => timestampMs(post) === null)
+      ? (incompleteRange || (!plan.reelsArePrimary && (results.some(post => timestampMs(post) === null)
           || (normalized.mode !== "post" && results.length < maxResults && diagnostics.rejected.missing_timestamp > 0)
-          || (normalized.mode === "keyword" && results.length < maxResults)))
+          || (normalized.mode === "keyword" && results.length < maxResults))))
         ? "partial"
         : "ok"
+      : range.active && diagnostics.range_coverage?.complete
+        ? "ok"
       : analyzedReels.length
         ? "partial"
       : finalAccess === "login_required" || finalAccess === "not_found"

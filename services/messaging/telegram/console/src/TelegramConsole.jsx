@@ -2444,18 +2444,11 @@ export function TelegramConsole({ integrated = false }) {
                             "Ready"
                           ),
                           h("option", null,
-                            "Scheduled"
-                          ),
-                          h("option", null,
                             "Posted"
                           )
                         )
                       )
                     ),
-                    h("label", {"htmlFor":"post-scheduled-at"},
-                      "Scheduled date"
-                    ),
-                    h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
                     h("label", {"htmlFor":"post-media-url"},
                       "Media URL"
                     ),
@@ -2482,9 +2475,6 @@ export function TelegramConsole({ integrated = false }) {
                       ),
                       h("button", {"id":"post-send-now","className":"button ghost","type":"button"},
                         "Post now"
-                      ),
-                      h("button", {"id":"post-schedule","className":"button ghost","type":"button"},
-                        "Schedule"
                       ),
                       h("button", {"id":"post-clear","className":"button text","type":"button"},
                         "Clear"
@@ -2549,9 +2539,6 @@ export function TelegramConsole({ integrated = false }) {
                       h("option", {"value":"category"},
                         "Category"
                       ),
-                      h("option", {"value":"scheduled"},
-                        "Scheduled date"
-                      )
                     )
                   ),
                   h("div", {"id":"post-list","className":"record-list"})

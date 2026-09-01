@@ -1,21 +1,24 @@
-# AgenticThat Publishing Companion extension
+# Optional AgenticThat Companion extension
 
-This Manifest V3 Chrome extension connects the AgenticThat publishing dashboard
-to the Windows companion on `127.0.0.1:8792`. It requests no broad browsing
-permission and never receives or stores social-network passwords.
+This Manifest V3 extension bridges an AgenticThat dashboard opened in Chrome to
+the Windows Companion on `127.0.0.1:8792`. The desktop Companion now embeds the
+dashboard directly, so normal users do not need to install this extension.
 
-Customers install the reviewed extension from the Chrome Web Store using the
-button on `https://agentic-that.netlify.app/publishing`. They do not load this
-folder or download the repository.
+The bridge accepts only loopback API/media paths and trusted dashboard origins.
+The production AgenticThat origin is built in. A user may explicitly grant one
+additional HTTPS origin from the popup; the extension requests that exact host
+permission and registers only the bridge content script for it. Social-network
+pages are never injected and passwords are never read or stored.
 
-For local development only, run `npm run publishing:extension:open`, enable
-Developer mode on the Chrome extensions page, choose **Load unpacked**, and
-select this directory.
+For local development, run `npm run publishing:extension:open`, enable Developer
+mode in Chrome, choose **Load unpacked**, and select this directory.
 
-Build the review ZIP with `npm run publishing:extension:package`. Store listing
-copy, permission explanations, and the submission checklist are in
-`docs/chrome-web-store-listing.md`.
+Validate and build the review ZIP with:
 
-The production origin is intentionally restricted to
-`https://agentic-that.netlify.app`. Add a specific origin to `manifest.json`
-before moving the production dashboard to another domain.
+```text
+npm run publishing:extension:validate
+npm run publishing:extension:package
+```
+
+The package command creates both a versioned ZIP and the stable
+`AgenticThat-Publishing-Extension.zip` release alias.

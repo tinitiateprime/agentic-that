@@ -1,6 +1,7 @@
 const api = window.publishingCompanion;
 const byId = id => document.getElementById(id);
 const views = {
+  dashboard: { panel: byId("dashboard-panel"), title: "AgenticThat workspace", eyebrow: "ONE APP WORKSPACE" },
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
@@ -24,7 +25,7 @@ function setButtonLabel(buttonOrId, label) {
   else button.textContent = label;
 }
 
-let activeView = "activity";
+let activeView = "dashboard";
 let currentStatus = null;
 let currentWorkspace = { sessions: [] };
 let currentScraping = { activeJob: null, queuedJobs: [], recentJobs: [], concurrency: 1 };
@@ -106,7 +107,7 @@ function scheduleLayout() {
       .filter(Boolean)
       .filter(entry => entry.id && entry.bounds);
     void api.setLayout({
-      dashboard: null,
+      dashboard: activeView === "dashboard" ? elementBounds(byId("dashboard-host")) : null,
       browsers: activeView === "activity" ? browsers : [],
     });
   });
@@ -326,7 +327,7 @@ function renderWorkspace() {
         : `${externalSessions.length} protected provider-bound publishing sessions shown inside Companion.`
       : liveLayoutMode === "focus"
       ? "Full-size browser selected. Choose another account tab to switch."
-      : "Publishing all scheduled accounts together in the visible grid.";
+      : "Publishing all active accounts together in the visible grid.";
   setButtonLabel("live-stop", singleSession?.purpose === "login" ? "Close login" : "Stop publishing");
 
   const focusButton = byId("layout-focus");
@@ -504,12 +505,12 @@ function renderStatus(status) {
   byId("browser-check").textContent = status.embeddedBrowser
     ? status.chromeInstalled ? "Companion + Chrome fallback" : "Companion browser"
     : status.chromeInstalled ? "Chrome or Edge" : "Install Chrome/Edge";
-  byId("scheduler-check").textContent = status.connected ? "Running" : "Stopped";
+  byId("scheduler-check").textContent = status.connected ? "Ready" : "Stopped";
   const consentGranted = status.publishingInteractionConsent === true;
-  byId("permission-state").textContent = consentGranted ? "Unattended publishing allowed" : "Permission not granted";
+  byId("permission-state").textContent = consentGranted ? "Workspace publishing allowed" : "Permission not granted";
   byId("permission-detail").textContent = consentGranted
-    ? "Scheduled posts can publish without asking again at their scheduled time."
-    : "Scheduling will show an Allow/Deny popup before the post is saved.";
+    ? "This paired Companion can accept approved publish-now jobs."
+    : "Publishing will ask before the first approved workspace job.";
   byId("revoke-consent").hidden = !consentGranted;
 
   const ready = Boolean(status.automationReady);
@@ -590,6 +591,7 @@ byId("refresh-current").addEventListener("click", async () => {
   button.disabled = true;
   button.classList.add("is-loading");
   try {
+    if (activeView === "dashboard") await api.reloadDashboard();
     await Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]);
   } finally {
     button.classList.remove("is-loading");

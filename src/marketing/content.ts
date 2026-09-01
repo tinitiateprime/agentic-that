@@ -1,6 +1,5 @@
 import {
   Braces,
-  CalendarClock,
   Facebook,
   Heart,
   Instagram,
@@ -101,12 +100,12 @@ export const CAPABILITIES: Capability[] = [
     href: "/whatsapp",
   },
   {
-    icon: CalendarClock,
+    icon: Send,
     title: "Publish Queue Runner",
     status: "Active",
     description:
-      "Schedule, queue and track browser-driven publishing across every connected channel, with preflight checks before anything ships.",
-    badges: ["Scheduler", "Multi-channel", "Receipts"],
+      "Prepare, queue and track browser-driven publishing across every connected channel, with preflight checks before anything ships.",
+    badges: ["Publish now", "Multi-channel", "Receipts"],
     href: "/publishing",
   },
   {
@@ -144,7 +143,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     index: "02",
     title: "Configure Workflow & Rules",
     description:
-      "Set fields, filters, rate limits and schedules. Safety governors cap throughput so runs stay well inside platform tolerances.",
+      "Set fields, filters, rate limits and execution rules. Safety governors cap throughput so runs stay well inside platform tolerances.",
   },
   {
     icon: Rocket,

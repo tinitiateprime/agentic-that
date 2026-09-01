@@ -45,7 +45,7 @@ export function Hero() {
 
           <motion.p variants={fadeInUp} className="mt-5 max-w-xl text-[15px] leading-relaxed text-slate-400 sm:text-base">
             AgenticThat runs headless browser agents that extract clean, structured data from any platform — then
-            schedule posts, drive outreach and track engagement from a single control plane.
+            publish posts, drive outreach and track engagement from a single control plane.
           </motion.p>
 
           <motion.div variants={fadeInUp} className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">

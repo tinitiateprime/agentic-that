@@ -1,9 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "AgenticThat Publishing Companion",
-  "description": "Connects the AgenticThat publishing dashboard to the local publishing companion.",
-  "version": "1.1.0",
+  "name": "AgenticThat Companion",
+  "description": "Optional browser bridge for AgenticThat publishing and scraping. The desktop Companion works without it.",
+  "version": "1.3.0",
   "minimum_chrome_version": "120",
+  "permissions": [
+    "scripting",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "host_permissions": [
     "http://127.0.0.1:8792/*"
   ],
@@ -17,7 +24,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "AgenticThat Publishing Companion",
+    "default_title": "AgenticThat Companion",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -28,6 +35,7 @@
     {
       "matches": [
         "https://agentic-that.netlify.app/*",
+        "https://*.trycloudflare.com/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
@@ -45,7 +53,7 @@
         "media-proxy.css"
       ],
       "matches": [
-        "https://agentic-that.netlify.app/*",
+        "https://*/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ]

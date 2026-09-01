@@ -29,6 +29,10 @@ import {
   subscribeFacebookCompanionActivity,
 } from "../../../scraping/facebook/src/companion-jobs.js";
 import {
+  companionResourceSchedulerState,
+  setCompanionPublishingBusyProvider,
+} from "../../../scraping/companion-resource-scheduler.js";
+import {
   createUserProfileSchema,
   loginInputSchema,
   platformLabels,
@@ -148,6 +152,8 @@ const configuredWebOrigins = new Set(
     .map(origin => origin.trim())
     .filter(Boolean),
 );
+
+setCompanionPublishingBusyProvider(() => isAutomationRunning());
 
 fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(stagedUploadDir, { recursive: true });
@@ -798,7 +804,7 @@ function requiredPublishingCapability(req: express.Request) {
   if (requestPath.startsWith("/api/users")) return "workspace.team.manage";
   if (requestPath === "/api/automation/consent") return "publishing.accounts.configure";
   if (requestPath.startsWith("/api/automation")) return "publishing.execute";
-  if (requestPath === "/api/publishing-safety/assess") return "publishing.schedule.manage";
+  if (requestPath === "/api/publishing-safety/assess") return "publishing.execute";
   if (req.method === "GET" || req.method === "HEAD") return "publishing.view";
   if (/^\/api\/(?:platforms\/[^/]+\/accounts|accounts(?:\/|$))/.test(requestPath)) return "publishing.accounts.configure";
   if (requestPath.startsWith("/api/schedules") || /^\/api\/submissions\/[^/]+\/schedule$/.test(requestPath)) return "publishing.schedule.manage";
@@ -967,6 +973,9 @@ async function createUnifiedPosts(
 
   try {
     const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
+    if (destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
+      throw new Error("Scheduling is temporarily unavailable. Publish or queue the post now instead.");
+    }
     const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
     if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
     if (user.role === "post_uploader" && destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
@@ -1227,12 +1236,14 @@ app.get("/api/health", async (_req, res) => {
       embeddedBrowser: browser.embeddedBrowser,
       engines: browser.engines,
       companionInstanceId: publishingCompanionId(),
+      companionVersion: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
       paired: Boolean(centralPairing),
       extensionBridge: true,
       capabilities: {
         publishing: true,
         instagramScraping: instagramCompanionQueueHealth(),
         facebookScraping: facebookCompanionQueueHealth(),
+        resourceScheduler: companionResourceSchedulerState(),
       },
       platforms,
     });
@@ -1678,7 +1689,7 @@ app.get("/api/auth/me", (req: RequestWithUser, res) => {
   res.json(currentUser(req));
 });
 
-app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
+app.post("/api/publishing-safety/assess", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
     const payload = publishingSafetyRequestSchema.parse(req.body);
@@ -1692,13 +1703,13 @@ app.post("/api/automation/consent", requireRoles("operations_manager"), async (r
   try {
     const desktopHost = publishingDesktopHost();
     if (!desktopHost) {
-      res.status(409).json({ message: "Open Publishing Companion to approve protected unattended publishing." });
+      res.status(409).json({ message: "Open Companion to approve protected workspace publishing." });
       return;
     }
     await desktopHost.requestPersistentPublishingPermission();
     const user = currentUser(req);
-    await logActivity(user.id, "automation.permission_granted", "automation_run", null, "Protected unattended publishing was approved in Companion.", {});
-    res.json({ granted: true, message: "Publishing permission saved. You do not need to return at the scheduled time." });
+    await logActivity(user.id, "automation.permission_granted", "automation_run", null, "Protected workspace publishing was approved in Companion.", {});
+    res.json({ granted: true, message: "Publishing permission saved for approved publish-now jobs." });
   } catch (error) {
     next(error);
   }
@@ -1932,7 +1943,23 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
   }
 });
 
-// --- REUSABLE SCHEDULES ---
+// Scheduling is intentionally paused in this Companion release. Keep historical
+// records intact, but reject every route that could create or change timed work.
+const schedulingUnavailable = (_req: express.Request, res: express.Response) => {
+  res.status(410).json({ message: "Scheduling is temporarily unavailable. Publish or queue the post now instead." });
+};
+app.all(["/api/schedules", "/api/schedules/:id", "/api/social-media-schedules", "/api/submissions/:id/schedule"], schedulingUnavailable);
+app.post(["/api/submissions/text", "/api/submissions/staged"], schedulingUnavailable);
+app.patch("/api/uploads/:id", (req, res, next) => {
+  const payload = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+  if (Object.hasOwn(payload, "scheduledAt") || Object.hasOwn(payload, "scheduleId")) {
+    schedulingUnavailable(req, res);
+    return;
+  }
+  next();
+});
+
+// --- LEGACY REUSABLE SCHEDULES (kept for data compatibility) ---
 app.get("/api/schedules", async (req: RequestWithUser, res, next) => {
   try {
     res.json(await listPublishingSchedules(currentUser(req).workspaceId));

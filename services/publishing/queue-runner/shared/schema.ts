@@ -55,8 +55,8 @@ export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
 
 export const userRoleLabels: Record<UserRole, string> = {
   operations_manager: "Operations Manager",
-  post_uploader: "Post Uploader",
-  scheduler: "Scheduler",
+  post_uploader: "Legacy Uploader (read-only)",
+  scheduler: "Legacy Scheduler (read-only)",
   viewer: "Viewer"
 };
 

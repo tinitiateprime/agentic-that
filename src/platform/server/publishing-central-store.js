@@ -318,23 +318,9 @@ function queueJob(document, upload) {
 function refreshDueJobs(document, workspaceId, uploadIds) {
   const allowed = uploadIds?.length ? new Set(uploadIds) : null;
   const timestamp = Date.now();
-  for (const schedule of document.schedules) {
-    if (schedule.workspaceId !== workspaceId || schedule.status !== "active") continue;
-    const dueAt = Date.parse(schedule.nextRunAt || "");
-    if (!Number.isFinite(dueAt) || dueAt > timestamp) continue;
-    for (const upload of document.uploads) {
-      if (upload.workspaceId === workspaceId && upload.scheduleId === schedule.id && upload.status === "queued" && (!allowed || allowed.has(upload.id))) {
-        queueJob(document, upload);
-      }
-    }
-    schedule.lastRunAt = new Date(dueAt).toISOString();
-    schedule.nextRunAt = nextScheduleOccurrence(schedule, new Date(timestamp + 1_000))?.toISOString() || null;
-    if (!schedule.nextRunAt) schedule.status = "inactive";
-    schedule.updatedAt = now();
-  }
   for (const upload of document.uploads) {
     if (upload.workspaceId !== workspaceId || (allowed && !allowed.has(upload.id))) continue;
-    if (!upload.scheduleId && scheduleDue(upload, document, timestamp)) queueJob(document, upload);
+    if (!upload.scheduleId && !upload.scheduledAt && scheduleDue(upload, document, timestamp)) queueJob(document, upload);
   }
 }
 
@@ -879,6 +865,10 @@ function selectClaimableCentralJobs(document, workspaceId, timestamp, limit) {
   const selected = [];
   const candidates = document.jobs
     .filter((job) => job.workspaceId === workspaceId && ["queued", "waiting_for_companion"].includes(job.state))
+    .filter((job) => {
+      const upload = document.uploads.find((item) => item.id === job.uploadId);
+      return Boolean(upload && !upload.scheduledAt && !upload.scheduleId);
+    })
     .filter((job) => (!job.notBefore || Date.parse(job.notBefore) <= timestamp) && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= timestamp))
     .filter((job) => job.attemptCount < MAX_JOB_ATTEMPTS);
 

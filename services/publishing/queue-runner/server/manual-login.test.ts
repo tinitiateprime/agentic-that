@@ -1,7 +1,56 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "playwright-core";
+import { selectManualLoginSurface } from "./services/login-surface.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification } from "./services/publishers/manual-login.js";
+
+test("normal X and YouTube login opens in external Chrome or Edge", () => {
+  for (const platform of ["x", "youtube"] as const) {
+    assert.equal(selectManualLoginSurface({
+      platform,
+      requestedSurface: "engine",
+      activeEngine: "companion",
+      credentialConfigured: false,
+      externalProfilePresent: false,
+      embeddedBrowserAvailable: true,
+    }), "external");
+  }
+});
+
+test("normal Instagram, Facebook, and LinkedIn login remains embedded", () => {
+  for (const platform of ["instagram", "facebook", "linkedin"] as const) {
+    assert.equal(selectManualLoginSurface({
+      platform,
+      requestedSurface: "engine",
+      activeEngine: "companion",
+      credentialConfigured: false,
+      externalProfilePresent: false,
+      embeddedBrowserAvailable: true,
+    }), "embedded");
+  }
+});
+
+test("normal reconnect preserves a provider-bound managed Chrome session", () => {
+  assert.equal(selectManualLoginSurface({
+    platform: "linkedin",
+    requestedSurface: "engine",
+    activeEngine: "external_browser",
+    credentialConfigured: true,
+    externalProfilePresent: true,
+    embeddedBrowserAvailable: true,
+  }), "external");
+});
+
+test("explicit embedded login remains available when Companion supports it", () => {
+  assert.equal(selectManualLoginSurface({
+    platform: "youtube",
+    requestedSurface: "embedded",
+    activeEngine: "companion",
+    credentialConfigured: false,
+    externalProfilePresent: false,
+    embeddedBrowserAvailable: true,
+  }), "embedded");
+});
 
 test("manual login reports a closed browser with a useful retry message", async () => {
   const page = {

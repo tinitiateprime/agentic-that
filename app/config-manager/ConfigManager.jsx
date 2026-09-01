@@ -1141,7 +1141,7 @@ function PublishingManager({
       </div>
 
       <div className="config-publishing-toolbar">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, schedules, and channel views.</p></div>
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, queues, and channel views.</p></div>
         {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>
 

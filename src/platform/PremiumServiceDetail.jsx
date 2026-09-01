@@ -7,11 +7,9 @@ import {
   AtSign,
   BarChart3,
   Bookmark,
-  CalendarDays,
   Check,
   CheckCircle2,
   ChevronRight,
-  Clock3,
   Download,
   Eye,
   FileText,
@@ -39,7 +37,6 @@ import {
 import {
   PiBriefcaseBold,
   PiBroadcastBold,
-  PiCalendarDotsBold,
   PiChartLineUpBold,
   PiChatsCircleBold,
   PiCheckCircleBold,
@@ -73,31 +70,29 @@ const publishingProfiles = {
   instagram: {
     account: "@agenticthat",
     heroTitle: "Instagram Publishing",
-    heroDescription: "Create the post, see exactly how it will look, and choose the right publish time—all in one clear workflow.",
+    heroDescription: "Create the post, see exactly how it will look, and publish through the right account—all in one clear workflow.",
     headline: "Make every launch feel considered.",
     body: "A first look at our summer collection. Designed for slower days and brighter plans.",
     mediaLabel: "Summer collection",
     postType: "Instagram feed post · 4:5",
-    scheduleTime: "4:00 PM",
     mediaClass: styles.instagramMedia,
     audience: [
       ["Brands and businesses", "Keep campaign posts consistent across every connected account."],
-      ["Content teams", "Draft, review, and schedule visual content without switching tools."],
+      ["Content teams", "Draft, review, and publish visual content without switching tools."],
       ["Social media managers", "See upcoming posts and delivery results in one clear queue."],
     ],
   },
   youtube: {
     account: "AgenticThat",
     heroTitle: "YouTube Publishing",
-    heroDescription: "Prepare the video, title, description, channel, and release time in one clear publishing workflow.",
+    heroDescription: "Prepare the video, title, description, and channel in one clear publishing workflow.",
     headline: "How AgenticThat turns one campaign into a clear publishing plan",
-    body: "A practical walkthrough of composing, reviewing, scheduling, and tracking every channel from one workspace.",
+    body: "A practical walkthrough of composing, reviewing, publishing, and tracking every channel from one workspace.",
     mediaLabel: "Publishing workflow, explained",
     postType: "Public video · 16:9",
-    scheduleTime: "6:30 PM",
     mediaClass: styles.youtubeMedia,
     audience: [
-      ["Creators and studios", "Prepare the video, title, description, and release time together."],
+      ["Creators and studios", "Prepare the video, title, description, and destination together."],
       ["Channel teams", "Coordinate releases without losing track of the destination channel."],
       ["Marketing teams", "Plan video and community updates alongside the wider campaign."],
     ],
@@ -105,16 +100,15 @@ const publishingProfiles = {
   facebook: {
     account: "AgenticThat",
     heroTitle: "Facebook Publishing",
-    heroDescription: "Create page-ready updates, confirm the right account, preview the post, and schedule it with confidence.",
+    heroDescription: "Create page-ready updates, confirm the right account, preview the post, and publish it with confidence.",
     headline: "A faster way to keep customers informed",
-    body: "Your next update is ready: clear copy, approved media, and the right publish time—all organised in one shared workspace.",
+    body: "Your next update is ready: clear copy, approved media, and the right destination—all organised in one shared workspace.",
     mediaLabel: "Customer update",
     postType: "Facebook Page post",
-    scheduleTime: "11:30 AM",
     mediaClass: styles.facebookMedia,
     audience: [
-      ["Local businesses", "Schedule page updates, announcements, and campaign posts."],
-      ["Community teams", "Keep useful updates visible and publish them at the right time."],
+      ["Local businesses", "Publish page updates, announcements, and campaign posts."],
+      ["Community teams", "Keep useful updates visible and publish them through the right page."],
       ["Marketing teams", "Manage page-specific copy and media from one publishing flow."],
     ],
   },
@@ -123,30 +117,28 @@ const publishingProfiles = {
     heroTitle: "X Publishing",
     heroDescription: "Write concise updates, verify the publishing account, preview every detail, and send at the right moment.",
     headline: "A faster publishing workflow just shipped.",
-    body: "Compose, preview, schedule, and track every channel from one AgenticThat workspace. Less switching. More clarity.",
+    body: "Compose, preview, publish, and track every channel from one AgenticThat workspace. Less switching. More clarity.",
     mediaLabel: "Product release",
     postType: "X post · Within 280 characters",
-    scheduleTime: "2:15 PM",
     mediaClass: styles.xMedia,
     audience: [
       ["Product teams", "Prepare launches and updates while keeping every post concise."],
-      ["Editorial teams", "Schedule timely posts and confirm exactly what went live."],
+      ["Editorial teams", "Publish timely posts and confirm exactly what went live."],
       ["Multi-account teams", "Choose the correct identity before an update enters the queue."],
     ],
   },
   linkedin: {
     account: "AgenticThat",
     heroTitle: "LinkedIn Publishing",
-    heroDescription: "Prepare professional updates, preserve review context, and schedule every company post from one workspace.",
+    heroDescription: "Prepare professional updates, preserve review context, and publish every company post from one workspace.",
     headline: "Why content operations need one source of truth",
     body: "Strong publishing depends on clear ownership, review context, and delivery visibility. Here is the operating model our team uses.",
     mediaLabel: "Content operations playbook",
     postType: "Company Page update",
-    scheduleTime: "9:30 AM",
     mediaClass: styles.linkedinMedia,
     audience: [
       ["Company teams", "Prepare polished updates for the right company or personal account."],
-      ["B2B marketers", "Coordinate thought leadership, launches, and campaign schedules."],
+      ["B2B marketers", "Coordinate thought leadership, launches, and campaign publishing."],
       ["People teams", "Plan hiring and culture updates with a clear review history."],
     ],
   },
@@ -172,11 +164,11 @@ const categoryContent = {
   },
   publishing: {
     sectionTitle: "Everything you need to move a post from idea to published.",
-    sectionIntro: "Media, copy, destination, timing, and delivery status stay in one clear flow.",
+    sectionIntro: "Media, copy, destination, and delivery status stay in one clear flow.",
     benefits: [
       [PiPencilSimpleBold, "Prepare the post", "Write platform-ready copy and keep it beside the correct media."],
       [PiEyeBold, "Preview before publishing", "See the complete post before it reaches your audience."],
-      [PiCalendarDotsBold, "Choose the right time", "Publish now or add the post to a deliberate content schedule."],
+      [PiPaperPlaneTiltBold, "Publish with control", "Start the post only after its content, destination, and preview are confirmed."],
       [PiCheckCircleBold, "Know what happened", "See whether each post is queued, published, or needs attention."],
     ],
   },
@@ -221,9 +213,9 @@ function actionFor(service, status) {
 }
 
 const telegramChats = [
-  { id: "maya", avatar: "/avatars/maya-rao.svg", name: "Maya Rao", preview: "Can we confirm the launch?", time: "10:24", incoming: "Can we confirm the launch update for 4:00 PM?", outgoing: "Yes—everything is ready. I’ll send it at 4:00 PM." },
+  { id: "maya", avatar: "/avatars/maya-rao.svg", name: "Maya Rao", preview: "Can we confirm the launch?", time: "10:24", incoming: "Can we confirm the launch update?", outgoing: "Yes—everything is ready. I’ll send it now." },
   { id: "arjun", avatar: "/avatars/arjun-kumar.svg", name: "Arjun Kumar", preview: "Files are ready to review.", time: "09:48", incoming: "The final files are ready. Should I share them with the team?", outgoing: "Please do. I’ve confirmed the review group and added the deadline." },
-  { id: "priya", avatar: "/avatars/priya-shah.svg", name: "Priya Shah", preview: "Thanks, that works.", time: "Mon", incoming: "The customer update looks good. Can we send it this afternoon?", outgoing: "Absolutely. It’s scheduled for 3:30 PM and ready for delivery." },
+  { id: "priya", avatar: "/avatars/priya-shah.svg", name: "Priya Shah", preview: "Thanks, that works.", time: "Mon", incoming: "The customer update looks good. Can we send it now?", outgoing: "Absolutely. It’s ready and I’m sending it now." },
 ];
 
 function ProfileAvatar({ src, name, size = "regular" }) {
@@ -322,7 +314,7 @@ function TelegramAccounts() {
 const publishingWorkflowViews = [
   { id: "compose", label: "Compose", note: "Build the post", icon: FileText },
   { id: "preview", label: "Preview", note: "See the final post", icon: Eye },
-  { id: "schedule", label: "Schedule", note: "Choose the time", icon: CalendarDays },
+  { id: "publish", label: "Publish", note: "Start delivery", icon: Send },
 ];
 
 function PublishingWorkspaceDemo({ service, profile }) {
@@ -350,7 +342,7 @@ function PublishingWorkspaceDemo({ service, profile }) {
         <div className={styles.instagramViewport}>
           <div className={`${styles.instagramScene} ${active === 0 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 0}>{service.slug === "instagram" ? <InstagramComposeScene profile={profile} /> : <PlatformComposeScene service={service} profile={profile} />}</div>
           <div className={`${styles.instagramScene} ${active === 1 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 1}>{service.slug === "instagram" ? <InstagramPreviewScene profile={profile} /> : <PlatformPreviewScene service={service} profile={profile} />}</div>
-          <div className={`${styles.instagramScene} ${active === 2 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 2}><PublishingScheduleScene service={service} profile={profile} /></div>
+          <div className={`${styles.instagramScene} ${active === 2 ? styles.instagramSceneActive : ""}`} aria-hidden={active !== 2}><PublishingDeliveryScene service={service} profile={profile} /></div>
         </div>
       </div>
     </div>
@@ -447,7 +439,7 @@ function InstagramPreviewScene({ profile }) {
         <h3>Review the post your audience will see.</h3>
         <dl><div><dt>Publishing to</dt><dd><img src="/instagram-logo.svg" alt="" />{profile.account}</dd></div><div><dt>Post type</dt><dd>Feed post · 4:5</dd></div><div><dt>Caption</dt><dd>{profile.body}</dd></div></dl>
         <p><CheckCircle2 size={14} />Instagram checks passed</p>
-        <footer><button type="button">Back</button><button type="button">Continue to schedule<ArrowRight size={13} /></button></footer>
+        <footer><button type="button">Back</button><button type="button">Continue to publish<ArrowRight size={13} /></button></footer>
       </aside>
     </div>
   );
@@ -540,27 +532,24 @@ function PlatformPreviewScene({ service, profile }) {
         <h3>Review exactly what your audience will see.</h3>
         <dl><div><dt>{platformFieldLabel(service)}</dt><dd><img src={service.logo} alt="" />{profile.account}</dd></div><div><dt>Content format</dt><dd>{profile.postType}</dd></div><div><dt>Post copy</dt><dd>{profile.body}</dd></div></dl>
         <p><CheckCircle2 size={15} />{service.platformName} checks passed</p>
-        <footer><button type="button">Back</button><button type="button">Continue to schedule<ArrowRight size={14} /></button></footer>
+        <footer><button type="button">Back</button><button type="button">Continue to publish<ArrowRight size={14} /></button></footer>
       </aside>
     </div>
   );
 }
 
-function PublishingScheduleScene({ service, profile }) {
-  const days = Array.from({ length: 30 }, (_, index) => index + 1);
+function PublishingDeliveryScene({ service, profile }) {
   return (
     <div className={styles.instagramScheduleScene}>
       <section className={styles.instagramCalendar}>
-        <header><button type="button">‹</button><strong>September 2026</strong><button type="button">›</button></header>
-        <div className={styles.instagramWeek}><span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span></div>
-        <div className={styles.instagramDays}><i /><i />{days.map((day) => <button type="button" className={day === 24 ? styles.instagramSelectedDay : ""} key={day}>{day}</button>)}</div>
-        <div className={styles.instagramTime}><span><Clock3 size={15} />{profile.scheduleTime || "4:00 PM"}</span><small>Asia/Kolkata</small></div>
+        <header><strong>Ready to publish</strong></header>
+        <div className={styles.instagramTime}><span><CheckCircle2 size={15} />Pre-flight checks passed</span><small>Saved account session</small></div>
       </section>
       <aside className={styles.instagramQueuePreview}>
-        <span>QUEUE PREVIEW</span>
-        <article><img src={publishingImageFor(service)} alt="" /><div><small>Thu, 24 Sep · {profile.scheduleTime || "4:00 PM"}</small><strong>{profile.headline}</strong><span>{profile.account}</span></div><CheckCircle2 size={17} /></article>
-        <div className={styles.instagramBestTime}><Sparkles size={18} /><span><strong>A strong time to publish</strong><small>The release time is clear and the post will stay visible in your queue.</small></span></div>
-        <footer><button type="button">Edit</button><button type="button">Add to queue<ArrowRight size={15} /></button></footer>
+        <span>PUBLISHING PREVIEW</span>
+        <article><img src={publishingImageFor(service)} alt="" /><div><small>Ready now</small><strong>{profile.headline}</strong><span>{profile.account}</span></div><CheckCircle2 size={17} /></article>
+        <div className={styles.instagramBestTime}><Sparkles size={18} /><span><strong>Companion is ready</strong><small>The content and destination are confirmed before browser publishing starts.</small></span></div>
+        <footer><button type="button">Edit</button><button type="button">Publish now<ArrowRight size={15} /></button></footer>
       </aside>
     </div>
   );
@@ -621,7 +610,7 @@ function Benefits({ content }) {
 function AudienceAndSetup({ service, content }) {
   const platformProfile = service.category === "publishing" ? publishingProfiles[service.slug] : null;
   const audience = platformProfile?.audience.map(([title, description], index) => [[PiBriefcaseBold, PiUsersThreeBold, PiChartLineUpBold][index], title, description]) || content.audience;
-  const stepIcons = service.category === "scraping" ? [PiLinkSimpleBold, PiFunnelBold, PiDownloadSimpleBold] : service.category === "publishing" ? [PiLockKeyBold, PiPencilSimpleBold, PiCalendarDotsBold] : [PiDeviceMobileBold, PiShieldCheckBold, PiPaperPlaneTiltBold];
+  const stepIcons = service.category === "scraping" ? [PiLinkSimpleBold, PiFunnelBold, PiDownloadSimpleBold] : service.category === "publishing" ? [PiLockKeyBold, PiPencilSimpleBold, PiPaperPlaneTiltBold] : [PiDeviceMobileBold, PiShieldCheckBold, PiPaperPlaneTiltBold];
   return (
     <section className={styles.guideSection}>
       <article className={styles.audiencePanel}>
@@ -649,13 +638,13 @@ function PublishingProof({ service }) {
   const profile = publishingProfiles[service.slug];
   return (
     <section className={`${styles.proofSection} ${styles.instagramProofSection}`}>
-      <div className={styles.proofCopy}><h2>From draft to delivery, nothing gets lost.</h2><p>See the final creative, destination account, publish time, and delivery state together instead of checking separate tools.</p></div>
+      <div className={styles.proofCopy}><h2>From draft to delivery, nothing gets lost.</h2><p>See the final creative, destination account, queue state, and delivery result together instead of checking separate tools.</p></div>
       <div className={styles.instagramDeliveryRecord}>
-        <header><img src={publishingImageFor(service)} alt="" /><span><strong>{profile.headline}</strong><small>{profile.account} · {profile.postType}</small></span><em>On schedule</em></header>
+        <header><img src={publishingImageFor(service)} alt="" /><span><strong>{profile.headline}</strong><small>{profile.account} · {profile.postType}</small></span><em>Ready</em></header>
         <ol>
           <li><span><PiPencilSimpleBold /></span><div><strong>Draft approved</strong><small>Copy and media are ready</small></div><CheckCircle2 size={17} /></li>
-          <li><span><PiCalendarDotsBold /></span><div><strong>Scheduled for 24 September</strong><small>{profile.scheduleTime || "4:00 PM"} · Asia/Kolkata</small></div><CheckCircle2 size={17} /></li>
-          <li><span><img src={service.logo} alt="" /></span><div><strong>{service.platformName} delivery</strong><small>Waiting safely in the publishing queue</small></div><Clock3 size={17} /></li>
+          <li><span><PiPaperPlaneTiltBold /></span><div><strong>Destination confirmed</strong><small>{profile.account} is ready</small></div><CheckCircle2 size={17} /></li>
+          <li><span><img src={service.logo} alt="" /></span><div><strong>{service.platformName} delivery</strong><small>Ready for Companion publishing</small></div><Send size={17} /></li>
         </ol>
       </div>
     </section>
@@ -716,7 +705,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
               {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ChevronRight size={17} /></Link> : <a href="#how-it-works">See how it works<ChevronRight size={17} /></a>}
             </div>
             <div className={styles.heroAssurances}>
-              {service.category === "scraping" ? <><span><Globe2 />Public data only</span><span><ShieldCheck />No Instagram login</span><span><Download />CSV and JSON</span></> : service.category === "publishing" ? <><span><Eye />Preview first</span><span><CalendarDays />Schedule clearly</span><span><BarChart3 />Track delivery</span></> : <><span><LockKeyhole />Encrypted sessions</span><span><Users />Multiple accounts</span><span><MessageCircle />Direct messaging</span></>}
+              {service.category === "scraping" ? <><span><Globe2 />Public data only</span><span><ShieldCheck />No Instagram login</span><span><Download />CSV and JSON</span></> : service.category === "publishing" ? <><span><Eye />Preview first</span><span><Send />Publish with control</span><span><BarChart3 />Track delivery</span></> : <><span><LockKeyhole />Encrypted sessions</span><span><Users />Multiple accounts</span><span><MessageCircle />Direct messaging</span></>}
             </div>
             <div className={styles.statusLine}><i className={styles[`status_${status.state}`]} />{status.label}{status.detail ? <small>{status.detail}</small> : null}</div>
           </div>

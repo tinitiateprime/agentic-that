@@ -1,4 +1,4 @@
-import { getInstagramScraperInfo, runInstagramScrape } from "./scraper.ts";
+import { getInstagramScraperInfo, instagramScrapeRange, runInstagramScrape } from "./scraper.ts";
 import {
   InstagramRunStore,
   selectRecentRunFallback,
@@ -73,7 +73,7 @@ function requestError(message: string): never {
   throw new InstagramRequestError(message);
 }
 
-function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
+export function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
   const requestedMode = String(body.mode || body.inputMode || "").trim().toLowerCase();
   let requestedQuery = String(body.query || body.keyword || "").trim();
   if (requestedMode === "keyword" && requestedQuery && !requestedQuery.startsWith("#")) {
@@ -128,7 +128,7 @@ function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
   );
   const sortBy = collectionMode === "engagement" ? "engagement" as const : "recent" as const;
 
-  return {
+  const input: InstagramJobInput = {
     requestedMode,
     requestedQuery,
     maxResults,
@@ -143,6 +143,14 @@ function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
     timezoneOffsetMinutes,
     sortBy
   };
+  if (collectionMode === "range") {
+    try {
+      instagramScrapeRange({ ...input, query: input.requestedQuery });
+    } catch (error) {
+      requestError(error instanceof Error ? error.message : "Choose a valid range.");
+    }
+  }
+  return input;
 }
 
 function friendlyScrapeMessage(error: unknown) {

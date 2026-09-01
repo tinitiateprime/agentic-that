@@ -35,6 +35,14 @@ test("Companion validation preserves the Facebook scraper contract", () => {
   assert.equal(input.maxResults, 50);
   assert.equal(prepareFacebookCompanionInput({ mode: "profile", query: "example", comparison_mode: true }).skipComments, true);
   assert.throws(() => prepareFacebookCompanionInput({ mode: "keyword", query: "launch", collection_mode: "engagement" }), /Profile analysis/);
+  assert.throws(() => prepareFacebookCompanionInput({
+    mode: "profile",
+    query: "example",
+    collection_mode: "range",
+    range_type: "date",
+    range_from: "2026-02-30",
+    range_to: "2026-03-01",
+  }), /valid Facebook post range/);
 });
 
 test("Companion jobs are owner-scoped and return only the current live result", async () => {

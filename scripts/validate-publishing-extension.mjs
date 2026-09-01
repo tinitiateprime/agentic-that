@@ -27,12 +27,13 @@ if (extensionPermissions.some(permission => /instagram\.com/i.test(permission)))
 if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
   throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
 }
-if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).includes(productionMatch))) {
+if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).some(match => match === productionMatch || match === "https://*/*"))) {
   throw new Error(`Publishing extension media resources must be available on ${productionMatch}.`);
 }
 
 const files = new Set([
   manifest.background.service_worker,
+  "trusted-origins.js",
   manifest.action?.default_popup,
   ...Object.values(manifest.icons ?? {}),
   ...Object.values(manifest.action?.default_icon ?? {}),
@@ -41,6 +42,15 @@ const files = new Set([
 ].filter(Boolean));
 
 for (const file of files) await access(path.join(extensionRoot, file));
+
+const serviceWorkerSource = await readFile(path.join(extensionRoot, manifest.background.service_worker), "utf8");
+if (!serviceWorkerSource.includes('importScripts("trusted-origins.js")')) {
+  throw new Error("Publishing extension service worker must load the trusted-origin policy.");
+}
+const mediaProxySource = await readFile(path.join(extensionRoot, "media-proxy.js"), "utf8");
+if (!mediaProxySource.includes("assertTrustedParent")) {
+  throw new Error("Publishing extension media proxy must verify its embedding dashboard origin.");
+}
 
 const scriptFiles = [...files].filter(file => file.endsWith(".js"));
 for (const file of scriptFiles) {

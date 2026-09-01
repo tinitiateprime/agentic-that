@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { runInstagramCompanionScrape, InstagramCompanionCancelledError } from "./companion-runner.js";
 import { instagramCompanionDesktopHost } from "./companion-desktop-host.js";
-import type { InstagramScrapeInput } from "./scraper.js";
+import { instagramScrapeRange, type InstagramScrapeInput } from "./scraper.js";
+import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 export type InstagramCompanionJobStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type InstagramCompanionFailureCode =
@@ -37,6 +38,7 @@ type CompanionJob = {
   result?: Awaited<ReturnType<typeof runInstagramCompanionScrape>>;
   error?: InstagramCompanionFailure;
   controller?: AbortController;
+  queueController?: AbortController;
   timedOut?: boolean;
 };
 
@@ -50,7 +52,7 @@ const activityListeners = new Set<InstagramCompanionActivityListener>();
 let activityNotificationQueued = false;
 
 function companionActivityJob(job: CompanionJob, queuePosition: number | null = null) {
-  return {
+  const input = {
     id: job.id,
     query: job.requestedQuery,
     collectionMode: job.input.collectionMode || "latest",
@@ -66,6 +68,7 @@ function companionActivityJob(job: CompanionJob, queuePosition: number | null = 
     discoveryStatus: job.result?.discoveryStatus || null,
     error: job.error ? { ...job.error } : null,
   };
+  return input;
 }
 
 export function instagramCompanionActivityState() {
@@ -160,7 +163,7 @@ export function prepareInstagramCompanionInput(body: Record<string, unknown>): I
   }
 
   const recentDays = Math.max(1, Math.min(365, Number(body.recent_days || body.recentDays) || 7));
-  return {
+  const input: InstagramScrapeInput = {
     query,
     maxResults: singlePost ? 1 : Math.max(1, Math.min(50, Number(body.max_results || body.maxResults) || 10)),
     collectionMode,
@@ -179,6 +182,8 @@ export function prepareInstagramCompanionInput(body: Record<string, unknown>): I
     ),
     sortBy: collectionMode === "engagement" ? "engagement" : "recent",
   };
+  if (collectionMode === "range") instagramScrapeRange(input);
+  return input;
 }
 
 function failureFor(error: unknown, job: CompanionJob): InstagramCompanionFailure {
@@ -318,9 +323,18 @@ async function pumpQueue() {
     return;
   }
   activeJobId = job.id;
+  const queueController = new AbortController();
+  job.queueController = queueController;
   try {
-    await executeJob(job);
+    await runCompanionScrapingTask("instagram", job.id, async () => {
+      job.queueController = undefined;
+      if (job.status !== "queued") return;
+      await executeJob(job);
+    }, queueController.signal);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
   } finally {
+    job.queueController = undefined;
     activeJobId = null;
     pruneJobs();
     notifyInstagramCompanionActivity();
@@ -363,6 +377,7 @@ export async function cancelInstagramCompanionJob(ownerKey: string, jobId: strin
     const index = queue.indexOf(job.id);
     if (index >= 0) queue.splice(index, 1);
     job.status = "cancelled";
+    job.queueController?.abort();
     job.error = { code: "cancelled", message: "Instagram scraping was cancelled.", retryable: true };
     job.completedAt = new Date().toISOString();
     touch(job);
@@ -380,6 +395,7 @@ export async function cancelAllInstagramCompanionJobs(reason = "Instagram scrapi
   let cancelled = 0;
   for (const job of jobs.values()) {
     if (job.status === "queued") {
+      job.queueController?.abort();
       job.status = "cancelled";
       job.error = { code: "cancelled", message: reason, retryable: true };
       job.completedAt = new Date().toISOString();

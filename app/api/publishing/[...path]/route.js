@@ -7,30 +7,24 @@ import {
   centralMediaFileName,
   claimCentralJobs,
   createCentralAccount,
-  createCentralSchedule,
   createCentralStagedUpload,
-  createCentralSubmission,
   createCentralUpload,
   createCompanionPairing,
   deleteCentralAccount,
-  deleteCentralSchedule,
   deleteCentralStagedUpload,
   deleteCentralUpload,
   getCentralCompanion,
   getCentralStagedUpload,
   heartbeatCentralCompanion,
   listCentralAccounts,
-  listCentralSchedules,
   listCentralSubmissions,
   listCentralUploads,
   publishingDashboard,
   publishingUserFromPrincipal,
   queueCentralUploads,
   removeCentralCompanion,
-  scheduleCentralSubmission,
   updateCentralAccount,
   updateCentralJob,
-  updateCentralSchedule,
   updateCentralUpload,
   updateCentralUploadStatus,
   consumeCentralStagedUpload,
@@ -49,6 +43,10 @@ function fail(error) {
   } catch {
     return Response.json({ message: error instanceof Error ? error.message : "The publishing request failed." }, { status: 400 });
   }
+}
+
+function schedulingUnavailable() {
+  return Response.json({ message: "Scheduling is temporarily unavailable. Publish or queue the post now instead." }, { status: 410 });
 }
 
 async function segments(context) {
@@ -183,6 +181,9 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
 async function createPosts(principalValue, input) {
   const destinations = Array.isArray(input.destinations) ? input.destinations : [];
   if (!destinations.length) throw new Error("Choose at least one workspace account.");
+  if (destinations.some((destination) => destination.scheduledAt || destination.scheduleId)) {
+    throw new Error("Scheduling is temporarily unavailable. Publish or queue the post now instead.");
+  }
   await Promise.all(destinations.map((destination) => centralAccountForPrincipal(principalValue, destination.accountId, "operate")));
   return Promise.all(destinations.map((destination) => createCentralUpload(principalValue, {
     ...input,
@@ -267,7 +268,7 @@ export async function GET(request, context) {
       const { accountIds: visibleAccountIds } = await visibleWorkspacePublishing(user);
       return Response.json((await listCentralSubmissions(user.workspaceId)).filter((submission) => submission.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))));
     }
-    if (parts[0] === "schedules") return Response.json(await listCentralSchedules(user.workspaceId));
+    if (parts[0] === "schedules") return Response.json([]);
     if (parts[0] === "social-media-schedules") return Response.json([]);
     if (parts[0] === "activity-logs") {
       const [dashboard, visible] = await Promise.all([publishingDashboard(user.workspaceId), visibleWorkspacePublishing(user)]);
@@ -330,20 +331,13 @@ export async function POST(request, context) {
       return Response.json(await createPosts(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "text") {
-      const user = await principal("publishing.content.create");
-      await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
-      return Response.json(await createCentralSubmission(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
+      return schedulingUnavailable();
     }
     if (parts[0] === "submissions" && parts[1] === "staged") {
-      const user = await principal("publishing.content.create");
-      await Promise.all((body.selectedAccountIds || []).map((accountId) => centralAccountForPrincipal(user, accountId, "operate")));
-      const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createCentralSubmission(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
+      return schedulingUnavailable();
     }
     if (parts[0] === "submissions" && parts[2] === "schedule") {
-      const user = await principal("publishing.schedule.manage");
-      await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
-      return Response.json(await scheduleCentralSubmission(user, parts[1], body.destinations || []));
+      return schedulingUnavailable();
     }
     if (parts[0] === "platforms" && parts[2] === "accounts") {
       const user = await principal("publishing.accounts.configure");
@@ -351,15 +345,14 @@ export async function POST(request, context) {
       return Response.json(await createCentralAccount(user, parts[1], body), { status: 201 });
     }
     if (parts[0] === "schedules") {
-      const user = await principal("publishing.schedule.manage");
-      return Response.json(await createCentralSchedule(user, body), { status: 201 });
+      return schedulingUnavailable();
     }
     if (parts[0] === "automation" && parts[1] === "consent") {
       await principal("publishing.execute");
       return Response.json({ granted: true, message: "Publishing jobs are authorized for the workspace Companion." });
     }
     if (parts[0] === "publishing-safety" && parts[1] === "assess") {
-      const user = await principal("publishing.schedule.manage");
+      const user = await principal("publishing.execute");
       await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
       return Response.json({ allowed: true, issues: [], assessments: [] });
     }
@@ -399,14 +392,14 @@ export async function PATCH(request, context) {
       return Response.json(await updateCentralUploadStatus(user, parts[1], body.status, body.failureReason));
     }
     if (parts[0] === "uploads" && parts[1]) {
+      if (Object.hasOwn(body, "scheduledAt") || Object.hasOwn(body, "scheduleId")) return schedulingUnavailable();
       const scheduleOnly = Object.keys(body).length > 0 && Object.keys(body).every((key) => key === "scheduledAt" || key === "scheduleId");
       const user = await principal(scheduleOnly ? "publishing.schedule.manage" : "publishing.content.edit");
       await centralUploadForPrincipal(user, parts[1], "operate");
       return Response.json(await updateCentralUpload(user, parts[1], body));
     }
     if (parts[0] === "schedules" && parts[1]) {
-      const user = await principal("publishing.schedule.manage");
-      return Response.json(await updateCentralSchedule(user, parts[1], body));
+      return schedulingUnavailable();
     }
     return Response.json({ message: "Publishing endpoint was not found." }, { status: 404 });
   } catch (error) {
@@ -439,8 +432,7 @@ export async function DELETE(request, context) {
       return Response.json(await deleteCentralUpload(user, parts[1]));
     }
     if (parts[0] === "schedules" && parts[1]) {
-      const user = await principal("publishing.schedule.manage");
-      return Response.json(await deleteCentralSchedule(user, parts[1]));
+      return schedulingUnavailable();
     }
     return Response.json({ message: "Publishing endpoint was not found." }, { status: 404 });
   } catch (error) {

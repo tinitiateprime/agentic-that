@@ -8,7 +8,7 @@ if (Test-Path Env:AGENTICTHAT_COMPANION_PACKAGE_ROOT) {
 $packageRoot = if ($configuredPackageRoot) {
   [System.IO.Path]::GetFullPath($configuredPackageRoot)
 } else {
-  [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps\publishing-companion-desktop\out\AgenticThat Publishing Companion-win32-x64"))
+  [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps\publishing-companion-desktop\out\AgenticThat Companion-win32-x64"))
 }
 $executable = Join-Path $packageRoot "AgenticThat Publishing Companion.exe"
 if (-not (Test-Path -LiteralPath $executable)) {
@@ -22,6 +22,9 @@ if ((Get-Content -LiteralPath $packagedMain -Raw) -match "interaction-lock") {
 $packagedMainSource = Get-Content -LiteralPath $packagedMain -Raw
 if ($packagedMainSource -notmatch "subscribeFacebookCompanionActivity") {
   throw "The packaged Companion is missing Facebook scraping activity integration."
+}
+if ($packagedMainSource -notmatch 'EMBED_FULL_PUBLISHING_WORKSPACE = process\.env\.AGENTICTHAT_COMPANION_EMBED_DASHBOARD !== "0"') {
+  throw "The packaged Companion does not enable the one-install embedded dashboard."
 }
 $packagedControlSource = Get-Content -LiteralPath (Join-Path $packagedAppRoot "control.html") -Raw
 if ($packagedControlSource -notmatch "Instagram and Facebook") {
@@ -131,6 +134,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   if (-not $health.capabilities.instagramScraping.available) { throw "Instagram Companion scraping is unavailable." }
   if (-not $health.capabilities.facebookScraping.available) { throw "Facebook Companion scraping is unavailable." }
+  if (-not $health.capabilities.resourceScheduler) { throw "The shared Companion resource scheduler is unavailable." }
   foreach ($platform in @("facebook", "instagram", "x", "linkedin", "youtube")) {
     if ($health.platforms -notcontains $platform) { throw "The packaged runtime is missing $platform support." }
   }
@@ -204,6 +208,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $xManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($xAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $xManualLogin.started) { throw "The X manual-login smoke session did not start." }
+  if ($xManualLogin.surface -ne "external") { throw "X login did not select the required external Chrome or Edge flow." }
 
   $youtubeAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/youtube/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
@@ -214,6 +219,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $youtubeManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($youtubeAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $youtubeManualLogin.started) { throw "The YouTube manual-login smoke session did not start." }
+  if ($youtubeManualLogin.surface -ne "external") { throw "YouTube login did not select the required external Chrome or Edge flow." }
 
   $companionLog = Join-Path $smokeRoot "publishing-data\logs\publishing-companion.log"
   $loginNavigationReady = $false
@@ -224,8 +230,8 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
       $loginLog -match "Opening instagram login page .* using the embedded login surface" -and
       $loginLog -match "Opening facebook login page .* using the embedded login surface" -and
       $loginLog -match "Opening linkedin login page .* using the embedded login surface" -and
-      $loginLog -match "Opening x login page .* using the embedded login surface" -and
-      $loginLog -match "Opening youtube login page .* using the embedded login surface" -and
+      $loginLog -match "Opening x login page .* using the external login surface" -and
+      $loginLog -match "Opening youtube login page .* using the external login surface" -and
       $loginLog -match "Navigating to Instagram login page" -and
       $loginLog -match "Navigating to Facebook home page" -and
       $loginLog -match "Navigating to LinkedIn login page" -and
@@ -243,6 +249,14 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
     throw "An embedded manual-login browser connection failed."
+  }
+
+  try {
+    Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$serviceOrigin/api/schedules" -Headers $authorization `
+      -ContentType "application/json" -Body '{"name":"must-not-run","time":"09:00","frequency":"daily","status":"active"}' -TimeoutSec 5 | Out-Null
+    throw "The packaged Companion unexpectedly accepted a publishing schedule."
+  } catch {
+    if ($_.Exception.Response.StatusCode.value__ -ne 410) { throw }
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"
@@ -268,7 +282,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
   Write-Host "Embedded live browser: enabled"
-  Write-Host "All five platform logins: opened in isolated Companion partitions"
+  Write-Host "Login surfaces: Instagram/Facebook/LinkedIn embedded; X/YouTube external"
   Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"

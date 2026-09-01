@@ -4,7 +4,7 @@ import { requireAccess, requireCapability } from "@platform/server/access-contro
 
 export const metadata = {
   title: "Publish Queue Runner - AgenticThat",
-  description: "Queue, schedule, and publish content across connected social channels.",
+  description: "Prepare, queue, and publish content across connected social channels.",
 };
 
 export default async function PublishingPage({ searchParams }) {

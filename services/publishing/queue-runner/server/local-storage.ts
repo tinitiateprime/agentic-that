@@ -973,8 +973,8 @@ function scheduledTime(upload: PlatformUpload) {
 export function isUploadReadyForAutomation(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued") return false;
   if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
-  const scheduledAt = scheduledTime(upload);
-  return scheduledAt === null ? !upload.scheduledAt : scheduledAt <= now;
+  if (upload.scheduledAt || upload.scheduleId) return false;
+  return true;
 }
 
 export function isDueScheduledUpload(upload: PlatformUpload, now = Date.now()) {
@@ -1669,14 +1669,14 @@ function isStoreUploadReadyForAutomation(
 ) {
   const account = store.accounts.find(item => item.id === upload.accountId);
   if (!account?.enabled) return false;
+  if (upload.scheduledAt || upload.scheduleId) return false;
   if (upload.safetyDeferredUntil) {
     const deferredUntil = Date.parse(upload.safetyDeferredUntil);
     if (Number.isFinite(deferredUntil)) {
       return upload.status === "queued" && deferredUntil <= now;
     }
   }
-  if (upload.scheduleId) return isDueByPostSchedule(upload, account, scheduledIds);
-  if (mode === "scheduledOnly") return isDueScheduledUpload(upload, now);
+  if (mode === "scheduledOnly") return false;
   return isUploadReadyForAutomation(upload, now);
 }
 

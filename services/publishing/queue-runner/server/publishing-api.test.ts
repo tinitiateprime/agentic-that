@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 
-test("publishing API supports login, media and text posts, queue scheduling, and failure details", async (context) => {
+test("publishing API supports login, media and text posts, blocks scheduling, and reports failure details", async (context) => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agenticthat-publishing-api-"));
   const uploadDir = path.join(temporaryRoot, "uploads");
   (process.env as Record<string, string | undefined>).NODE_ENV = "test";
@@ -14,7 +14,6 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET = "test-auth-secret-that-is-longer-than-thirty-two-characters";
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = "operations.manager";
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = "Testing@2026";
-  process.env.PUBLISH_QUEUE_SCHEDULER_ENABLED = "false";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
 
   const { centralDeliveryFailure, createPublishingHttpServer } = await import("./index.js");
@@ -296,10 +295,10 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     method: "POST",
     body: JSON.stringify({ description: "Private Workspace A handoff", selectedAccountIds: [workspaceAccount.id] }),
   });
-  assert.equal(workspaceASubmissionResponse.status, 201);
+  assert.equal(workspaceASubmissionResponse.status, 410);
   const workspaceASubmissions = await (await workspaceApi(workspaceA.token, "/api/submissions")).json() as unknown[];
   const workspaceBSubmissions = await (await workspaceApi(workspaceB.token, "/api/submissions")).json() as unknown[];
-  assert.equal(workspaceASubmissions.length, 1);
+  assert.equal(workspaceASubmissions.length, 0);
   assert.equal(workspaceBSubmissions.length, 0);
 
   const centralUploaderToken = signPublishingWorkspaceIdentity({
@@ -343,9 +342,9 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     method: "POST",
     body: JSON.stringify({ description: "Central role handoff", selectedAccountIds: [workspaceAccount.id] }),
   });
-  assert.equal(centralHandoffResponse.status, 201);
-  const centralHandoff = await centralHandoffResponse.json() as { id: string };
-  assert.equal((await workspaceApi(centralUploaderToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+  assert.equal(centralHandoffResponse.status, 410);
+  const centralHandoffId = "scheduling-paused";
+  assert.equal((await workspaceApi(centralUploaderToken, `/api/submissions/${centralHandoffId}/schedule`, {
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
   })).status, 403);
@@ -358,11 +357,11 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     grants: { "publishing.facebook": "configure" },
     capabilities: ["publishing.view", "publishing.schedule.manage"],
   });
-  const centralScheduleResponse = await workspaceApi(centralSchedulerToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+  const centralScheduleResponse = await workspaceApi(centralSchedulerToken, `/api/submissions/${centralHandoffId}/schedule`, {
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
   });
-  assert.equal(centralScheduleResponse.status, 201);
+  assert.equal(centralScheduleResponse.status, 410);
 
   const textPostResponse = await api("/api/posts/unified/text", {
     method: "POST",
@@ -436,7 +435,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
 
   const consentWithoutCompanion = await api("/api/automation/consent", { method: "POST" });
   assert.equal(consentWithoutCompanion.status, 409);
-  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open Publishing Companion/i);
+  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open Companion/i);
 
   const xAccountResponse = await api("/api/platforms/x/accounts", {
     method: "POST",
@@ -548,8 +547,7 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     method: "POST",
     body: JSON.stringify({ name: "Daily test schedule", time: "09:30", frequency: "daily", status: "active" }),
   });
-  assert.equal(scheduleResponse.status, 201);
-  const schedule = await scheduleResponse.json() as { id: number };
+  assert.equal(scheduleResponse.status, 410);
 
   const scheduledAt = new Date(Date.now() + 5 * 60_000).toISOString();
   const scheduledResponse = await api(`/api/uploads/${posts[0].id}`, {
@@ -559,28 +557,20 @@ test("publishing API supports login, media and text posts, queue scheduling, and
       scheduledAt,
     }),
   });
-  assert.equal(scheduledResponse.status, 200);
-  const scheduledPost = await scheduledResponse.json() as { scheduledAt?: string; scheduleId?: number; status: string };
-  assert.equal(scheduledPost.status, "queued");
-  assert.equal(scheduledPost.scheduledAt, scheduledAt);
-  assert.equal(scheduledPost.scheduleId, undefined);
+  assert.equal(scheduledResponse.status, 410);
 
   const { isUploadReadyForAutomation } = await import("./local-storage.js");
-  assert.equal(isUploadReadyForAutomation(scheduledPost as never, Date.now()), false);
-  assert.equal(isUploadReadyForAutomation(scheduledPost as never, Date.parse(scheduledAt) + 1), true);
+  assert.equal(isUploadReadyForAutomation({ status: "queued", scheduledAt: new Date(Date.now() - 60_000).toISOString() } as never), false);
 
   const reusableScheduleResponse = await api(`/api/uploads/${posts[0].id}`, {
     method: "PATCH",
     body: JSON.stringify({
       caption: "Publishing integration test",
       scheduledAt: null,
-      scheduleId: schedule.id,
+      scheduleId: 1,
     }),
   });
-  assert.equal(reusableScheduleResponse.status, 200);
-  const reusableScheduledPost = await reusableScheduleResponse.json() as { scheduledAt?: string; scheduleId?: number };
-  assert.equal(reusableScheduledPost.scheduledAt, undefined);
-  assert.equal(reusableScheduledPost.scheduleId, schedule.id);
+  assert.equal(reusableScheduleResponse.status, 410);
 
   const roleUsers = [
     { username: "handoff.uploader", fullName: "Handoff Uploader", role: "post_uploader", password: "Uploader@2026" },
@@ -621,9 +611,8 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     method: "POST",
     body: JSON.stringify({ description: "Persistent uploader to scheduler handoff", selectedAccountIds: [account.id] }),
   });
-  assert.equal(handoffResponse.status, 201);
-  const handoff = await handoffResponse.json() as { id: string; status: string; description: string; createdByUserId: string };
-  assert.equal(handoff.status, "awaiting_schedule");
+  assert.equal(handoffResponse.status, 410);
+  const handoff = { id: "scheduling-paused" };
   assert.equal((await (await api("/api/uploads")).json() as unknown[]).length, uploadsBeforeHandoff.length);
 
   const uploaderDirectPublish = await roleApi(uploaderLogin.token, "/api/posts/unified/text", {
@@ -639,11 +628,11 @@ test("publishing API supports login, media and text posts, queue scheduling, and
   const schedulerSubmissionsResponse = await roleApi(schedulerLogin.token, "/api/submissions");
   assert.equal(schedulerSubmissionsResponse.status, 200);
   const schedulerSubmissions = await schedulerSubmissionsResponse.json() as Array<{ id: string; status: string }>;
-  assert.equal(schedulerSubmissions.some(submission => submission.id === handoff.id && submission.status === "awaiting_schedule"), true);
+  assert.equal(schedulerSubmissions.some(submission => submission.id === handoff.id), false);
   assert.equal((await roleApi(schedulerLogin.token, "/api/submissions/text", {
     method: "POST",
     body: JSON.stringify({ description: "Schedulers cannot create content" }),
-  })).status, 403);
+  })).status, 410);
   assert.equal((await roleApi(schedulerLogin.token, "/api/automation/consent", {
     method: "POST",
   })).status, 403);
@@ -653,30 +642,18 @@ test("publishing API supports login, media and text posts, queue scheduling, and
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
   });
-  assert.equal(scheduleHandoffResponse.status, 201);
-  const scheduledHandoff = await scheduleHandoffResponse.json() as {
-    submission: { status: string; destinationUploadIds: string[] };
-    uploads: Array<{ caption: string; scheduledAt?: string; createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string }>;
-  };
-  assert.equal(scheduledHandoff.submission.status, "scheduled");
-  assert.equal(scheduledHandoff.submission.destinationUploadIds.length, 1);
-  assert.equal(scheduledHandoff.uploads[0].caption, handoff.description);
-  assert.equal(scheduledHandoff.uploads[0].scheduledAt, handoffScheduledAt);
-  assert.equal(scheduledHandoff.uploads[0].createdByUserId, handoff.createdByUserId);
-  assert.ok(scheduledHandoff.uploads[0].scheduledByUserId);
-  assert.notEqual(scheduledHandoff.uploads[0].scheduledByUserId, handoff.createdByUserId);
-  assert.equal(scheduledHandoff.uploads[0].sourceSubmissionId, handoff.id);
+  assert.equal(scheduleHandoffResponse.status, 410);
   assert.equal((await roleApi(schedulerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
-  })).status, 400);
+  })).status, 410);
 
   assert.equal((await roleApi(viewerLogin.token, "/api/submissions")).status, 200);
   assert.equal((await roleApi(viewerLogin.token, "/api/uploads")).status, 200);
   assert.equal((await roleApi(viewerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
     method: "POST",
     body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
-  })).status, 403);
+  })).status, 410);
   assert.equal((await roleApi(viewerLogin.token, "/api/users")).status, 403);
   assert.equal((await roleApi(viewerLogin.token, "/api/automation/stop", { method: "POST" })).status, 403);
 

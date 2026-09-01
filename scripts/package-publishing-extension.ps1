@@ -13,6 +13,7 @@ if (-not $stagingRoot.StartsWith($artifactRoot + [System.IO.Path]::DirectorySepa
 
 $manifest = Get-Content (Join-Path $extensionRoot "manifest.json") -Raw | ConvertFrom-Json
 $zipPath = Join-Path $artifactRoot ("AgenticThat-Publishing-Extension-{0}.zip" -f $manifest.version)
+$stableZipPath = Join-Path $artifactRoot "AgenticThat-Publishing-Extension.zip"
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 if (Test-Path -LiteralPath $stagingRoot) { Remove-Item -LiteralPath $stagingRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
@@ -29,9 +30,6 @@ $productionMatch = "https://agentic-that.netlify.app/*"
 foreach ($contentScript in $stagedManifest.content_scripts) {
   $contentScript.matches = @($productionMatch)
 }
-foreach ($resource in $stagedManifest.web_accessible_resources) {
-  $resource.matches = @($productionMatch)
-}
 $manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
 [System.IO.File]::WriteAllText(
   $stagedManifestPath,
@@ -41,6 +39,7 @@ $manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
 
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Copy-Item -LiteralPath $zipPath -Destination $stableZipPath -Force
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 
-Write-Host "Chrome Web Store package created: $zipPath" -ForegroundColor Green
+Write-Host "Optional Chrome extension packages created: $zipPath and $stableZipPath" -ForegroundColor Green

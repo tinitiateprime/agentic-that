@@ -1,38 +1,31 @@
-# AgenticThat Publishing Companion for Windows
+# AgenticThat Companion for Windows
 
-This Electron application packages the persistent Publish Queue API, local JSON
-store, media uploads, scheduler, and isolated Chrome profiles into a normal
-Windows desktop installer.
+The Electron Companion is the primary one-install AgenticThat experience. It
+opens the production publishing workspace inside the desktop app and owns the
+loopback API, encrypted social-account sessions, uploaded media, visible
+browser publishing, and Instagram/Facebook scraping engines.
 
-The Companion keeps AgenticThat itself in the user's normal browser. Account
-login opens by default in an isolated browser pane inside Companion. The user
-enters credentials and verification codes only on the provider page; Companion
-detects successful login, protects the resulting local session, and closes the
-login pane automatically. A dedicated Google Chrome or Microsoft Edge login is
-available as an explicit fallback for providers that reject embedded sign-in.
-Publishing runs remain visible in Companion's live activity grid, and an
-emergency stop is always available.
+The Chrome extension is optional. Users need it only when they want to operate
+the web dashboard in a separate Chrome window; the embedded desktop workspace
+uses the same restricted bridge without an extension.
 
-The complete embedded AgenticThat dashboard implementation is preserved behind
-the `EMBED_FULL_PUBLISHING_WORKSPACE` flag in `main.js`, but is temporarily
-disabled pending product approval.
+X and YouTube sign-in opens in a Companion-managed Chrome or Edge profile by
+default because those providers can reject embedded authentication. Companion
+retains that dedicated profile, verifies the signed-in state, and reuses it for
+publishing. Instagram, Facebook, and LinkedIn keep the embedded login flow with
+the same external-browser fallback available when needed. Passwords and
+verification codes are entered only on the provider page.
 
-On first launch it creates a local auth secret, protects it with Electron safe
-storage when available, encrypts exported publishing session state with a
-separate OS-protected key, starts the service on loopback port 8792, and enables
-launch at Windows sign-in. Each account has an isolated sign-in profile and an
-isolated persistent publishing partition. Google Chrome or Microsoft Edge is
-optional and used only for the system-browser login fallback.
+Instagram and Facebook scraping share one local browser-resource slot and wait
+while publishing is active. Requested date ranges are timezone-aware and are
+reported as partial when the scraper cannot prove that it scanned through the
+range boundary; an incomplete scan is never represented as a trustworthy empty
+result.
 
-Version 1.6.7 provides the shared Instagram and Facebook Local Companion engines. Facebook profile analysis scans the public Reels grid for current views, correlates every loaded Reel with its exact reactions, comment count, and publish timestamp, and ranks separate Most Viewed, Most Reacted, and Most Discussed lists only after the full scanned set is verified. Comment bodies are not collected or displayed. Public Facebook collection runs in a fresh local Chrome or Edge session for reliable profile hydration, with a fresh anonymous embedded browser as the browser-launch fallback.
-Instagram and Facebook scraping use hidden temporary browser partitions and never reuse connected publishing/login sessions. See
-[`docs/instagram-companion-engine.md`](../../docs/instagram-companion-engine.md)
-for its API, isolation, queue, and failure behavior.
-
-Companion shows Instagram and Facebook work on a shared live activity screen with the
-current profile, elapsed time, lifecycle stages, queue, recent results, and a
-scraping-only stop action. Windows notifications and the tray tooltip announce
-start and completion without taking over visible publishing browsers.
+Publishing and Telegram scheduling are paused in release 1.8.0. Existing stored
+records are retained for compatibility, but the UI does not expose scheduling
+and the publishing API rejects new timed work. Publish-now jobs and Telegram's
+manual **Post now** action remain available.
 
 ## Development
 
@@ -43,21 +36,16 @@ npm run publishing:desktop:install
 npm run publishing:desktop:start
 ```
 
+Set `AGENTICTHAT_DASHBOARD_URL` to an HTTPS dashboard URL (or an HTTP localhost
+URL for development) when testing a self-hosted deployment.
+
 ## Packaging
 
 ```text
 npm run publishing:release:windows
 ```
 
-The Squirrel installer and portable ZIP are copied to the repository's ignored
-`artifacts/` directory. Set `WINDOWS_CERTIFICATE_FILE` and
-`WINDOWS_CERTIFICATE_PASSWORD` to sign both the packaged application used by the
-Portable ZIP and the installer during a production build. Public GitHub releases
-also verify that both entry points have valid RSA Authenticode signatures and
-trusted timestamps before publishing.
-
-For Microsoft Store distribution, set `WINDOWS_MSIX_IDENTITY_NAME`,
-`WINDOWS_MSIX_PUBLISHER`, and `WINDOWS_MSIX_PUBLISHER_DISPLAY_NAME` to the exact
-values reserved in Partner Center, then run `npm run make:store`. The dedicated
-GitHub Actions Store workflow accepts the same values and produces the MSIX
-artifact for Partner Center submission.
+The release command validates and packages the optional extension, builds the
+desktop application, and copies versioned and stable ZIP names to `artifacts/`.
+The legacy `AgenticThat-Publishing-Companion-Portable.zip` alias is retained so
+existing website links continue to work.

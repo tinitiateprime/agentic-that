@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'" />
-    <title>AgenticThat Publishing Companion</title>
+    <title>AgenticThat Companion</title>
     <link rel="stylesheet" href="control.css" />
   </head>
   <body>
@@ -46,13 +46,11 @@
         </div>
 
         <nav aria-label="Companion navigation">
-          <!-- Full AgenticThat dashboard navigation is paused pending product approval.
-          <button class="nav-item" data-view="dashboard" type="button">
+          <button class="nav-item active" data-view="dashboard" type="button">
             <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg></span>
             <span><strong>Publishing</strong><small>Dashboard workspace</small></span>
           </button>
-          -->
-          <button class="nav-item active" data-view="activity" type="button">
+          <button class="nav-item" data-view="activity" type="button">
             <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>
             <span><strong>Publishing activity</strong><small>Visible and managed</small></span>
             <b id="activity-badge" hidden>0</b>
@@ -78,8 +76,8 @@
       <main class="workspace">
         <header class="topbar">
           <div>
-            <span class="eyebrow" id="view-eyebrow">VISIBLE AUTOMATION</span>
-            <h1 id="view-title">Login and publishing activity</h1>
+            <span class="eyebrow" id="view-eyebrow">ONE APP WORKSPACE</span>
+            <h1 id="view-title">AgenticThat workspace</h1>
           </div>
           <div class="topbar-actions">
             <button class="secondary" id="refresh-current" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg><span class="button-label">Refresh</span></button>
@@ -87,8 +85,7 @@
           </div>
         </header>
 
-        <!-- Full AgenticThat dashboard panel is preserved but paused pending product approval.
-        <section class="view-panel" id="dashboard-panel">
+        <section class="view-panel active" id="dashboard-panel">
           <div class="dashboard-note">
             <div><strong>One managed publishing workflow</strong><span>Create posts in AgenticThat, sign in through a dedicated provider browser, and monitor publishing in Companion.</span></div>
             <span class="secure-pill">Local secure bridge</span>
@@ -97,9 +94,8 @@
             <div class="frame-loading"><i></i><strong>Loading publishing dashboard…</strong><span>The online workspace will appear here.</span></div>
           </div>
         </section>
-        -->
 
-        <section class="view-panel active" id="activity-panel">
+        <section class="view-panel" id="activity-panel">
           <div class="activity-intro">
             <div class="activity-intro-copy">
               <span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>
@@ -111,7 +107,7 @@
             </div>
             <div class="safety-note">
               <span class="safety-note-icon"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg></span>
-              <span><strong>Approve once when scheduling</strong><small>The Allow/Deny popup appears immediately, so scheduled publishing can run unattended later.</small></span>
+              <span><strong>Approve workspace publishing once</strong><small>The Allow/Deny popup appears during setup before Companion accepts publishing jobs.</small></span>
             </div>
           </div>
 
@@ -199,27 +195,27 @@
           <div class="settings-grid">
             <section class="settings-card service-card">
               <div class="card-heading"><div class="settings-title"><span class="section-icon tone-blue"><svg class="icon" aria-hidden="true"><use href="#icon-server"></use></svg></span><div><span class="eyebrow">LOCAL SERVICE</span><h2 id="status-title">Starting Companion…</h2></div></div><i id="status-dot"></i></div>
-              <p id="status-detail">Preparing the scheduler, secure account login, and live publishing browser.</p>
+              <p id="status-detail">Preparing the secure account login, publishing queue, and scraping engines.</p>
               <div class="checks">
                 <div><span><svg class="icon" aria-hidden="true"><use href="#icon-server"></use></svg>Local service</span><strong id="service-check">Checking</strong></div>
                 <div><span><svg class="icon" aria-hidden="true"><use href="#icon-globe"></use></svg>Browser security</span><strong id="browser-check">Checking</strong></div>
-                <div><span><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>Scheduler</span><strong id="scheduler-check">Checking</strong></div>
+                <div><span><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg>Queue engine</span><strong id="scheduler-check">Checking</strong></div>
               </div>
             </section>
 
             <section class="settings-card">
-              <div class="settings-title"><span class="section-icon tone-amber"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg></span><div><span class="eyebrow">SAFETY</span><h2>Scheduled publishing permission</h2></div></div>
-              <p>The first scheduling action shows a clear Allow/Deny popup immediately. Allow lets Companion publish while you are away; every live browser stays fully visible and unobstructed.</p>
-              <div class="permission-mode"><span><svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg></span><div><strong id="permission-state">Permission not granted</strong><small id="permission-detail">Scheduling will ask before saving the first unattended post.</small></div></div>
+              <div class="settings-title"><span class="section-icon tone-amber"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg></span><div><span class="eyebrow">SAFETY</span><h2>Workspace publishing permission</h2></div></div>
+              <p>The first publish-now action shows a clear Allow/Deny popup. Allow lets this paired Companion accept approved workspace jobs while every live browser and Emergency stop remain visible.</p>
+              <div class="permission-mode"><span><svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg></span><div><strong id="permission-state">Permission not granted</strong><small id="permission-detail">Publishing will ask before the first approved workspace job.</small></div></div>
               <button class="secondary compact" id="revoke-consent" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Revoke publishing permission</span></button>
             </section>
 
             <section class="settings-card">
-              <div class="settings-title"><span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg></span><div><span class="eyebrow">STARTUP</span><h2>Scheduled publishing</h2></div></div>
-              <p>Keep Companion available after Windows starts so scheduled posts can publish at the selected time.</p>
+              <div class="settings-title"><span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-calendar"></use></svg></span><div><span class="eyebrow">STARTUP</span><h2>Background availability</h2></div></div>
+              <p>Keep Companion available after Windows starts so queued posts and scraping requests can run when requested.</p>
               <label class="setting-toggle">
                 <input id="auto-start" type="checkbox" />
-                <span><strong>Start automatically with Windows</strong><small>Recommended for scheduled posts.</small></span>
+                <span><strong>Start automatically with Windows</strong><small>Recommended for dependable local publishing and scraping.</small></span>
               </label>
             </section>
 

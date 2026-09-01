@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
 import { FacebookCompanionCancelledError, runFacebookCompanionScrape } from "./companion-runner.js";
-import type { FacebookScrapeInput } from "./scraper.js";
+import { facebookScrapeRange, type FacebookScrapeInput } from "./scraper.js";
+import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
 
 type Status = "queued" | "running" | "complete" | "failed" | "cancelled";
 type Failure = { code: string; message: string; retryable: boolean };
@@ -19,6 +20,7 @@ type Job = {
   result?: Awaited<ReturnType<typeof runFacebookCompanionScrape>>;
   error?: Failure;
   controller?: AbortController;
+  queueController?: AbortController;
   timedOut?: boolean;
 };
 
@@ -39,7 +41,7 @@ function activityJob(job: Job, queuePosition: number | null = null) {
         job.result.analysis.top_discussed.length,
       )
     : 0;
-  return {
+  const input = {
     id: job.id,
     query: job.requestedQuery,
     collectionMode: job.input.collectionMode || "latest",
@@ -55,6 +57,7 @@ function activityJob(job: Job, queuePosition: number | null = null) {
     discoveryStatus: job.result?.discoveryStatus || null,
     error: job.error ? { ...job.error } : null,
   };
+  return input;
 }
 
 export function facebookCompanionActivityState() {
@@ -111,7 +114,7 @@ export function prepareFacebookCompanionInput(body: Record<string, unknown>): Fa
   const rangeFrom = value(body.range_from ?? body.rangeFrom) || undefined;
   const rangeTo = value(body.range_to ?? body.rangeTo) || undefined;
   if (collectionMode === "range" && (!rangeType || !rangeFrom || !rangeTo)) throw new Error("Choose a valid range type, start, and end.");
-  return {
+  const input: FacebookScrapeInput = {
     query,
     inputMode,
     profileType,
@@ -124,6 +127,8 @@ export function prepareFacebookCompanionInput(body: Record<string, unknown>): Fa
     timezoneOffsetMinutes: Math.max(-840, Math.min(840, Number(body.timezone_offset_minutes ?? body.timezoneOffsetMinutes) || 0)),
     skipComments: body.comparison_mode === true || body.skip_comments === true,
   };
+  if (collectionMode === "range") facebookScrapeRange(input);
+  return input;
 }
 
 export function setFacebookCompanionScrapeExecutorForTests(next: Executor | null) {
@@ -237,8 +242,19 @@ async function pump() {
   const job = jobs.get(nextId);
   if (!job || job.status !== "queued") { queueMicrotask(() => void pump()); return; }
   activeJobId = job.id;
-  try { await executeJob(job); }
+  const queueController = new AbortController();
+  job.queueController = queueController;
+  try {
+    await runCompanionScrapingTask("facebook", job.id, async () => {
+      job.queueController = undefined;
+      if (job.status !== "queued") return;
+      await executeJob(job);
+    }, queueController.signal);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+  }
   finally {
+    job.queueController = undefined;
     activeJobId = null;
     const terminal = [...jobs.values()].filter(item => ["complete", "failed", "cancelled"].includes(item.status)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     for (const item of terminal.slice(50)) jobs.delete(item.id);
@@ -271,6 +287,7 @@ export async function cancelFacebookCompanionJob(ownerKey: string, jobId: string
     const index = queue.indexOf(job.id);
     if (index >= 0) queue.splice(index, 1);
     job.status = "cancelled";
+    job.queueController?.abort();
     job.error = { code: "cancelled", message: "Facebook scraping was cancelled.", retryable: true };
     job.completedAt = new Date().toISOString();
     touch(job);
@@ -284,6 +301,7 @@ export async function cancelAllFacebookCompanionJobs(reason = "Facebook scraping
   let cancelled = false;
   for (const job of jobs.values()) {
     if (job.status === "queued") {
+      job.queueController?.abort();
       job.status = "cancelled";
       job.error = { code: "cancelled", message: reason, retryable: true };
       job.completedAt = new Date().toISOString();

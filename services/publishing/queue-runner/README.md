@@ -2,31 +2,32 @@
 
 Publish Queue Runner is the local execution service behind AgenticThat's Netlify
 publishing dashboard. It supports Facebook, Instagram, X, LinkedIn, and YouTube
-through isolated account sessions and fully manual social-account login inside
-the Companion browser. A dedicated normal Chrome or Edge window is available as
-a fallback when a provider rejects embedded sign-in.
+through isolated account sessions and fully manual social-account login.
+Instagram, Facebook, and LinkedIn use the Companion browser. X and YouTube use
+a dedicated normal Chrome or Edge profile because those providers reject
+embedded sign-in; the Companion retains and verifies that profile locally.
 
-Customers use the packaged Windows companion; they do not run this service or
-edit JSON files. The companion stores queue metadata and media locally, checks
-schedules every minute, and keeps an isolated persistent browser partition for
-each account. The Chrome extension securely connects the deployed dashboard to
-that loopback service.
+Customers use the packaged Windows Companion; they do not run this service or
+edit JSON files. The Companion stores queue metadata, media, and account browser
+profiles locally. Its built-in dashboard is the primary interface. The optional
+Chrome extension securely connects a separately opened deployed dashboard to
+the same loopback service.
 
 ## Customer workflow
 
-1. Install the Chrome extension and Windows companion from the dashboard.
-2. Copy the dashboard credentials shown in the companion.
+1. Install and open the Windows Companion from the dashboard.
+2. Use its built-in dashboard, or install the optional Chrome extension when
+   using the dashboard in a separate browser.
 3. Add social accounts in Config Manager and choose **Login** for each one.
-4. Enter credentials manually in the provider page shown inside Companion.
-   Companion detects success, protects the session locally, and closes that
-   sign-in pane automatically. Use the account's **Chrome** action only if the
-   provider blocks embedded sign-in.
+4. Enter credentials manually in the provider page. Companion detects success,
+   protects the session locally, and closes embedded sign-in panes automatically.
+   X and YouTube open their saved external Chrome or Edge profile by design.
 5. Create a post, choose a normal image or video file, select accounts, and
-   publish now or schedule a future time.
+   publish it now.
 
-No structured folders are required. Media is transferred to the companion in
-safe, size-checked chunks. The computer must stay powered on and the companion
-must remain running for scheduled publishing.
+No structured folders are required. Media is transferred to the Companion in
+safe, size-checked chunks. Scheduling is paused in release 1.8.0; existing
+historical scheduling records are retained but never executed.
 
 ## Reliability behavior
 

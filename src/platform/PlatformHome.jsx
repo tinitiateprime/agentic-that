@@ -5,7 +5,6 @@ import { animate, stagger } from "animejs";
 import {
   Activity,
   ArrowRight,
-  CalendarClock,
   Bookmark,
   CheckCheck,
   CircleDashed,
@@ -117,15 +116,6 @@ const engagementShowcaseFeatures = [
   { label: "Route every URL to the correct app", Icon: Compass },
   { label: "Run likes, comments, reposts, and follows", Icon: MessageCircle },
   { label: "Verify each action inside the live session", Icon: ShieldCheck },
-];
-
-const publishingCalendarDays = [
-  ["26", true], ["27", true], ["28", true], ["29", true], ["30", true], ["31", true], ["1", false],
-  ["2", false], ["3", false], ["4", false], ["5", false], ["6", false], ["7", false], ["8", false],
-  ["9", false], ["10", false], ["11", false], ["12", false], ["13", false], ["14", false], ["15", false],
-  ["16", false], ["17", false], ["18", false], ["19", false], ["20", false], ["21", false], ["22", false],
-  ["23", false], ["24", false], ["25", false], ["26", false], ["27", false], ["28", false], ["29", false],
-  ["30", false], ["31", false], ["1", true], ["2", true], ["3", true], ["4", true], ["5", true],
 ];
 
 const navItems = [
@@ -254,7 +244,7 @@ const systemInputs = [
 
 const systemOutputs = [
   { label: "Structured dataset", detail: "Clean and ready", tone: "blue", Icon: Database },
-  { label: "Scheduled queue", detail: "Queued to publish", tone: "gold", Icon: CalendarClock },
+  { label: "Controlled queue", detail: "Ready to publish", tone: "gold", Icon: Send },
   { label: "Ready reply", detail: "Context-aware", tone: "green", Icon: MessageSquareReply },
   { label: "Monitored action", detail: "Like · comment · repost", tone: "coral", Icon: ShieldCheck },
 ];
@@ -1560,15 +1550,15 @@ function PublishingAutomationShowcase() {
               <span className="publishing-paper-plane"><Send /></span>
             </span>
           </span>
-          <h2 id="publishing-showcase-title">Create. Schedule. Publish. Track.</h2>
+          <h2 id="publishing-showcase-title">Create. Preview. Publish. Track.</h2>
         </div>
         <p className="publishing-showcase-intro">
-          Plan content once and let AgenticThat publish it everywhere at the perfect time, then track every result.
+          Prepare content once, confirm every destination, publish through the Companion, and track every result.
         </p>
         <ul className="publishing-feature-list">
           <li><span><Send /></span>Upload once and prepare one campaign</li>
           <li><span><Send /></span>Select every connected destination</li>
-          <li><span><Send /></span>Choose the exact publishing time</li>
+          <li><span><Send /></span>Preview and confirm every destination</li>
           <li><span><Send /></span>Track live delivery across channels</li>
         </ul>
         <ServicePlanFooter
@@ -1629,18 +1619,12 @@ function PublishingAutomationShowcase() {
           </div>
 
           <div className={`publishing-calendar${isAtLeast("date") ? " is-selected" : ""}`}>
-            <header><button type="button" aria-label="Previous month">&lsaquo;</button><strong>August 2026</strong><button type="button" aria-label="Next month">&rsaquo;</button></header>
-            <div className="publishing-calendar-weekdays">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div>
-            <div className="publishing-calendar-days">
-              {publishingCalendarDays.map(([day, muted], index) => (
-                <span className={`${muted ? "is-muted" : ""}${day === "18" && index === 23 && isAtLeast("date") ? " is-date-selected" : ""}`} key={`${day}-${index}`}>{day}</span>
-              ))}
-            </div>
-            <div className={`publishing-time-select${isAtLeast("time") ? " is-selected" : ""}`}><CalendarClock /><span>11:00 AM</span><b aria-hidden="true" /></div>
+            <header><strong>Destination review</strong></header>
+            <div className={`publishing-time-select${isAtLeast("time") ? " is-selected" : ""}`}><CheckCheck /><span>Content and accounts confirmed</span><b aria-hidden="true" /></div>
           </div>
 
           <div className={`publishing-schedule-confirmation${isAtLeast("time") ? " is-visible" : ""}`}>
-            <CalendarClock /><span>Scheduled for Aug 18, 2026 at 11:00 AM</span>
+            <Send /><span>Ready for Companion publishing</span>
           </div>
         </article>
 
@@ -2338,7 +2322,7 @@ const capabilityCards = [
     Icon: Send,
     title: "Publishing",
     detail: "Five social channels",
-    chip: "Scheduled queue",
+    chip: "Controlled queue",
     logos: [
       { src: FacebookLogo, alt: "Facebook" },
       { src: InstagramLogo, alt: "Instagram" },

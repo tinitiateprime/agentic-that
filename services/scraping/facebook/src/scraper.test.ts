@@ -5,6 +5,8 @@ import {
   buildFacebookProfileAnalysis,
   classifyFacebookAccess,
   facebookDiscoveryPlan,
+  facebookRangeCoverage,
+  facebookScrapeRange,
   facebookPageTimelinePluginUrl,
   facebookProfileTabUrl,
   facebookUrlType,
@@ -251,6 +253,41 @@ test("server and Companion input contracts bound counts and ranges identically",
   assert.equal(input.timezoneOffsetMinutes, 840);
   assert.equal(prepareFacebookScrapeInput({ mode: "profile", query: "example", comparison_mode: true }).skipComments, true);
   assert.throws(() => prepareFacebookScrapeInput({ mode: "keyword", query: "news", collection_mode: "engagement" }), /Profile analysis/);
+});
+
+test("uses exact Facebook range boundaries and detects incomplete history scans", () => {
+  const range = facebookScrapeRange({
+    query: "example",
+    collectionMode: "range",
+    rangeType: "month",
+    rangeFrom: "2026-02",
+    rangeTo: "2026-03",
+    timezoneOffsetMinutes: -330,
+  });
+  assert.equal(new Date(range.start).toISOString(), "2026-01-31T18:30:00.000Z");
+  assert.equal(new Date(range.end).toISOString(), "2026-03-31T18:29:59.999Z");
+
+  assert.equal(facebookRangeCoverage([
+    "2026-04-02T00:00:00.000Z",
+    "2026-03-10T00:00:00.000Z",
+  ], range, 2).complete, false);
+  assert.equal(facebookRangeCoverage([
+    "2026-01-31T18:00:00.000Z",
+    "2026-04-02T00:00:00.000Z",
+  ], range, 5).reached_range_start, false);
+  assert.equal(facebookRangeCoverage([
+    "2026-03-10T00:00:00.000Z",
+    "2026-01-31T18:15:00.000Z",
+    "2026-01-31T18:00:00.000Z",
+  ], range, 5).complete, true);
+  assert.throws(() => prepareFacebookScrapeInput({
+    mode: "profile",
+    query: "example",
+    collection_mode: "range",
+    range_type: "date",
+    range_from: "2026-02-30",
+    range_to: "2026-03-01",
+  }), /valid Facebook post range/);
 });
 
 test("Facebook health endpoint reports public-browser mode with no API token", async () => {

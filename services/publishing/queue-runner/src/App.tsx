@@ -69,6 +69,7 @@ const platformColor: Record<Platform, string> = {
 };
 
 const DONUT_CIRCUMFERENCE = 263.89;
+const PUBLISHING_SCHEDULING_ENABLED = false;
 
 function toLocalDateTimeInputValue(date: Date) {
   const localTime = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -110,13 +111,11 @@ const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLO
   || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip';
 const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
 const extensionInstallUrl = configuredExtensionInstallUrl
-  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension-1.1.0.zip';
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension.zip';
 const localCompanionHealthUrl = 'http://127.0.0.1:8792/api/health';
 
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [
   { role: 'operations_manager', username: 'operations.manager', description: 'Full workspace, users, audit, and automation access' },
-  { role: 'post_uploader', username: 'content.uploader', description: 'Upload finished content and hand it to scheduling' },
-  { role: 'scheduler', username: 'post.scheduler', description: 'Review selected destinations and assign publish times' },
   { role: 'viewer', username: 'workspace.viewer', description: 'Read-only access with no publishing actions' },
 ];
 
@@ -133,8 +132,8 @@ function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'opera
       canManageUsers: false,
       canViewActivity: capabilities.includes('publishing.view'),
       canManageAccounts: capabilities.includes('publishing.accounts.configure'),
-      canEditContent: capabilities.includes('publishing.content.create') || capabilities.includes('publishing.content.edit'),
-      canSchedulePosts: capabilities.includes('publishing.schedule.manage'),
+      canEditContent: capabilities.includes('publishing.execute') && (capabilities.includes('publishing.content.create') || capabilities.includes('publishing.content.edit')),
+      canSchedulePosts: false,
       canRunAutomation: capabilities.includes('publishing.execute'),
     };
   }
@@ -142,16 +141,16 @@ function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'opera
     canManageUsers: false,
     canViewActivity: centralAccessLevel === 'configure',
     canManageAccounts: centralAccessLevel === 'configure',
-    canEditContent: centralAccessLevel !== 'view',
-    canSchedulePosts: centralAccessLevel !== 'view',
+    canEditContent: centralAccessLevel === 'configure',
+    canSchedulePosts: false,
     canRunAutomation: centralAccessLevel === 'configure',
   };
   return {
     canManageUsers: role === 'operations_manager',
     canViewActivity: role === 'operations_manager',
     canManageAccounts: role === 'operations_manager',
-    canEditContent: role === 'operations_manager' || role === 'post_uploader',
-    canSchedulePosts: role === 'operations_manager' || role === 'scheduler',
+    canEditContent: role === 'operations_manager',
+    canSchedulePosts: false,
     canRunAutomation: role === 'operations_manager',
   };
 }
@@ -551,7 +550,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         api.uploads(),
         api.submissions(),
         api.accounts(),
-        api.schedules(),
+        Promise.resolve([] as PublishingSchedule[]),
       ] as const;
       const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
       setConnectionMode(health.transport);
@@ -655,7 +654,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         onCreated={() => void refresh(false)}
         onScheduleSubmission={setSchedulingSubmission}
       />
-      {scheduleManagerOpen && (
+      {PUBLISHING_SCHEDULING_ENABLED && scheduleManagerOpen && (
         <ScheduleManagerModal
           schedules={schedules}
           uploads={uploads}
@@ -683,7 +682,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
           onClose={() => setAutomationNotice(null)}
         />
       )}
-      {schedulingSubmission && permissions.canSchedulePosts && (
+      {PUBLISHING_SCHEDULING_ENABLED && schedulingSubmission && permissions.canSchedulePosts && (
         <ScheduleSubmissionModal
           submission={schedulingSubmission}
           accounts={accounts}
@@ -739,9 +738,8 @@ function getAuditTimestamp(upload: PlatformUpload) {
   return upload.scheduledAt ?? upload.updatedAt ?? upload.uploadedAt;
 }
 
-function isWaitingForCompanion(upload: PlatformUpload, now = Date.now()) {
-  return upload.statusDetail === 'waiting_for_companion'
-    || (upload.status === 'queued' && Boolean(upload.scheduledAt) && Date.parse(upload.scheduledAt || '') <= now);
+function isWaitingForCompanion(upload: PlatformUpload) {
+  return upload.statusDetail === 'waiting_for_companion';
 }
 
 function getAuditAction(upload: PlatformUpload) {
@@ -753,7 +751,7 @@ function getAuditAction(upload: PlatformUpload) {
   if (upload.statusDetail === 'publishing') return 'Publishing';
   if (upload.status === 'processing') return 'Publishing now';
   if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
-  if (upload.scheduledAt) return 'Scheduled';
+  if (upload.scheduledAt || upload.scheduleId) return 'Legacy timed post paused';
   return 'Queued';
 }
 
@@ -795,10 +793,10 @@ function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone
   if (isWaitingForCompanion(upload)) {
     return { tone: 'scheduled', label: 'Waiting for Companion', detail: 'The job is safely queued and will retry when its assigned Companion is available.', timestamp: upload.scheduledAt! };
   }
-  if (upload.scheduledAt) {
-    return { tone: 'scheduled', label: 'Scheduled', detail: `Will publish ${formatEventTime(upload.scheduledAt)}`, timestamp: upload.scheduledAt };
+  if (upload.scheduledAt || upload.scheduleId) {
+    return { tone: 'deferred', label: 'Paused', detail: 'Scheduling is paused in this release. Recreate this post to publish it now.', timestamp };
   }
-  return { tone: 'queued', label: 'Waiting', detail: 'Ready, but no publishing time has been assigned.', timestamp };
+  return { tone: 'queued', label: 'Queued', detail: 'Ready for an Operations Manager to publish now.', timestamp };
 }
 
 function formatCalendarHeading(dayKey: string) {
@@ -1394,7 +1392,7 @@ function UnifiedComposer({
       </div>
 
       <div className='composer-timing'>
-        <div className='composer-section-title'><span><strong>Publishing time</strong><small>Use one setting for every destination, then override only where needed.</small></span><Clock3 size={20} /></div>
+        <div className='composer-section-title'><span><strong>Publishing time</strong><small>This release sends every destination to the queue immediately.</small></span><Clock3 size={20} /></div>
         {canSchedule ? <>
           <div className='composer-shared-schedule'>
             <label><span>Shared timing</span><select value={sharedSchedule.mode} onChange={event => updateSharedSchedule({ mode: event.target.value as ComposerScheduleMode })}><option value='now'>Add to queue now</option><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
@@ -1411,7 +1409,7 @@ function UnifiedComposer({
               </article>;
             })}
           </div>}
-        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>{handoffOnly ? 'Selected destinations are locked for the scheduler.' : 'Posts will enter the queue immediately.'}</strong><small>{handoffOnly ? 'Your upload and destination accounts are saved together; the scheduler only chooses when they publish.' : 'Your role can prepare content; a scheduler can assign publishing times afterward.'}</small></span></div>}
+        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>Posts enter the queue immediately.</strong><small>Scheduling is paused in this release; an Operations Manager can publish queued work now.</small></span></div>}
       </div>
 
       <footer className='composer-footer'>
@@ -1487,8 +1485,8 @@ function Workboard({
     const posted = uploads.filter(upload => upload.status === 'posted').length;
     const failed = uploads.filter(upload => upload.status === 'failed').length;
     const queued = uploads.filter(upload => upload.status === 'queued').length;
-    const scheduled = uploads.filter(upload => upload.status === 'queued' && upload.scheduledAt).length;
-    return { posted, failed, queued, scheduled, total: uploads.length };
+    const processing = uploads.filter(upload => upload.status === 'processing').length;
+    return { posted, failed, queued, processing, total: uploads.length };
   }, [uploads]);
 
   const eventByDay = useMemo(() => {
@@ -1520,8 +1518,7 @@ function Workboard({
     .slice(0, 1), [uploads]);
 
   const statusMix = useMemo(() => [
-    { id: 'scheduled', label: 'Scheduled', detail: 'Timed', value: uploads.filter(upload => upload.status === 'queued' && upload.scheduledAt).length, color: '#318EC2' },
-    { id: 'queued', label: 'In queue', detail: 'Needs a time', value: uploads.filter(upload => upload.status === 'queued' && !upload.scheduledAt).length, color: '#B17A08' },
+    { id: 'queued', label: 'In queue', detail: 'Ready', value: uploads.filter(upload => upload.status === 'queued').length, color: '#B17A08' },
     { id: 'processing', label: 'Publishing', detail: 'In progress', value: uploads.filter(upload => upload.status === 'processing').length, color: '#7367D8' },
     { id: 'posted', label: 'Delivered', detail: 'Complete', value: uploads.filter(upload => upload.status === 'posted').length, color: '#14895E' },
     { id: 'failed', label: 'Review', detail: 'Needs input', value: uploads.filter(upload => upload.status === 'failed').length, color: '#C65448' },
@@ -1567,12 +1564,11 @@ function Workboard({
   const canEditPosts = permissions.canRunAutomation || permissions.canSchedulePosts;
   const awaitingSubmissions = submissions.filter(submission => submission.status === 'awaiting_schedule');
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
-  const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
   const accountAttentionCount = accounts.filter(account => accountHealthStatus(account) !== 'healthy').length;
-  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length + awaitingSubmissions.length + accountAttentionCount;
+  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed').length + accountAttentionCount;
   const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && accountHealthStatus(account) === 'healthy')).length;
   const overviewCards = [
-    { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
+    { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.processing} publishing`, icon: <TimerReset size={18} />, tone: 'queue' },
     { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${accountAttentionCount} account alerts`, icon: <CircleAlert size={18} />, tone: 'attention' },
     { id: 'delivered', label: 'Delivered', value: metrics.posted, detail: `${metrics.failed} failed`, icon: <CircleCheckBig size={18} />, tone: 'success' },
     { id: 'channels', label: 'Channels', value: healthyChannelCount, detail: `${enabledAccountsCount} enabled accounts`, icon: <UsersRound size={18} />, tone: 'channels' },
@@ -1597,8 +1593,8 @@ function Workboard({
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
-          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
-          <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
+          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length}</small></button>
+          {PUBLISHING_SCHEDULING_ENABLED && <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>}
         </nav>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
@@ -1622,7 +1618,7 @@ function Workboard({
           <span>{user.fullName} · {userRoleLabels[user.role]}</span>
           <div className={`dashboard-context ${attentionCount ? 'needs-attention' : 'healthy'}`}>
             {attentionCount ? <CircleAlert size={17} /> : <CircleCheckBig size={17} />}
-            <span><strong>{attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'item needs' : 'items need'} attention` : 'Publishing operations are clear'}</strong><small>{activeSchedulesCount} active {activeSchedulesCount === 1 ? 'schedule' : 'schedules'} · {healthyChannelCount} connected {healthyChannelCount === 1 ? 'channel' : 'channels'}</small></span>
+            <span><strong>{attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'item needs' : 'items need'} attention` : 'Publishing operations are clear'}</strong><small>{healthyChannelCount} connected {healthyChannelCount === 1 ? 'channel' : 'channels'} · scheduling paused</small></span>
           </div>
         </div>
         <div className='dashboard-stat-grid'>
@@ -1673,7 +1669,7 @@ function Workboard({
 
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
-          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={!permissions.canRunAutomation} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
+          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={[]} canSchedule={false} handoffOnly={false} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Scheduling is paused in this release. Operations Managers can create and publish posts now; other roles remain read-only.</span></div><LockKeyhole size={28} /></section>}
         </div>
       </section>
 
@@ -1705,7 +1701,7 @@ function Workboard({
         )}
       </section>
 
-      <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>
         <header className='workboard-section-head'>
           <div><p className='section-kicker'>Uploader to scheduler</p><h2 id='handoff-queue-heading'>Content handoff queue</h2></div>
           <span>{awaitingSubmissions.length} awaiting schedule</span>
@@ -1724,7 +1720,7 @@ function Workboard({
             </article>
           ))}
         </div>
-      </section>
+      </section>}
 
       <section className='platform-metrics' id='channels' aria-labelledby='post-metrics-heading'>
         <header className='workboard-section-head'><div><p className='section-kicker'>Channel control</p><h2 id='post-metrics-heading'>Publishing channels</h2></div><span>{trackingSummary}</span></header>
@@ -1777,7 +1773,7 @@ function Workboard({
         </section>
       )}
 
-      <section className='workboard-schedule-manager' aria-labelledby='schedule-manager-heading'>
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='workboard-schedule-manager' aria-labelledby='schedule-manager-heading'>
         <header className='workboard-section-head'>
           <div><p className='section-kicker'>Reusable timing</p><h2 id='schedule-manager-heading'>Schedule manager</h2></div>
           {permissions.canSchedulePosts && <button className='btn-primary' onClick={onOpenSchedules}><CalendarClock size={16} />Add or manage</button>}
@@ -1794,7 +1790,7 @@ function Workboard({
             </button>;
           })}
         </div>
-      </section>
+      </section>}
 
       <section className='workboard-focus-grid' id='operations'>
         <section className='operations-summary-grid'>
@@ -1809,7 +1805,7 @@ function Workboard({
             <div className='review-queue-list'>{reviewQueue.length === 0 ? <div className='review-queue-empty'><CircleCheckBig size={24} /><strong>Nothing waiting for review.</strong><span>Every tracked post has been delivered.</span></div> : reviewQueue.map(upload => (
               <button className='review-queue-row' key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <div className={`review-queue-media review-${upload.status}`}><PostMediaPreview upload={upload} compact /><i><CustomIcon platform={upload.platform} size={17} /></i></div>
-                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : isWaitingForCompanion(upload) ? 'Waiting safely for the assigned Companion' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
+                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : isWaitingForCompanion(upload) ? 'Waiting safely for the assigned Companion' : upload.scheduledAt || upload.scheduleId ? 'Legacy timed post paused' : upload.status === 'processing' ? 'Publishing now' : 'Ready to publish'}</small></span>
                 <Pencil size={14} />
               </button>
             ))}</div>
@@ -1837,7 +1833,7 @@ function Workboard({
           <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Delivery results will appear here as channels publish posts.'}</footer>
         </article>
 
-        <article className='legacy-next-action-board'>
+        {PUBLISHING_SCHEDULING_ENABLED && <article className='legacy-next-action-board'>
           <header className='workboard-section-head'><div><p className='section-kicker'>Next action</p><h2>{nextAction ? 'Ready for its moment' : 'Nothing scheduled yet'}</h2></div><CalendarClock size={20} /></header>
           {nextAction ? (
             <button className='next-action-content' onClick={() => canEditPosts && onEdit(nextAction)} disabled={!canEditPosts}>
@@ -1846,10 +1842,10 @@ function Workboard({
               <Pencil size={16} />
             </button>
           ) : <div className='next-action-empty'><CalendarDays size={24} /><span>Choose a post and set its date from the channel portfolio.</span></div>}
-        </article>
+        </article>}
       </section>
 
-      <section className='workboard-calendar-section' id='schedule'>
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='workboard-calendar-section' id='schedule'>
         <article className='calendar-board'>
           <header className='workboard-section-head'><div><p className='section-kicker'>Schedule map</p><h2>{monthLabel}</h2></div><div className='calendar-navigation'><button className='workboard-tool' title='Previous month' onClick={() => shiftCalendarMonth(-1)}><ChevronLeft size={18} /></button><button className='workboard-tool' title='Next month' onClick={() => shiftCalendarMonth(1)}><ChevronRight size={18} /></button></div></header>
           <div className='workboard-calendar'>
@@ -1880,9 +1876,9 @@ function Workboard({
           </div>
           <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Your broadcast mix will appear as channels complete deliveries.'}</footer>
         </article>
-      </section>
+      </section>}
 
-      {schedulePlatform && permissions.canSchedulePosts && (
+      {PUBLISHING_SCHEDULING_ENABLED && schedulePlatform && permissions.canSchedulePosts && (
         <PlatformScheduleModal
           platform={schedulePlatform}
           uploads={uploads.filter(upload => upload.platform === schedulePlatform)}

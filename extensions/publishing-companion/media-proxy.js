@@ -1,7 +1,24 @@
 const COMPANION_ORIGIN = "http://127.0.0.1:8792";
+const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
+const PRODUCTION_ORIGIN = "https://agentic-that.netlify.app";
 const container = document.querySelector("#media");
 
+async function assertTrustedParent() {
+  let origin = "";
+  try { origin = new URL(document.referrer).origin; } catch { /* handled below */ }
+  const { normalizeDashboardOrigin, hasStaticBridgeForOrigin } = globalThis.AgenticThatTrustedOrigins;
+  if (origin === PRODUCTION_ORIGIN || hasStaticBridgeForOrigin(origin)) return;
+  const stored = await chrome.storage.local.get(TRUSTED_ORIGINS_KEY);
+  const trusted = Array.isArray(stored[TRUSTED_ORIGINS_KEY])
+    ? stored[TRUSTED_ORIGINS_KEY].flatMap(value => {
+        try { return [normalizeDashboardOrigin(value)]; } catch { return []; }
+      })
+    : [];
+  if (!trusted.includes(origin)) throw new Error("This dashboard is not trusted for local media previews.");
+}
+
 async function load() {
+  await assertTrustedParent();
   const params = new URLSearchParams(window.location.search);
   const path = params.get("path") || "";
   const compact = params.get("compact") === "1";

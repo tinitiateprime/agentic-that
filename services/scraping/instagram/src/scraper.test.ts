@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleInstagramRequest } from "./api.ts";
+import { handleInstagramRequest, prepareScrapeInput } from "./api.ts";
 import {
   buildProfileAnalysis,
   canUpgradeCurrentReelsGridView,
@@ -8,6 +8,8 @@ import {
   currentReelsCandidatesFromAuthoritativePayload,
   currentReelViewCandidatesFromPayload,
   engagementValues,
+  instagramRangeCoverage,
+  instagramScrapeRange,
   instagramVisibleMetric,
   latestProfileCandidateTarget,
   liveRequestHeaders,
@@ -53,6 +55,46 @@ test("bounds Latest profile discovery to a smaller reliability-focused pool", ()
   assert.equal(latestProfileCandidateTarget(3), 12);
   assert.equal(latestProfileCandidateTarget(10), 20);
   assert.equal(latestProfileCandidateTarget(50), 60);
+});
+
+test("uses exact timezone-aware range boundaries and reports scan completeness", () => {
+  const range = instagramScrapeRange({
+    query: "example",
+    collectionMode: "range",
+    rangeType: "date",
+    rangeFrom: "2026-03-01",
+    rangeTo: "2026-03-02",
+    timezoneOffsetMinutes: -330,
+  });
+  assert.equal(range.start.toISOString(), "2026-02-28T18:30:00.000Z");
+  assert.equal(range.end.toISOString(), "2026-03-02T18:29:59.999Z");
+
+  const incomplete = instagramRangeCoverage([
+    "2026-03-03T08:00:00.000Z",
+    "2026-03-02T08:00:00.000Z",
+  ], range, 2);
+  assert.equal(incomplete.inRangeCandidates, 1);
+  assert.equal(incomplete.complete, false);
+  assert.equal(instagramRangeCoverage([
+    "2026-02-28T18:00:00.000Z",
+    "2026-03-03T08:00:00.000Z",
+  ], range, 5).reachedRangeStart, false);
+
+  const complete = instagramRangeCoverage([
+    "2026-03-02T08:00:00.000Z",
+    "2026-02-28T18:15:00.000Z",
+    "2026-02-28T18:00:00.000Z",
+  ], range, 5);
+  assert.equal(complete.reachedRangeStart, true);
+  assert.equal(complete.complete, true);
+  assert.throws(() => prepareScrapeInput({
+    mode: "profile",
+    query: "example",
+    collection_mode: "range",
+    range_type: "date",
+    range_from: "2026-02-30",
+    range_to: "2026-03-01",
+  }), /valid date range/);
 });
 
 test("keeps only trusted requested-profile discoveries when post pages are temporarily unavailable", () => {

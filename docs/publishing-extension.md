@@ -1,78 +1,46 @@
-# Publishing extension and Windows companion
+# Desktop Companion and optional Chrome bridge
 
-AgenticThat publishing uses three coordinated components:
+AgenticThat publishing has two supported access paths:
 
-1. The dashboard deployed on Netlify.
-2. The AgenticThat Publishing Companion extension from the Chrome Web Store.
-3. The AgenticThat Publishing Companion Windows application.
+1. Recommended: install **AgenticThat Companion** and use the dashboard embedded
+   in the desktop application.
+2. Optional: open the dashboard in Chrome and install the Companion extension,
+   which relays restricted requests to the same loopback service.
 
-The Netlify site remains the user interface. The Windows app owns the persistent
-queue, uploaded media, scheduler, Chrome profiles, and browser publishing. The
-extension is a restricted bridge from the dashboard to that app on
-`127.0.0.1:8792`. This avoids trying to run a persistent browser or minute-by-minute
-scheduler inside a request-based Netlify function.
+The desktop application owns the persistent local queue, encrypted browser
+profiles, uploaded media, visible publishing browsers, and Instagram/Facebook
+scraping. The website and extension never receive social-network passwords or
+verification codes.
 
 ## Customer setup
 
-Customers do not download this repository or run commands.
+1. Download and extract the latest Companion portable ZIP.
+2. Open `AgenticThat Publishing Companion.exe` (the legacy executable name is
+   retained for upgrade compatibility).
+3. Use the embedded AgenticThat workspace and pair this computer from
+   **Connections → Publishing**.
+4. Add a social account and choose **Login**. X and YouTube open in a dedicated
+   Companion-managed Chrome or Edge profile; other providers open in the
+   embedded browser and can fall back to Chrome/Edge if necessary.
+5. Complete credentials and verification only on the provider page. Companion
+   verifies and protects the resulting local session before using it.
 
-1. Open `https://agentic-that.netlify.app/publishing` in Google Chrome.
-2. Choose **Install extension** and confirm the Chrome Web Store installation.
-3. Choose **Install Windows companion**, run the installer once, and leave
-   **Start automatically with Windows** enabled.
-4. Copy the dashboard login displayed by the companion app.
-5. Return to the dashboard and choose **Check again**.
-6. Add each social account in Config Manager and choose **Login**. An isolated
-   sign-in pane opens inside Companion. Enter credentials and verification
-   codes only on the provider page; Companion detects success, protects the
-   session locally, and closes the pane automatically. If a provider blocks
-   embedded sign-in, choose the account's **Chrome** fallback action.
+Install the Chrome extension only if the user wants the dashboard in a separate
+browser. The popup can grant one exact self-hosted HTTPS origin; it does not ask
+for unrestricted browsing access.
 
-The setup card reports whether the extension and Companion are ready before
-allowing Publish Queue sign-in. Chrome or Edge is optional fallback software.
+## Publishing behavior
 
-## Posting and scheduling
-
-Create posts with the site's normal file picker or drag and drop; customers do
-not create special folders. The companion checks the queue every minute and can
-publish to Facebook, Instagram, X, LinkedIn, and YouTube using the saved manual
-login session for the selected account.
-
-The publishing computer must be powered on, connected to the internet, and
-running the companion at the scheduled time. If it was stopped, overdue work is
-picked up after it returns. An interrupted publish is held for review by default
-so an uncertain browser result does not silently create a duplicate.
-
-## Developer setup and release
-
-Use the unpacked extension only for local development:
-
-```text
-npm install
-npm run publishing:desktop:install
-npm run publishing:companion
-npm run publishing:extension:open
-```
-
-Build all customer artifacts on Windows with:
-
-```text
-npm run publishing:release:windows
-```
-
-This creates the Web Store ZIP and Windows installer in `artifacts/`. The GitHub
-Actions publishing release workflow performs the same build for version tags.
+Release 1.8.0 supports publish-now queue execution for Facebook, Instagram, X,
+LinkedIn, and YouTube. Scheduling is paused: schedule controls are absent, timed
+API mutations return HTTP 410, and existing timed records are not executed.
+Interrupted or uncertain final publish actions are held for inspection so the
+system does not silently create duplicates.
 
 ## Security boundary
 
-Social passwords and verification codes are never accepted by the AgenticThat
-dashboard or extension. They are typed directly into the social network page
-shown by Companion or the optional Chrome/Edge fallback. Publishing data and
-browser sessions remain in the companion's Windows user-data directory. The
-extension is limited to the production dashboard origin and the loopback
-companion address.
-
-Browser publishing still depends on third-party interfaces. Platform UI
-changes, CAPTCHA, account restrictions, and internet outages can require manual
-action; these conditions are recorded as recoverable failures rather than
-reported as successful posts.
+The local API binds only to `127.0.0.1`. Central workspace sharing uses an
+outbound paired-token connection, never a public local port. Browser publishing
+still depends on third-party interfaces; UI changes, CAPTCHA, account warnings,
+rate limits, and internet failures are recorded as explicit recoverable errors
+rather than false successes.

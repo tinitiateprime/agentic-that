@@ -99,8 +99,8 @@ export const OPERATIONAL_ROLE_CATALOG = Object.freeze([
     ]),
   }),
   Object.freeze({ id: "role_publishing_viewer", name: "Publishing Viewer", description: "Read-only Publishing access.", capabilities: publishingViewer }),
-  Object.freeze({ id: "role_publishing_uploader", name: "Content Uploader", description: "Creates content and selects destinations for scheduling.", capabilities: publishingUploader }),
-  Object.freeze({ id: "role_publishing_scheduler", name: "Scheduler", description: "Schedules submitted Publishing content without changing it.", capabilities: publishingScheduler }),
+  Object.freeze({ id: "role_publishing_uploader", name: "Legacy Content Uploader", description: "Read-only while publishing handoffs are paused.", capabilities: publishingUploader }),
+  Object.freeze({ id: "role_publishing_scheduler", name: "Legacy Scheduler", description: "Read-only while publishing scheduling is paused.", capabilities: publishingScheduler }),
   Object.freeze({ id: "role_publishing_manager", name: "Publishing Manager", description: "Full Publishing operations and configuration.", capabilities: publishingManager }),
   Object.freeze({ id: "role_scraping_viewer", name: "Scraping Viewer", description: "Views and exports workspace scraping results.", capabilities: scrapingViewer }),
   Object.freeze({ id: "role_scraping_operator", name: "Scraping Operator", description: "Runs scrapers, comparisons, and supported analysis.", capabilities: scrapingOperator }),
@@ -133,7 +133,7 @@ export const SELF_SERVICE_ROLE_CATALOG = Object.freeze([
   Object.freeze({
     id: "role_self_publishing",
     name: "Publishing access",
-    description: "Create, schedule, and configure all live publishing destinations.",
+    description: "Create, publish, and configure all live publishing destinations.",
     grants: Object.freeze([{ resourceKey: "publishing", accessLevel: "configure" }]),
   }),
   Object.freeze({

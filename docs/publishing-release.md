@@ -50,9 +50,9 @@ Before tagging a customer release:
 1. Run `npm run test:publishing` and `npm run build`.
 2. Confirm production dependency audits report no known vulnerabilities for
    both the repository and desktop app.
-3. Test one account per supported app with visible manual login, a normal post,
-   a scheduled post, warning confirmation, account pause/resume, and emergency
-   stop.
+3. Test one owned account per supported app with visible manual login, a normal
+   publish-now post, warning confirmation, account pause/resume, and emergency
+   stop. Confirm schedule mutations return HTTP 410 in this release.
 4. Verify the Account health dashboard and activity log show the expected
    Green, Warning, Paused, or Restricted state.
 5. Confirm the release remains local-profile based and contains no stealth,
@@ -61,14 +61,13 @@ Before tagging a customer release:
 After the code is on `main`, create and push the release tag:
 
 ```text
-git tag publishing-v1.1.3
-git push origin publishing-v1.1.3
+git tag publishing-v1.8.0
+git push origin publishing-v1.8.0
 ```
 
-GitHub Actions builds the Portable ZIP and publishes it with both a versioned
-filename and a stable unversioned filename, which is the download used by
-Netlify. This temporary test-release workflow does not publish an installer or
-extension ZIP.
+GitHub Actions builds the Portable ZIP and optional Chrome extension, then
+publishes versioned and stable filenames. The legacy Publishing Companion ZIP
+alias remains available for existing Netlify download links.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The

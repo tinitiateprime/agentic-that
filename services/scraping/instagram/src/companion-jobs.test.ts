@@ -50,6 +50,17 @@ test("Companion input validation preserves the server scraper contract", () => {
     () => prepareInstagramCompanionInput({ mode: "profile_url", keyword: "https://instagram.com/reel/abc/" }),
     /profile URL/,
   );
+  assert.throws(
+    () => prepareInstagramCompanionInput({
+      mode: "profile",
+      keyword: "example",
+      collection_mode: "range",
+      range_type: "date",
+      range_from: "2026-02-30",
+      range_to: "2026-03-01",
+    }),
+    /valid date range/,
+  );
 });
 
 test("Companion jobs execute one at a time and return only fresh live results", async context => {

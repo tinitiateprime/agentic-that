@@ -20,15 +20,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DASHBOARD_URL = "https://agentic-that.netlify.app/publishing";
+function configuredDashboardUrl() {
+  const fallback = "https://agentic-that.netlify.app/publishing";
+  const configured = process.env.AGENTICTHAT_DASHBOARD_URL?.trim();
+  if (!configured) return fallback;
+  try {
+    const url = new URL(configured);
+    const localDevelopment = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    if (url.protocol !== "https:" && !(localDevelopment && url.protocol === "http:")) return fallback;
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+}
+
+const DASHBOARD_URL = configuredDashboardUrl();
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 const PUBLISHING_CONNECTIONS_URL = `${DASHBOARD_ORIGIN}/config-manager?service=publishing`;
 const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
   || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
-// Temporarily keep the complete AgenticThat workspace out of Companion until
-// the product team approves that experience. The implementation remains below
-// so it can be restored without rebuilding the live-browser integration.
-const EMBED_FULL_PUBLISHING_WORKSPACE = false;
+// The embedded dashboard is the primary one-install experience. Set the
+// environment switch to 0 only for diagnostics or emergency rollback.
+const EMBED_FULL_PUBLISHING_WORKSPACE = process.env.AGENTICTHAT_COMPANION_EMBED_DASHBOARD !== "0";
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const configuredServicePort = Number(process.env.AGENTICTHAT_COMPANION_SERVICE_PORT || 8792);
 const SERVICE_PORT = Number.isInteger(configuredServicePort) && configuredServicePort > 0 && configuredServicePort < 65536
@@ -226,9 +239,6 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID = settings.instanceId;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = settings.username;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = settings.passwordPlain;
-  process.env.PUBLISH_QUEUE_SCHEDULER_ENABLED = "true";
-  process.env.PUBLISH_QUEUE_SCHEDULER_CRON = "* * * * *";
-  process.env.PUBLISH_QUEUE_SCHEDULER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
 }
 
@@ -275,6 +285,7 @@ function installFileLogging() {
 }
 
 async function startPublishingService() {
+  process.env.AGENTICTHAT_COMPANION_VERSION = APP_VERSION;
   const runtimeEntry = path.join(app.getAppPath(), "runtime", "server.mjs");
   publishingRuntime = await import(
     `${pathToFileURL(runtimeEntry).href}?v=${createHash("sha1").update(APP_VERSION).digest("hex")}`
@@ -485,7 +496,7 @@ function handleScrapingActivity(platform, state) {
     const active = scrapingActivityState.activeJob;
     tray.setToolTip(active && scrapingWorkActive
       ? `AgenticThat Companion - Scraping ${active.query}`
-      : "AgenticThat Publishing Companion");
+      : "AgenticThat Companion");
   }
   rebuildTrayMenu?.();
   if (mainWindow && !mainWindow.webContents.isDestroyed()) {
@@ -524,7 +535,7 @@ function chromiumUserAgent(webContents) {
     // Packaged Electron removes spaces from productName in its UA token.
     // Facebook returns an empty, non-hydrated document when that custom token
     // remains, so cover both development and packaged spellings.
-    .replace(/\sAgenticThat\s*Publishing\s*Companion\/[^\s]+/i, "");
+    .replace(/\sAgenticThat(?:\s*Publishing)?\s*Companion\/[^\s]+/i, "");
 }
 
 function createDashboardView() {
@@ -577,12 +588,12 @@ async function requestPersistentPublishingInteractionConsent() {
   showCompanion("activity");
   publishingPermissionPromise = dialog.showMessageBox(mainWindow, {
     type: "question",
-    title: "Scheduled publishing permission",
-    message: "Allow scheduled publishing while you are away?",
+    title: "Workspace publishing permission",
+    message: "Allow approved publishing jobs on this Companion?",
     detail: [
       "Companion will use each account's selected engine and complete the publishing steps in visible social-media tabs or external browser windows.",
       "Every publishing browser remains visible, and Emergency stop is always available in Companion and its tray menu.",
-      "This permission is saved for future scheduled posts and can be revoked at any time in Companion Settings.",
+      "This permission is saved for future publish-now jobs from the paired workspace and can be revoked at any time in Companion Settings.",
     ].join("\n\n"),
     buttons: ["Allow", "Deny"],
     defaultId: 0,
@@ -590,7 +601,7 @@ async function requestPersistentPublishingInteractionConsent() {
     noLink: true,
   }).then(result => {
     if (result.response !== 0) {
-      throw new Error("Publishing was cancelled because scheduled publishing permission was denied.");
+      throw new Error("Publishing was cancelled because workspace publishing permission was denied.");
     }
     settings.publishingInteractionConsent = true;
     writeSettings();
@@ -1084,7 +1095,7 @@ function createWindow() {
     minWidth: 980,
     minHeight: 680,
     show: false,
-    title: "AgenticThat Publishing Companion",
+    title: "AgenticThat Companion",
     icon: path.join(app.getAppPath(), "assets", "app-icon.ico"),
     backgroundColor: "#f4f6f9",
     webPreferences: {
@@ -1098,9 +1109,9 @@ function createWindow() {
   mainWindow.removeMenu();
   void mainWindow.loadFile(path.join(app.getAppPath(), "control.html"));
   mainWindow.once("ready-to-show", () => {
-    // The Companion is a background agent. Its tray menu is the normal manual
-    // entry point; login and explicit activity requests reveal the window.
-    if (process.argv.includes("--show")) mainWindow.show();
+    // Normal launches open the complete workspace. Windows startup uses
+    // --hidden so the background engine remains unobtrusive.
+    if (!process.argv.includes("--hidden")) mainWindow.show();
   });
   mainWindow.on("close", event => {
     if (quitting) return;
@@ -1115,17 +1126,16 @@ function createWindow() {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
   });
-  // Full dashboard embedding is deliberately paused. Account-login and
-  // publishing WebContentsViews continue to open inside this Companion window.
   if (EMBED_FULL_PUBLISHING_WORKSPACE) createDashboardView();
 }
 
 function createTray() {
   const trayImage = nativeImage.createFromPath(path.join(app.getAppPath(), "assets", "tray-icon.png"));
   tray = new Tray(trayImage);
-  tray.setToolTip("AgenticThat Publishing Companion");
+  tray.setToolTip("AgenticThat Companion");
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open AgenticThat Publishing", click: () => shell.openExternal(DASHBOARD_URL) },
+    { label: "Open AgenticThat Workspace", click: () => showCompanion("dashboard") },
+    { label: "Open Workspace in Browser", click: () => shell.openExternal(DASHBOARD_URL) },
     { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
     {
       label: scrapingWorkCount() > 0
@@ -1282,7 +1292,9 @@ function registerIpc() {
 if (started || !ownsSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => showCompanion(scrapingWorkCount() > 0 ? "scraping" : "activity"));
+  app.on("second-instance", () => showCompanion(
+    scrapingWorkCount() > 0 ? "scraping" : managedBrowsers.size > 0 ? "activity" : "dashboard",
+  ));
 
   app.whenReady().then(async () => {
     settings = loadSettings();
@@ -1297,7 +1309,7 @@ if (started || !ownsSingleInstanceLock) {
       await configureServiceTokenVerifier();
       await desktopDebugEndpoint();
       await startPublishingService();
-      console.log(`AgenticThat Publishing Companion ${APP_VERSION} is ready.`);
+      console.log(`AgenticThat Companion ${APP_VERSION} is ready.`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const isPortConflict = /port 8792|EADDRINUSE|address already in use/i.test(errorMessage);

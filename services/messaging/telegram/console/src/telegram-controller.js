@@ -100,8 +100,7 @@ const state = {
   postHistory: read(keys.postHistory, []),
   settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Browser session", proxy: "", storage: "Browser local workspace", theme: "Dark mode" }),
   activeView: "dashboard",
-  inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} },
-  scheduledSending: new Set()
+  inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} }
 };
 
 const el = {
@@ -506,7 +505,7 @@ function renderPostGroups(selectedIds = selectedPostGroupIds()) {
 }
 function postFromForm() {
   const existing = state.posts.find((item) => item.id === $("post-id").value);
-  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: currentAccount()?.id || existing?.accountId || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: existing?.scheduledAt || "", mediaUrl: $("post-media-url").value.trim(), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: currentAccount()?.id || existing?.accountId || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
 function savePost(statusOverride = "") {
   const post = postFromForm();
@@ -522,7 +521,7 @@ function savePost(statusOverride = "") {
   return post;
 }
 function fillPost(post) {
-  $("post-id").value = post.id; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = post.scheduledAt || ""; $("post-media-url").value = post.mediaUrl || ""; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
+  $("post-id").value = post.id; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status === "Scheduled" ? "Ready" : post.status || "Draft"; $("post-media-url").value = post.mediaUrl || ""; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
 }
 function clearPost() { el.postForm.reset(); $("post-id").value = ""; $("post-status").value = "Draft"; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
 function formatDate(value) { const date = new Date(value); return value && !Number.isNaN(date.getTime()) ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : value; }
@@ -530,7 +529,7 @@ function renderPostPreview() {
   const post = postFromForm();
   const contactNames = (post.contacts || []).map((id) => state.contacts.find((contact) => contact.id === id)?.name).filter(Boolean);
   const groupNames = (post.groups || []).map((id) => state.groups.find((group) => group.id === id)?.name).filter(Boolean);
-  const tags = [postLabels[post.type], post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : "", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
+  const tags = [postLabels[post.type], post.category, post.status, ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
   let media = "";
   if (post.mediaUrl && post.type === "image") media = `<img src="${esc(post.mediaUrl)}" alt="">`;
   else if (post.mediaUrl && post.type === "video") media = `<video src="${esc(post.mediaUrl)}" controls></video>`;
@@ -546,8 +545,8 @@ function renderPosts() {
   const type = el.postFilterType.value;
   const sort = el.postSort.value;
   let posts = state.posts.filter((post) => (!type || post.type === type) && (!query || [post.title, post.type, post.category, (post.tags || []).join(" "), post.status, post.body, post.recipient].join(" ").toLowerCase().includes(query)));
-  posts = posts.slice().sort((a, b) => sort === "created-asc" ? a.createdAt.localeCompare(b.createdAt) : sort === "category" ? (a.category || "").localeCompare(b.category || "") : sort === "scheduled" ? (a.scheduledAt || "9999").localeCompare(b.scheduledAt || "9999") : b.createdAt.localeCompare(a.createdAt));
-  el.postList.innerHTML = posts.length ? posts.map((post) => record(post.title, [postLabels[post.type] || post.type, post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : ""].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button><button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`)).join("") : empty("No posts found.");
+  posts = posts.slice().sort((a, b) => sort === "created-asc" ? a.createdAt.localeCompare(b.createdAt) : sort === "category" ? (a.category || "").localeCompare(b.category || "") : b.createdAt.localeCompare(a.createdAt));
+  el.postList.innerHTML = posts.length ? posts.map((post) => record(post.title, [postLabels[post.type] || post.type, post.category, post.status === "Scheduled" ? "Ready" : post.status].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button><button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`)).join("") : empty("No posts found.");
 }
 function savePostHistory(records) {
   if (!records.length) return;
@@ -570,7 +569,7 @@ function pendingPostRow(post) {
   const targets = postTargets(post);
   const contactNames = (post.contacts || []).map((id) => state.contacts.find((contact) => contact.id === id)?.name).filter(Boolean);
   const groupNames = (post.groups || []).map((id) => state.groups.find((group) => group.id === id)?.name).filter(Boolean);
-  const meta = [post.status || "Draft", post.scheduledAt ? `Schedule: ${formatDate(post.scheduledAt)}` : "", targets.length ? `${targets.length} recipient${targets.length === 1 ? "" : "s"}` : "No recipients", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).join(" | ");
+  const meta = [post.status === "Scheduled" ? "Ready" : post.status || "Draft", targets.length ? `${targets.length} recipient${targets.length === 1 ? "" : "s"}` : "No recipients", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).join(" | ");
   return record(post.title || "Untitled post", meta, post.lastError || post.body || "", `<button class="mini-button" data-view="posts" data-edit-post="${esc(post.id)}" type="button">Open post</button>`);
 }
 function renderPostHistory() {
@@ -954,34 +953,6 @@ async function sendPostToTargets(post, node, options = {}) {
   renderPostHistory();
   return { sentCount, targets, failures };
 }
-async function sendScheduledPost(post) {
-  if (state.scheduledSending.has(post.id)) return;
-  state.scheduledSending.add(post.id);
-  try {
-    const result = await sendPostToTargets(post, el.postStatusMessage, { throwOnError: true });
-    const index = state.posts.findIndex((item) => item.id === post.id);
-    if (index === -1) return;
-    state.posts[index] = { ...state.posts[index], status: result.failures.length ? "Failed" : "Posted", sentAt: new Date().toISOString(), lastError: result.failures.join("; "), updatedAt: new Date().toISOString() };
-    write(keys.posts, state.posts);
-    render();
-    status(el.postStatusMessage, result.failures.length ? `Scheduled post failed: ${result.failures.slice(0, 3).join("; ")}` : `Scheduled post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, result.failures.length ? "error" : "success");
-  } catch (error) {
-    const index = state.posts.findIndex((item) => item.id === post.id);
-    if (index !== -1) {
-      state.posts[index] = { ...state.posts[index], status: "Failed", lastError: error instanceof Error ? error.message : "Scheduled send failed", updatedAt: new Date().toISOString() };
-      write(keys.posts, state.posts);
-      render();
-    }
-    status(el.postStatusMessage, error instanceof Error ? error.message : "Scheduled send failed.", "error");
-  } finally {
-    state.scheduledSending.delete(post.id);
-  }
-}
-function runScheduler() {
-  if (!state.user || !currentAccount()) return;
-  const now = Date.now();
-  state.posts.filter((post) => post.status === "Scheduled" && post.scheduledAt && new Date(post.scheduledAt).getTime() <= now).forEach((post) => { void sendScheduledPost(post); });
-}
 async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); delete state.profiles[account.id]; write(keys.profiles, state.profiles); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
 function setLoginStage(stage) {
   state.login.stage = stage;
@@ -1094,7 +1065,7 @@ el.channelForm.addEventListener("submit", (event) => {
   const index = state.channels.findIndex((row) => row.id === item.id); index === -1 ? state.channels.unshift(item) : state.channels[index] = item;
   write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
 });el.postForm.addEventListener("submit", (event) => { event.preventDefault(); savePost(); });
-["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-media-url", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
+["post-title", "post-type", "post-category", "post-tags", "post-status", "post-media-url", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
 el.postContactTargets.addEventListener("change", renderPostPreview);
 el.postGroupTargets.addEventListener("change", renderPostPreview);
 [el.numberSearch, el.numberStatusFilter].forEach((node) => node.addEventListener("input", renderAccounts));
@@ -1139,7 +1110,6 @@ document.addEventListener("click", async (event) => {
   if (button.id === "group-clear") { el.groupForm.reset(); $("group-id").value = ""; }
   if (button.id === "channel-clear") { el.channelForm.reset(); $("channel-id").value = ""; }
   if (button.id === "post-clear") clearPost();
-  if (button.id === "post-schedule") { if (!$("post-scheduled-at").value) return status(el.postStatusMessage, "Choose a scheduled date.", "error"); savePost("Scheduled"); status(el.postStatusMessage, "Post saved as scheduled.", "success"); }
   if (button.id === "post-send-now") {
     const post = savePost();
     if (!post) return;
@@ -1185,8 +1155,6 @@ document.addEventListener("keydown", (event) => {
     signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again.");
   }
   setView("dashboard");
-  runScheduler();
-  setInterval(runScheduler, 30000);
   setInterval(() => { if (state.user && state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }, 10000);
 })();
 }

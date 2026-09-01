@@ -29,5 +29,7 @@ if ($setup) {
 }
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Publishing-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Portable.zip") -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Companion-Portable.zip") -Force
 
 Write-Host "Windows companion release artifacts copied to $artifactRoot" -ForegroundColor Green
