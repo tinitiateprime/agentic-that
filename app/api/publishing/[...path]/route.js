@@ -3,9 +3,7 @@ import path from "node:path";
 import { accessErrorResponse, authorizeApiCapability, principalHasAccess } from "@platform/server/access-control";
 import {
   advanceCentralStagedUpload,
-  authenticateCentralCompanion,
   centralMediaFileName,
-  claimCentralJobs,
   createCentralAccount,
   createCentralStagedUpload,
   createCentralUpload,
@@ -15,7 +13,6 @@ import {
   deleteCentralUpload,
   getCentralCompanion,
   getCentralStagedUpload,
-  heartbeatCentralCompanion,
   listCentralAccounts,
   listCentralSubmissions,
   listCentralUploads,
@@ -23,16 +20,15 @@ import {
   publishingDashboard,
   publishingUserFromPrincipal,
   queueCentralUploads,
-  redeemCompanionPairing,
   removeCentralCompanion,
   updateCentralAccount,
-  updateCentralJob,
   updateCentralUpload,
   updateCentralUploadStatus,
   consumeCentralStagedUpload,
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
+import { storeSupabaseJobArtifact } from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
 
@@ -59,16 +55,6 @@ async function segments(context) {
 function parseBoolean(value, fallback = false) {
   if (value === undefined) return fallback;
   return value === true || value === "true";
-}
-
-function companionToken(request) {
-  return request.headers.get("x-agenticthat-companion-token") || "";
-}
-
-async function companion(request) {
-  const token = companionToken(request);
-  if (!token) throw new Error("Companion authentication is required.");
-  return { token, companion: await authenticateCentralCompanion(token) };
 }
 
 async function principal(capability) {
@@ -168,6 +154,12 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
   await fs.writeFile(temporary, bytes, { mode: 0o600 });
   await fs.rename(temporary, filePath);
   await storePublishingMedia(stage.fileName, principalValue.workspaceId, stage.mimeType);
+  const artifact = await storeSupabaseJobArtifact(bytes, {
+    workspaceId: principalValue.workspaceId,
+    fileName: stage.fileName,
+    originalName: stage.originalName,
+    mimeType: stage.mimeType,
+  });
   await consumeCentralStagedUpload(principalValue, stagedUploadId);
   await removeStageBytes(stage);
   return {
@@ -177,6 +169,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
     size: stage.size,
     extension: path.extname(stage.originalName),
     url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
+    artifact,
   };
 }
 
@@ -204,26 +197,16 @@ export async function GET(request, context) {
   try {
     const parts = await segments(context);
     if (parts[0] === "companion" && parts[1] === "jobs") {
-      const authenticated = await companion(request);
-      const limit = Number(new URL(request.url).searchParams.get("limit") || 1);
-      return Response.json({ jobs: await claimCentralJobs(authenticated.token, limit) });
+      return Response.json({ message: "Companion job transport moved to Supabase RPC." }, { status: 410 });
     }
     if (parts[0] === "media" && parts[1]) {
-      let workspaceId;
-      let webPrincipal;
-      const token = companionToken(request);
-      if (token) workspaceId = (await companion(request)).companion.workspaceId;
-      else {
-        webPrincipal = await principal("publishing.view");
-        workspaceId = webPrincipal.workspaceId;
-      }
+      const webPrincipal = await principal("publishing.view");
+      const workspaceId = webPrincipal.workspaceId;
       const upload = (await listCentralUploads(workspaceId)).find((item) => item.fileName === parts[1]);
       const submission = upload ? null : (await listCentralSubmissions(workspaceId)).find((item) => item.fileName === parts[1]);
       if (!upload && !submission) return Response.json({ message: "Publishing media was not found." }, { status: 404 });
-      if (!token && upload) {
-        assertPlatformAccess(webPrincipal, upload.platform, "view");
-      }
-      if (!token && submission) {
+      if (upload) assertPlatformAccess(webPrincipal, upload.platform, "view");
+      if (submission) {
         const visibleAccountIds = new Set(visibleForPrincipal(webPrincipal, await listCentralAccounts(workspaceId)).map((account) => account.id));
         if (!submission.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))) {
           throw new Error("Your role does not include access to this publishing media.");
@@ -293,16 +276,13 @@ export async function POST(request, context) {
   try {
     const parts = await segments(context);
     if (parts[0] === "companion" && parts[1] === "heartbeat") {
-      const token = companionToken(request);
-      const body = await requestJson(request);
-      return Response.json({ companion: await heartbeatCentralCompanion(token, body) });
+      return Response.json({ message: "Companion heartbeat transport moved to Supabase RPC." }, { status: 410 });
     }
     if (parts[0] === "companion" && parts[1] === "jobs" && parts[3] === "status") {
-      const token = companionToken(request);
-      return Response.json(await updateCentralJob(token, parts[2], await requestJson(request)));
+      return Response.json({ message: "Companion job transport moved to Supabase RPC." }, { status: 410 });
     }
     if (parts[0] === "companion" && parts[1] === "pair" && parts[2] === "redeem") {
-      return Response.json(await redeemCompanionPairing(await requestJson(request)));
+      return Response.json({ message: "Companion pairing redemption moved to Supabase RPC." }, { status: 410 });
     }
     if (parts[0] === "companion" && parts[1] === "pair") {
       const user = await principal("publishing.accounts.configure");
@@ -384,7 +364,7 @@ export async function PATCH(request, context) {
   try {
     const parts = await segments(context);
     if (parts[0] === "companion" && parts[1] === "jobs" && parts[3] === "status") {
-      return Response.json(await updateCentralJob(companionToken(request), parts[2], await requestJson(request)));
+      return Response.json({ message: "Companion job transport moved to Supabase RPC." }, { status: 410 });
     }
     const body = await requestJson(request);
     if (parts[0] === "accounts" && parts[1]) {

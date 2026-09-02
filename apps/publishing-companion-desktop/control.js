@@ -1,7 +1,6 @@
 const api = window.publishingCompanion;
 const byId = id => document.getElementById(id);
 const views = {
-  dashboard: { panel: byId("dashboard-panel"), title: "AgenticThat workspace", eyebrow: "ONE APP WORKSPACE" },
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
@@ -25,7 +24,7 @@ function setButtonLabel(buttonOrId, label) {
   else button.textContent = label;
 }
 
-let activeView = "dashboard";
+let activeView = "activity";
 let currentStatus = null;
 let currentWorkspace = { sessions: [] };
 let currentScraping = { activeJob: null, queuedJobs: [], recentJobs: [], concurrency: 1 };
@@ -107,7 +106,7 @@ function scheduleLayout() {
       .filter(Boolean)
       .filter(entry => entry.id && entry.bounds);
     void api.setLayout({
-      dashboard: activeView === "dashboard" ? elementBounds(byId("dashboard-host")) : null,
+      dashboard: null,
       browsers: activeView === "activity" ? browsers : [],
     });
   });
@@ -625,7 +624,6 @@ byId("refresh-current").addEventListener("click", async () => {
   button.disabled = true;
   button.classList.add("is-loading");
   try {
-    if (activeView === "dashboard") await api.reloadDashboard();
     await Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]);
   } finally {
     button.classList.remove("is-loading");

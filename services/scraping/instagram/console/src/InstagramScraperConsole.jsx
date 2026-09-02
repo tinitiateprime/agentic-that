@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { getClientServiceToken } from "@platform/client-service-token";
 import {
   getInstagramCompanionStatus,
+  listInstagramCompanionRuns,
   runInstagramCompanionJob
 } from "./companionClient";
 
@@ -43,8 +44,7 @@ const ANALYSIS_TABS = [
   { id: "patterns", label: "Content Patterns" }
 ];
 const SCRAPE_ENGINES = [
-  { id: "server", label: "Server", description: "Runs in the cloud" },
-  { id: "companion", label: "Local Companion", description: "Runs privately on this computer" }
+  { id: "companion", label: "Desktop Companion", description: "Runs privately in your paired desktop browser" }
 ];
 
 const inputModes = [
@@ -231,62 +231,6 @@ async function apiGet(path, serviceUrl = API_URL, identityToken = "") {
   return response.json();
 }
 
-async function apiGetRequired(path, serviceUrl = API_URL, identityToken = "") {
-  const response = await fetch(`${serviceUrl}${path}`, {
-    cache: "no-store",
-    headers: await serviceHeaders(identityToken)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || `Request failed (${response.status})`);
-  }
-  return data;
-}
-
-async function apiPost(path, body, serviceUrl = API_URL, identityToken = "") {
-  const response = await fetch(`${serviceUrl}${path}`, {
-    cache: "no-store",
-    method: "POST",
-    headers: await serviceHeaders(identityToken, { "content-type": "application/json" }),
-    body: JSON.stringify(body)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || `Scrape failed (${response.status})`);
-  }
-  return data;
-}
-
-async function runInstagramJob(payload, onStatus = () => {}, serviceUrl = API_URL, identityToken = "") {
-  const created = await apiPost("/jobs", payload, serviceUrl, identityToken);
-  const jobId = created?.job?.id;
-  if (!jobId) throw new Error("The background scrape could not be created.");
-
-  onStatus("Scraping public pages");
-  let data = await apiPost(`/jobs/${jobId}/run`, {}, serviceUrl, identityToken);
-  const deadline = Date.now() + 16 * 60_000;
-  let pollingFailures = 0;
-  while (data?.job?.status !== "complete") {
-    if (data?.job?.status === "failed") {
-      throw new Error(data.job.error || "Scrape failed");
-    }
-    if (Date.now() >= deadline) {
-      throw new Error("The scrape took too long. Try a smaller count or range.");
-    }
-    onStatus(data?.job?.status === "running" ? "Collecting visible data" : "Waiting to start");
-    await new Promise((resolve) => window.setTimeout(resolve, 2000));
-    try {
-      data = await apiGetRequired(`/jobs/${jobId}`, serviceUrl, identityToken);
-      pollingFailures = 0;
-    } catch (pollError) {
-      pollingFailures += 1;
-      if (pollingFailures >= 5) throw pollError;
-      onStatus("Reconnecting to background job");
-    }
-  }
-  return data;
-}
-
 function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = null, platformConfig = {} }) {
   const platformName = platformConfig.name || "Instagram";
   const platformLower = platformName.toLowerCase();
@@ -298,6 +242,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   const selectedUrlTypeFor = platformConfig.urlType || instagramUrlType;
   const publicPostUrl = platformConfig.publicUrl || publicInstagramUrl;
   const companionStatusCheck = platformConfig.getCompanionStatus || getInstagramCompanionStatus;
+  const companionRunsLoader = platformConfig.listCompanionRuns || listInstagramCompanionRuns;
   const companionJobRunner = platformConfig.runCompanionJob || runInstagramCompanionJob;
   const normalizeJob = platformConfig.normalizeJob || ((value) => value);
   const engineStorageKey = platformConfig.engineStorageKey || "agenticthat-instagram-scrape-engine";
@@ -319,7 +264,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   const engagementMetricNote = platformConfig.engagementMetricNote || "From visible grid values";
   const commentsMetricNote = platformConfig.commentsMetricNote || "From visible grid values";
   const canRunScraper = capabilities === null || capabilities.includes("scraping.run");
-  const [scrapeEngine, setScrapeEngine] = useState("server");
+  const [scrapeEngine, setScrapeEngine] = useState("companion");
   const [companionStatus, setCompanionStatus] = useState({ checking: false, ready: false, message: "" });
   const [inputMode, setInputMode] = useState(null);
   const [inputValue, setInputValue] = useState("");
@@ -454,8 +399,8 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   }, []);
 
   useEffect(() => {
-    const savedEngine = window.localStorage.getItem(engineStorageKey);
-    if (savedEngine === "server" || savedEngine === "companion") setScrapeEngine(savedEngine);
+    window.localStorage.setItem(engineStorageKey, "companion");
+    setScrapeEngine("companion");
   }, []);
 
   useEffect(() => {
@@ -533,10 +478,11 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
   }, [publishingIdentityToken, savedQueriesKey, savedQueriesPath, serviceUrl]);
 
   useEffect(() => {
-    apiGet("/runs", serviceUrl, publishingIdentityToken)
+    const request = getClientServiceToken("scraping", publishingIdentityToken).then((token) => companionRunsLoader(token));
+    request
       .then((data) => setWorkspaceRuns(Array.isArray(data.runs) ? data.runs : []))
       .catch(() => setWorkspaceRuns([]));
-  }, [publishingIdentityToken, serviceUrl]);
+  }, [companionRunsLoader, publishingIdentityToken, scrapeEngine, serviceUrl]);
 
   const completeUserGuide = () => {
     window.clearTimeout(tourTypingTimer.current);
@@ -606,9 +552,6 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
 
   const runSelectedInstagramJob = async (payload, onStatus) => {
     if (!canRunScraper) throw new Error("Your Scraping Viewer role cannot run a scraper.");
-    if (scrapeEngine !== "companion") {
-      return normalizeJob(await runInstagramJob(payload, onStatus, serviceUrl, publishingIdentityToken));
-    }
     const controller = new AbortController();
     setCancelActiveScrape(() => () => controller.abort());
     try {
@@ -986,7 +929,7 @@ function InstagramScraperConsole({ publishingIdentityToken = "", capabilities = 
       <main className="instagram-scraper-app results-page">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">Dataset ready · {lastScrapeEngine === "companion" ? "Local Companion" : "Server"}</p>
+            <p className="eyebrow">Dataset ready · Desktop Companion</p>
             <h1>{lastQuery}</h1>
             <p className="subtle">
               {lastWorkflowLabel}. {lastCollectionMode === "engagement"

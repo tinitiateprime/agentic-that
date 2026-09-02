@@ -112,10 +112,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $releaseVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $notesPath = "docs/publishing-companion-$releaseVersion.md"
           $releaseArguments = @(
             "release", "create", $env:GITHUB_REF_NAME,
-            "--verify-tag", "--generate-notes",
+            "--verify-tag",
             "--title", "AgenticThat Companion $env:GITHUB_REF_NAME"
           )
+          if (Test-Path -LiteralPath $notesPath) {
+            $releaseArguments += @("--notes-file", $notesPath)
+          } else {
+            $releaseArguments += "--generate-notes"
+          }
           $releaseArguments += (Get-ChildItem -LiteralPath "artifacts" -File | ForEach-Object { $_.FullName })
           & gh @releaseArguments

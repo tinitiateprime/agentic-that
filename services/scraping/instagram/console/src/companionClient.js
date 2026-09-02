@@ -1,36 +1,17 @@
-import {
-  detectPublishingExtension,
-  publishingExtensionFetch
-} from "../../../../../lib/publishing-extension-bridge.ts";
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
 
-const SESSION_KEY = "agenticthat-publish-queue-session";
-const SCRAPING_SESSION_KEY = "agenticthat-instagram-companion-session";
-const JOBS_PATH = "/api/scraping/instagram/jobs";
+const CONTROL_PATH = "/api/job-control/scraping/instagram";
 
-function readCompanionToken() {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || "null");
-    return typeof session?.token === "string" ? session.token : "";
-  } catch {
-    return "";
-  }
-}
-
-function readScrapingToken() {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(SCRAPING_SESSION_KEY) || "null");
-    return typeof session?.token === "string" && Number(session?.expiresAt) > Date.now() + 30_000
-      ? session.token
-      : "";
-  } catch {
-    return "";
-  }
-}
-
-async function responsePayload(response) {
+async function controlFetch(path, init = {}, identityToken = "", retry = true) {
+  const token = await getClientServiceToken("scraping", identityToken, !retry);
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch(`${CONTROL_PATH}${path}`, { cache: "no-store", credentials: "same-origin", ...init, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.message || `Local Companion request failed (${response.status}).`);
+    if (response.status === 401 && retry) return controlFetch(path, init, identityToken, false);
+    const error = new Error(data.message || `Companion job control failed (${response.status}).`);
     error.status = response.status;
     error.code = data.code;
     throw error;
@@ -38,126 +19,55 @@ async function responsePayload(response) {
   return data;
 }
 
-async function extensionJson(path, init = {}) {
-  const extension = await detectPublishingExtension();
-  if (!extension) {
-    const error = new Error("The AgenticThat Companion extension is not connected.");
-    error.code = "extension_unavailable";
-    throw error;
-  }
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await publishingExtensionFetch(path, {
-    cache: "no-store",
-    ...init,
-    headers
-  });
-  if (!response) throw new Error("The AgenticThat Companion extension is not connected.");
-  return responsePayload(response);
-}
-
-async function scrapingAccessToken(publishingIdentityToken, force = false) {
-  const publishingToken = readCompanionToken();
-  if (publishingToken) return publishingToken;
-  if (!force) {
-    const existing = readScrapingToken();
-    if (existing) return existing;
-  }
-  if (!publishingIdentityToken) {
-    throw new Error("Refresh AgenticThat and try Local Companion again.");
-  }
-  const session = await extensionJson("/api/auth/platform/instagram-scraping", {
-    method: "POST",
-    body: JSON.stringify({ token: publishingIdentityToken })
-  });
-  if (!session?.token) throw new Error("Companion could not create a local scraping session.");
-  window.sessionStorage.setItem(SCRAPING_SESSION_KEY, JSON.stringify({
-    token: session.token,
-    expiresAt: Date.now() + Math.max(300, Number(session.expiresInSeconds) || 7200) * 1000
-  }));
-  return session.token;
-}
-
-async function companionFetch(path, init = {}, publishingIdentityToken = "", retry = true) {
-  const token = await scrapingAccessToken(publishingIdentityToken);
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${token}`);
+export async function getInstagramCompanionStatus(identityToken) {
   try {
-    return await extensionJson(path, { ...init, headers });
-  } catch (error) {
-    if (retry && error?.status === 401 && !readCompanionToken()) {
-      window.sessionStorage.removeItem(SCRAPING_SESSION_KEY);
-      await scrapingAccessToken(publishingIdentityToken, true);
-      return companionFetch(path, init, publishingIdentityToken, false);
-    }
-    throw error;
-  }
-}
-
-export async function getInstagramCompanionStatus(publishingIdentityToken) {
-  try {
-    const health = await extensionJson("/api/health");
-    const capability = health?.capabilities?.instagramScraping;
-    if (!capability?.available) {
-      return { ready: false, message: "Restart Companion to enable local scraping." };
-    }
-    await scrapingAccessToken(publishingIdentityToken);
+    const status = await controlFetch("/status", {}, identityToken);
     return {
-      ready: true,
-      message: capability.activeJobs ? "Local scraper is busy; your job will be queued." : "Ready on this computer"
+      ready: Boolean(status.companion),
+      message: status.companion ? status.message : "Pair a desktop Companion once. Jobs can then be sent from any device.",
     };
   } catch (error) {
-    return {
-      ready: false,
-      message: error instanceof Error ? error.message : "Local Companion is unavailable."
-    };
+    return { ready: false, message: error instanceof Error ? error.message : "Companion job control is unavailable." };
   }
 }
 
-export async function runInstagramCompanionJob(payload, onStatus = () => {}, signal, publishingIdentityToken) {
-  const created = await companionFetch(JOBS_PATH, {
+export async function listInstagramCompanionRuns(identityToken) {
+  return controlFetch("/runs", {}, identityToken);
+}
+
+export async function runInstagramCompanionJob(payload, onStatus = () => {}, signal, identityToken) {
+  const created = await controlFetch("/jobs", {
     method: "POST",
-    body: JSON.stringify(payload)
-  }, publishingIdentityToken);
+    headers: { "idempotency-key": `instagram:${crypto.randomUUID()}` },
+    body: JSON.stringify(payload),
+  }, identityToken);
   const jobId = created?.job?.id;
-  if (!jobId) throw new Error("The local scrape job could not be created.");
-
-  const cancelJob = () => companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, {
-    method: "DELETE"
-  }, publishingIdentityToken).catch(() => {});
-  if (signal?.aborted) {
-    await cancelJob();
-    throw new Error("Local Instagram scraping was cancelled.");
+  if (!jobId) throw new Error("The Instagram scrape job could not be queued.");
+  const cancel = () => controlFetch(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }, identityToken).catch(() => {});
+  if (signal?.aborted) { await cancel(); throw new Error("Instagram scraping was cancelled."); }
+  const abort = () => { void cancel(); };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const deadline = Date.now() + 24 * 60 * 60_000;
+    let failures = 0;
+    let current = created;
+    while (current?.job?.status !== "complete") {
+      if (signal?.aborted) throw new Error("Instagram scraping was cancelled.");
+      if (["failed", "cancelled"].includes(current?.job?.status)) throw new Error(current.job.error?.message || "Instagram scraping did not complete.");
+      if (Date.now() >= deadline) throw new Error("The job is still safely queued. Reopen this page later to view its result.");
+      onStatus(current?.job?.progress?.message || (current?.job?.status === "queued" ? "Safely queued for the paired Companion" : "Collecting current Instagram data"));
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+      try {
+        current = await controlFetch(`/jobs/${encodeURIComponent(jobId)}`, {}, identityToken);
+        failures = 0;
+      } catch (error) {
+        failures += 1;
+        if (failures >= 8) throw error;
+        onStatus("Reconnecting to job control");
+      }
+    }
+    return current;
+  } finally {
+    signal?.removeEventListener("abort", abort);
   }
-
-  const deadline = Date.now() + 16 * 60_000;
-  let consecutiveFailures = 0;
-  let current = created;
-  while (current?.job?.status !== "complete") {
-    if (signal?.aborted) {
-      await cancelJob();
-      throw new Error("Local Instagram scraping was cancelled.");
-    }
-    const status = current?.job?.status;
-    if (status === "failed" || status === "cancelled") {
-      throw new Error(current.job.error?.message || "Local Instagram scraping failed.");
-    }
-    if (Date.now() >= deadline) {
-      await cancelJob();
-      throw new Error("The local scrape took too long. Try a smaller count or range.");
-    }
-    onStatus(current?.job?.progress?.message || (status === "queued"
-      ? "Waiting for the local scraper"
-      : "Collecting current public data"));
-    await new Promise(resolve => window.setTimeout(resolve, 1_000));
-    try {
-      current = await companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, {}, publishingIdentityToken);
-      consecutiveFailures = 0;
-    } catch (error) {
-      consecutiveFailures += 1;
-      if (consecutiveFailures >= 5) throw error;
-      onStatus("Reconnecting to Companion");
-    }
-  }
-  return current;
 }

@@ -46,11 +46,7 @@
         </div>
 
         <nav aria-label="Companion navigation">
-          <button class="nav-item active" data-view="dashboard" type="button">
-            <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-grid"></use></svg></span>
-            <span><strong>Publishing</strong><small>Dashboard workspace</small></span>
-          </button>
-          <button class="nav-item" data-view="activity" type="button">
+          <button class="nav-item active" data-view="activity" type="button">
             <span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>
             <span><strong>Publishing activity</strong><small>Visible and managed</small></span>
             <b id="activity-badge" hidden>0</b>
@@ -76,8 +72,8 @@
       <main class="workspace">
         <header class="topbar">
           <div>
-            <span class="eyebrow" id="view-eyebrow">ONE APP WORKSPACE</span>
-            <h1 id="view-title">AgenticThat workspace</h1>
+            <span class="eyebrow" id="view-eyebrow">VISIBLE AUTOMATION</span>
+            <h1 id="view-title">Login and publishing activity</h1>
           </div>
           <div class="topbar-actions">
             <button class="secondary" id="refresh-current" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg><span class="button-label">Refresh</span></button>
@@ -85,7 +81,7 @@
           </div>
         </header>
 
-        <section class="view-panel active" id="dashboard-panel">
+        <section class="view-panel" id="dashboard-panel" hidden>
           <div class="dashboard-note">
             <div><strong>One managed publishing workflow</strong><span>Create posts in AgenticThat, sign in through a dedicated provider browser, and monitor publishing in Companion.</span></div>
             <span class="secure-pill">Local secure bridge</span>
@@ -95,7 +91,7 @@
           </div>
         </section>
 
-        <section class="view-panel" id="activity-panel">
+        <section class="view-panel active" id="activity-panel">
           <div class="activity-intro">
             <div class="activity-intro-copy">
               <span class="section-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#icon-activity"></use></svg></span>

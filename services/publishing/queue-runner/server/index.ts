@@ -159,7 +159,9 @@ fs.mkdirSync(uploadDir, { recursive: true });
 fs.mkdirSync(stagedUploadDir, { recursive: true });
 
 type CentralCompanionPairing = {
-  serverOrigin: string;
+  supabaseUrl: string;
+  supabaseApiKey: string;
+  supabaseAnonKey?: string;
   pairingToken: string;
   companionId: string;
   workspaceId: string;
@@ -175,8 +177,28 @@ type CentralConnectionState = {
 
 type CentralPublishingJob = {
   id: string;
-  upload: PlatformUpload;
-  account: PlatformAccount;
+  type: "publish";
+  payload: {
+    upload: PlatformUpload & { artifact?: CentralJobArtifact | null };
+    account: PlatformAccount;
+  };
+};
+
+type CentralJobArtifact = {
+  bucket: string;
+  path: string;
+  fileName: string;
+  mimeType?: string;
+  byteSize?: number;
+  sha256?: string;
+  downloadUrl: string;
+  expiresAt?: string;
+};
+
+type CentralCompanionJob = CentralPublishingJob | {
+  id: string;
+  type: "scrape.instagram" | "scrape.facebook";
+  payload: Record<string, unknown>;
 };
 
 let centralPollingTimer: NodeJS.Timeout | null = null;
@@ -188,15 +210,15 @@ let centralConnectionState: CentralConnectionState = {
   companion: null,
 };
 
-function centralServerOrigin(value: unknown) {
+function supabaseApiOrigin(value: unknown) {
   const raw = String(value || "").trim().replace(/\/$/, "");
   const url = new URL(raw);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-    throw new Error("The AgenticThat server URL must use HTTPS.");
+    throw new Error("The Supabase API URL must use HTTPS.");
   }
   if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("The AgenticThat server URL is invalid.");
+    throw new Error("The Supabase API URL is invalid.");
   }
   return url.origin;
 }
@@ -252,15 +274,20 @@ function unprotectCentralPairing(value: Record<string, unknown>) {
 }
 
 function validCentralPairing(value: Partial<CentralCompanionPairing> | null): value is CentralCompanionPairing {
-  return Boolean(value?.serverOrigin && value?.pairingToken && value?.workspaceId && value?.companionId);
+  return Boolean(value?.supabaseUrl && value?.supabaseApiKey && value?.pairingToken && value?.workspaceId && value?.companionId);
 }
 
 async function readCentralPairing(): Promise<CentralCompanionPairing | null> {
   try {
     const stored = JSON.parse(await fs.promises.readFile(centralPairingFile, "utf8")) as Record<string, unknown>;
-    const value = stored?.protected === true
+    const decoded = stored?.protected === true
       ? unprotectCentralPairing(stored)
       : stored as CentralCompanionPairing;
+    const value = {
+      ...decoded,
+      supabaseApiKey: decoded.supabaseApiKey || decoded.supabaseAnonKey || "",
+      supabaseAnonKey: undefined,
+    };
     if (!validCentralPairing(value)) return null;
     if (stored?.protected !== true && pairingEncryptionKey()) await writeCentralPairing(value);
     return value;
@@ -276,36 +303,43 @@ async function writeCentralPairing(value: CentralCompanionPairing) {
   await durableWrite(centralPairingFile, protectCentralPairing(value));
 }
 
-async function centralRequest(pairing: CentralCompanionPairing, endpoint: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers);
-  headers.set("X-AgenticThat-Companion-Token", pairing.pairingToken);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await fetch(`${pairing.serverOrigin}/api/publishing${endpoint}`, { ...init, headers });
+function supabaseApiHeaders(apiKey: string) {
+  const headers: Record<string, string> = { apikey: apiKey };
+  if (!apiKey.startsWith("sb_")) headers.authorization = `Bearer ${apiKey}`;
+  return headers;
+}
+
+async function supabaseRpc<T>(pairing: Pick<CentralCompanionPairing, "supabaseUrl" | "supabaseApiKey">, name: string, input: Record<string, unknown>) {
+  const response = await fetch(`${pairing.supabaseUrl}/rest/v1/rpc/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: {
+      ...supabaseApiHeaders(pairing.supabaseApiKey),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
   if (!response.ok) {
-    const payload = await response.text().catch(() => "");
-    throw new Error(payload || `AgenticThat server returned ${response.status}.`);
+    const payload = await response.json().catch(() => ({})) as { message?: string; details?: string };
+    throw new Error(payload.message || payload.details || `Supabase job control returned ${response.status}.`);
   }
-  return response;
+  return response.json() as Promise<T>;
 }
 
 async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
   const accounts = await listPlatformAccounts(undefined, pairing.workspaceId);
-  const response = await centralRequest(pairing, "/companion/heartbeat", {
-    method: "POST",
-    body: JSON.stringify({
-      companionInstanceId: publishingCompanionId(),
-      version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
-      runtimeStatus: isAutomationRunning() ? "busy" : "ready",
-      updateStatus: process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS?.trim() || "idle",
-      lastError: process.env.AGENTICTHAT_COMPANION_RUNTIME_ERROR?.trim() || null,
-      platform: process.platform,
-      architecture: process.arch,
-      secureStorage: Boolean(pairingEncryptionKey()),
-      accounts,
-    }),
+  const companion = await supabaseRpc<Record<string, unknown>>(pairing, "companion_heartbeat", {
+    p_token: pairing.pairingToken,
+    p_instance_id: publishingCompanionId(),
+    p_version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
+    p_runtime_status: isAutomationRunning() ? "busy" : "ready",
+    p_update_status: process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS?.trim() || "idle",
+    p_last_error: process.env.AGENTICTHAT_COMPANION_RUNTIME_ERROR?.trim() || null,
+    p_platform: process.platform,
+    p_architecture: process.arch,
+    p_secure_storage: Boolean(pairingEncryptionKey()),
+    p_accounts: accounts,
   });
-  const payload = await response.json() as { companion?: Record<string, unknown> };
-  const reportedStatus = String(payload.companion?.status || "online");
+  const reportedStatus = String(companion?.status || "online");
   const status: CentralConnectionState["status"] = ["online", "offline", "updating", "outdated", "error"].includes(reportedStatus)
     ? reportedStatus as CentralConnectionState["status"]
     : "online";
@@ -313,11 +347,11 @@ async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
     status,
     lastHeartbeatAt: new Date().toISOString(),
     lastError: null,
-    companion: payload.companion || null,
+    companion: companion || null,
   };
 }
 
-async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string) {
+async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string, artifact?: CentralJobArtifact | null) {
   const safeName = path.basename(String(fileName || ""));
   if (!safeName || safeName !== fileName) throw new Error("The publishing media filename is invalid.");
   const localPath = path.join(uploadDir, safeName);
@@ -327,9 +361,20 @@ async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, 
   } catch {
     // Download only after the local copy is confirmed absent.
   }
-  const response = await centralRequest(pairing, `/media/${encodeURIComponent(safeName)}`);
+  if (!artifact?.downloadUrl || artifact.fileName !== safeName) {
+    throw new Error("This publishing job has no authorized private media download.");
+  }
+  const downloadUrl = new URL(artifact.downloadUrl);
+  if (downloadUrl.protocol !== "https:" || downloadUrl.origin !== pairing.supabaseUrl) {
+    throw new Error("The private media download URL is invalid.");
+  }
+  const response = await fetch(downloadUrl);
+  if (!response.ok) throw new Error(`Private media download failed (${response.status}).`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (!bytes.length) throw new Error("The publishing media file is empty.");
+  if (artifact.sha256 && createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) {
+    throw new Error("The publishing media integrity check failed.");
+  }
   const temporary = `${localPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
   await fs.promises.writeFile(temporary, bytes, { mode: 0o600 });
@@ -337,10 +382,28 @@ async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, 
   return localPath;
 }
 
-async function updateCentralJobStatus(pairing: CentralCompanionPairing, jobId: string, state: string, message?: string, retry?: boolean) {
-  await centralRequest(pairing, `/companion/jobs/${encodeURIComponent(jobId)}/status`, {
-    method: "POST",
-    body: JSON.stringify({ state, message, retry }),
+async function updateCentralJobStatus(
+  pairing: CentralCompanionPairing,
+  jobId: string,
+  state: string,
+  message?: string,
+  retry?: boolean,
+  progress: Record<string, unknown> = {},
+  result: Record<string, unknown> | null = null,
+  error: Record<string, unknown> | null = null,
+  finalAction = false,
+) {
+  return supabaseRpc<Record<string, unknown>>(pairing, "companion_update_job", {
+    p_token: pairing.pairingToken,
+    p_instance_id: publishingCompanionId(),
+    p_job_id: jobId,
+    p_status: state === "published" ? "success" : state,
+    p_progress: progress,
+    p_message: message || null,
+    p_retry: retry === true,
+    p_result: result,
+    p_error: error,
+    p_final_action: finalAction,
   });
 }
 
@@ -376,17 +439,22 @@ export function centralDeliveryFailure(upload?: PlatformUpload) {
 
 async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
   let leaseHeartbeat: NodeJS.Timeout | null = null;
+  let cancellationRequested = false;
+  const { account: remoteAccount, upload } = job.payload;
   try {
     const account = await upsertSyncedPlatformAccount({
-  ...job.account,
-  companionId: publishingCompanionId(),
-});
+      ...remoteAccount,
+      companionId: publishingCompanionId(),
+      // Only a verified local record can assert that a browser session exists.
+      // Central metadata must never create a credential-ready local account.
+      credentialConfigured: false,
+    });
     if (!account.credentialConfigured) {
       await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
       return;
     }
-    if (job.upload.fileName) await downloadCentralPublishingMedia(pairing, job.upload.fileName);
-    await upsertSyncedUpload(job.upload);
+    if (upload.fileName) await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
+    await upsertSyncedUpload(upload);
     await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
     await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");
     await updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.");
@@ -394,32 +462,153 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     // lease while this Companion owns the browser so another process cannot
     // pick up the same post and submit it twice.
     leaseHeartbeat = setInterval(() => {
-      void updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.")
+      void listUploads(undefined, remoteAccount.id, pairing.workspaceId)
+        .then((items) => items.find((item) => item.id === upload.id))
+        .then((current) => updateCentralJobStatus(
+          pairing,
+          job.id,
+          "publishing",
+          "Publishing through the saved local session.",
+          false,
+          {},
+          null,
+          null,
+          current?.publishActionState === "submitted" || current?.publishActionState === "uncertain",
+        ))
+        .then(async (remote) => {
+          if (!cancellationRequested && (remote.cancelRequested === true || remote.status === "cancel_requested")) {
+            cancellationRequested = true;
+            await cancelAutomation("Publishing cancellation was requested from the workspace.");
+          }
+        })
         .catch(() => undefined);
-    }, 60_000);
-    await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: [job.upload.id] });
-    const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId)).find((item) => item.id === job.upload.id);
+    }, 1_000);
+    await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: [upload.id] });
+    const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId)).find((item) => item.id === upload.id);
     if (localUpload?.status === "posted") {
-      await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false);
+      await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, {}, null, null, true);
       return;
     }
     const failure = centralDeliveryFailure(localUpload);
-    await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry);
+    await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry, {}, null, null, failure.state === "uncertain");
   } catch (error) {
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);
-    const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId).catch(() => []))
-      .find((item) => item.id === job.upload.id);
+    const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId).catch(() => []))
+      .find((item) => item.id === upload.id);
     const failure = centralDeliveryFailure(localUpload);
+    if (cancellationRequested) {
+      const finalAction = localUpload?.publishActionState === "submitted" || localUpload?.publishActionState === "uncertain";
+      await updateCentralJobStatus(
+        pairing,
+        job.id,
+        finalAction ? "uncertain" : "cancelled",
+        finalAction
+          ? "Publishing was cancelled after the final platform action. Verify the platform before retrying."
+          : "Publishing was cancelled before the final platform action.",
+        false,
+        {},
+        null,
+        finalAction ? { code: "cancelled_after_final_action", message } : null,
+        finalAction,
+      ).catch(() => undefined);
+      return;
+    }
     await updateCentralJobStatus(
       pairing,
       job.id,
       reconnect ? "reconnect_required" : failure.state,
       reconnect ? message : failure.message || message,
       reconnect ? false : failure.retry,
+      {},
+      null,
+      { code: reconnect ? "login_required" : "publish_failed", message },
+      failure.state === "uncertain",
     ).catch(() => undefined);
   } finally {
     if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+  }
+}
+
+async function runCentralScrapingJob(
+  pairing: CentralCompanionPairing,
+  job: Exclude<CentralCompanionJob, CentralPublishingJob>,
+) {
+  const ownerKey = `supabase:${pairing.workspaceId}`;
+  const instagram = job.type === "scrape.instagram";
+  let localJobId = "";
+  try {
+    const created = instagram
+      ? createInstagramCompanionJob(ownerKey, job.payload)
+      : createFacebookCompanionJob(ownerKey, job.payload);
+    localJobId = String(created?.job?.id || "");
+    if (!localJobId) throw new Error("Companion could not create the local scraping job.");
+    await updateCentralJobStatus(pairing, job.id, "running", `Starting ${instagram ? "Instagram" : "Facebook"} scraping.`, false, {
+      stage: "starting",
+      localJobId,
+    });
+
+    let lastRemoteUpdate = 0;
+    const deadline = Date.now() + 30 * 60_000;
+    while (Date.now() < deadline) {
+      const current = instagram
+        ? getInstagramCompanionJob(ownerKey, localJobId)
+        : getFacebookCompanionJob(ownerKey, localJobId);
+      if (!current?.job) throw new Error("The local scraping job was not found after it started.");
+      if (current.job.status === "complete") {
+        await updateCentralJobStatus(
+          pairing,
+          job.id,
+          "success",
+          current.message || `${instagram ? "Instagram" : "Facebook"} scraping completed.`,
+          false,
+          current.job.progress || { stage: "complete" },
+          current as Record<string, unknown>,
+        );
+        return;
+      }
+      if (current.job.status === "failed" || current.job.status === "cancelled") {
+        const cancelled = current.job.status === "cancelled";
+        await updateCentralJobStatus(
+          pairing,
+          job.id,
+          cancelled ? "cancelled" : "failed",
+          current.job.error?.message || `Local ${instagram ? "Instagram" : "Facebook"} scraping failed.`,
+          !cancelled && current.job.error?.retryable === true,
+          current.job.progress || {},
+          null,
+          current.job.error || { code: cancelled ? "cancelled" : "scrape_failed" },
+        );
+        return;
+      }
+      if (Date.now() - lastRemoteUpdate >= 5_000) {
+        const remote = await updateCentralJobStatus(
+          pairing,
+          job.id,
+          "running",
+          current.job.progress?.message || `Collecting ${instagram ? "Instagram" : "Facebook"} data.`,
+          false,
+          current.job.progress || {},
+        );
+        lastRemoteUpdate = Date.now();
+        if (remote.cancelRequested === true || remote.status === "cancel_requested") {
+          if (instagram) await cancelInstagramCompanionJob(ownerKey, localJobId);
+          else await cancelFacebookCompanionJob(ownerKey, localJobId);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    throw new Error("The scraping job exceeded the Companion execution limit.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Companion scraping failed.";
+    if (localJobId) {
+      if (instagram) await cancelInstagramCompanionJob(ownerKey, localJobId).catch(() => undefined);
+      else await cancelFacebookCompanionJob(ownerKey, localJobId).catch(() => undefined);
+    }
+    await updateCentralJobStatus(pairing, job.id, "failed", message, true, {}, null, {
+      code: /login|session|authenticat/i.test(message) ? "login_required" : "scrape_failed",
+      message,
+    }).catch(() => undefined);
   }
 }
 
@@ -434,9 +623,15 @@ async function pollCentralWorkspaceCompanion() {
     }
     centralConnectionState = { ...centralConnectionState, status: "connecting", lastError: null };
     await heartbeatCentralPairing(pairing);
-    const response = await centralRequest(pairing, "/companion/jobs?limit=1");
-    const payload = await response.json() as { jobs?: CentralPublishingJob[] };
-    for (const job of payload.jobs || []) await runCentralPublishingJob(pairing, job);
+    const jobs = await supabaseRpc<CentralCompanionJob[]>(pairing, "companion_claim_jobs", {
+      p_token: pairing.pairingToken,
+      p_instance_id: publishingCompanionId(),
+      p_limit: 1,
+    });
+    for (const job of jobs || []) {
+      if (job.type === "publish") await runCentralPublishingJob(pairing, job);
+      else await runCentralScrapingJob(pairing, job);
+    }
   } catch (error) {
     // A network outage is normal while the server is unavailable. The next
     // heartbeat retries automatically without exposing secrets in the UI.
@@ -1411,36 +1606,36 @@ app.post("/api/companion/pair", async (req, res, next) => {
       return;
     }
     const body = z.object({
-      serverOrigin: z.string().min(1),
+      supabaseUrl: z.string().min(1),
+      supabaseApiKey: z.string().min(20).optional(),
+      supabaseAnonKey: z.string().min(20).optional(),
       pairingCode: z.string().min(32),
+    }).refine(value => Boolean(value.supabaseApiKey || value.supabaseAnonKey), {
+      message: "A Supabase publishable API key is required.",
     }).parse(req.body ?? {});
-    const serverOrigin = centralServerOrigin(body.serverOrigin);
-    const redeemResponse = await fetch(`${serverOrigin}/api/publishing/companion/pair/redeem`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        pairingCode: body.pairingCode,
-        companionInstanceId: publishingCompanionId(),
-        version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
-        platform: process.platform,
-        architecture: process.arch,
-        secureStorage: Boolean(pairingEncryptionKey()),
-      }),
-    });
-    const redeemed = await redeemResponse.json().catch(() => ({})) as {
+    const supabaseUrl = supabaseApiOrigin(body.supabaseUrl);
+    const supabaseApiKey = body.supabaseApiKey || body.supabaseAnonKey || "";
+    const redeemed = await supabaseRpc<{
       token?: string;
       companion?: { id?: string; workspaceId?: string; status?: string };
-      message?: string;
-    };
-    if (!redeemResponse.ok || !redeemed.token || !redeemed.companion?.id || !redeemed.companion?.workspaceId) {
-      throw new Error(redeemed.message || `AgenticThat rejected the pairing request (${redeemResponse.status}).`);
+    }>({ supabaseUrl, supabaseApiKey }, "companion_redeem_pairing", {
+      p_pairing_code: body.pairingCode,
+      p_instance_id: publishingCompanionId(),
+      p_version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
+      p_platform: process.platform,
+      p_architecture: process.arch,
+      p_secure_storage: Boolean(pairingEncryptionKey()),
+    });
+    if (!redeemed.token || !redeemed.companion?.id || !redeemed.companion?.workspaceId) {
+      throw new Error("Supabase rejected the pairing request.");
     }
     if (redeemed.companion.workspaceId !== identity.workspaceId) {
       res.status(403).json({ message: "This Companion can only be paired to its own workspace." });
       return;
     }
     await writeCentralPairing({
-      serverOrigin,
+      supabaseUrl,
+      supabaseApiKey,
       pairingToken: redeemed.token,
       companionId: redeemed.companion.id,
       workspaceId: redeemed.companion.workspaceId,

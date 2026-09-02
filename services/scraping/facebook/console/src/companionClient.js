@@ -1,22 +1,17 @@
-import { detectPublishingExtension, publishingExtensionFetch } from "../../../../../lib/publishing-extension-bridge.ts";
+import { getClientServiceToken } from "../../../../../src/platform/client-service-token.js";
 
-const PUBLISHING_SESSION_KEY = "agenticthat-publish-queue-session";
-const SCRAPING_SESSION_KEY = "agenticthat-facebook-companion-session";
-const JOBS_PATH = "/api/scraping/facebook/jobs";
+const CONTROL_PATH = "/api/job-control/scraping/facebook";
 
-function savedToken(key) {
-  try {
-    const session = JSON.parse(window.sessionStorage.getItem(key) || "null");
-    if (typeof session?.token !== "string") return "";
-    if (key === SCRAPING_SESSION_KEY && Number(session.expiresAt) <= Date.now() + 30_000) return "";
-    return session.token;
-  } catch { return ""; }
-}
-
-async function payload(response) {
+async function controlFetch(path, init = {}, identityToken = "", retry = true) {
+  const token = await getClientServiceToken("scraping", identityToken, !retry);
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch(`${CONTROL_PATH}${path}`, { cache: "no-store", credentials: "same-origin", ...init, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.message || `Local Companion request failed (${response.status}).`);
+    if (response.status === 401 && retry) return controlFetch(path, init, identityToken, false);
+    const error = new Error(data.message || `Companion job control failed (${response.status}).`);
     error.status = response.status;
     error.code = data.code;
     throw error;
@@ -24,89 +19,55 @@ async function payload(response) {
   return data;
 }
 
-async function extensionJson(path, init = {}) {
-  if (!(await detectPublishingExtension())) {
-    const error = new Error("The AgenticThat Companion extension is not connected.");
-    error.code = "extension_unavailable";
-    throw error;
-  }
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await publishingExtensionFetch(path, { cache: "no-store", ...init, headers });
-  if (!response) throw new Error("The AgenticThat Companion extension is not connected.");
-  return payload(response);
-}
-
-async function accessToken(identityToken, force = false) {
-  const publishingToken = savedToken(PUBLISHING_SESSION_KEY);
-  if (publishingToken) return publishingToken;
-  if (!force) {
-    const existing = savedToken(SCRAPING_SESSION_KEY);
-    if (existing) return existing;
-  }
-  if (!identityToken) throw new Error("Refresh AgenticThat and try Local Companion again.");
-  const session = await extensionJson("/api/auth/platform/facebook-scraping", {
-    method: "POST",
-    body: JSON.stringify({ token: identityToken }),
-  });
-  if (!session?.token) throw new Error("Companion could not create a Facebook scraping session.");
-  window.sessionStorage.setItem(SCRAPING_SESSION_KEY, JSON.stringify({
-    token: session.token,
-    expiresAt: Date.now() + Math.max(300, Number(session.expiresInSeconds) || 7200) * 1000,
-  }));
-  return session.token;
-}
-
-async function companionFetch(path, init = {}, identityToken = "", retry = true) {
-  const token = await accessToken(identityToken);
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  try { return await extensionJson(path, { ...init, headers }); }
-  catch (error) {
-    if (retry && error?.status === 401 && !savedToken(PUBLISHING_SESSION_KEY)) {
-      window.sessionStorage.removeItem(SCRAPING_SESSION_KEY);
-      await accessToken(identityToken, true);
-      return companionFetch(path, init, identityToken, false);
-    }
-    throw error;
-  }
-}
-
 export async function getFacebookCompanionStatus(identityToken) {
   try {
-    const health = await extensionJson("/api/health");
-    const capability = health?.capabilities?.facebookScraping;
-    if (!capability?.available) return { ready: false, message: "Restart Companion to enable Facebook scraping." };
-    await accessToken(identityToken);
-    return { ready: true, message: capability.activeJobs ? "Local scraper is busy; your job will be queued." : "Ready on this computer" };
+    const status = await controlFetch("/status", {}, identityToken);
+    return {
+      ready: Boolean(status.companion),
+      message: status.companion ? status.message : "Pair a desktop Companion once. Jobs can then be sent from any device.",
+    };
   } catch (error) {
-    return { ready: false, message: error instanceof Error ? error.message : "Local Companion is unavailable." };
+    return { ready: false, message: error instanceof Error ? error.message : "Companion job control is unavailable." };
   }
 }
 
-export async function runFacebookCompanionJob(jobPayload, onStatus = () => {}, signal, identityToken) {
-  const created = await companionFetch(JOBS_PATH, { method: "POST", body: JSON.stringify(jobPayload) }, identityToken);
+export async function listFacebookCompanionRuns(identityToken) {
+  return controlFetch("/runs", {}, identityToken);
+}
+
+export async function runFacebookCompanionJob(payload, onStatus = () => {}, signal, identityToken) {
+  const created = await controlFetch("/jobs", {
+    method: "POST",
+    headers: { "idempotency-key": `facebook:${crypto.randomUUID()}` },
+    body: JSON.stringify(payload),
+  }, identityToken);
   const jobId = created?.job?.id;
-  if (!jobId) throw new Error("The local Facebook scrape job could not be created.");
-  const cancel = () => companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, { method: "DELETE" }, identityToken).catch(() => undefined);
-  if (signal?.aborted) { await cancel(); throw new Error("Local Facebook scraping was cancelled."); }
-  const deadline = Date.now() + 16 * 60_000;
-  let current = created;
-  let failures = 0;
-  while (current?.job?.status !== "complete") {
-    if (signal?.aborted) { await cancel(); throw new Error("Local Facebook scraping was cancelled."); }
-    if (["failed", "cancelled"].includes(current?.job?.status)) throw new Error(current.job.error?.message || "Local Facebook scraping failed.");
-    if (Date.now() >= deadline) { await cancel(); throw new Error("The local Facebook scrape took too long. Try a smaller count or range."); }
-    onStatus(current?.job?.progress?.message || "Collecting current public Facebook data");
-    await new Promise(resolve => window.setTimeout(resolve, 1_000));
-    try {
-      current = await companionFetch(`${JOBS_PATH}/${encodeURIComponent(jobId)}`, {}, identityToken);
-      failures = 0;
-    } catch (error) {
-      failures += 1;
-      if (failures >= 5) throw error;
-      onStatus("Reconnecting to Companion");
+  if (!jobId) throw new Error("The Facebook scrape job could not be queued.");
+  const cancel = () => controlFetch(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }, identityToken).catch(() => {});
+  if (signal?.aborted) { await cancel(); throw new Error("Facebook scraping was cancelled."); }
+  const abort = () => { void cancel(); };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const deadline = Date.now() + 24 * 60 * 60_000;
+    let failures = 0;
+    let current = created;
+    while (current?.job?.status !== "complete") {
+      if (signal?.aborted) throw new Error("Facebook scraping was cancelled.");
+      if (["failed", "cancelled"].includes(current?.job?.status)) throw new Error(current.job.error?.message || "Facebook scraping did not complete.");
+      if (Date.now() >= deadline) throw new Error("The job is still safely queued. Reopen this page later to view its result.");
+      onStatus(current?.job?.progress?.message || (current?.job?.status === "queued" ? "Safely queued for the paired Companion" : "Collecting current Facebook data"));
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+      try {
+        current = await controlFetch(`/jobs/${encodeURIComponent(jobId)}`, {}, identityToken);
+        failures = 0;
+      } catch (error) {
+        failures += 1;
+        if (failures >= 8) throw error;
+        onStatus("Reconnecting to job control");
+      }
     }
+    return current;
+  } finally {
+    signal?.removeEventListener("abort", abort);
   }
-  return current;
 }

@@ -1,13 +1,13 @@
 # AgenticThat Companion for Windows
 
-The Electron Companion is the primary one-install AgenticThat experience. It
-opens the production publishing workspace inside the desktop app and owns the
-loopback API, encrypted social-account sessions, uploaded media, visible
-browser publishing, and Instagram/Facebook scraping engines.
+The Electron Companion is AgenticThat's focused desktop execution engine. The
+SaaS workspace stays in the user's normal browser while Companion owns the
+loopback login API, encrypted social-account sessions, visible browser
+publishing, and Instagram/Facebook scraping engines.
 
-The Chrome extension is optional. Users need it only when they want to operate
-the web dashboard in a separate Chrome window; the embedded desktop workspace
-uses the same restricted bridge without an extension.
+The Chrome extension is optional and is not part of the core workflow. Website
+publishing and scraping enter the durable Supabase queue, and Companion claims
+them directly using its encrypted, revocable device token.
 
 X and YouTube sign-in opens in a Companion-managed Chrome or Edge profile by
 default because those providers can reject embedded authentication. Companion
@@ -22,7 +22,7 @@ reported as partial when the scraper cannot prove that it scanned through the
 range boundary; an incomplete scan is never represented as a trustworthy empty
 result.
 
-Publishing and Telegram scheduling are paused in release 1.9.0. Existing stored
+Publishing and Telegram scheduling are paused in release 2.0.0. Existing stored
 records are retained for compatibility, but the UI does not expose scheduling
 and the publishing API rejects new timed work. Publish-now jobs and Telegram's
 manual **Post now** action remain available.

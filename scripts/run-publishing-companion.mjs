@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -8,6 +9,10 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
 const serverEntry = path.join(projectRoot, "services", "publishing", "queue-runner", "server", "index.ts");
 const serviceRoot = path.dirname(path.dirname(serverEntry));
+const companionVersion = JSON.parse(readFileSync(
+  path.join(projectRoot, "apps", "publishing-companion-desktop", "package.json"),
+  "utf8",
+)).version;
 const port = Number(process.env.PUBLISH_QUEUE_SERVICE_PORT || 8792);
 const restartDelayMs = Math.max(1000, Number(process.env.PUBLISH_QUEUE_COMPANION_RESTART_DELAY_MS || 5000));
 
@@ -46,7 +51,10 @@ async function run() {
     console.log(`Starting publishing companion on http://127.0.0.1:${port}...`);
     child = spawn(process.execPath, ["--import", tsxLoader, serverEntry], {
       cwd: serviceRoot,
-      env: process.env,
+      env: {
+        ...process.env,
+        AGENTICTHAT_COMPANION_VERSION: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || companionVersion,
+      },
       stdio: "inherit",
       windowsHide: true,
     });

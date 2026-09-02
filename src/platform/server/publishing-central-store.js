@@ -6,13 +6,25 @@ import {
   mutateDatabaseDocument,
   readDatabaseDocument,
 } from "../../../lib/database-document-store.js";
+import {
+  cancelSupabaseJob,
+  createSupabasePairing,
+  deleteSupabaseAccount,
+  latestSupabaseCompanion,
+  listSupabaseAccounts,
+  listSupabaseJobs,
+  revokeSupabaseCompanions,
+  supabaseJobDashboard,
+  synchronizePublishingJobs,
+  upsertSupabaseAccount,
+} from "./supabase-job-control.js";
 
 const DOCUMENT_KEY = "platform.publishing-central.v1";
 const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "1.9.0";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.0.0";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
@@ -212,8 +224,17 @@ function uploadPublic(document, upload) {
     : (job?.state === "queued" && jobIsDue && accountState?.companionStatus !== "online") || (scheduledWithoutJobIsDue && accountState?.companionStatus !== "online")
       ? "waiting_for_companion"
       : job?.state || (upload.status === "posted" ? "published" : upload.status);
+  const { artifact, ...safeUpload } = upload;
   return {
-    ...upload,
+    ...safeUpload,
+    artifact: artifact ? {
+      fileName: artifact.fileName,
+      originalName: artifact.originalName,
+      mimeType: artifact.mimeType,
+      byteSize: artifact.byteSize,
+      sha256: artifact.sha256,
+      expiresAt: artifact.expiresAt,
+    } : null,
     statusDetail,
     outcome: statusDetail === "published" || upload.status === "posted"
       ? "SUCCESS"
@@ -413,17 +434,65 @@ export async function getPublishingSnapshot(workspaceId) {
   return documentValue(await readDatabaseDocument(DOCUMENT_KEY));
 }
 
+async function synchronizePublishingControlPlane(workspaceId) {
+  const document = await getPublishingSnapshot(workspaceId);
+  const workspaceAccounts = document.accounts.filter((item) => item.workspaceId === workspaceId);
+  const workspaceUploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
+  const workspaceJobs = document.jobs.filter((item) => item.workspaceId === workspaceId);
+  await synchronizePublishingJobs(workspaceId, workspaceJobs, workspaceUploads, workspaceAccounts);
+  return document;
+}
+
+async function reconcilePublishingControlPlane(workspaceId) {
+  const remoteJobs = await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
+  if (!remoteJobs.length) return;
+  const jobsById = new Map(remoteJobs.map((item) => [item.id, item]));
+  await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+    const document = documentValue(value);
+    for (const job of document.jobs) {
+      if (job.workspaceId !== workspaceId) continue;
+      const remote = jobsById.get(job.id);
+      if (!remote) continue;
+      const upload = document.uploads.find((item) => item.id === job.uploadId && item.workspaceId === workspaceId);
+      job.state = remote.status === "success" ? "published" : remote.status;
+      job.message = remote.message;
+      job.attemptCount = remote.attemptCount;
+      job.leaseOwner = remote.assignedDeviceId;
+      job.leaseExpiresAt = remote.leaseExpiresAt;
+      job.updatedAt = remote.updatedAt;
+      if (!upload) continue;
+      if (remote.status === "success") {
+        upload.status = "posted";
+        upload.postedAt = remote.completedAt;
+        upload.failureReason = null;
+      } else if (["failed", "uncertain", "reconnect_required", "cancelled"].includes(remote.status)) {
+        upload.status = "failed";
+        upload.failureReason = remote.message || "Companion job did not complete.";
+        if (remote.status === "uncertain") upload.publishActionState = "uncertain";
+      } else if (["claimed", "running", "opening_platform", "uploading", "publishing"].includes(remote.status)) {
+        upload.status = "processing";
+      } else {
+        upload.status = "queued";
+      }
+      upload.updatedAt = remote.updatedAt;
+    }
+    return { document, result: null };
+  });
+}
+
 export async function listCentralAccounts(workspaceId, platformName) {
   const document = await getPublishingSnapshot(workspaceId);
   const requestedPlatform = platformName ? platform(platformName) : null;
-  return document.accounts
+  const legacy = document.accounts
     .filter((item) => item.workspaceId === workspaceId && (!requestedPlatform || item.platform === requestedPlatform))
     .map((item) => publicAccount(document, item));
+  const normalized = await listSupabaseAccounts(workspaceId, requestedPlatform || undefined);
+  const byId = new Map(normalized.map((item) => [item.id, item]));
+  return legacy.map((item) => ({ ...item, ...(byId.get(item.id) || {}) }));
 }
 
 export async function getCentralCompanion(workspaceId) {
-  const document = await getPublishingSnapshot(workspaceId);
-  return publicCompanion(latestWorkspaceCompanion(document, workspaceId));
+  return latestSupabaseCompanion(workspaceId);
 }
 
 export function minimumCompanionVersion() {
@@ -431,28 +500,7 @@ export function minimumCompanionVersion() {
 }
 
 export async function createCompanionPairing(principal, input = {}) {
-  await initialize();
-  const pairingCode = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
-  const label = String(input.label || "Workspace Companion").trim().slice(0, 80) || "Workspace Companion";
-  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const timestamp = now();
-    const expiresAt = new Date(Date.now() + PAIRING_CHALLENGE_MS).toISOString();
-    document.pairingChallenges = document.pairingChallenges
-      .filter((challenge) => Date.parse(challenge.expiresAt || "") > Date.now() && challenge.workspaceId !== principal.workspaceId);
-    document.pairingChallenges.push({
-      id: id("pairing"),
-      workspaceId: principal.workspaceId,
-      label,
-      companionInstanceId: String(input.companionInstanceId || "").slice(0, 120),
-      codeHash: hashSecret(pairingCode),
-      expiresAt,
-      createdAt: timestamp,
-      registeredByUserId: principal.userId,
-    });
-    return { document, result: { expiresAt } };
-  });
-  return { pairingCode, expiresAt: result.expiresAt };
+  return createSupabasePairing(principal, input);
 }
 
 export async function redeemCompanionPairing(input = {}) {
@@ -504,17 +552,7 @@ export async function redeemCompanionPairing(input = {}) {
 }
 
 export async function removeCentralCompanion(principal) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const before = document.companions.length;
-    document.companions = document.companions.filter((item) => item.workspaceId !== principal.workspaceId);
-    document.pairingChallenges = document.pairingChallenges.filter((item) => item.workspaceId !== principal.workspaceId);
-    for (const account of document.accounts) {
-      if (account.workspaceId === principal.workspaceId) account.companionId = null;
-    }
-    return { document, result: { ok: true, removed: before !== document.companions.length } };
-  });
+  return revokeSupabaseCompanions(principal);
 }
 
 export async function authenticateCentralCompanion(token) {
@@ -578,7 +616,7 @@ export async function heartbeatCentralCompanion(token, input = {}) {
 export async function createCentralAccount(principal, platformName, input = {}) {
   const selectedPlatform = platform(platformName);
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const handle = String(input.handle || "").trim();
@@ -599,11 +637,12 @@ export async function createCentralAccount(principal, platformName, input = {}) 
     activity(document, principal.workspaceId, { type: "account.created", summary: `${account.displayName} was added for ${selectedPlatform}.` });
     return { document, result: publicAccount(document, account) };
   });
+  return upsertSupabaseAccount(account);
 }
 
 export async function updateCentralAccount(principal, accountId, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     for (const key of ["displayName", "handle", "loginIdentifier", "enabled"]) {
@@ -613,11 +652,14 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
     account.updatedAt = now();
     return { document, result: publicAccount(document, account) };
   });
+  await upsertSupabaseAccount(account);
+  await synchronizePublishingControlPlane(principal.workspaceId);
+  return account;
 }
 
 export async function deleteCentralAccount(principal, accountId) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === accountId && !["posted", "failed"].includes(item.status))) {
@@ -626,16 +668,20 @@ export async function deleteCentralAccount(principal, accountId) {
     document.accounts = document.accounts.filter((item) => item.id !== accountId);
     return { document, result: { ok: true } };
   });
+  await deleteSupabaseAccount(principal.workspaceId, accountId);
+  return result;
 }
 
 export async function listCentralUploads(workspaceId) {
+  await reconcilePublishingControlPlane(workspaceId);
   const document = await getPublishingSnapshot(workspaceId);
   return document.uploads.filter((item) => item.workspaceId === workspaceId).map((item) => uploadPublic(document, item));
 }
 
 export async function createCentralUpload(principal, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  await reconcilePublishingControlPlane(principal.workspaceId);
+  const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const account = findOwned(document, "accounts", principal.workspaceId, input.accountId, "Account");
     if (!account.enabled) throw new Error("This publishing account is disabled.");
@@ -663,7 +709,7 @@ export async function createCentralUpload(principal, input = {}) {
       id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
       postFormat: format, originalName: input.originalName || "Text post",
       fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
-      size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
+      size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
       caption, status: "queued", publishActionState: "not_started",
       uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
       createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
@@ -674,11 +720,13 @@ export async function createCentralUpload(principal, input = {}) {
     activity(document, principal.workspaceId, { type: "post.queued", summary: `A ${account.platform} post was queued.`, uploadId: upload.id });
     return { document, result: uploadPublic(document, upload) };
   });
+  await synchronizePublishingControlPlane(principal.workspaceId);
+  return upload;
 }
 
 export async function updateCentralUpload(principal, uploadId, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     for (const key of ["title", "caption", "scheduledAt", "scheduleId", "accountId"]) {
@@ -717,6 +765,8 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     }
     return { document, result: uploadPublic(document, upload) };
   });
+  await synchronizePublishingControlPlane(principal.workspaceId);
+  return upload;
 }
 
 export async function updateCentralUploadStatus(principal, uploadId, status, failureReason) {
@@ -734,13 +784,16 @@ export async function updateCentralUploadStatus(principal, uploadId, status, fai
 
 export async function deleteCentralUpload(principal, uploadId) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
+    const removedJobIds = document.jobs.filter((item) => item.uploadId === uploadId).map((item) => item.id);
     document.uploads = document.uploads.filter((item) => item.id !== uploadId);
     document.jobs = document.jobs.filter((item) => item.uploadId !== uploadId);
-    return { document, result: { ok: true } };
+    return { document, result: { ok: true, removedJobIds } };
   });
+  await Promise.all(result.removedJobIds.map((jobId) => cancelSupabaseJob(principal.workspaceId, jobId)));
+  return { ok: true };
 }
 
 export async function createCentralStagedUpload(principal, input = {}) {
@@ -962,13 +1015,16 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
 
 export async function queueCentralUploads(principal, uploadIds) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  await reconcilePublishingControlPlane(principal.workspaceId);
+  const jobs = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
     if (ids?.length) ids.forEach((item) => findOwned(document, "uploads", principal.workspaceId, item, "Post"));
     refreshDueJobs(document, principal.workspaceId, ids);
     return { document, result: document.jobs.filter((item) => item.workspaceId === principal.workspaceId && !TERMINAL_JOB_STATES.has(item.state)).map((item) => ({ ...item })) };
   });
+  await synchronizePublishingControlPlane(principal.workspaceId);
+  return jobs;
 }
 
 function selectClaimableCentralJobs(document, workspaceId, timestamp, limit) {
@@ -1118,9 +1174,15 @@ export async function updateCentralJob(token, jobId, input = {}) {
 }
 
 export async function publishingDashboard(workspaceId) {
+  await reconcilePublishingControlPlane(workspaceId);
   const document = await getPublishingSnapshot(workspaceId);
   const uploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
-  const jobs = document.jobs.filter((item) => item.workspaceId === workspaceId);
+  const control = await supabaseJobDashboard(workspaceId);
+  const jobs = control.jobs.filter((item) => item.type === "publish").map((item) => {
+    const safeJob = { ...item };
+    delete safeJob.payload;
+    return { ...safeJob, state: item.status === "success" ? "published" : item.status };
+  });
   return {
     totals: {
       accounts: document.accounts.filter((item) => item.workspaceId === workspaceId).length,
@@ -1129,8 +1191,8 @@ export async function publishingDashboard(workspaceId) {
       posted: uploads.filter((item) => item.status === "posted").length,
       failed: uploads.filter((item) => item.status === "failed").length,
     },
-    companion: publicCompanion(latestWorkspaceCompanion(document, workspaceId)),
-    jobs: jobs.map((item) => ({ ...item })),
+    companion: control.companion,
+    jobs,
     recentActivity: document.activityLogs.filter((item) => item.workspaceId === workspaceId).slice(0, 30),
   };
 }

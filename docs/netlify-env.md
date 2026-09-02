@@ -11,6 +11,12 @@ NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
 NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe
 
+# Supabase Data API. The publishable key is public and constrained by RLS plus
+# token-authenticated Companion RPCs. The secret key stays server-only.
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<supabase-publishable-key>
+SUPABASE_SECRET_KEY=<supabase-secret-key>
+
 # Telegram API and encrypted account sessions
 SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
 USER_PROVISIONING_KEY=<different-new-random-32-byte-base64url-secret>
@@ -66,7 +72,17 @@ PLATFORM_AUTH_DATA_PATH=
 SECRETS_SCAN_OMIT_KEYS=
 ```
 
-`DATABASE_URL` is the only database variable needed. Use a serverless-compatible pooled PostgreSQL connection URL. `CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after deployment because changing it makes stored workspace credentials unreadable. `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per account in Config Manager; the environment versions are only used by the standalone CLI login command.
+`DATABASE_URL` is the server-side Postgres connection. The public Supabase URL
+and publishable key let Companion call only the granted RLS-protected RPCs.
+`SUPABASE_SECRET_KEY` stays on Netlify and is used only to put publishing
+media in the private `job-artifacts` bucket and issue scoped signed downloads.
+Legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` values are
+accepted during migration. All Supabase variables and `DATABASE_URL` must point
+to the same project.
+`CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after
+deployment because changing it makes stored workspace credentials unreadable.
+`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per account in Config
+Manager; the environment versions are only used by the standalone CLI login command.
 
 `META_APP_SECRET` is required for Embedded Signup token exchange and signed webhook validation. `META_CONFIGURATION_ID` is required for the recommended Embedded Signup/coexistence button. If you intentionally use only the advanced manual Cloud API credential form, the configuration id can be omitted, but the app secret should still be set for webhook validation.
 
@@ -98,7 +114,12 @@ https://<your-netlify-site>.netlify.app/api/webhooks/wati?token=<wati-webhook-se
 
 Read-only WhatsApp Web monitoring requires a separately deployed Baileys service. Configure its HTTPS URL and shared secret from `/settings`; the archive does not contain a runnable Baileys service. For a legacy environment-configured monitor, the equivalent variables are `BAILEYS_SERVICE_URL` and `BAILEYS_API_SECRET`.
 
-Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service instead of the included Netlify Function. For publishing, omit both Publish Queue URL variables. The paired Workspace Companion keeps social-media sessions and browser profiles on the manager device, while the AgenticThat server keeps workspace account metadata, content, schedules, queue state, and live publishing status. Team members use the website directly and do not configure a local URL, tunnel, or Companion connection.
+Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service
+instead of the included Netlify Function. For publishing, omit both Publish
+Queue URL variables. Supabase keeps workspace metadata, durable jobs, leases,
+events, results, and private media. The paired Companion keeps browser sessions
+and profiles locally and calls Supabase directly. Team members use the website
+without a tunnel, extension, or local URL.
 
 ## Publish Queue distribution
 
@@ -109,8 +130,8 @@ pairs it once from Connections; other workspace users do not install it. After
 downloading the Setup installer, the manager runs it once; Companion then starts
 with Windows and updates itself from signed GitHub releases.
 
-After the Chrome Web Store approves the extension, set
-`NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` to its public listing and redeploy. Keep
+The Chrome extension is an optional compatibility bridge; core website jobs do
+not require it. Keep
 `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable Setup installer GitHub
 Release URL shown above. Do not set either Publish Queue API URL. The Companion
 generates and protects its own local credentials and browser sessions; central

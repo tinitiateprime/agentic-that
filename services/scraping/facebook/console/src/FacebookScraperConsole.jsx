@@ -3,7 +3,7 @@
 import React from "react";
 import dynamic from "next/dynamic";
 import InstagramScraperConsole from "../../../instagram/console/src/InstagramScraperConsole";
-import { getFacebookCompanionStatus, runFacebookCompanionJob } from "./companionClient";
+import { getFacebookCompanionStatus, listFacebookCompanionRuns, runFacebookCompanionJob } from "./companionClient";
 
 const FACEBOOK_API_URL = process.env.NEXT_PUBLIC_FACEBOOK_API_URL || "/api/scraping/facebook";
 const FacebookScraperVideoGuide = dynamic(() => import("./FacebookScraperVideoGuide"), { ssr: false });
@@ -217,6 +217,7 @@ const facebookPlatformConfig = {
   urlType: facebookUrlType,
   publicUrl: publicFacebookUrl,
   getCompanionStatus: getFacebookCompanionStatus,
+  listCompanionRuns: listFacebookCompanionRuns,
   runCompanionJob: runFacebookCompanionJob,
   normalizeJob: normalizeFacebookJob,
   engineStorageKey: "agenticthat-facebook-scrape-engine",

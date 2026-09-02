@@ -981,7 +981,8 @@ function PublishingManager({
       const localPairing = await localCompanionRequest("/api/companion/pair", session.token, {
         method: "POST",
         body: JSON.stringify({
-          serverOrigin: window.location.origin,
+          supabaseUrl: data.supabaseUrl,
+          supabaseApiKey: data.supabaseApiKey,
           pairingCode: data.pairingCode
         })
       });

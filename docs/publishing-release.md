@@ -60,8 +60,8 @@ Before tagging a customer release:
 After the code is on `main`, create and push the release tag:
 
 ```text
-git tag v1.9.0
-git push origin v1.9.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 Use a SemVer tag (`vX.Y.Z`) so Electron's public update service can discover the
@@ -80,8 +80,9 @@ artifacts are available from that workflow run.
 The Workspace Manager installs and pairs one Companion from **Connections →
 Publishing → Pair this device**. No ngrok, Cloudflare URL, public port, or team
 device setup is required. The paired Companion keeps social-media sessions on
-the manager device, polls the AgenticThat server for approved workspace jobs,
-and reports live progress back to the website.
+the manager device and uses token-scoped Supabase RPCs for jobs, leases,
+heartbeats, progress, cancellation, and durable results. It never receives the
+database connection string or Supabase secret key.
 
 Content Uploaders and Schedulers use the website from their own devices. They
 see the accounts allowed by their role but do not install, configure, or receive

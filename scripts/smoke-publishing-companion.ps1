@@ -24,12 +24,15 @@ $packagedMainSource = Get-Content -LiteralPath $packagedMain -Raw
 if ($packagedMainSource -notmatch "subscribeFacebookCompanionActivity") {
   throw "The packaged Companion is missing Facebook scraping activity integration."
 }
-if ($packagedMainSource -notmatch 'EMBED_FULL_PUBLISHING_WORKSPACE = process\.env\.AGENTICTHAT_COMPANION_EMBED_DASHBOARD !== "0"') {
-  throw "The packaged Companion does not enable the one-install embedded dashboard."
+if ($packagedMainSource -notmatch 'EMBED_FULL_PUBLISHING_WORKSPACE = process\.env\.AGENTICTHAT_COMPANION_EMBED_DASHBOARD === "1"') {
+  throw "The packaged Companion does not default to the focused local worker interface."
 }
 $packagedControlSource = Get-Content -LiteralPath (Join-Path $packagedAppRoot "control.html") -Raw
 if ($packagedControlSource -notmatch "Instagram and Facebook") {
   throw "The packaged Companion control screen is missing the shared Facebook scraping UI."
+}
+if ($packagedControlSource -notmatch '<section class="view-panel active" id="activity-panel">') {
+  throw "The packaged Companion does not open on local publishing activity."
 }
 if (Get-ChildItem -LiteralPath $packagedAppRoot -Filter "interaction-lock*" -ErrorAction SilentlyContinue) {
   throw "The packaged Companion still contains the obsolete publishing overlay."
@@ -288,6 +291,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
 
   Write-Host "Packaged companion smoke test passed." -ForegroundColor Green
   Write-Host "Process: $($process.Id)"
+  Write-Host "SaaS workspace embedding: disabled by default"
   Write-Host "Embedded live browser: enabled"
   Write-Host "Login surfaces: Instagram/Facebook/LinkedIn embedded; X/YouTube external"
   Write-Host "Isolated browser-debug port: $debugPort"

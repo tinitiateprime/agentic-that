@@ -42,9 +42,9 @@ const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 const PUBLISHING_CONNECTIONS_URL = `${DASHBOARD_ORIGIN}/config-manager?service=publishing`;
 const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
   || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
-// The embedded dashboard is the primary one-install experience. Set the
-// environment switch to 0 only for diagnostics or emergency rollback.
-const EMBED_FULL_PUBLISHING_WORKSPACE = process.env.AGENTICTHAT_COMPANION_EMBED_DASHBOARD !== "0";
+// Companion is a focused worker and local session manager. The SaaS workspace
+// opens in the normal browser; embedding remains an opt-in diagnostic.
+const EMBED_FULL_PUBLISHING_WORKSPACE = process.env.AGENTICTHAT_COMPANION_EMBED_DASHBOARD === "1";
 const CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/";
 const configuredServicePort = Number(process.env.AGENTICTHAT_COMPANION_SERVICE_PORT || 8792);
 const SERVICE_PORT = Number.isInteger(configuredServicePort) && configuredServicePort > 0 && configuredServicePort < 65536
@@ -1342,7 +1342,7 @@ function createTray() {
   tray = new Tray(trayImage);
   tray.setToolTip("AgenticThat Companion");
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open AgenticThat Workspace", click: () => showCompanion("dashboard") },
+    { label: "Open AgenticThat Companion", click: () => showCompanion("activity") },
     { label: "Open Workspace in Browser", click: () => shell.openExternal(DASHBOARD_URL) },
     { label: "View Login & Publishing Activity", click: () => showCompanion("activity") },
     {
