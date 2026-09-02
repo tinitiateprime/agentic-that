@@ -33,11 +33,10 @@ Use Microsoft Store MSIX distribution as the primary public installation path:
    MSIX, so users do not receive SmartScreen or Smart App Control warnings
    during Store installation.
 
-The GitHub release workflow refuses to publish a production tag unless
-`WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` are configured.
-It verifies the Authenticode signature before creating the GitHub release.
-Manual workflow runs may still produce unsigned QA artifacts, but those are not
-customer releases.
+The workflow signs releases when `WINDOWS_CERTIFICATE_BASE64` and
+`WINDOWS_CERTIFICATE_PASSWORD` are configured, and verifies the Authenticode
+signature before publishing. Until those secrets are added, it can publish an
+unsigned installer and Windows may show a SmartScreen warning.
 
 For a zero-warning consumer installation, publish an MSIX package through the
 Microsoft Store. Microsoft signs Store MSIX submissions after certification.
@@ -52,8 +51,7 @@ Before tagging a customer release:
 2. Confirm production dependency audits report no known vulnerabilities for
    both the repository and desktop app.
 3. Complete `docs/publishing-companion-production-validation.md` with owned test
-   accounts, then set the repository variable
-   `COMPANION_LIVE_MATRIX_APPROVED_VERSION` to the exact desktop version.
+   accounts before presenting the build as fully production-validated.
 4. Verify the Account health dashboard and activity log show the expected
    Green, Warning, Paused, or Restricted state.
 5. Confirm the release remains local-profile based and contains no stealth,
@@ -67,8 +65,9 @@ git push origin v1.9.0
 ```
 
 Use a SemVer tag (`vX.Y.Z`) so Electron's public update service can discover the
-release. GitHub Actions builds the signed Squirrel installer, update manifest,
-full update package, Portable ZIP, checksums, and optional Chrome extension.
+release. GitHub Actions builds the Squirrel installer, update manifest, full
+update package, Portable ZIP, checksums, and optional Chrome extension. It signs
+and verifies the installer automatically whenever signing secrets are present.
 The legacy Publishing Companion ZIP alias remains available for existing
 Netlify download links.
 

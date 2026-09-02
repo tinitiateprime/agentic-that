@@ -26,8 +26,10 @@ SaaS control plane. The browser extension remains optional.
   immediate health and workspace-job check.
 - Installed Windows builds automatically download applicable GitHub releases.
 
-## Production gates
+## Release verification
 
-Production tags require passing automated tests and build, a valid signed
-installer, packaged smoke test, SHA-256 checksums, and an explicitly approved
-owned-account validation matrix. Scheduling remains paused.
+Release tags require passing automated tests, the production web build, packaged
+Companion smoke test, and SHA-256 checksum generation. The 1.9.0 direct-download
+installer is currently unsigned and may trigger a Windows SmartScreen warning.
+Owned-account validation and code signing remain recommended before describing
+the release as fully production-validated. Scheduling remains paused.
