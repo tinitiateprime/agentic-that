@@ -12,7 +12,8 @@
 4. After approval, add the public listing URL to Netlify as
    `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` with Builds scope.
 5. Keep `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` set to the stable GitHub
-   portable Release URL documented in `docs/netlify-env.md`.
+   Setup installer URL documented in `docs/netlify-env.md`. The installer is the
+   supported customer build because it provides auto-start and automatic updates.
 
 ### Windows distribution without security warnings
 
@@ -32,11 +33,11 @@ Use Microsoft Store MSIX distribution as the primary public installation path:
    MSIX, so users do not receive SmartScreen or Smart App Control warnings
    during Store installation.
 
-The current GitHub release workflow publishes an **unsigned Portable ZIP only**
-for product testing. Windows may show a security warning because it is not code
-signed. Switch back to signed portable and installer releases before public
-production distribution by adding `WINDOWS_CERTIFICATE_BASE64` and
-`WINDOWS_CERTIFICATE_PASSWORD` and restoring signature verification.
+The GitHub release workflow refuses to publish a production tag unless
+`WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` are configured.
+It verifies the Authenticode signature before creating the GitHub release.
+Manual workflow runs may still produce unsigned QA artifacts, but those are not
+customer releases.
 
 For a zero-warning consumer installation, publish an MSIX package through the
 Microsoft Store. Microsoft signs Store MSIX submissions after certification.
@@ -50,9 +51,9 @@ Before tagging a customer release:
 1. Run `npm run test:publishing` and `npm run build`.
 2. Confirm production dependency audits report no known vulnerabilities for
    both the repository and desktop app.
-3. Test one owned account per supported app with visible manual login, a normal
-   publish-now post, warning confirmation, account pause/resume, and emergency
-   stop. Confirm schedule mutations return HTTP 410 in this release.
+3. Complete `docs/publishing-companion-production-validation.md` with owned test
+   accounts, then set the repository variable
+   `COMPANION_LIVE_MATRIX_APPROVED_VERSION` to the exact desktop version.
 4. Verify the Account health dashboard and activity log show the expected
    Green, Warning, Paused, or Restricted state.
 5. Confirm the release remains local-profile based and contains no stealth,
@@ -61,13 +62,15 @@ Before tagging a customer release:
 After the code is on `main`, create and push the release tag:
 
 ```text
-git tag publishing-v1.8.0
-git push origin publishing-v1.8.0
+git tag v1.9.0
+git push origin v1.9.0
 ```
 
-GitHub Actions builds the Portable ZIP and optional Chrome extension, then
-publishes versioned and stable filenames. The legacy Publishing Companion ZIP
-alias remains available for existing Netlify download links.
+Use a SemVer tag (`vX.Y.Z`) so Electron's public update service can discover the
+release. GitHub Actions builds the signed Squirrel installer, update manifest,
+full update package, Portable ZIP, checksums, and optional Chrome extension.
+The legacy Publishing Companion ZIP alias remains available for existing
+Netlify download links.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The

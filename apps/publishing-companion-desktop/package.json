@@ -1,22 +1,25 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Companion",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "One desktop workspace for AgenticThat publishing, account sessions, and scraping",
   "author": "AgenticThat",
+  "repository": "https://github.com/tinitiateprime/agentic-that",
   "private": true,
   "type": "module",
   "main": "main.js",
   "scripts": {
     "prepare-runtime": "node ../../scripts/build-publishing-companion-runtime.mjs",
     "start": "npm run prepare-runtime && electron-forge start",
-    "package": "npm run prepare-runtime && electron-forge package --platform=win32 --arch=x64",
-    "make": "npm run prepare-runtime && electron-forge make --platform=win32 --arch=x64",
-    "make:store": "npm run prepare-runtime && electron-forge make --platform=win32 --arch=x64 --targets @electron-forge/maker-msix"
+    "prepare-forge": "node scripts/patch-forge-packager-v20.cjs",
+    "package": "npm run prepare-runtime && npm run prepare-forge && electron-forge package --platform=win32 --arch=x64",
+    "make": "npm run prepare-runtime && npm run prepare-forge && electron-forge make --platform=win32 --arch=x64",
+    "make:store": "npm run prepare-runtime && npm run prepare-forge && electron-forge make --platform=win32 --arch=x64 --targets @electron-forge/maker-msix"
   },
   "dependencies": {
     "electron-squirrel-startup": "1.0.1",
-    "playwright-core": "1.61.1"
+    "playwright-core": "1.61.1",
+    "update-electron-app": "^3.1.1"
   },
   "devDependencies": {
     "@electron-forge/cli": "7.11.2",
@@ -27,7 +30,8 @@
   },
   "overrides": {
     "@electron/rebuild": "4.2.0",
-    "tar": "7.5.20",
+    "@electron/packager": "20.0.4",
+    "tar": "7.5.22",
     "tmp": "0.2.7"
   }
 }

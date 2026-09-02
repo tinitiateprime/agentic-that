@@ -3,6 +3,7 @@ import { runInstagramCompanionScrape, InstagramCompanionCancelledError } from ".
 import { instagramCompanionDesktopHost } from "./companion-desktop-host.js";
 import { instagramScrapeRange, type InstagramScrapeInput } from "./scraper.js";
 import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
+import { loadCompanionJobs, persistCompanionJobs } from "../../companion-job-persistence.js";
 
 export type InstagramCompanionJobStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type InstagramCompanionFailureCode =
@@ -50,6 +51,35 @@ let companionScrapeExecutor: CompanionScrapeExecutor = runInstagramCompanionScra
 type InstagramCompanionActivityListener = (state: ReturnType<typeof instagramCompanionActivityState>) => void;
 const activityListeners = new Set<InstagramCompanionActivityListener>();
 let activityNotificationQueued = false;
+
+function persistJobs() {
+  const records = [...jobs.values()].map(({ controller, queueController, timedOut, ...job }) => job);
+  try {
+    persistCompanionJobs("instagram", records);
+  } catch (error) {
+    console.warn("Could not persist the Instagram Companion queue:", error instanceof Error ? error.message : error);
+  }
+}
+
+function restoreJobs() {
+  const validStatuses = new Set<InstagramCompanionJobStatus>(["queued", "running", "complete", "failed", "cancelled"]);
+  for (const record of loadCompanionJobs("instagram")) {
+    if (!record.id || !record.ownerKey || !record.input || !validStatuses.has(record.status as InstagramCompanionJobStatus)) continue;
+    const job = record as unknown as CompanionJob;
+    if (job.status === "running") {
+      job.status = "queued";
+      job.startedAt = undefined;
+      job.completedAt = undefined;
+      job.error = undefined;
+      job.progress = { stage: "queued", message: "Recovered safely after Companion restarted" };
+      job.updatedAt = new Date().toISOString();
+    }
+    jobs.set(job.id, job);
+    if (job.status === "queued") queue.push(job.id);
+  }
+  if (jobs.size) persistJobs();
+  if (queue.length) queueMicrotask(() => { void pumpQueue(); });
+}
 
 function companionActivityJob(job: CompanionJob, queuePosition: number | null = null) {
   const input = {
@@ -265,6 +295,7 @@ export function instagramCompanionJobResponse(job: CompanionJob) {
 
 function touch(job: CompanionJob) {
   job.updatedAt = new Date().toISOString();
+  persistJobs();
   notifyInstagramCompanionActivity();
 }
 
@@ -273,6 +304,7 @@ function pruneJobs() {
     .filter(job => ["complete", "failed", "cancelled"].includes(job.status))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   for (const job of terminal.slice(50)) jobs.delete(job.id);
+  persistJobs();
 }
 
 async function executeJob(job: CompanionJob) {
@@ -360,6 +392,7 @@ export function createInstagramCompanionJob(ownerKey: string, body: Record<strin
   };
   jobs.set(job.id, job);
   queue.push(job.id);
+  persistJobs();
   notifyInstagramCompanionActivity();
   queueMicrotask(() => { void pumpQueue(); });
   return instagramCompanionJobResponse(job);
@@ -420,3 +453,5 @@ export function instagramCompanionQueueHealth() {
     concurrency: 1,
   };
 }
+
+restoreJobs();

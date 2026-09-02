@@ -4,7 +4,7 @@ import { centralPublishingTestHelpers } from "./publishing-central-store.js";
 
 test("central publishing resumes reconnect-required jobs only after the paired Companion is online", () => {
   const timestamp = Date.now();
-  const companion = { id: "companion_1", status: "online", lastSeenAt: new Date(timestamp).toISOString() };
+  const companion = { id: "companion_1", status: "online", version: "1.9.0", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
   const account = { id: "account_1", workspaceId: "workspace_1", credentialConfigured: true };
   const document = {
     uploads: [
@@ -28,7 +28,7 @@ test("central publishing resumes reconnect-required jobs only after the paired C
 
 test("central publishing reports account readiness and accepts only the active Companion job lease", () => {
   const timestamp = Date.now();
-  const online = { status: "online", lastSeenAt: new Date(timestamp).toISOString() };
+  const online = { status: "online", version: "1.9.0", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
   const offline = { status: "offline", lastSeenAt: new Date(timestamp).toISOString() };
   assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, online), "ready");
   assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, offline), "waiting_for_companion");
@@ -47,6 +47,42 @@ test("central publishing accepts a confirmed late success without reopening othe
   assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "published", timestamp), true);
   assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "publishing", timestamp), false);
   assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed({ state: "published" }, "companion_1", "published", timestamp), false);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed({ state: "uncertain" }, "companion_1", "published", timestamp), true);
+});
+
+test("central publishing enforces Companion compatibility and reports operational states", () => {
+  const timestamp = Date.now();
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("1.9.0"), true);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("1.8.9"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.0.0"), true);
+  assert.equal(centralPublishingTestHelpers.companionCompatibility({ version: "1.8.0" }), "outdated");
+  assert.equal(centralPublishingTestHelpers.companionStatus({
+    status: "online", version: "1.9.0", runtimeStatus: "ready", updateStatus: "downloading",
+    lastSeenAt: new Date(timestamp).toISOString(),
+  }), "updating");
+  assert.equal(centralPublishingTestHelpers.companionStatus({
+    status: "online", version: "1.9.0", runtimeStatus: "error", lastSeenAt: new Date(timestamp).toISOString(),
+  }), "error");
+});
+
+test("expired publishing leases become UNCERTAIN while pre-submit work is safely requeued", () => {
+  const timestamp = Date.now();
+  const document = {
+    jobs: [
+      { id: "final", workspaceId: "workspace_1", uploadId: "upload_final", state: "publishing", leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1).toISOString() },
+      { id: "safe", workspaceId: "workspace_1", uploadId: "upload_safe", state: "uploading", leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1).toISOString() },
+    ],
+    uploads: [
+      { id: "upload_final", status: "processing", publishActionState: "submitted" },
+      { id: "upload_safe", status: "processing", publishActionState: "not_started" },
+    ],
+  };
+  centralPublishingTestHelpers.recoverExpiredCentralJobLeases(document, "workspace_1", timestamp);
+  assert.equal(document.jobs[0].state, "uncertain");
+  assert.equal(document.uploads[0].publishActionState, "uncertain");
+  assert.match(document.uploads[0].failureReason, /uncertain/i);
+  assert.equal(document.jobs[1].state, "queued");
+  assert.equal(document.uploads[1].status, "queued");
 });
 
 test("central publishing skips a disconnected account without starving later ready jobs", () => {

@@ -22,7 +22,7 @@ reported as partial when the scraper cannot prove that it scanned through the
 range boundary; an incomplete scan is never represented as a trustworthy empty
 result.
 
-Publishing and Telegram scheduling are paused in release 1.8.0. Existing stored
+Publishing and Telegram scheduling are paused in release 1.9.0. Existing stored
 records are retained for compatibility, but the UI does not expose scheduling
 and the publishing API rejects new timed work. Publish-now jobs and Telegram's
 manual **Post now** action remain available.
@@ -46,6 +46,11 @@ npm run publishing:release:windows
 ```
 
 The release command validates and packages the optional extension, builds the
-desktop application, and copies versioned and stable ZIP names to `artifacts/`.
+desktop application, and copies the installer, Squirrel update assets, and
+versioned/stable ZIP names to `artifacts/`.
 The legacy `AgenticThat-Publishing-Companion-Portable.zip` alias is retained so
 existing website links continue to work.
+
+Installed Squirrel builds check the signed GitHub release feed automatically.
+Portable ZIP builds are intended for QA and report that an installer is needed
+for automatic updates.

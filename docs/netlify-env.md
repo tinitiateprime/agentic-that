@@ -9,7 +9,7 @@ DATA_STORE=netlify-blobs
 NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL=/console
 NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
-NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip
+NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe
 
 # Telegram API and encrypted account sessions
 SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
@@ -104,17 +104,18 @@ Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service inste
 
 Interactive social login and browser publishing use the installable Windows
 Companion because a request-based Netlify Function cannot own persistent Chrome
-profiles or a continuously running scheduler. A Workspace Manager installs and
+profiles or a continuously running local worker. A Workspace Manager installs and
 pairs it once from Connections; other workspace users do not install it. After
-downloading the portable companion, the manager extracts the ZIP and opens
-`AgenticThat Publishing Companion.exe` from the extracted folder.
+downloading the Setup installer, the manager runs it once; Companion then starts
+with Windows and updates itself from signed GitHub releases.
 
 After the Chrome Web Store approves the extension, set
 `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` to its public listing and redeploy. Keep
-`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable portable GitHub
+`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable Setup installer GitHub
 Release URL shown above. Do not set either Publish Queue API URL. The Companion
 generates and protects its own local credentials and browser sessions; central
-workspace posts and schedules remain available to the authorized team.
+workspace publishing remains available to the authorized team. Publishing and
+Telegram scheduling are intentionally paused in this release.
 
 ## Webhook
 

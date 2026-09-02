@@ -39,7 +39,7 @@ import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip";
+  || "https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe";
 const publishingHealthUrl = "http://127.0.0.1:8792/api/health";
 const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
 const platformLabels = {
@@ -978,15 +978,14 @@ function PublishingManager({
           companionInstanceId
         })
       });
-      await localCompanionRequest("/api/companion/pair", session.token, {
+      const localPairing = await localCompanionRequest("/api/companion/pair", session.token, {
         method: "POST",
         body: JSON.stringify({
           serverOrigin: window.location.origin,
-          pairingToken: data.token,
-          companion: data.companion
+          pairingCode: data.pairingCode
         })
       });
-      onCompanionSaved(data.companion || null);
+      onCompanionSaved(localPairing.companion || null);
       setNotice({ tone: "success", message: "This device is paired. It will publish for authorized workspace members automatically." });
     } catch (error) {
       setNotice({ tone: "error", message: error instanceof Error && /Companion|pair/i.test(error.message) ? error.message : "Could not pair this device. Open AgenticThat Companion here, then try again." });
@@ -1106,7 +1105,20 @@ function PublishingManager({
             <span><MonitorCheck size={18} /></span>
             <div>
               <strong>Workspace Companion</strong>
-              <small>{workspaceCompanion.status === "online" ? "Online — ready for workspace publishing." : "Offline — queued posts will continue when it reconnects."}</small>
+              <small>{workspaceCompanion.status === "online"
+                ? workspaceCompanion.accountHealth?.loginRequired > 0
+                  ? `Online — login required for ${workspaceCompanion.accountHealth.loginRequired} account${workspaceCompanion.accountHealth.loginRequired === 1 ? "" : "s"}.`
+                  : "Online — ready for workspace publishing."
+                : workspaceCompanion.status === "updating"
+                  ? "Updating — publishing will continue after Companion restarts."
+                  : workspaceCompanion.status === "outdated"
+                    ? `Update Companion to ${workspaceCompanion.minimumSupportedVersion || "the latest version"} to continue.`
+                    : workspaceCompanion.status === "error"
+                      ? workspaceCompanion.lastError || "Companion needs attention on the paired computer."
+                      : "Offline — queued posts will continue when it reconnects."}</small>
+              <small>{workspaceCompanion.version
+                ? `Version ${workspaceCompanion.version}${workspaceCompanion.lastSeenAt ? ` · Last heartbeat ${new Date(workspaceCompanion.lastSeenAt).toLocaleString()}` : ""}`
+                : "Waiting for the first secure heartbeat."}</small>
             </div>
           </div>
           <div className="config-shared-companion-actions">

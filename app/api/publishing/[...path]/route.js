@@ -19,9 +19,11 @@ import {
   listCentralAccounts,
   listCentralSubmissions,
   listCentralUploads,
+  minimumCompanionVersion,
   publishingDashboard,
   publishingUserFromPrincipal,
   queueCentralUploads,
+  redeemCompanionPairing,
   removeCentralCompanion,
   updateCentralAccount,
   updateCentralJob,
@@ -240,6 +242,7 @@ export async function GET(request, context) {
         automationReady: true,
         automationRunning: dashboard.jobs.some((job) => ["opening_platform", "uploading", "publishing"].includes(job.state)),
         companion: companionValue,
+        minimumCompanionVersion: minimumCompanionVersion(),
         transport: "central",
       });
     }
@@ -297,6 +300,9 @@ export async function POST(request, context) {
     if (parts[0] === "companion" && parts[1] === "jobs" && parts[3] === "status") {
       const token = companionToken(request);
       return Response.json(await updateCentralJob(token, parts[2], await requestJson(request)));
+    }
+    if (parts[0] === "companion" && parts[1] === "pair" && parts[2] === "redeem") {
+      return Response.json(await redeemCompanionPairing(await requestJson(request)));
     }
     if (parts[0] === "companion" && parts[1] === "pair") {
       const user = await principal("publishing.accounts.configure");

@@ -11,6 +11,7 @@ $packageRoot = if ($configuredPackageRoot) {
   [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps\publishing-companion-desktop\out\AgenticThat Companion-win32-x64"))
 }
 $executable = Join-Path $packageRoot "AgenticThat Publishing Companion.exe"
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $projectRoot "apps\publishing-companion-desktop\package.json") -Raw | ConvertFrom-Json).version
 if (-not (Test-Path -LiteralPath $executable)) {
   throw "Build the packaged companion before running this smoke test."
 }
@@ -132,6 +133,8 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
+  if ($health.companionVersion -ne $expectedVersion) { throw "The packaged Companion version heartbeat is incorrect." }
+  if (-not $health.storageHealth.durableWrites) { throw "The packaged publishing queue is not using durable local writes." }
   if (-not $health.capabilities.instagramScraping.available) { throw "Instagram Companion scraping is unavailable." }
   if (-not $health.capabilities.facebookScraping.available) { throw "Facebook Companion scraping is unavailable." }
   if (-not $health.capabilities.resourceScheduler) { throw "The shared Companion resource scheduler is unavailable." }
@@ -274,6 +277,10 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
 
   if (-not (Test-Path -LiteralPath (Join-Path $smokeRoot "companion-settings.json"))) {
     throw "The packaged companion did not create protected settings."
+  }
+  $protectedSettings = Get-Content -LiteralPath (Join-Path $smokeRoot "companion-settings.json") -Raw | ConvertFrom-Json
+  if (-not $protectedSettings.password.protected -or -not $protectedSettings.authSecret.protected -or -not $protectedSettings.sessionEncryptionKey.protected) {
+    throw "The packaged Companion did not migrate every local secret into OS-protected storage."
   }
   if (-not (Test-Path -LiteralPath (Join-Path $smokeRoot "publishing-data"))) {
     throw "The packaged companion did not create its isolated data directory."

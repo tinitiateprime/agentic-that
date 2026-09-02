@@ -1,5 +1,6 @@
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   clipboard,
   dialog,
@@ -7,6 +8,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  powerMonitor,
   safeStorage,
   screen,
   session,
@@ -15,6 +17,7 @@ import {
   WebContentsView,
 } from "electron";
 import started from "electron-squirrel-startup";
+import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -97,6 +100,14 @@ let resolvedDesktopDebugPort = REQUESTED_DESKTOP_DEBUG_PORT || null;
 let unsubscribeScrapingActivities = [];
 let scrapingWorkActive = false;
 let rebuildTrayMenu = null;
+let serviceWatchdogTimer = null;
+let serviceRestartPromise = null;
+let consecutiveHealthFailures = 0;
+let runtimeState = "starting";
+let runtimeError = null;
+let updateStatus = "unsupported";
+let updatePromptTimer = null;
+let updatePromptPending = false;
 let scrapingActivityState = {
   activeJob: null,
   queuedJobs: [],
@@ -129,6 +140,24 @@ function settingsFilePath() {
   return path.join(app.getPath("userData"), "companion-settings.json");
 }
 
+function atomicWriteFileSync(filePath, contents) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const descriptor = fs.openSync(temporary, "w", 0o600);
+  try {
+    fs.writeFileSync(descriptor, contents, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    fs.renameSync(temporary, filePath);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+
 function persistedSettings(value = settings) {
   return {
     version: value.version,
@@ -144,47 +173,56 @@ function persistedSettings(value = settings) {
 }
 
 function writeSettings() {
-  fs.writeFileSync(
-    settingsFilePath(),
-    `${JSON.stringify(persistedSettings(), null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const settingsPath = settingsFilePath();
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const current = fs.readFileSync(settingsPath, "utf8");
+      JSON.parse(current);
+      atomicWriteFileSync(`${settingsPath}.backup`, current);
+    }
+  } catch {}
+  atomicWriteFileSync(settingsPath, `${JSON.stringify(persistedSettings(), null, 2)}\n`);
 }
 
 function loadSettings() {
   const settingsPath = settingsFilePath();
-  try {
-    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  for (const candidate of [settingsPath, `${settingsPath}.backup`]) { try {
+    const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
     if (parsed.version === 1 && parsed.password?.value && parsed.authSecret?.value) {
       const instanceId = parsed.instanceId || randomSecret(18);
-      const protectedSessionKey = parsed.sessionEncryptionKey?.protected === true
-        && parsed.sessionEncryptionKey?.value;
-      const sessionEncryptionKeyPlain = protectedSessionKey
+      const passwordPlain = decryptedValue(parsed.password);
+      const authSecretPlain = decryptedValue(parsed.authSecret);
+      const savedSessionKey = parsed.sessionEncryptionKey?.value;
+      const sessionEncryptionKeyPlain = savedSessionKey
         ? decryptedValue(parsed.sessionEncryptionKey)
         : safeStorage.isEncryptionAvailable() ? randomSecret(32) : undefined;
+      const secretsNeedProtection = safeStorage.isEncryptionAvailable()
+        && (parsed.password.protected !== true || parsed.authSecret.protected !== true || parsed.sessionEncryptionKey?.protected !== true);
       const normalized = {
         ...parsed,
         instanceId,
-        sessionEncryptionKey: protectedSessionKey
-          ? parsed.sessionEncryptionKey
-          : sessionEncryptionKeyPlain ? encryptedValue(sessionEncryptionKeyPlain) : undefined,
+        password: secretsNeedProtection ? encryptedValue(passwordPlain) : parsed.password,
+        authSecret: secretsNeedProtection ? encryptedValue(authSecretPlain) : parsed.authSecret,
+        sessionEncryptionKey: sessionEncryptionKeyPlain
+          ? parsed.sessionEncryptionKey?.protected === true ? parsed.sessionEncryptionKey : encryptedValue(sessionEncryptionKeyPlain)
+          : undefined,
         publishingInteractionConsent: parsed.publishingInteractionConsent === true,
       };
-      if (!parsed.instanceId || !protectedSessionKey || parsed.publishingInteractionConsent === undefined) {
-        fs.writeFileSync(settingsPath, `${JSON.stringify(persistedSettings(normalized), null, 2)}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+      if (!parsed.instanceId || !savedSessionKey || secretsNeedProtection || parsed.publishingInteractionConsent === undefined) {
+        atomicWriteFileSync(settingsPath, `${JSON.stringify(persistedSettings(normalized), null, 2)}\n`);
+      } else if (candidate !== settingsPath) {
+        atomicWriteFileSync(settingsPath, `${JSON.stringify(persistedSettings(normalized), null, 2)}\n`);
       }
       return {
         ...normalized,
-        passwordPlain: decryptedValue(parsed.password),
-        authSecretPlain: decryptedValue(parsed.authSecret),
+        passwordPlain,
+        authSecretPlain,
         sessionEncryptionKeyPlain,
       };
     }
   } catch {
     // Create a recoverable local configuration below.
+  }
   }
 
   const passwordPlain = `${randomSecret(9)}!Aa7`;
@@ -201,11 +239,7 @@ function loadSettings() {
     publishingInteractionConsent: false,
     createdAt: new Date().toISOString(),
   };
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, `${JSON.stringify(persistedSettings(created), null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  atomicWriteFileSync(settingsPath, `${JSON.stringify(persistedSettings(created), null, 2)}\n`);
   return { ...created, passwordPlain, authSecretPlain, sessionEncryptionKeyPlain };
 }
 
@@ -239,7 +273,8 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID = settings.instanceId;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = settings.username;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = settings.passwordPlain;
-  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
+  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "retry";
+  process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS = updateStatus;
 }
 
 async function configureServiceTokenVerifier() {
@@ -284,10 +319,97 @@ function installFileLogging() {
   }
 }
 
+function setRuntimeState(state, error = null) {
+  runtimeState = state;
+  runtimeError = error;
+  process.env.AGENTICTHAT_COMPANION_RUNTIME_ERROR = error || "";
+  mainWindow?.webContents.send("companion:status-changed");
+}
+
+function setUpdateStatus(state) {
+  updateStatus = state;
+  process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS = state;
+  mainWindow?.webContents.send("companion:status-changed");
+}
+
+function squirrelInstalledBuild() {
+  if (!app.isPackaged || process.platform !== "win32" || process.windowsStore) return false;
+  const executableDirectory = path.dirname(process.execPath);
+  return /^app-/i.test(path.basename(executableDirectory))
+    && fs.existsSync(path.resolve(executableDirectory, "..", "Update.exe"));
+}
+
+function configureAutoUpdates() {
+  if (!squirrelInstalledBuild() || process.env.AGENTICTHAT_COMPANION_DISABLE_AUTO_UPDATE === "1") {
+    setUpdateStatus("unsupported");
+    console.log("Automatic updates are available in the installed Companion; this build will not self-update.");
+    return;
+  }
+  autoUpdater.on("checking-for-update", () => setUpdateStatus("checking"));
+  autoUpdater.on("update-available", () => setUpdateStatus("downloading"));
+  autoUpdater.on("update-not-available", () => setUpdateStatus("idle"));
+  autoUpdater.on("update-downloaded", () => setUpdateStatus("downloaded"));
+  autoUpdater.on("error", error => {
+    setUpdateStatus("error");
+    console.warn("Companion update check failed:", error instanceof Error ? error.message : error);
+  });
+  try {
+    setUpdateStatus("idle");
+    updateElectronApp({
+      updateSource: {
+        type: UpdateSourceType.ElectronPublicUpdateService,
+        repo: "tinitiateprime/agentic-that",
+      },
+      updateInterval: "10 minutes",
+      notifyUser: true,
+      onNotifyUser: () => scheduleSafeUpdatePrompt(),
+      logger: console,
+    });
+    console.log("Automatic Companion updates are enabled.");
+  } catch (error) {
+    setUpdateStatus("error");
+    console.warn("Could not enable Companion updates:", error instanceof Error ? error.message : error);
+  }
+}
+
+function scheduleSafeUpdatePrompt() {
+  if (updatePromptPending || quitting) return;
+  updatePromptPending = true;
+  const attemptPrompt = async () => {
+    const activity = publishingRuntime?.companionRuntimeActivity?.();
+    if (activity?.publishing || activity?.scraping) {
+      console.log("Companion update is ready and will ask to restart after active work finishes.");
+      updatePromptTimer = setTimeout(() => void attemptPrompt(), 10_000);
+      return;
+    }
+    updatePromptTimer = null;
+    const options = {
+      type: "info",
+      title: "AgenticThat Companion update ready",
+      message: "A new Companion version is ready to install.",
+      detail: "Restart now to apply the update. No publishing or scraping work is active.",
+      buttons: ["Restart and update", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    };
+    const result = mainWindow
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    updatePromptPending = false;
+    if (result.response === 0) {
+      setUpdateStatus("applying");
+      quitting = true;
+      autoUpdater.quitAndInstall();
+    }
+  };
+  void attemptPrompt();
+}
+
 async function startPublishingService() {
+  setRuntimeState("starting");
   process.env.AGENTICTHAT_COMPANION_VERSION = APP_VERSION;
   const runtimeEntry = path.join(app.getAppPath(), "runtime", "server.mjs");
-  publishingRuntime = await import(
+  publishingRuntime ??= await import(
     `${pathToFileURL(runtimeEntry).href}?v=${createHash("sha1").update(APP_VERSION).digest("hex")}`
   );
   if (typeof publishingRuntime.subscribeInstagramCompanionActivity === "function") {
@@ -310,6 +432,72 @@ async function startPublishingService() {
     publishingServer.once("listening", resolve);
     publishingServer.once("error", reject);
   });
+  const activeServer = publishingServer;
+  activeServer.on("error", error => {
+    if (publishingServer === activeServer) setRuntimeState("error", error instanceof Error ? error.message : String(error));
+  });
+  activeServer.on("close", () => {
+    if (!quitting && publishingServer === activeServer) {
+      publishingServer = null;
+      setRuntimeState("error", "The local Companion service stopped unexpectedly.");
+    }
+  });
+  setRuntimeState("ready");
+}
+
+async function closePublishingServer() {
+  if (!publishingServer) return;
+  const server = publishingServer;
+  publishingServer = null;
+  await Promise.race([
+    new Promise(resolve => server.close(() => resolve())),
+    new Promise(resolve => setTimeout(resolve, 5_000)),
+  ]);
+}
+
+async function restartPublishingService(reason) {
+  if (serviceRestartPromise) return serviceRestartPromise;
+  const activity = publishingRuntime?.companionRuntimeActivity?.();
+  if (activity?.publishing || activity?.scraping) {
+    console.warn(`Companion watchdog postponed a service restart while local work is active: ${reason}`);
+    return;
+  }
+  serviceRestartPromise = (async () => {
+    setRuntimeState("starting", reason);
+    console.warn(`Companion watchdog is restarting the local service: ${reason}`);
+    publishingRuntime?.stopPublishingBackgroundServices?.();
+    for (const unsubscribe of unsubscribeScrapingActivities) unsubscribe?.();
+    unsubscribeScrapingActivities = [];
+    await closePublishingServer();
+    try {
+      await configureServiceTokenVerifier();
+      await desktopDebugEndpoint();
+      await startPublishingService();
+      consecutiveHealthFailures = 0;
+      console.log("Companion local service recovered successfully.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimeState("error", message);
+      console.error("Companion local service restart failed:", message);
+    }
+  })().finally(() => { serviceRestartPromise = null; });
+  return serviceRestartPromise;
+}
+
+function startServiceWatchdog() {
+  if (serviceWatchdogTimer) return;
+  serviceWatchdogTimer = setInterval(async () => {
+    const status = await serviceStatus();
+    if (status.connected) {
+      consecutiveHealthFailures = 0;
+      if (runtimeState !== "ready") setRuntimeState("ready");
+      return;
+    }
+    consecutiveHealthFailures += 1;
+    if (consecutiveHealthFailures >= 3) {
+      await restartPublishingService(status.error || "Three consecutive health checks failed.");
+    }
+  }, 15_000);
 }
 
 async function serviceStatus() {
@@ -331,6 +519,10 @@ async function serviceStatus() {
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       dataDirectory: path.join(app.getPath("userData"), "publishing-data"),
+      secureLocalStorage: safeStorage.isEncryptionAvailable(),
+      runtimeState,
+      runtimeError,
+      updateStatus,
     };
   } catch (error) {
     return {
@@ -343,6 +535,10 @@ async function serviceStatus() {
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       error: error instanceof Error ? error.message : "The publishing service is unavailable.",
+      secureLocalStorage: safeStorage.isEncryptionAvailable(),
+      runtimeState,
+      runtimeError,
+      updateStatus,
     };
   }
 }
@@ -351,7 +547,15 @@ function saveAutoStart(enabled) {
   settings.autoStart = enabled;
   writeSettings();
   if (app.isPackaged && process.env.AGENTICTHAT_COMPANION_DISABLE_AUTOSTART !== "1") {
-    app.setLoginItemSettings({ openAtLogin: enabled, args: ["--hidden"] });
+    const installedLauncher = squirrelInstalledBuild()
+      ? path.resolve(path.dirname(process.execPath), "..", path.basename(process.execPath))
+      : process.execPath;
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      enabled,
+      path: installedLauncher,
+      args: ["--hidden"],
+    });
   }
 }
 
@@ -1126,6 +1330,10 @@ function createWindow() {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
   });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`Companion interface process stopped (${details.reason}). Reloading the local interface.`);
+    if (!quitting && mainWindow && !mainWindow.isDestroyed()) void mainWindow.reload();
+  });
   if (EMBED_FULL_PUBLISHING_WORKSPACE) createDashboardView();
 }
 
@@ -1297,9 +1505,21 @@ if (started || !ownsSingleInstanceLock) {
   ));
 
   app.whenReady().then(async () => {
+    if (app.isPackaged && !safeStorage.isEncryptionAvailable()) {
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Secure storage is unavailable",
+        message: "AgenticThat Companion cannot start without operating-system encryption.",
+        detail: "Restart Windows and try again. Companion will not store workspace or social-session secrets as plain text.",
+        buttons: ["Close"],
+      });
+      app.quit();
+      return;
+    }
     settings = loadSettings();
     configureRuntimeEnvironment();
     installFileLogging();
+    configureAutoUpdates();
     registerIpc();
     createWindow();
     installPublishingDesktopHost();
@@ -1309,12 +1529,13 @@ if (started || !ownsSingleInstanceLock) {
       await configureServiceTokenVerifier();
       await desktopDebugEndpoint();
       await startPublishingService();
+      startServiceWatchdog();
       console.log(`AgenticThat Companion ${APP_VERSION} is ready.`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const isPortConflict = /port 8792|EADDRINUSE|address already in use/i.test(errorMessage);
       console.error("Could not start publishing service:", errorMessage);
-      await dialog.showMessageBox(mainWindow, {
+      const response = await dialog.showMessageBox(mainWindow, {
         type: "error",
         title: "Companion could not start",
         message: isPortConflict
@@ -1322,14 +1543,30 @@ if (started || !ownsSingleInstanceLock) {
           : "AgenticThat Companion could not start its local service.",
         detail: isPortConflict
           ? "Close every older Companion version, then open this version again."
-          : errorMessage,
-        buttons: ["Close"],
+          : `${errorMessage}\n\nCompanion can remain open and retry automatically.`,
+        buttons: isPortConflict ? ["Close"] : ["Keep retrying", "Close"],
+        defaultId: 0,
+        cancelId: isPortConflict ? 0 : 1,
       });
-      app.quit();
-      return;
+      if (isPortConflict || response.response === 1) {
+        app.quit();
+        return;
+      }
+      setRuntimeState("error", errorMessage);
+      startServiceWatchdog();
     }
     mainWindow?.webContents.send("companion:status-changed");
     notifyWorkspaceState();
+
+    powerMonitor.on("resume", () => {
+      console.log("Computer resumed; checking Companion health and workspace jobs now.");
+      void publishingRuntime?.wakeCentralWorkspaceCompanion?.().catch(error => {
+        console.warn("Workspace reconnect after resume is pending:", error instanceof Error ? error.message : error);
+      });
+      void serviceStatus().then(status => {
+        if (!status.connected) return restartPublishingService(status.error || "Local service did not recover after resume.");
+      });
+    });
   });
 
   app.on("before-quit", () => {
@@ -1338,12 +1575,18 @@ if (started || !ownsSingleInstanceLock) {
   });
   app.on("window-all-closed", () => {});
   app.on("will-quit", () => {
+    if (serviceWatchdogTimer) clearInterval(serviceWatchdogTimer);
+    serviceWatchdogTimer = null;
+    if (updatePromptTimer) clearTimeout(updatePromptTimer);
+    updatePromptTimer = null;
     for (const unsubscribe of unsubscribeScrapingActivities) unsubscribe?.();
     unsubscribeScrapingActivities = [];
-    void publishingRuntime?.cancelAllInstagramCompanionJobs?.("Companion is shutting down.");
-    void publishingRuntime?.cancelAllFacebookCompanionJobs?.("Companion is shutting down.");
+    // Do not mark queued/running scrape jobs as cancelled on normal exit or an
+    // update restart. Their encrypted snapshots restore running work as queued
+    // so a restart never silently discards a customer job.
     void stopInstagramScrapingBrowsers();
     void stopFacebookScrapingBrowsers();
+    publishingRuntime?.stopPublishingBackgroundServices?.();
     publishingServer?.close();
     globalThis.__AGENTICTHAT_PUBLISHING_DESKTOP_HOST__ = undefined;
     globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = undefined;

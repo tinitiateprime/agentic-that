@@ -20,6 +20,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   assert.deepEqual(centralDeliveryFailure(undefined), {
     message: "Companion could not find the local copy of this publishing job. It is safe to retry.",
     retry: true,
+    state: "failed",
   });
   assert.deepEqual(centralDeliveryFailure({
     platform: "linkedin",
@@ -28,6 +29,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   } as never), {
     message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
     retry: false,
+    state: "uncertain",
   });
   const server = createPublishingHttpServer({ host: "127.0.0.1", port: 0, startBackgroundServices: false });
   await new Promise<void>((resolve, reject) => {
@@ -708,4 +710,13 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   const failedPost = await failedResponse.json() as { status: string; failureReason?: string };
   assert.equal(failedPost.status, "failed");
   assert.match(failedPost.failureReason || "", /Test failure details/);
+
+  await fs.writeFile(process.env.PUBLISH_QUEUE_DATA_PATH!, "{corrupt", "utf8");
+  const durableRecoveryResponse = await api("/api/uploads");
+  assert.equal(durableRecoveryResponse.status, 200);
+  const recoveredHealth = await (await fetch(`${origin}/api/health`)).json() as {
+    localStorage?: { lastRecoveryAt?: string };
+    storageHealth?: { lastRecoveryAt?: string };
+  };
+  assert.ok(recoveredHealth.localStorage?.lastRecoveryAt || recoveredHealth.storageHealth?.lastRecoveryAt);
 });

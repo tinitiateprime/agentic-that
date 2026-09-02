@@ -506,6 +506,28 @@ function renderStatus(status) {
     ? status.chromeInstalled ? "Companion + Chrome fallback" : "Companion browser"
     : status.chromeInstalled ? "Chrome or Edge" : "Install Chrome/Edge";
   byId("scheduler-check").textContent = status.connected ? "Ready" : "Stopped";
+  const controlPlane = status.controlPlane || {};
+  byId("heartbeat-check").textContent = !status.paired
+    ? "Not paired"
+    : controlPlane.status === "online" ? "Online"
+      : controlPlane.status === "updating" ? "Updating"
+        : controlPlane.status === "outdated" ? "Update required"
+          : controlPlane.status === "connecting" ? "Connecting"
+            : controlPlane.status === "error" ? "Error"
+              : "Offline — retrying";
+  byId("secure-storage-check").textContent = status.paired
+    ? status.securePairingStorage ? "Encrypted" : "Unavailable"
+    : status.secureLocalStorage ? "OS encrypted" : "Unavailable";
+  const updateLabels = {
+    unsupported: "Installer required",
+    idle: "Up to date",
+    checking: "Checking",
+    downloading: "Downloading",
+    downloaded: "Restart to apply",
+    applying: "Applying",
+    error: "Check failed",
+  };
+  byId("update-check").textContent = updateLabels[status.updateStatus] || "Checking";
   const consentGranted = status.publishingInteractionConsent === true;
   byId("permission-state").textContent = consentGranted ? "Workspace publishing allowed" : "Permission not granted";
   byId("permission-detail").textContent = consentGranted
@@ -513,15 +535,27 @@ function renderStatus(status) {
     : "Publishing will ask before the first approved workspace job.";
   byId("revoke-consent").hidden = !consentGranted;
 
-  const ready = Boolean(status.automationReady);
-  byId("status-dot").className = ready ? "ready" : "error";
-  byId("sidebar-status-dot").className = ready ? "ready" : "error";
-  byId("status-title").textContent = ready ? "Ready for visible publishing" : "Companion needs attention";
-  byId("status-detail").textContent = ready
-    ? "Account login and publishing use each account's selected Companion or External browser engine."
-    : status.error || "The local publishing service could not start.";
-  byId("sidebar-status-title").textContent = ready ? "Ready" : "Needs attention";
-  byId("sidebar-status-detail").textContent = ready ? "Local publishing online" : "Open Companion settings";
+  const ready = Boolean(status.automationReady) && status.runtimeState !== "error";
+  const needsLogin = Number(status.accountHealth?.loginRequired || 0) > 0;
+  const outdated = controlPlane.status === "outdated";
+  const updating = ["checking", "downloading", "downloaded", "applying"].includes(status.updateStatus);
+  const healthy = ready && !outdated;
+  byId("status-dot").className = healthy ? "ready" : "error";
+  byId("sidebar-status-dot").className = healthy ? "ready" : "error";
+  byId("status-title").textContent = !ready ? "Companion needs attention"
+    : outdated ? "Update Companion to continue"
+      : updating ? "Companion update in progress"
+        : needsLogin ? "Login required for an account"
+          : "Ready for visible publishing";
+  byId("status-detail").textContent = !ready
+    ? status.runtimeError || status.error || "The local publishing service could not start."
+    : outdated ? controlPlane.lastError || "Install the latest Companion before publishing more jobs."
+      : needsLogin ? `${status.accountHealth.loginRequired} connected account${status.accountHealth.loginRequired === 1 ? " needs" : "s need"} login again.`
+        : controlPlane.status === "offline" && status.paired
+          ? "Local work is safe. Companion is retrying the workspace connection automatically."
+          : "Account login and publishing use isolated local browser profiles.";
+  byId("sidebar-status-title").textContent = !ready ? "Error" : outdated ? "Update required" : updating ? "Updating" : needsLogin ? "Login required" : "Ready";
+  byId("sidebar-status-detail").textContent = !ready ? "Open Companion settings" : status.paired ? "Workspace worker online" : "Pair this computer";
   byId("companion-open-step").classList.toggle("complete", ready);
   byId("companion-open-step").classList.toggle("active", !ready);
   byId("companion-open-copy").textContent = ready

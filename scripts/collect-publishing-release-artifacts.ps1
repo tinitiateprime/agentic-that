@@ -23,9 +23,21 @@ if (-not $PortableOnly) {
   if (-not $setup) { throw "Windows companion Setup executable was not produced." }
 }
 
+$releaseManifest = $null
+$updatePackage = $null
+if (-not $PortableOnly) {
+  $releaseManifest = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "RELEASES" | Select-Object -First 1
+  $updatePackage = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "*-full.nupkg" | Select-Object -First 1
+  if (-not $releaseManifest -or -not $updatePackage) {
+    throw "Squirrel update artifacts were not produced."
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 if ($setup) {
   Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Setup.exe") -Force
+  Copy-Item -LiteralPath $releaseManifest.FullName -Destination (Join-Path $artifactRoot "RELEASES") -Force
+  Copy-Item -LiteralPath $updatePackage.FullName -Destination (Join-Path $artifactRoot $updatePackage.Name) -Force
 }
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Publishing-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Portable.zip") -Force

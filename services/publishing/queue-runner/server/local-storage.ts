@@ -123,7 +123,7 @@ type Store = {
 
 export type AutomationInputMode = "ready" | "scheduledOnly";
 export type PublishingAccount = PlatformAccount;
-export type AutomationRunTrigger = "manual" | "scheduler";
+export type AutomationRunTrigger = "manual" | "scheduler" | "companion";
 export type AutomationRunStatus = "running" | "completed" | "failed";
 export type AutomationPostStatus = "processing" | "posted" | "failed" | "deferred";
 
@@ -132,6 +132,7 @@ const passwordAlgorithm = "pbkdf2_sha256";
 const legacyWorkspaceId = "workspace_legacy";
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localStoreFile = resolveFromRoot(process.env.PUBLISH_QUEUE_DATA_PATH ?? "./data/store.json");
+const localStoreBackupFile = `${localStoreFile}.backup`;
 const useNetlifyBlobs = (
   process.env.DATA_STORE === "netlify-blobs" ||
   process.env.NETLIFY === "true" ||
@@ -140,6 +141,7 @@ const useNetlifyBlobs = (
 let blobStorePromise: Promise<BlobStore> | null = null;
 let storeMutationQueue: Promise<void> = Promise.resolve();
 let storeReadyPromise: Promise<void> | null = null;
+let lastStoreRecoveryAt: string | null = null;
 
 function resolveFromRoot(candidate: string) {
   return path.isAbsolute(candidate) ? candidate : path.resolve(serviceRoot, candidate);
@@ -392,6 +394,24 @@ function addBootstrapUsers(store: Store) {
   return changed;
 }
 
+async function atomicReplaceFile(filePath: string, contents: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryFile = filePath + "." + process.pid + "." + randomUUID() + ".tmp";
+  const handle = await fs.open(temporaryFile, "w", 0o600);
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fs.rename(temporaryFile, filePath);
+  } catch (error) {
+    await fs.unlink(temporaryFile).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function writeStoreFile(store: Store) {
   if (useNetlifyBlobs) {
     const blobStore = await getBlobStore();
@@ -399,15 +419,18 @@ async function writeStoreFile(store: Store) {
     return;
   }
 
-  await fs.mkdir(path.dirname(localStoreFile), { recursive: true });
-  const temporaryFile = localStoreFile + "." + process.pid + "." + randomUUID() + ".tmp";
-  await fs.writeFile(temporaryFile, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   try {
-    await fs.rename(temporaryFile, localStoreFile);
+    const current = await fs.readFile(localStoreFile, "utf8");
+    normalizeStore(JSON.parse(current));
+    await atomicReplaceFile(localStoreBackupFile, current);
   } catch (error) {
-    await fs.unlink(temporaryFile).catch(() => undefined);
-    throw error;
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && error instanceof SyntaxError) {
+      // Keep an existing known-good backup when the primary file is corrupt.
+    } else if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
   }
+  await atomicReplaceFile(localStoreFile, JSON.stringify(store, null, 2) + "\n");
 }
 
 async function readStoreFile() {
@@ -416,7 +439,20 @@ async function readStoreFile() {
     return normalizeStore(await blobStore.get("store", { type: "json", consistency: "strong" }));
   }
 
-  return normalizeStore(JSON.parse(await fs.readFile(localStoreFile, "utf8")));
+  try {
+    return normalizeStore(JSON.parse(await fs.readFile(localStoreFile, "utf8")));
+  } catch (primaryError) {
+    if ((primaryError as NodeJS.ErrnoException)?.code === "ENOENT") throw primaryError;
+    try {
+      const backup = await fs.readFile(localStoreBackupFile, "utf8");
+      const recovered = normalizeStore(JSON.parse(backup));
+      await atomicReplaceFile(localStoreFile, backup);
+      lastStoreRecoveryAt = nowIso();
+      return recovered;
+    } catch {
+      throw primaryError;
+    }
+  }
 }
 
 function getBlobStore(): Promise<BlobStore> {
@@ -485,7 +521,10 @@ export async function localStorageHealth() {
   return {
     path: useNetlifyBlobs ? "netlify-blobs://agentic-that-publishing/store" : localStoreFile,
     version: store.version,
-    storage: useNetlifyBlobs ? "netlify-blobs" : "local-json"
+    storage: useNetlifyBlobs ? "netlify-blobs" : "local-json",
+    durableWrites: !useNetlifyBlobs,
+    backupPath: useNetlifyBlobs ? null : localStoreBackupFile,
+    lastRecoveryAt: lastStoreRecoveryAt,
   };
 }
 

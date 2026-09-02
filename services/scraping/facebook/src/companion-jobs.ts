@@ -3,6 +3,7 @@ import { facebookCompanionDesktopHost } from "./companion-desktop-host.js";
 import { FacebookCompanionCancelledError, runFacebookCompanionScrape } from "./companion-runner.js";
 import { facebookScrapeRange, type FacebookScrapeInput } from "./scraper.js";
 import { runCompanionScrapingTask } from "../../companion-resource-scheduler.js";
+import { loadCompanionJobs, persistCompanionJobs } from "../../companion-job-persistence.js";
 
 type Status = "queued" | "running" | "complete" | "failed" | "cancelled";
 type Failure = { code: string; message: string; retryable: boolean };
@@ -32,6 +33,35 @@ let executor: Executor = runFacebookCompanionScrape;
 type FacebookCompanionActivityListener = (state: ReturnType<typeof facebookCompanionActivityState>) => void;
 const activityListeners = new Set<FacebookCompanionActivityListener>();
 let activityNotificationQueued = false;
+
+function persistJobs() {
+  const records = [...jobs.values()].map(({ controller, queueController, timedOut, ...job }) => job);
+  try {
+    persistCompanionJobs("facebook", records);
+  } catch (error) {
+    console.warn("Could not persist the Facebook Companion queue:", error instanceof Error ? error.message : error);
+  }
+}
+
+function restoreJobs() {
+  const validStatuses = new Set<Status>(["queued", "running", "complete", "failed", "cancelled"]);
+  for (const record of loadCompanionJobs("facebook")) {
+    if (!record.id || !record.ownerKey || !record.input || !validStatuses.has(record.status as Status)) continue;
+    const job = record as unknown as Job;
+    if (job.status === "running") {
+      job.status = "queued";
+      job.startedAt = undefined;
+      job.completedAt = undefined;
+      job.error = undefined;
+      job.progress = { stage: "queued", message: "Recovered safely after Companion restarted" };
+      job.updatedAt = new Date().toISOString();
+    }
+    jobs.set(job.id, job);
+    if (job.status === "queued") queue.push(job.id);
+  }
+  if (jobs.size) persistJobs();
+  if (queue.length) queueMicrotask(() => { void pump(); });
+}
 
 function activityJob(job: Job, queuePosition: number | null = null) {
   const analysisResultCount = job.result?.analysis
@@ -180,7 +210,7 @@ export function facebookCompanionJobResponse(job: Job) {
   };
 }
 
-function touch(job: Job) { job.updatedAt = new Date().toISOString(); notifyActivity(); }
+function touch(job: Job) { job.updatedAt = new Date().toISOString(); persistJobs(); notifyActivity(); }
 
 async function executeJob(job: Job) {
   const controller = new AbortController();
@@ -258,6 +288,7 @@ async function pump() {
     activeJobId = null;
     const terminal = [...jobs.values()].filter(item => ["complete", "failed", "cancelled"].includes(item.status)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     for (const item of terminal.slice(50)) jobs.delete(item.id);
+    persistJobs();
     notifyActivity();
     queueMicrotask(() => void pump());
   }
@@ -270,6 +301,7 @@ export function createFacebookCompanionJob(ownerKey: string, body: Record<string
   const job: Job = { id: `fscrape_${randomUUID()}`, ownerKey, input, requestedQuery: input.query, status: "queued", progress: { stage: "queued", message: "Waiting for the local Facebook browser" }, createdAt: now, updatedAt: now };
   jobs.set(job.id, job);
   queue.push(job.id);
+  persistJobs();
   notifyActivity();
   queueMicrotask(() => void pump());
   return facebookCompanionJobResponse(job);
@@ -318,3 +350,5 @@ export async function cancelAllFacebookCompanionJobs(reason = "Facebook scraping
 export function facebookCompanionQueueHealth() {
   return { available: Boolean(facebookCompanionDesktopHost()), activeJobs: activeJobId ? 1 : 0, queuedJobs: queue.length, concurrency: 1 };
 }
+
+restoreJobs();

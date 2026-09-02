@@ -1,7 +1,7 @@
 import "./env.js";
 import cors from "cors";
 import express from "express";
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Server } from "node:http";
@@ -166,6 +166,13 @@ type CentralCompanionPairing = {
   savedAt: string;
 };
 
+type CentralConnectionState = {
+  status: "unpaired" | "connecting" | "online" | "offline" | "updating" | "outdated" | "error";
+  lastHeartbeatAt: string | null;
+  lastError: string | null;
+  companion: Record<string, unknown> | null;
+};
+
 type CentralPublishingJob = {
   id: string;
   upload: PlatformUpload;
@@ -174,6 +181,12 @@ type CentralPublishingJob = {
 
 let centralPollingTimer: NodeJS.Timeout | null = null;
 let centralPollInFlight = false;
+let centralConnectionState: CentralConnectionState = {
+  status: "unpaired",
+  lastHeartbeatAt: null,
+  lastError: null,
+  companion: null,
+};
 
 function centralServerOrigin(value: unknown) {
   const raw = String(value || "").trim().replace(/\/$/, "");
@@ -188,21 +201,79 @@ function centralServerOrigin(value: unknown) {
   return url.origin;
 }
 
+function pairingEncryptionKey() {
+  const secret = process.env.PUBLISH_QUEUE_SESSION_ENCRYPTION_KEY?.trim();
+  return secret ? createHash("sha256").update(secret).digest() : null;
+}
+
+async function durableWrite(filePath: string, contents: string) {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await fs.promises.open(temporary, "w", 0o600);
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fs.promises.rename(temporary, filePath);
+  } catch (error) {
+    await fs.promises.unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
+
+function protectCentralPairing(value: CentralCompanionPairing) {
+  const key = pairingEncryptionKey();
+  if (!key) throw new Error("Secure operating-system storage is unavailable. Companion pairing was not saved.");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
+  return JSON.stringify({
+    version: 2,
+    protected: true,
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  });
+}
+
+function unprotectCentralPairing(value: Record<string, unknown>) {
+  const key = pairingEncryptionKey();
+  if (!key) throw new Error("Secure operating-system storage is unavailable.");
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(String(value.iv || ""), "base64"));
+  decipher.setAuthTag(Buffer.from(String(value.tag || ""), "base64"));
+  return JSON.parse(Buffer.concat([
+    decipher.update(Buffer.from(String(value.ciphertext || ""), "base64")),
+    decipher.final(),
+  ]).toString("utf8")) as CentralCompanionPairing;
+}
+
+function validCentralPairing(value: Partial<CentralCompanionPairing> | null): value is CentralCompanionPairing {
+  return Boolean(value?.serverOrigin && value?.pairingToken && value?.workspaceId && value?.companionId);
+}
+
 async function readCentralPairing(): Promise<CentralCompanionPairing | null> {
   try {
-    const value = JSON.parse(await fs.promises.readFile(centralPairingFile, "utf8")) as CentralCompanionPairing;
-    if (!value?.serverOrigin || !value?.pairingToken || !value?.workspaceId || !value?.companionId) return null;
+    const stored = JSON.parse(await fs.promises.readFile(centralPairingFile, "utf8")) as Record<string, unknown>;
+    const value = stored?.protected === true
+      ? unprotectCentralPairing(stored)
+      : stored as CentralCompanionPairing;
+    if (!validCentralPairing(value)) return null;
+    if (stored?.protected !== true && pairingEncryptionKey()) await writeCentralPairing(value);
     return value;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("Could not read the encrypted workspace pairing:", error instanceof Error ? error.message : error);
+    }
     return null;
   }
 }
 
 async function writeCentralPairing(value: CentralCompanionPairing) {
-  await fs.promises.mkdir(path.dirname(centralPairingFile), { recursive: true });
-  const temporary = `${centralPairingFile}.${process.pid}.${Date.now()}.tmp`;
-  await fs.promises.writeFile(temporary, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
-  await fs.promises.rename(temporary, centralPairingFile);
+  await durableWrite(centralPairingFile, protectCentralPairing(value));
 }
 
 async function centralRequest(pairing: CentralCompanionPairing, endpoint: string, init: RequestInit = {}) {
@@ -219,10 +290,31 @@ async function centralRequest(pairing: CentralCompanionPairing, endpoint: string
 
 async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
   const accounts = await listPlatformAccounts(undefined, pairing.workspaceId);
-  await centralRequest(pairing, "/companion/heartbeat", {
+  const response = await centralRequest(pairing, "/companion/heartbeat", {
     method: "POST",
-    body: JSON.stringify({ companionInstanceId: publishingCompanionId(), accounts }),
+    body: JSON.stringify({
+      companionInstanceId: publishingCompanionId(),
+      version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
+      runtimeStatus: isAutomationRunning() ? "busy" : "ready",
+      updateStatus: process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS?.trim() || "idle",
+      lastError: process.env.AGENTICTHAT_COMPANION_RUNTIME_ERROR?.trim() || null,
+      platform: process.platform,
+      architecture: process.arch,
+      secureStorage: Boolean(pairingEncryptionKey()),
+      accounts,
+    }),
   });
+  const payload = await response.json() as { companion?: Record<string, unknown> };
+  const reportedStatus = String(payload.companion?.status || "online");
+  const status: CentralConnectionState["status"] = ["online", "offline", "updating", "outdated", "error"].includes(reportedStatus)
+    ? reportedStatus as CentralConnectionState["status"]
+    : "online";
+  centralConnectionState = {
+    status,
+    lastHeartbeatAt: new Date().toISOString(),
+    lastError: null,
+    companion: payload.companion || null,
+  };
 }
 
 async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string) {
@@ -257,23 +349,28 @@ export function centralDeliveryFailure(upload?: PlatformUpload) {
   if (recordedFailure) return {
     message: recordedFailure,
     retry: upload?.publishActionState !== "submitted" && upload?.publishActionState !== "uncertain",
+    state: upload?.publishActionState === "submitted" || upload?.publishActionState === "uncertain" ? "uncertain" : "failed",
   };
   if (!upload) return {
     message: "Companion could not find the local copy of this publishing job. It is safe to retry.",
     retry: true,
+    state: "failed",
   };
   if (upload.status === "queued") return {
     message: upload.safetyReason || "Companion kept this post queued and did not submit it. It is safe to retry.",
     retry: true,
+    state: "failed",
   };
   const finalActionUncertain = upload.publishActionState === "submitted" || upload.publishActionState === "uncertain";
   if (finalActionUncertain) return {
     message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
     retry: false,
+    state: "uncertain",
   };
   return {
     message: `Companion stopped before ${upload.platform} confirmed the post. No final publish action was recorded, so it is safe to retry.`,
     retry: true,
+    state: "failed",
   };
 }
 
@@ -300,18 +397,27 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
       void updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.")
         .catch(() => undefined);
     }, 60_000);
-    await runAutomation({ trigger: "scheduler", workspaceId: pairing.workspaceId, uploadIds: [job.upload.id] });
+    await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: [job.upload.id] });
     const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId)).find((item) => item.id === job.upload.id);
     if (localUpload?.status === "posted") {
       await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false);
       return;
     }
     const failure = centralDeliveryFailure(localUpload);
-    await updateCentralJobStatus(pairing, job.id, "failed", failure.message, failure.retry);
+    await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry);
   } catch (error) {
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);
-    await updateCentralJobStatus(pairing, job.id, reconnect ? "reconnect_required" : "failed", message, !reconnect).catch(() => undefined);
+    const localUpload = (await listUploads(undefined, job.account.id, pairing.workspaceId).catch(() => []))
+      .find((item) => item.id === job.upload.id);
+    const failure = centralDeliveryFailure(localUpload);
+    await updateCentralJobStatus(
+      pairing,
+      job.id,
+      reconnect ? "reconnect_required" : failure.state,
+      reconnect ? message : failure.message || message,
+      reconnect ? false : failure.retry,
+    ).catch(() => undefined);
   } finally {
     if (leaseHeartbeat) clearInterval(leaseHeartbeat);
   }
@@ -322,7 +428,11 @@ async function pollCentralWorkspaceCompanion() {
   centralPollInFlight = true;
   try {
     const pairing = await readCentralPairing();
-    if (!pairing) return;
+    if (!pairing) {
+      centralConnectionState = { status: "unpaired", lastHeartbeatAt: null, lastError: null, companion: null };
+      return;
+    }
+    centralConnectionState = { ...centralConnectionState, status: "connecting", lastError: null };
     await heartbeatCentralPairing(pairing);
     const response = await centralRequest(pairing, "/companion/jobs?limit=1");
     const payload = await response.json() as { jobs?: CentralPublishingJob[] };
@@ -333,8 +443,12 @@ async function pollCentralWorkspaceCompanion() {
     const message = error instanceof Error ? error.message : String(error);
     if (/pairing is no longer valid/i.test(message)) {
       await fs.promises.unlink(centralPairingFile).catch(() => undefined);
+      centralConnectionState = { status: "unpaired", lastHeartbeatAt: null, lastError: message, companion: null };
       console.warn("Workspace Companion pairing was removed from the server. Pair this device again to resume publishing.");
+    } else if (/Update Companion to/i.test(message)) {
+      centralConnectionState = { ...centralConnectionState, status: "outdated", lastError: message };
     } else {
+      centralConnectionState = { ...centralConnectionState, status: "offline", lastError: message };
       console.warn("Workspace Companion reconnect pending:", message);
     }
   } finally {
@@ -352,6 +466,27 @@ function stopCentralWorkspaceCompanionPolling() {
   if (!centralPollingTimer) return;
   clearInterval(centralPollingTimer);
   centralPollingTimer = null;
+}
+
+export async function wakeCentralWorkspaceCompanion() {
+  await pollCentralWorkspaceCompanion();
+}
+
+export function companionRuntimeActivity() {
+  const instagram = instagramCompanionQueueHealth();
+  const facebook = facebookCompanionQueueHealth();
+  return {
+    publishing: isAutomationRunning(),
+    // Queued scraping jobs are encrypted on disk and safely resume after a
+    // restart. Only a browser task that is actively executing must delay a
+    // watchdog restart or update installation.
+    scraping: instagram.activeJobs > 0 || facebook.activeJobs > 0,
+  };
+}
+
+export function stopPublishingBackgroundServices() {
+  stopScheduler();
+  stopCentralWorkspaceCompanionPolling();
 }
 
 app.use((req, res, next) => {
@@ -1226,10 +1361,12 @@ app.get("/api/health", async (_req, res) => {
     const serverless = process.env.SERVERLESS === "true" || process.env.NETLIFY === "true";
     const browser = publishingBrowserRuntimeHealth();
     const centralPairing = serverless ? null : await readCentralPairing();
+    const localAccounts = serverless ? [] : await listPlatformAccounts();
     res.json({
       ok: true,
       service: "agenticthat-publish-queue-runner",
       storage: storage.storage,
+      storageHealth: storage,
       automationReady: !serverless && browser.automationAvailable,
       automationRunning: isAutomationRunning(),
       chromeInstalled: browser.chromeInstalled,
@@ -1238,6 +1375,13 @@ app.get("/api/health", async (_req, res) => {
       companionInstanceId: publishingCompanionId(),
       companionVersion: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
       paired: Boolean(centralPairing),
+      securePairingStorage: Boolean(centralPairing && pairingEncryptionKey()),
+      controlPlane: centralConnectionState,
+      accountHealth: {
+        total: localAccounts.length,
+        ready: localAccounts.filter(account => account.enabled && account.credentialConfigured).length,
+        loginRequired: localAccounts.filter(account => account.enabled && !account.credentialConfigured).length,
+      },
       extensionBridge: true,
       capabilities: {
         publishing: true,
@@ -1268,22 +1412,49 @@ app.post("/api/companion/pair", async (req, res, next) => {
     }
     const body = z.object({
       serverOrigin: z.string().min(1),
-      pairingToken: z.string().min(32),
-      companion: z.object({ id: z.string().min(1), workspaceId: z.string().min(1) }),
+      pairingCode: z.string().min(32),
     }).parse(req.body ?? {});
-    if (body.companion.workspaceId !== identity.workspaceId) {
+    const serverOrigin = centralServerOrigin(body.serverOrigin);
+    const redeemResponse = await fetch(`${serverOrigin}/api/publishing/companion/pair/redeem`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        pairingCode: body.pairingCode,
+        companionInstanceId: publishingCompanionId(),
+        version: process.env.AGENTICTHAT_COMPANION_VERSION?.trim() || null,
+        platform: process.platform,
+        architecture: process.arch,
+        secureStorage: Boolean(pairingEncryptionKey()),
+      }),
+    });
+    const redeemed = await redeemResponse.json().catch(() => ({})) as {
+      token?: string;
+      companion?: { id?: string; workspaceId?: string; status?: string };
+      message?: string;
+    };
+    if (!redeemResponse.ok || !redeemed.token || !redeemed.companion?.id || !redeemed.companion?.workspaceId) {
+      throw new Error(redeemed.message || `AgenticThat rejected the pairing request (${redeemResponse.status}).`);
+    }
+    if (redeemed.companion.workspaceId !== identity.workspaceId) {
       res.status(403).json({ message: "This Companion can only be paired to its own workspace." });
       return;
     }
     await writeCentralPairing({
-      serverOrigin: centralServerOrigin(body.serverOrigin),
-      pairingToken: body.pairingToken,
-      companionId: body.companion.id,
-      workspaceId: body.companion.workspaceId,
+      serverOrigin,
+      pairingToken: redeemed.token,
+      companionId: redeemed.companion.id,
+      workspaceId: redeemed.companion.workspaceId,
       savedAt: new Date().toISOString(),
     });
+    centralConnectionState = { status: "connecting", lastHeartbeatAt: null, lastError: null, companion: redeemed.companion };
+    await pollCentralWorkspaceCompanion();
     startCentralWorkspaceCompanionPolling();
-    res.status(201).json({ paired: true, workspaceId: body.companion.workspaceId, companionInstanceId: publishingCompanionId() });
+    res.status(201).json({
+      paired: true,
+      workspaceId: redeemed.companion.workspaceId,
+      companionInstanceId: publishingCompanionId(),
+      companion: centralConnectionState.companion || redeemed.companion,
+    });
   } catch (error) {
     next(error);
   }
@@ -2573,8 +2744,7 @@ let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  stopScheduler();
-  stopCentralWorkspaceCompanionPolling();
+  stopPublishingBackgroundServices();
   server?.close();
 }
 

@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "publishing-v*"
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
-  portable-release:
+  windows-release:
     runs-on: windows-latest
     steps:
       - name: Check out source
@@ -31,7 +31,57 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci --prefix apps/publishing-companion-desktop
 
-      - name: Build unsigned portable Companion
+      - name: Verify application and Companion contracts
+        run: |
+          npm run test:publishing
+          npm run test:instagram
+          npm run test:facebook
+          npm run build
+
+      - name: Require a signing certificate for production tags
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:SIGNING_PASSWORD)) {
+            throw "Production Companion releases require WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD repository secrets."
+          }
+
+      - name: Require completed live-account validation for production tags
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          APPROVED_VERSION: ${{ vars.COMPANION_LIVE_MATRIX_APPROVED_VERSION }}
+        run: |
+          $version = (Get-Content -LiteralPath "apps/publishing-companion-desktop/package.json" -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Release tag $env:GITHUB_REF_NAME must exactly match Companion version v$version."
+          }
+          if ($env:APPROVED_VERSION -ne $version) {
+            throw "Complete docs/publishing-companion-production-validation.md and set COMPANION_LIVE_MATRIX_APPROVED_VERSION=$version before release."
+          }
+
+      - name: Configure Windows code signing
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE)) {
+            Write-Host "No signing certificate configured; producing manual QA artifacts."
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is required when WINDOWS_CERTIFICATE_BASE64 is configured."
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "agenticthat-companion-signing.pfx"
+          [System.IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE))
+          "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_CERTIFICATE_PASSWORD=$env:SIGNING_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Companion installer and portable package
         run: |
           npm run publishing:brand-assets
           npm --prefix apps/publishing-companion-desktop run make
@@ -43,7 +93,26 @@ jobs:
 
       - name: Collect Companion release artifacts
         shell: pwsh
-        run: ./scripts/collect-publishing-release-artifacts.ps1 -PortableOnly
+        run: ./scripts/collect-publishing-release-artifacts.ps1
+
+      - name: Verify signed production installer
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath "artifacts/AgenticThat-Publishing-Companion-Setup.exe"
+          if ($signature.Status -ne "Valid") { throw "The production Companion installer signature is $($signature.Status)." }
+
+      - name: Smoke-test packaged Companion
+        shell: pwsh
+        run: npm run publishing:desktop:smoke
+
+      - name: Create SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath "artifacts" -File |
+            Sort-Object Name |
+            ForEach-Object { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name } |
+            Set-Content -LiteralPath "artifacts/SHA256SUMS.txt" -Encoding ascii
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -53,7 +122,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish tagged GitHub release
-        if: startsWith(github.ref, 'refs/tags/publishing-v')
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

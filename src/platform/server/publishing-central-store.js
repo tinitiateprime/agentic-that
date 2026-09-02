@@ -9,11 +9,13 @@ import {
 
 const DOCUMENT_KEY = "platform.publishing-central.v1";
 const COMPANION_ONLINE_MS = 90_000;
+const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "1.9.0";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
-const TERMINAL_JOB_STATES = new Set(["published", "failed", "cancelled"]);
+const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
 
 function companionPublishingEngine() {
@@ -48,6 +50,7 @@ function blankDocument() {
     activityLogs: [],
     jobs: [],
     companions: [],
+    pairingChallenges: [],
     stagedUploads: [],
   };
 }
@@ -81,6 +84,40 @@ function isOnline(companion, timestamp = Date.now()) {
   return Boolean(companion?.status === "online" && Number.isFinite(lastSeen) && timestamp - lastSeen < COMPANION_ONLINE_MS);
 }
 
+function versionParts(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value || "").trim());
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function versionAtLeast(value, minimum = MINIMUM_COMPANION_VERSION) {
+  const current = versionParts(value);
+  const required = versionParts(minimum);
+  if (!current || !required) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (current[index] !== required[index]) return current[index] > required[index];
+  }
+  return true;
+}
+
+function companionCompatibility(companion) {
+  if (!companion?.version) return "unknown";
+  return versionAtLeast(companion.version) ? "supported" : "outdated";
+}
+
+function companionStatus(companion) {
+  if (!isOnline(companion)) return "offline";
+  if (companionCompatibility(companion) === "outdated") return "outdated";
+  if (companion.runtimeStatus === "error") return "error";
+  if (["checking", "downloading", "downloaded", "applying"].includes(companion.updateStatus)) return "updating";
+  return "online";
+}
+
+function isAvailable(companion, timestamp = Date.now()) {
+  return isOnline(companion, timestamp)
+    && companionCompatibility(companion) === "supported"
+    && companion.runtimeStatus !== "error";
+}
+
 function latestWorkspaceCompanion(document, workspaceId) {
   return document.companions
     .filter((item) => item.workspaceId === workspaceId)
@@ -90,7 +127,7 @@ function latestWorkspaceCompanion(document, workspaceId) {
 function accountReadiness(account, companion) {
   if (!account.enabled) return "unavailable";
   if (!account.credentialConfigured) return "reconnect_required";
-  return isOnline(companion) ? "ready" : "waiting_for_companion";
+  return isAvailable(companion) ? "ready" : "waiting_for_companion";
 }
 
 function hasActiveJobLease(job, companionId, timestamp = Date.now()) {
@@ -105,7 +142,19 @@ function publicCompanion(companion) {
     workspaceId: companion.workspaceId,
     label: companion.label,
     companionInstanceId: companion.companionInstanceId || "",
-    status: isOnline(companion) ? "online" : "offline",
+    status: companionStatus(companion),
+    version: companion.version || null,
+    minimumSupportedVersion: MINIMUM_COMPANION_VERSION,
+    compatibility: companionCompatibility(companion),
+    runtimeStatus: companion.runtimeStatus || "unknown",
+    lastError: companion.lastError || null,
+    updateStatus: companion.updateStatus || "unknown",
+    platform: companion.platform || null,
+    architecture: companion.architecture || null,
+    secureStorage: companion.secureStorage === true,
+    accountHealth: {
+      loginRequired: Number(companion.loginRequiredAccounts || 0),
+    },
     lastSeenAt: companion.lastSeenAt || null,
     pairedAt: companion.pairedAt,
     updatedAt: companion.updatedAt,
@@ -121,7 +170,7 @@ function publicAccount(document, account) {
     ...account,
     credentialConfigured: Boolean(account.credentialConfigured),
     companionId: companion?.id || account.companionId || null,
-    companionStatus: isOnline(companion) ? "online" : "offline",
+    companionStatus: companionStatus(companion),
     sessionStatus: account.credentialConfigured ? "connected" : "reconnect_required",
     readiness,
     safetyStatus: readiness === "reconnect_required" ? "restricted" : account.safetyStatus || "healthy",
@@ -166,6 +215,11 @@ function uploadPublic(document, upload) {
   return {
     ...upload,
     statusDetail,
+    outcome: statusDetail === "published" || upload.status === "posted"
+      ? "SUCCESS"
+      : statusDetail === "uncertain" || upload.publishActionState === "uncertain"
+        ? "UNCERTAIN"
+        : upload.status === "failed" ? "FAILED" : null,
     jobId: job?.id || null,
     jobAttemptCount: job?.attemptCount || 0,
     companionStatus: accountState?.companionStatus || "offline",
@@ -173,7 +227,7 @@ function uploadPublic(document, upload) {
 }
 
 function resumeReconnectJobs(document, account, companion, timestamp) {
-  if (!account.credentialConfigured || !isOnline(companion, timestamp)) return;
+  if (!account.credentialConfigured || !isAvailable(companion, timestamp)) return;
   for (const job of document.jobs) {
     if (job.workspaceId !== account.workspaceId || job.accountId !== account.id || job.state !== "reconnect_required") continue;
     const upload = document.uploads.find((item) => item.id === job.uploadId);
@@ -303,7 +357,7 @@ function queueJob(document, upload) {
     uploadId: upload.id,
     accountId: upload.accountId,
     platform: upload.platform,
-    state: isOnline(latestWorkspaceCompanion(document, upload.workspaceId)) ? "queued" : "waiting_for_companion",
+    state: isAvailable(latestWorkspaceCompanion(document, upload.workspaceId)) ? "queued" : "waiting_for_companion",
     notBefore: upload.scheduledAt || null,
     attemptCount: 0,
     leaseOwner: null,
@@ -372,35 +426,81 @@ export async function getCentralCompanion(workspaceId) {
   return publicCompanion(latestWorkspaceCompanion(document, workspaceId));
 }
 
+export function minimumCompanionVersion() {
+  return MINIMUM_COMPANION_VERSION;
+}
+
 export async function createCompanionPairing(principal, input = {}) {
   await initialize();
-  const token = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
+  const pairingCode = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
   const label = String(input.label || "Workspace Companion").trim().slice(0, 80) || "Workspace Companion";
   const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const timestamp = now();
-    const previous = latestWorkspaceCompanion(document, principal.workspaceId);
-    const companion = {
-      id: previous?.id || id("companion"),
+    const expiresAt = new Date(Date.now() + PAIRING_CHALLENGE_MS).toISOString();
+    document.pairingChallenges = document.pairingChallenges
+      .filter((challenge) => Date.parse(challenge.expiresAt || "") > Date.now() && challenge.workspaceId !== principal.workspaceId);
+    document.pairingChallenges.push({
+      id: id("pairing"),
       workspaceId: principal.workspaceId,
       label,
-      companionInstanceId: String(input.companionInstanceId || previous?.companionInstanceId || "").slice(0, 120),
+      companionInstanceId: String(input.companionInstanceId || "").slice(0, 120),
+      codeHash: hashSecret(pairingCode),
+      expiresAt,
+      createdAt: timestamp,
+      registeredByUserId: principal.userId,
+    });
+    return { document, result: { expiresAt } };
+  });
+  return { pairingCode, expiresAt: result.expiresAt };
+}
+
+export async function redeemCompanionPairing(input = {}) {
+  await initialize();
+  const codeHash = hashSecret(input.pairingCode || "");
+  const companionInstanceId = String(input.companionInstanceId || "").trim().slice(0, 120);
+  if (!companionInstanceId) throw new Error("Companion instance identity is required.");
+  const token = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
+  const companion = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+    const document = documentValue(value);
+    const timestamp = now();
+    const challenge = document.pairingChallenges.find((item) => safeEqual(item.codeHash, codeHash));
+    document.pairingChallenges = document.pairingChallenges.filter((item) => item !== challenge && Date.parse(item.expiresAt || "") > Date.now());
+    if (!challenge || Date.parse(challenge.expiresAt || "") <= Date.now()) {
+      throw new Error("This one-time pairing request is invalid or expired.");
+    }
+    if (challenge.companionInstanceId && challenge.companionInstanceId !== companionInstanceId) {
+      throw new Error("This pairing request belongs to a different Companion.");
+    }
+    const previous = latestWorkspaceCompanion(document, challenge.workspaceId);
+    const record = {
+      id: previous?.id || id("companion"),
+      workspaceId: challenge.workspaceId,
+      label: challenge.label,
+      companionInstanceId,
       tokenHash: hashSecret(token),
       status: "offline",
-      lastSeenAt: previous?.lastSeenAt || null,
-      pairedAt: previous?.pairedAt || timestamp,
+      version: String(input.version || "").slice(0, 40) || null,
+      runtimeStatus: "starting",
+      updateStatus: "unknown",
+      lastError: null,
+      platform: String(input.platform || "").slice(0, 40) || null,
+      architecture: String(input.architecture || "").slice(0, 40) || null,
+      secureStorage: input.secureStorage === true,
+      lastSeenAt: null,
+      pairedAt: timestamp,
       updatedAt: timestamp,
-      registeredByUserId: principal.userId,
+      registeredByUserId: challenge.registeredByUserId,
     };
-    document.companions = document.companions.filter((item) => item.workspaceId !== principal.workspaceId);
-    document.companions.push(companion);
+    document.companions = document.companions.filter((item) => item.workspaceId !== challenge.workspaceId);
+    document.companions.push(record);
     for (const account of document.accounts) {
-      if (account.workspaceId === principal.workspaceId) account.companionId = companion.id;
+      if (account.workspaceId === challenge.workspaceId) account.companionId = record.id;
     }
-    activity(document, principal.workspaceId, { type: "companion.paired", summary: `${label} was paired.` });
-    return { document, result: publicCompanion(companion) };
+    activity(document, challenge.workspaceId, { type: "companion.paired", summary: `${record.label} was paired securely.` });
+    return { document, result: publicCompanion(record) };
   });
-  return { companion: result, token };
+  return { companion, token };
 }
 
 export async function removeCentralCompanion(principal) {
@@ -409,6 +509,7 @@ export async function removeCentralCompanion(principal) {
     const document = documentValue(value);
     const before = document.companions.length;
     document.companions = document.companions.filter((item) => item.workspaceId !== principal.workspaceId);
+    document.pairingChallenges = document.pairingChallenges.filter((item) => item.workspaceId !== principal.workspaceId);
     for (const account of document.accounts) {
       if (account.workspaceId === principal.workspaceId) account.companionId = null;
     }
@@ -437,6 +538,13 @@ export async function heartbeatCentralCompanion(token, input = {}) {
     companion.lastSeenAt = timestamp;
     companion.updatedAt = timestamp;
     if (input.companionInstanceId) companion.companionInstanceId = String(input.companionInstanceId).slice(0, 120);
+    if (input.version) companion.version = String(input.version).slice(0, 40);
+    if (["starting", "ready", "busy", "error"].includes(input.runtimeStatus)) companion.runtimeStatus = input.runtimeStatus;
+    if (["unsupported", "idle", "checking", "downloading", "downloaded", "applying", "error"].includes(input.updateStatus)) companion.updateStatus = input.updateStatus;
+    companion.lastError = String(input.lastError || "").trim().slice(0, 500) || null;
+    companion.platform = String(input.platform || companion.platform || "").slice(0, 40) || null;
+    companion.architecture = String(input.architecture || companion.architecture || "").slice(0, 40) || null;
+    companion.secureStorage = input.secureStorage === true;
     const accounts = Array.isArray(input.accounts) ? input.accounts : [];
     for (const incoming of accounts) {
       if (!incoming || incoming.workspaceId !== companion.workspaceId || !PLATFORM_VALUES.has(incoming.platform)) continue;
@@ -460,6 +568,9 @@ export async function heartbeatCentralCompanion(token, input = {}) {
       }
       resumeReconnectJobs(document, account, companion, timestamp);
     }
+    companion.loginRequiredAccounts = document.accounts.filter((account) => (
+      account.workspaceId === companion.workspaceId && account.enabled && !account.credentialConfigured
+    )).length;
     return { document, result: publicCompanion(companion) };
   });
 }
@@ -599,7 +710,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     const queuedJob = document.jobs.find((job) => job.uploadId === upload.id && ["queued", "waiting_for_companion"].includes(job.state));
     if (queuedJob) {
       queuedJob.notBefore = upload.scheduledAt || null;
-      queuedJob.state = isOnline(latestWorkspaceCompanion(document, principal.workspaceId)) ? "queued" : "waiting_for_companion";
+      queuedJob.state = isAvailable(latestWorkspaceCompanion(document, principal.workspaceId)) ? "queued" : "waiting_for_companion";
       queuedJob.updatedAt = upload.updatedAt;
     } else if (!upload.scheduleId) {
       queueJob(document, upload);
@@ -887,6 +998,35 @@ function selectClaimableCentralJobs(document, workspaceId, timestamp, limit) {
   return selected;
 }
 
+function recoverExpiredCentralJobLeases(document, workspaceId, timestamp) {
+  for (const staleJob of document.jobs) {
+    if (staleJob.workspaceId !== workspaceId || !staleJob.leaseExpiresAt || Date.parse(staleJob.leaseExpiresAt) > timestamp) continue;
+    if (!["opening_platform", "uploading", "publishing"].includes(staleJob.state)) continue;
+    const staleUpload = document.uploads.find((item) => item.id === staleJob.uploadId);
+    staleJob.leaseOwner = null;
+    staleJob.leaseExpiresAt = null;
+    staleJob.updatedAt = now();
+    if (staleJob.state === "publishing") {
+      // A browser may have submitted a post just before it disconnected.
+      // Never replay that uncertain final action automatically.
+      staleJob.state = "uncertain";
+      staleJob.message = "Publishing result is uncertain after the Companion disconnected. Review the platform before retrying.";
+      if (staleUpload) {
+        staleUpload.status = "failed";
+        staleUpload.publishActionState = "uncertain";
+        staleUpload.failureReason = staleJob.message;
+        staleUpload.updatedAt = staleJob.updatedAt;
+      }
+    } else {
+      staleJob.state = "queued";
+      if (staleUpload) {
+        staleUpload.status = "queued";
+        staleUpload.updatedAt = staleJob.updatedAt;
+      }
+    }
+  }
+}
+
 export async function claimCentralJobs(token, limit = 1) {
   await initialize();
   const secretHash = hashSecret(token || "");
@@ -898,32 +1038,11 @@ export async function claimCentralJobs(token, limit = 1) {
     companion.status = "online";
     companion.lastSeenAt = new Date(timestamp).toISOString();
     companion.updatedAt = companion.lastSeenAt;
-    refreshDueJobs(document, companion.workspaceId);
-    for (const staleJob of document.jobs) {
-      if (staleJob.workspaceId !== companion.workspaceId || !staleJob.leaseExpiresAt || Date.parse(staleJob.leaseExpiresAt) > timestamp) continue;
-      if (!["opening_platform", "uploading", "publishing"].includes(staleJob.state)) continue;
-      const staleUpload = document.uploads.find((item) => item.id === staleJob.uploadId);
-      staleJob.leaseOwner = null;
-      staleJob.leaseExpiresAt = null;
-      staleJob.updatedAt = now();
-      if (staleJob.state === "publishing") {
-        // A browser may have submitted a post just before it disconnected.
-        // Never replay that uncertain final action automatically.
-        staleJob.state = "failed";
-        staleJob.message = "Publishing result is uncertain after the Companion disconnected. Review the platform before retrying.";
-        if (staleUpload) {
-          staleUpload.status = "failed";
-          staleUpload.failureReason = staleJob.message;
-          staleUpload.updatedAt = staleJob.updatedAt;
-        }
-      } else {
-        staleJob.state = "queued";
-        if (staleUpload) {
-          staleUpload.status = "queued";
-          staleUpload.updatedAt = staleJob.updatedAt;
-        }
-      }
+    if (!versionAtLeast(companion.version)) {
+      throw new Error(`Update Companion to ${MINIMUM_COMPANION_VERSION} or later to continue.`);
     }
+    refreshDueJobs(document, companion.workspaceId);
+    recoverExpiredCentralJobLeases(document, companion.workspaceId, timestamp);
     const jobs = selectClaimableCentralJobs(document, companion.workspaceId, timestamp, limit);
     const result = [];
     for (const { job, upload, account } of jobs) {
@@ -944,7 +1063,7 @@ function centralJobUpdateIsAllowed(job, companionId, state, timestamp = Date.now
   // A verified local retry can finish after the central job exhausted its
   // attempts. Allow only that failed -> published reconciliation; every other
   // update still requires the active lease that prevents duplicate posting.
-  if (job.state === "failed" && state === "published") return true;
+  if (["failed", "uncertain"].includes(job.state) && state === "published") return true;
   if (TERMINAL_JOB_STATES.has(job.state)) return false;
   return hasActiveJobLease(job, companionId, timestamp);
 }
@@ -952,7 +1071,7 @@ function centralJobUpdateIsAllowed(job, companionId, state, timestamp = Date.now
 export async function updateCentralJob(token, jobId, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
-  const states = new Set(["waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "reconnect_required"]);
+  const states = new Set(["waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "uncertain", "reconnect_required"]);
   return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
@@ -978,6 +1097,11 @@ export async function updateCentralJob(token, jobId, input = {}) {
     } else if (state === "reconnect_required") {
       account.credentialConfigured = false; account.updatedAt = timestamp;
       job.state = state; job.leaseExpiresAt = null; upload.status = "failed"; upload.failureReason = job.message || "Social media login needs reconnecting.";
+    } else if (state === "uncertain") {
+      job.state = state; job.leaseOwner = null; job.leaseExpiresAt = null;
+      upload.status = "failed"; upload.publishActionState = "uncertain";
+      upload.failureReason = job.message || "Publishing may have completed. Verify the platform before retrying.";
+      activity(document, companion.workspaceId, { type: "post.uncertain", summary: upload.failureReason, uploadId: upload.id });
     } else if (state === "failed") {
       const retry = input.retry !== false && job.attemptCount < MAX_JOB_ATTEMPTS;
       job.state = retry ? "queued" : "failed";
@@ -1020,8 +1144,12 @@ export function centralMediaFileName(originalName) {
 export const centralPublishingTestHelpers = {
   accountReadiness,
   centralJobUpdateIsAllowed,
+  companionCompatibility,
   companionPublishingEngine,
+  companionStatus,
   hasActiveJobLease,
+  recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
   selectClaimableCentralJobs,
+  versionAtLeast,
 };
