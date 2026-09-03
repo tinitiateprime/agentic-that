@@ -48,7 +48,9 @@ On Netlify, backend users, Telegram sessions, login challenges, and message hist
 
 Netlify Functions are request-based. They can handle login, account listing, and sending messages, but they do not keep a permanent Telegram listener running in the background.
 They also cannot retain interactive Chrome profiles or run browser publishing
-continuously. Keep the interface on Netlify and run the publishing companion on
-the Windows computer used for social login. The Chrome extension connects the
-deployed dashboard to that companion. See
+continuously. Keep the website and request-based API on Netlify and run the
+publishing Companion on the Windows, macOS, or Linux computer used for social
+login. The Companion claims workspace jobs through outbound, token-scoped
+Supabase RPCs; no public local port, permanent server, or browser extension is
+required. The extension remains an optional compatibility bridge. See
 [publishing-extension.md](./publishing-extension.md).

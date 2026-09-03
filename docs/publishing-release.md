@@ -1,6 +1,10 @@
 # Publishing Companion release guide
 
-## One-time owner setup
+## Optional Chrome compatibility setup
+
+The production website + Supabase + Companion flow does not require an
+extension. Complete these steps only if the legacy Chrome bridge will also be
+offered:
 
 1. Register a Chrome Web Store developer account.
 2. Run `npm run publishing:extension:package` and upload the ZIP from
@@ -11,9 +15,22 @@
    submit the extension for review.
 4. After approval, add the public listing URL to Netlify as
    `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` with Builds scope.
-5. Keep `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` set to the stable GitHub
-   Setup installer URL documented in `docs/netlify-env.md`. The installer is the
-   supported customer build because it provides auto-start and automatic updates.
+5. Keep `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=/companion/download` as
+   documented in `docs/netlify-env.md`. That page selects Windows, macOS, or
+   Linux release assets without requiring the Chrome extension.
+
+### Required release credentials
+
+Production tags are intentionally prevented from publishing unless all of the
+following are configured and validation has been completed:
+
+- Windows: `WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`.
+- macOS signing: `MACOS_CERTIFICATE_BASE64` and `MACOS_CERTIFICATE_PASSWORD`.
+- macOS notarization: `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, and
+  `APPLE_API_ISSUER`.
+- Live validation: set the repository variable
+  `COMPANION_LIVE_MATRIX_APPROVED_VERSION` to the exact version only after the
+  Windows/macOS/Linux owned-account matrix is recorded.
 
 ### Windows distribution without security warnings
 
@@ -33,15 +50,31 @@ Use Microsoft Store MSIX distribution as the primary public installation path:
    MSIX, so users do not receive SmartScreen or Smart App Control warnings
    during Store installation.
 
-The workflow signs releases when `WINDOWS_CERTIFICATE_BASE64` and
-`WINDOWS_CERTIFICATE_PASSWORD` are configured, and verifies the Authenticode
-signature before publishing. Until those secrets are added, it can publish an
-unsigned installer and Windows may show a SmartScreen warning.
+The workflow signs Windows builds when `WINDOWS_CERTIFICATE_BASE64` and
+`WINDOWS_CERTIFICATE_PASSWORD` are configured and verifies the Authenticode
+signature. Unsigned workflow-dispatch builds remain available for QA, but a
+tagged production release will not publish without a valid signature.
 
 For a zero-warning consumer installation, publish an MSIX package through the
 Microsoft Store. Microsoft signs Store MSIX submissions after certification.
 Direct downloads must still build SmartScreen reputation even when they have a
 valid CA-trusted signature.
+
+### macOS distribution
+
+The release workflow builds a universal application on macOS so one DMG runs on
+Intel and Apple Silicon. Import a Developer ID Application certificate with the
+macOS certificate secrets and configure an App Store Connect API key with the
+three Apple API secrets. Forge signs and notarizes the app before the DMG/ZIP
+artifacts are collected. The release gate verifies both signing and Gatekeeper.
+
+### Linux distribution
+
+The workflow builds DEB, RPM, and portable ZIP artifacts on native x64 and ARM64
+Linux runners. Linux users must have GNOME Keyring/libsecret or KWallet enabled;
+Companion refuses to persist credentials through Electron's `basic_text`
+fallback. Electron has no native Linux auto-updater, so upgrades are delivered
+through a newer DEB/RPM installation or replacement portable ZIP.
 
 ## Publish a version
 
@@ -57,23 +90,30 @@ Before tagging a customer release:
 5. Confirm the release remains local-profile based and contains no stealth,
    proxy-rotation, CAPTCHA-bypass, or automation-hiding browser flags.
 
-After the code is on `main`, create and push the release tag:
+After the code is on `main`, signing/notarization secrets are configured, and
+the live matrix repository variable matches the version, create and push the
+release tag:
 
 ```text
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 Use a SemVer tag (`vX.Y.Z`) so Electron's public update service can discover the
-release. GitHub Actions builds the Squirrel installer, update manifest, full
-update package, Portable ZIP, checksums, and optional Chrome extension. It signs
-and verifies the installer automatically whenever signing secrets are present.
-The legacy Publishing Companion ZIP alias remains available for existing
-Netlify download links.
+release. GitHub Actions builds the Windows Squirrel installer/update package,
+universal macOS DMG/ZIP, Linux DEB/RPM/ZIP for x64 and ARM64, checksums, and the
+optional Chrome extension. The final GitHub release is created only after every
+native job succeeds and the production release gates pass.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The
 artifacts are available from that workflow run.
+
+For a downloadable cross-platform QA prerelease, push a numbered tag matching
+the current package version, for example `v2.1.0-qa.1`. The workflow publishes
+the native Windows, macOS, and Linux artifacts as a GitHub prerelease without
+weakening the signing, notarization, or live-matrix gates on the final
+`v2.1.0` production tag. QA artifacts may be unsigned and are for testing only.
 
 ## Workspace Companion
 

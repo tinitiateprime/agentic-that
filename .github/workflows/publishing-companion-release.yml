@@ -10,8 +10,58 @@ permissions:
   contents: write
 
 jobs:
-  windows-release:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/publishing-companion-desktop/package-lock.json
+            services/messaging/telegram/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix apps/publishing-companion-desktop
+          npm ci --prefix services/messaging/telegram
+
+      - name: Verify application and Companion contracts
+        run: |
+          npm run test:publishing
+          npm run test:instagram
+          npm run test:facebook
+          npm run test:whatsapp
+          npm run test:rbac
+          npm --prefix services/messaging/telegram test
+          npm run build
+
+      - name: Audit production dependencies
+        run: |
+          npm audit --omit=dev
+          npm audit --omit=dev --prefix apps/publishing-companion-desktop
+
+      - name: Verify release tag matches Companion version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(node -p "require('./apps/publishing-companion-desktop/package.json').version")
+          escaped_version=${version//./\\.}
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v${escaped_version}(-qa\.[0-9]+)?$ ]]; then
+            echo "Tag $GITHUB_REF_NAME must be v$version or v$version-qa.N." >&2
+            exit 1
+          fi
+
+  windows:
+    needs: verify
     runs-on: windows-latest
+    outputs:
+      signed: ${{ steps.windows_signing.outputs.signed }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -25,36 +75,21 @@ jobs:
             package-lock.json
             apps/publishing-companion-desktop/package-lock.json
 
-      - name: Install website dependencies
-        run: npm ci
-
-      - name: Install desktop dependencies
-        run: npm ci --prefix apps/publishing-companion-desktop
-
-      - name: Verify application and Companion contracts
+      - name: Install dependencies
         run: |
-          npm run test:publishing
-          npm run test:instagram
-          npm run test:facebook
-          npm run build
-
-      - name: Verify release tag matches Companion version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        run: |
-          $version = (Get-Content -LiteralPath "apps/publishing-companion-desktop/package.json" -Raw | ConvertFrom-Json).version
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
-            throw "Release tag $env:GITHUB_REF_NAME must exactly match Companion version v$version."
-          }
+          npm ci
+          npm ci --prefix apps/publishing-companion-desktop
 
       - name: Configure Windows code signing
+        id: windows_signing
         shell: pwsh
         env:
           SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
+          "signed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE)) {
-            Write-Warning "No signing certificate configured; producing unsigned release artifacts. Windows may show a SmartScreen warning."
+            Write-Warning "No Windows signing certificate is configured; artifacts are suitable for QA but not production sign-off."
             exit 0
           }
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_PASSWORD)) {
@@ -65,64 +100,290 @@ jobs:
           "WINDOWS_CERTIFICATE_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WINDOWS_CERTIFICATE_PASSWORD=$env:SIGNING_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WINDOWS_RELEASE_SIGNED=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Build Companion installer and portable package
-        run: |
-          npm run publishing:brand-assets
-          npm --prefix apps/publishing-companion-desktop run make
+      - name: Build Windows Companion
+        run: npm --prefix apps/publishing-companion-desktop run make:windows
 
-      - name: Validate and package optional Companion extension
+      - name: Package optional Chrome extension
         run: |
           npm run publishing:extension:validate
           npm run publishing:extension:package
 
-      - name: Collect Companion release artifacts
-        shell: pwsh
-        run: ./scripts/collect-publishing-release-artifacts.ps1
+      - name: Verify packaged Windows Companion
+        run: node scripts/verify-packaged-companion.mjs --platform=win32 --arch=x64
 
-      - name: Verify installer signature when configured
+      - name: Collect Windows release artifacts
+        run: node scripts/collect-publishing-release-artifacts.mjs --platform=win32 --arch=x64
+
+      - name: Verify Windows installer signature when configured
         if: env.WINDOWS_RELEASE_SIGNED == 'true'
         shell: pwsh
         run: |
-          $signature = Get-AuthenticodeSignature -LiteralPath "artifacts/AgenticThat-Publishing-Companion-Setup.exe"
-          if ($signature.Status -ne "Valid") { throw "The production Companion installer signature is $($signature.Status)." }
+          $signedFiles = @(
+            "artifacts/AgenticThat-Publishing-Companion-Setup.exe",
+            "apps/publishing-companion-desktop/out/AgenticThat Companion-win32-x64/AgenticThat Publishing Companion.exe"
+          )
+          foreach ($signedFile in $signedFiles) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $signedFile
+            if ($signature.Status -ne "Valid") { throw "$signedFile signature is $($signature.Status)." }
+          }
 
-      - name: Smoke-test packaged Companion
+      - name: Smoke-test packaged Windows Companion
         shell: pwsh
         run: npm run publishing:desktop:smoke
 
-      - name: Create SHA-256 checksums
-        shell: pwsh
-        run: |
-          Get-ChildItem -LiteralPath "artifacts" -File |
-            Sort-Object Name |
-            ForEach-Object { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name } |
-            Set-Content -LiteralPath "artifacts/SHA256SUMS.txt" -Encoding ascii
-
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: agenticthat-companion-release
+          name: companion-windows-x64
           path: artifacts/*
           if-no-files-found: error
 
+  macos:
+    needs: verify
+    runs-on: macos-15-intel
+    outputs:
+      signed: ${{ steps.macos_signing.outputs.signed }}
+      notarized: ${{ steps.macos_notarization.outputs.notarized }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/publishing-companion-desktop/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix apps/publishing-companion-desktop
+
+      - name: Import macOS signing certificate
+        id: macos_signing
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "signed=false" >> "$GITHUB_OUTPUT"
+          if [[ -z "$MACOS_CERTIFICATE_BASE64" ]]; then
+            echo "::warning::No macOS signing certificate is configured; artifacts are suitable for QA but not production sign-off."
+            exit 0
+          fi
+          if [[ -z "$MACOS_CERTIFICATE_PASSWORD" ]]; then
+            echo "MACOS_CERTIFICATE_PASSWORD is required when MACOS_CERTIFICATE_BASE64 is configured." >&2
+            exit 1
+          fi
+          certificate_path="$RUNNER_TEMP/agenticthat-companion-signing.p12"
+          keychain_path="$RUNNER_TEMP/agenticthat-companion.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | openssl base64 -d -A -out "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          signing_identity=$(security find-identity -v -p codesigning "$keychain_path" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)
+          if [[ -z "$signing_identity" ]]; then
+            echo "No code-signing identity was imported." >&2
+            exit 1
+          fi
+          echo "MACOS_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+          echo "MACOS_RELEASE_SIGNED=true" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Apple notarization
+        id: macos_notarization
+        shell: bash
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "notarized=false" >> "$GITHUB_OUTPUT"
+          if [[ -z "$APPLE_API_KEY_BASE64" && -z "$APPLE_KEY_ID" && -z "$APPLE_ISSUER" ]]; then
+            echo "::warning::Apple notarization credentials are not configured."
+            exit 0
+          fi
+          if [[ "$MACOS_RELEASE_SIGNED" != "true" || -z "$APPLE_API_KEY_BASE64" || -z "$APPLE_KEY_ID" || -z "$APPLE_ISSUER" ]]; then
+            echo "A signing certificate and all Apple API key fields are required for notarization." >&2
+            exit 1
+          fi
+          api_key_path="$RUNNER_TEMP/AuthKey_$APPLE_KEY_ID.p8"
+          printf '%s' "$APPLE_API_KEY_BASE64" | openssl base64 -d -A -out "$api_key_path"
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_ISSUER" >> "$GITHUB_ENV"
+          echo "MACOS_RELEASE_NOTARIZED=true" >> "$GITHUB_ENV"
+          echo "notarized=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal macOS Companion
+        run: npm --prefix apps/publishing-companion-desktop run make:macos
+
+      - name: Verify packaged macOS Companion
+        run: node scripts/verify-packaged-companion.mjs --platform=darwin --arch=universal
+
+      - name: Verify macOS signature and Gatekeeper assessment when configured
+        if: env.MACOS_RELEASE_SIGNED == 'true'
+        shell: bash
+        run: |
+          app_path=$(find "apps/publishing-companion-desktop/out" -type d -name "AgenticThat Companion.app" -print -quit)
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          if [[ "$MACOS_RELEASE_NOTARIZED" == "true" ]]; then
+            spctl --assess --type execute --verbose=2 "$app_path"
+          fi
+
+      - name: Collect macOS release artifacts
+        run: node scripts/collect-publishing-release-artifacts.mjs --platform=darwin --arch=universal
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: companion-macos-universal
+          path: artifacts/*
+          if-no-files-found: error
+
+  linux:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install Linux packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fakeroot rpm libsecret-1-0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/publishing-companion-desktop/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix apps/publishing-companion-desktop
+
+      - name: Build Linux Companion
+        run: npm --prefix apps/publishing-companion-desktop run make:linux
+
+      - name: Verify packaged Linux Companion
+        run: node scripts/verify-packaged-companion.mjs --platform=linux --arch=${{ matrix.arch }}
+
+      - name: Collect Linux release artifacts
+        run: node scripts/collect-publishing-release-artifacts.mjs --platform=linux --arch=${{ matrix.arch }}
+
+      - name: Validate Linux packages
+        run: |
+          version=$(node -p "require('./apps/publishing-companion-desktop/package.json').version")
+          deb="artifacts/AgenticThat-Publishing-Companion-$version-Linux-${{ matrix.arch }}.deb"
+          rpm_file="artifacts/AgenticThat-Publishing-Companion-$version-Linux-${{ matrix.arch }}.rpm"
+          expected_deb_arch=${{ matrix.arch }}
+          expected_rpm_arch=${{ matrix.arch }}
+          if [[ "${{ matrix.arch }}" == "x64" ]]; then
+            expected_deb_arch=amd64
+            expected_rpm_arch=x86_64
+          elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            expected_rpm_arch=aarch64
+          fi
+          test "$(dpkg-deb --field "$deb" Package)" = "agenticthat-companion"
+          test "$(dpkg-deb --field "$deb" Version)" = "$version"
+          test "$(dpkg-deb --field "$deb" Architecture)" = "$expected_deb_arch"
+          test "$(rpm -qp --queryformat '%{NAME}' "$rpm_file")" = "agenticthat-companion"
+          test "$(rpm -qp --queryformat '%{VERSION}' "$rpm_file")" = "$version"
+          test "$(rpm -qp --queryformat '%{ARCH}' "$rpm_file")" = "$expected_rpm_arch"
+          rpm --checksig "$rpm_file"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: companion-linux-${{ matrix.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Download every platform artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: companion-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create SHA-256 checksums
+        working-directory: release-artifacts
+        run: |
+          find . -maxdepth 1 -type f -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS.txt
+
+      - name: Enforce production release approvals
+        env:
+          LIVE_MATRIX_APPROVED_VERSION: ${{ vars.COMPANION_LIVE_MATRIX_APPROVED_VERSION }}
+          WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
+          MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
+          MACOS_NOTARIZED: ${{ needs.macos.outputs.notarized }}
+        run: |
+          package_version=$(node -p "require('./apps/publishing-companion-desktop/package.json').version")
+          if [[ "$GITHUB_REF_NAME" == "v$package_version-qa."* ]]; then
+            echo "Publishing an unsigned QA prerelease for cross-platform testing."
+            exit 0
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$package_version" ]]; then
+            echo "Only v$package_version or v$package_version-qa.N can be published." >&2
+            exit 1
+          fi
+          if [[ "$LIVE_MATRIX_APPROVED_VERSION" != "$package_version" ]]; then
+            echo "Complete the owned-account OS matrix and set COMPANION_LIVE_MATRIX_APPROVED_VERSION=$package_version before publishing." >&2
+            exit 1
+          fi
+          if [[ "$WINDOWS_SIGNED" != "true" ]]; then
+            echo "The Windows production artifact is not signed." >&2
+            exit 1
+          fi
+          if [[ "$MACOS_SIGNED" != "true" || "$MACOS_NOTARIZED" != "true" ]]; then
+            echo "The macOS production artifact must be signed and notarized." >&2
+            exit 1
+          fi
+
       - name: Publish tagged GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseVersion = $env:GITHUB_REF_NAME -replace '^v', ''
-          $notesPath = "docs/publishing-companion-$releaseVersion.md"
-          $releaseArguments = @(
-            "release", "create", $env:GITHUB_REF_NAME,
-            "--verify-tag",
-            "--title", "AgenticThat Companion $env:GITHUB_REF_NAME"
-          )
-          if (Test-Path -LiteralPath $notesPath) {
-            $releaseArguments += @("--notes-file", $notesPath)
-          } else {
-            $releaseArguments += "--generate-notes"
-          }
-          $releaseArguments += (Get-ChildItem -LiteralPath "artifacts" -File | ForEach-Object { $_.FullName })
-          & gh @releaseArguments
+          package_version=$(node -p "require('./apps/publishing-companion-desktop/package.json').version")
+          notes_path="docs/publishing-companion-$package_version.md"
+          prerelease_flags=()
+          if [[ "$GITHUB_REF_NAME" == "v$package_version-qa."* ]]; then
+            prerelease_flags+=(--prerelease)
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
+          elif [[ -f "$notes_path" ]]; then
+            gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --title "AgenticThat Companion $GITHUB_REF_NAME" --notes-file "$notes_path" "${prerelease_flags[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --title "AgenticThat Companion $GITHUB_REF_NAME" --generate-notes "${prerelease_flags[@]}"
+          fi

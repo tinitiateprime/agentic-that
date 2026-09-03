@@ -9,7 +9,7 @@ DATA_STORE=netlify-blobs
 NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL=/console
 NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
-NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe
+NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=/companion/download
 
 # Supabase Data API. The publishable key is public and constrained by RLS plus
 # token-authenticated Companion RPCs. The secret key stays server-only.
@@ -123,17 +123,19 @@ without a tunnel, extension, or local URL.
 
 ## Publish Queue distribution
 
-Interactive social login and browser publishing use the installable Windows
-Companion because a request-based Netlify Function cannot own persistent Chrome
+Interactive social login and browser publishing use the installable desktop
+Companion because a request-based Netlify Function cannot own persistent browser
 profiles or a continuously running local worker. A Workspace Manager installs and
 pairs it once from Connections; other workspace users do not install it. After
-downloading the Setup installer, the manager runs it once; Companion then starts
-with Windows and updates itself from signed GitHub releases.
+downloading the installer for their operating system, the manager runs it once;
+Companion can then start at login. Windows and signed macOS builds update from
+signed GitHub releases, while Linux upgrades use the newer DEB/RPM or archive.
 
 The Chrome extension is an optional compatibility bridge; core website jobs do
 not require it. Keep
-`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on the stable Setup installer GitHub
-Release URL shown above. Do not set either Publish Queue API URL. The Companion
+`NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL` on `/companion/download`, which
+offers the signed Windows Setup, universal macOS DMG, and Linux DEB/RPM/ZIP
+assets from the latest release. Do not set either Publish Queue API URL. The Companion
 generates and protects its own local credentials and browser sessions; central
 workspace publishing remains available to the authorized team. Publishing and
 Telegram scheduling are intentionally paused in this release.

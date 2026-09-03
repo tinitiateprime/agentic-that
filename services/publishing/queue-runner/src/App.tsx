@@ -108,7 +108,7 @@ type AutomationNotice = {
 
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Portable.zip';
+  || 'https://agentic-that.netlify.app/companion/download';
 const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
 const extensionInstallUrl = configuredExtensionInstallUrl
   || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension.zip';
@@ -461,19 +461,19 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
           </div>
 
           <div className='publishing-setup-card'>
-            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>{desktopBridgeDetected ? 'Companion publishing ready' : 'One-time publishing setup'}</strong><small>{desktopBridgeDetected ? 'Dashboard and live publishing browser are built into this app.' : 'Install both once. No project download or commands.'}</small></span></div>
+            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>{desktopBridgeDetected ? 'Companion publishing ready' : 'One-time Companion setup'}</strong><small>{desktopBridgeDetected ? 'Dashboard and live publishing browser are built into this app.' : 'Install the desktop Companion once. The browser extension is optional.'}</small></span></div>
             <div className='publishing-setup-checks'>
-              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>{desktopBridgeDetected ? 'Companion bridge' : 'Chrome bridge'}</b><small>{desktopBridgeDetected ? 'Built in' : connectionState === 'extension-missing' ? 'Install or repair' : connectionState === 'checking' ? 'Checking…' : extensionDetected ? 'Installed' : 'Direct connection'}</small></span>
-              <span className={connectionState === 'companion-missing' || connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Windows companion</b><small>{connectionState === 'companion-missing' ? 'Local service offline' : connectionState === 'extension-missing' ? 'Connection not confirmed' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Checking'}</small></span>
+              <span className={connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>{desktopBridgeDetected ? 'Companion bridge' : 'Browser bridge'}</b><small>{desktopBridgeDetected ? 'Built in' : extensionDetected ? 'Optional bridge installed' : 'Optional - not required'}</small></span>
+              <span className={connectionState === 'companion-missing' || connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Desktop companion</b><small>{connectionState === 'companion-missing' ? 'Local service offline' : connectionState === 'extension-missing' ? 'Connection not confirmed' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Checking'}</small></span>
             </div>
             {!desktopBridgeDetected && <div className='publishing-setup-actions'>
-              <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />{configuredExtensionInstallUrl ? 'Install extension' : 'Download Chrome bridge'}</a>
-              <a href={companionDownloadUrl}><Download size={15} />Install Windows companion</a>
+              <a href={companionDownloadUrl}><Download size={15} />Install desktop companion</a>
               <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
               <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
+              <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Optional browser bridge</a>
             </div>}
-            {connectionState === 'extension-missing' && !configuredExtensionInstallUrl && <p>Allow Local network access if Chrome asks. Otherwise extract the bridge ZIP, open <strong>chrome://extensions</strong>, enable Developer mode, choose <strong>Load unpacked</strong>, and select the extracted folder.</p>}
-            {connectionState === 'chrome-missing' && <p>Install Google Chrome or Microsoft Edge to use the system-browser login fallback.</p>}
+            {connectionState === 'extension-missing' && <p>Open the desktop Companion and allow Local network access if the browser asks. The optional bridge is needed only when browser policy blocks the direct local diagnostic connection.</p>}
+            {connectionState === 'chrome-missing' && <p>Install Google Chrome, Microsoft Edge, or Chromium to use the system-browser login fallback.</p>}
             {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{desktopBridgeDetected ? ' inside Companion' : extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
@@ -2324,7 +2324,7 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
             <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay on the provider sign-in page' /></div>
             <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
-            <div className='account-engine-field account-form-wide'><label>Publishing location</label><div className='account-engine-picker'><button type='button' className='active' aria-pressed='true' disabled><MonitorCheck size={18} /><span><strong>Companion</strong><small>All uploads and publishing run in visible protected Companion tabs. Chrome or Edge is used only as a login fallback.</small></span></button></div></div>
+            <div className='account-engine-field account-form-wide'><label>Publishing location</label><div className='account-engine-picker'><button type='button' className='active' aria-pressed='true' disabled><MonitorCheck size={18} /><span><strong>Companion</strong><small>All uploads and publishing run in visible protected Companion tabs. Chrome, Edge, or Chromium is used only as a login fallback.</small></span></button></div></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
             <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
           </div>
@@ -2345,8 +2345,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
               </button>
-              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with Chrome or Edge, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in Chrome or Edge`}>
-                <ExternalLink size={14} />Chrome
+              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with the system browser, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in the system browser`}>
+                <ExternalLink size={14} />Browser
               </button>
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}

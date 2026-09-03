@@ -1,11 +1,12 @@
 # Desktop Companion and optional Chrome bridge
 
-AgenticThat publishing has two supported access paths:
+AgenticThat publishing has one recommended production flow and an optional
+compatibility path:
 
-1. Recommended: install **AgenticThat Companion** and use the dashboard embedded
-   in the desktop application.
-2. Optional: open the dashboard in Chrome and install the Companion extension,
-   which relays restricted requests to the same loopback service.
+1. Recommended: use the AgenticThat website, Supabase job control, and the paired
+   **AgenticThat Companion** desktop app. No browser extension is required.
+2. Optional compatibility: install the Chrome extension when a legacy local UI
+   must relay restricted requests to Companion's loopback service.
 
 The desktop application owns the persistent local queue, encrypted browser
 profiles, uploaded media, visible publishing browsers, and Instagram/Facebook
@@ -14,20 +15,19 @@ verification codes.
 
 ## Customer setup
 
-1. Download and extract the latest Companion portable ZIP.
-2. Open `AgenticThat Publishing Companion.exe` (the legacy executable name is
-   retained for upgrade compatibility).
-3. Use the embedded AgenticThat workspace and pair this computer from
+1. Download the Windows, macOS, or Linux installer from `/companion/download`.
+2. Install and open **AgenticThat Companion**.
+3. Use the AgenticThat website and pair this computer from
    **Connections → Publishing**.
 4. Add a social account and choose **Login**. X and YouTube open in a dedicated
-   Companion-managed Chrome or Edge profile; other providers open in the
-   embedded browser and can fall back to Chrome/Edge if necessary.
+   Companion-managed Chrome, Edge, or Chromium profile; other providers open in
+   the embedded browser and can fall back to a system browser if necessary.
 5. Complete credentials and verification only on the provider page. Companion
    verifies and protects the resulting local session before using it.
 
-Install the Chrome extension only if the user wants the dashboard in a separate
-browser. The popup can grant one exact self-hosted HTTPS origin; it does not ask
-for unrestricted browsing access.
+Normal website use does not need the Chrome extension. Install it only for the
+legacy local compatibility path. Its popup can grant one exact self-hosted HTTPS
+origin; it does not ask for unrestricted browsing access.
 
 ## Publishing behavior
 

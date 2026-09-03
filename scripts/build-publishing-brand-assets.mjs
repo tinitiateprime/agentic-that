@@ -1,14 +1,20 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import sharp from "sharp";
+
+const execFileAsync = promisify(execFile);
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = path.join(projectRoot, "apps", "publishing-companion-desktop", "assets", "app-icon-1024.png");
 const extensionIconDirectory = path.join(projectRoot, "extensions", "publishing-companion", "icons");
 const desktopAssetDirectory = path.join(projectRoot, "apps", "publishing-companion-desktop", "assets");
 const msixAssetDirectory = path.join(desktopAssetDirectory, "msix");
-const sizes = [16, 32, 48, 64, 128, 256];
+const rasterSizes = [16, 32, 48, 64, 128, 256, 512, 1024];
+const icoSizes = [16, 32, 48, 64, 128, 256];
 
 await Promise.all([
   mkdir(extensionIconDirectory, { recursive: true }),
@@ -18,7 +24,7 @@ await Promise.all([
 const source = await readFile(sourcePath);
 const pngBySize = new Map();
 
-for (const size of sizes) {
+for (const size of rasterSizes) {
   const png = await sharp(source).resize(size, size, { fit: "cover" }).png().toBuffer();
   pngBySize.set(size, png);
   if ([16, 32, 48, 128].includes(size)) {
@@ -31,10 +37,10 @@ await writeFile(path.join(desktopAssetDirectory, "tray-icon.png"), pngBySize.get
 const iconHeader = Buffer.alloc(6);
 iconHeader.writeUInt16LE(0, 0);
 iconHeader.writeUInt16LE(1, 2);
-iconHeader.writeUInt16LE(sizes.length, 4);
+iconHeader.writeUInt16LE(icoSizes.length, 4);
 const entries = [];
-let imageOffset = 6 + sizes.length * 16;
-for (const size of sizes) {
+let imageOffset = 6 + icoSizes.length * 16;
+for (const size of icoSizes) {
   const png = pngBySize.get(size);
   const entry = Buffer.alloc(16);
   entry.writeUInt8(size === 256 ? 0 : size, 0);
@@ -51,8 +57,38 @@ for (const size of sizes) {
 
 await writeFile(
   path.join(desktopAssetDirectory, "app-icon.ico"),
-  Buffer.concat([iconHeader, ...entries, ...sizes.map(size => pngBySize.get(size))]),
+  Buffer.concat([iconHeader, ...entries, ...icoSizes.map(size => pngBySize.get(size))]),
 );
+
+if (process.platform === "darwin") {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "agenticthat-icon-"));
+  const iconsetDirectory = path.join(temporaryRoot, "app-icon.iconset");
+  try {
+    await mkdir(iconsetDirectory, { recursive: true });
+    const iconsetFiles = [
+      ["icon_16x16.png", 16],
+      ["icon_16x16@2x.png", 32],
+      ["icon_32x32.png", 32],
+      ["icon_32x32@2x.png", 64],
+      ["icon_128x128.png", 128],
+      ["icon_128x128@2x.png", 256],
+      ["icon_256x256.png", 256],
+      ["icon_256x256@2x.png", 512],
+      ["icon_512x512.png", 512],
+      ["icon_512x512@2x.png", 1024],
+    ];
+    await Promise.all(iconsetFiles.map(([fileName, size]) => (
+      writeFile(path.join(iconsetDirectory, fileName), pngBySize.get(size))
+    )));
+    await execFileAsync("iconutil", [
+      "--convert", "icns",
+      "--output", path.join(desktopAssetDirectory, "app-icon.icns"),
+      iconsetDirectory,
+    ]);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
 
 const msixAssets = [
   ["icon.png", 50, 50],

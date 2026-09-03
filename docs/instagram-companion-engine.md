@@ -16,7 +16,7 @@ The existing Publishing Companion owns the authenticated loopback API on `127.0.
 - `GET /api/scraping/instagram/jobs/:id` returns product-level progress and the normalized result.
 - `DELETE /api/scraping/instagram/jobs/:id` cancels queued or active work.
 
-Job routes use a short-lived scraping-only bearer session derived from the signed AgenticThat workspace identity and are scoped to the authenticated workspace and user. It is created automatically when Local Companion is selected; publishing permissions still require the separate Operations Manager session. The current Chrome extension transports these loopback requests; it retains only its `http://127.0.0.1:8792/*` host permission and receives no Instagram host permission.
+Job routes use a short-lived scraping-only bearer session derived from the signed AgenticThat workspace identity and are scoped to the authenticated workspace and user. It is created automatically when Local Companion is selected; publishing permissions still require the separate Operations Manager session. In the production website flow, the job is stored in Supabase and claimed directly by the paired Companion. The loopback routes remain internal and diagnostic; the optional Chrome extension can relay them for legacy local use but receives no Instagram host permission.
 
 ## Browser isolation
 

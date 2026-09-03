@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import type { PublishingAccount } from "../../local-storage.js";
@@ -110,7 +111,7 @@ async function waitForDebugEndpoint(port: number, processHandle: ChildProcess, t
     }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error("The external Chrome or Edge window did not become ready. Close any older window for this account and try again.");
+  throw new Error("The external Chrome, Edge, or Chromium window did not become ready. Close any older window for this account and try again.");
 }
 
 function normalizedExternalWorkspace(candidate: ExternalBrowserWorkspaceBounds) {
@@ -176,29 +177,82 @@ export function externalBrowserProfilesRoot() {
   return accountProfilesDir;
 }
 
+export function externalBrowserExecutableCandidates({
+  platform = process.platform,
+  environment = process.env,
+  homeDirectory = os.homedir(),
+}: {
+  platform?: NodeJS.Platform;
+  environment?: NodeJS.ProcessEnv;
+  homeDirectory?: string;
+} = {}) {
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  const configured = [
+    environment.PUBLISH_QUEUE_CHROME_PATH,
+    environment.CHROME_PATH,
+    environment.GOOGLE_CHROME_PATH,
+    environment.MICROSOFT_EDGE_PATH,
+    environment.CHROMIUM_PATH,
+  ].map(value => value?.trim()).filter(Boolean) as string[];
+  const platformCandidates: string[] = [];
+  if (platform === "win32") {
+    const programDirectories = [
+      environment.ProgramFiles,
+      environment["ProgramFiles(x86)"],
+      environment.LOCALAPPDATA || environment.LocalAppData,
+    ].filter(Boolean) as string[];
+    for (const directory of programDirectories) {
+      platformCandidates.push(
+        platformPath.join(directory, "Google", "Chrome", "Application", "chrome.exe"),
+        platformPath.join(directory, "Microsoft", "Edge", "Application", "msedge.exe"),
+        platformPath.join(directory, "Chromium", "Application", "chrome.exe"),
+      );
+    }
+  } else if (platform === "darwin") {
+    for (const applicationsDirectory of ["/Applications", platformPath.join(homeDirectory, "Applications")]) {
+      platformCandidates.push(
+        platformPath.join(applicationsDirectory, "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+        platformPath.join(applicationsDirectory, "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+        platformPath.join(applicationsDirectory, "Chromium.app", "Contents", "MacOS", "Chromium"),
+      );
+    }
+  } else if (platform === "linux") {
+    const binaryNames = [
+      "google-chrome-stable", "google-chrome", "microsoft-edge-stable", "microsoft-edge",
+      "chromium", "chromium-browser",
+    ];
+    const pathDirectories = String(environment.PATH || "").split(":").filter(Boolean);
+    for (const directory of pathDirectories) {
+      for (const binaryName of binaryNames) platformCandidates.push(platformPath.join(directory, binaryName));
+    }
+    platformCandidates.push(
+      "/opt/google/chrome/chrome",
+      "/opt/microsoft/msedge/msedge",
+      "/snap/bin/chromium",
+    );
+  }
+  return [...new Set([...configured, ...platformCandidates])];
+}
+
+function executableFile(candidate: string) {
+  if (!path.isAbsolute(candidate)) return false;
+  try {
+    if (!fs.statSync(candidate).isFile()) return false;
+    if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function detectedExternalBrowserExecutablePath() {
-  const configured = process.env.PUBLISH_QUEUE_CHROME_PATH?.trim()
-    || process.env.CHROME_PATH?.trim()
-    || process.env.GOOGLE_CHROME_PATH?.trim();
-  const candidates = [
-    configured,
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Microsoft", "Edge", "Application", "msedge.exe") : undefined,
-    process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome-stable" : undefined,
-  ].filter(Boolean) as string[];
-  return candidates.find(candidate => path.isAbsolute(candidate) && fs.existsSync(candidate)) ?? null;
+  return externalBrowserExecutableCandidates().find(executableFile) ?? null;
 }
 
 export function externalBrowserExecutablePath() {
   const executablePath = detectedExternalBrowserExecutablePath();
   if (!executablePath) {
-    throw new Error("Google Chrome or Microsoft Edge is required for the External browser engine. Install one, restart Companion, and try again.");
+    throw new Error("Google Chrome, Microsoft Edge, or Chromium is required for the External browser engine. Install one, restart Companion, and try again.");
   }
   return executablePath;
 }
@@ -216,7 +270,9 @@ export async function launchExternalBrowserEngine({
   prepareExternalBrowserProfile(profileDir);
 
   const executablePath = externalBrowserExecutablePath();
-  const browserName = /msedge/i.test(path.basename(executablePath)) ? "Microsoft Edge" : "Google Chrome";
+  const browserName = /edge|msedge/i.test(executablePath)
+    ? "Microsoft Edge"
+    : /chromium/i.test(executablePath) ? "Chromium" : "Google Chrome";
   const port = await getFreePort();
   const activity = desktopHost
     ? await desktopHost.openExternalActivity({

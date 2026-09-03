@@ -16,7 +16,8 @@ kanban
 
   inProgress[In Progress]
     prog1[Production Readiness]
-    prog2[WhatsApp Final Validation]
+    prog2[Companion v2.1 Signing and Live OS Validation]
+    prog3[WhatsApp Final Validation]
 
   testing[Testing]
     test1[Publishing All Platforms]
@@ -35,6 +36,7 @@ kanban
     done8[GitHub Actions Release Pipeline]
     done9[Extension Dependency Removed]
     done10[Invitation System]
+    done11[Companion v2.1 Windows macOS Linux Builds]
 
   future[Future]
     future1[Android Companion]

@@ -22,6 +22,16 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  desktopPlatformDetails,
+  linuxAutostartDesktopEntry,
+  linuxAutostartFilePath,
+} from "./platform-support.js";
+
+const DESKTOP_PLATFORM = desktopPlatformDetails();
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.squirrel.agenticthat_publishing_companion.agenticthat_publishing_companion");
+}
 
 function configuredDashboardUrl() {
   const fallback = "https://agentic-that.netlify.app/publishing";
@@ -124,8 +134,13 @@ function randomSecret(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
 }
 
+function secureStorageAvailable() {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  return process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text";
+}
+
 function encryptedValue(value) {
-  if (safeStorage.isEncryptionAvailable()) {
+  if (secureStorageAvailable()) {
     return { protected: true, value: safeStorage.encryptString(value).toString("base64") };
   }
   return { protected: false, value: Buffer.from(value, "utf8").toString("base64") };
@@ -195,8 +210,8 @@ function loadSettings() {
       const savedSessionKey = parsed.sessionEncryptionKey?.value;
       const sessionEncryptionKeyPlain = savedSessionKey
         ? decryptedValue(parsed.sessionEncryptionKey)
-        : safeStorage.isEncryptionAvailable() ? randomSecret(32) : undefined;
-      const secretsNeedProtection = safeStorage.isEncryptionAvailable()
+        : secureStorageAvailable() ? randomSecret(32) : undefined;
+      const secretsNeedProtection = secureStorageAvailable()
         && (parsed.password.protected !== true || parsed.authSecret.protected !== true || parsed.sessionEncryptionKey?.protected !== true);
       const normalized = {
         ...parsed,
@@ -227,7 +242,7 @@ function loadSettings() {
 
   const passwordPlain = `${randomSecret(9)}!Aa7`;
   const authSecretPlain = randomSecret(48);
-  const sessionEncryptionKeyPlain = safeStorage.isEncryptionAvailable() ? randomSecret(32) : undefined;
+  const sessionEncryptionKeyPlain = secureStorageAvailable() ? randomSecret(32) : undefined;
   const created = {
     version: 1,
     username: "operations.manager",
@@ -339,10 +354,18 @@ function squirrelInstalledBuild() {
     && fs.existsSync(path.resolve(executableDirectory, "..", "Update.exe"));
 }
 
+function automaticUpdateBuild() {
+  if (!app.isPackaged) return false;
+  if (process.platform === "win32") return squirrelInstalledBuild();
+  return process.platform === "darwin";
+}
+
 function configureAutoUpdates() {
-  if (!squirrelInstalledBuild() || process.env.AGENTICTHAT_COMPANION_DISABLE_AUTO_UPDATE === "1") {
+  if (!automaticUpdateBuild() || process.env.AGENTICTHAT_COMPANION_DISABLE_AUTO_UPDATE === "1") {
     setUpdateStatus("unsupported");
-    console.log("Automatic updates are available in the installed Companion; this build will not self-update.");
+    console.log(process.platform === "linux"
+      ? "Companion updates are managed by the installed Linux package or a newly downloaded archive."
+      : "Automatic updates are available in a signed installed Companion; this build will not self-update.");
     return;
   }
   autoUpdater.on("checking-for-update", () => setUpdateStatus("checking"));
@@ -519,10 +542,15 @@ async function serviceStatus() {
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       dataDirectory: path.join(app.getPath("userData"), "publishing-data"),
-      secureLocalStorage: safeStorage.isEncryptionAvailable(),
+      secureLocalStorage: secureStorageAvailable(),
       runtimeState,
       runtimeError,
       updateStatus,
+      platform: process.platform,
+      architecture: process.arch,
+      operatingSystemName: DESKTOP_PLATFORM.name,
+      autoStartLabel: DESKTOP_PLATFORM.autoStartLabel,
+      updateMode: DESKTOP_PLATFORM.updateMode,
     };
   } catch (error) {
     return {
@@ -535,28 +563,59 @@ async function serviceStatus() {
       autoStart: settings.autoStart,
       publishingInteractionConsent: settings.publishingInteractionConsent,
       error: error instanceof Error ? error.message : "The publishing service is unavailable.",
-      secureLocalStorage: safeStorage.isEncryptionAvailable(),
+      secureLocalStorage: secureStorageAvailable(),
       runtimeState,
       runtimeError,
       updateStatus,
+      platform: process.platform,
+      architecture: process.arch,
+      operatingSystemName: DESKTOP_PLATFORM.name,
+      autoStartLabel: DESKTOP_PLATFORM.autoStartLabel,
+      updateMode: DESKTOP_PLATFORM.updateMode,
     };
   }
 }
 
+function applicationIconPath() {
+  return path.join(app.getAppPath(), "assets", process.platform === "win32" ? "app-icon.ico" : "app-icon-1024.png");
+}
+
+function applyLinuxAutoStart(enabled) {
+  const autoStartPath = linuxAutostartFilePath({
+    xdgConfigHome: process.env.XDG_CONFIG_HOME,
+    homeDirectory: app.getPath("home"),
+  });
+  if (!enabled) {
+    fs.rmSync(autoStartPath, { force: true });
+    return;
+  }
+  atomicWriteFileSync(autoStartPath, linuxAutostartDesktopEntry({
+    executablePath: process.execPath,
+    iconPath: applicationIconPath(),
+  }));
+}
+
 function saveAutoStart(enabled) {
+  if (app.isPackaged && process.env.AGENTICTHAT_COMPANION_DISABLE_AUTOSTART !== "1") {
+    if (process.platform === "linux") {
+      applyLinuxAutoStart(enabled);
+    } else if (process.platform === "darwin") {
+      app.setLoginItemSettings({ openAtLogin: enabled, type: "mainAppService" });
+    } else if (process.platform === "win32") {
+      const installedLauncher = squirrelInstalledBuild()
+        ? path.resolve(path.dirname(process.execPath), "..", path.basename(process.execPath))
+        : process.execPath;
+      app.setLoginItemSettings({
+        openAtLogin: enabled,
+        enabled,
+        path: installedLauncher,
+        args: ["--hidden"],
+      });
+    }
+  }
   settings.autoStart = enabled;
   writeSettings();
-  if (app.isPackaged && process.env.AGENTICTHAT_COMPANION_DISABLE_AUTOSTART !== "1") {
-    const installedLauncher = squirrelInstalledBuild()
-      ? path.resolve(path.dirname(process.execPath), "..", path.basename(process.execPath))
-      : process.execPath;
-    app.setLoginItemSettings({
-      openAtLogin: enabled,
-      enabled,
-      path: installedLauncher,
-      args: ["--hidden"],
-    });
-  }
+  return settings.autoStart;
 }
 
 function safeBounds(value) {
@@ -1300,7 +1359,7 @@ function createWindow() {
     minHeight: 680,
     show: false,
     title: "AgenticThat Companion",
-    icon: path.join(app.getAppPath(), "assets", "app-icon.ico"),
+    icon: applicationIconPath(),
     backgroundColor: "#f4f6f9",
     webPreferences: {
       contextIsolation: true,
@@ -1313,14 +1372,18 @@ function createWindow() {
   mainWindow.removeMenu();
   void mainWindow.loadFile(path.join(app.getAppPath(), "control.html"));
   mainWindow.once("ready-to-show", () => {
-    // Normal launches open the complete workspace. Windows startup uses
-    // --hidden so the background engine remains unobtrusive.
-    if (!process.argv.includes("--hidden")) mainWindow.show();
+    const openedAtMacLogin = process.platform === "darwin" && app.getLoginItemSettings().wasOpenedAtLogin;
+    // Login-start launches remain unobtrusive on every supported desktop OS.
+    if (!process.argv.includes("--hidden") && !openedAtMacLogin) mainWindow.show();
   });
   mainWindow.on("close", event => {
     if (quitting) return;
-    event.preventDefault();
-    mainWindow.hide();
+    if (tray) {
+      event.preventDefault();
+      mainWindow.hide();
+    } else {
+      quitting = true;
+    }
   });
   mainWindow.on("closed", () => {
     dashboardView = null;
@@ -1338,8 +1401,22 @@ function createWindow() {
 }
 
 function createTray() {
-  const trayImage = nativeImage.createFromPath(path.join(app.getAppPath(), "assets", "tray-icon.png"));
-  tray = new Tray(trayImage);
+  const trayImage = nativeImage
+    .createFromPath(path.join(app.getAppPath(), "assets", "tray-icon.png"))
+    .resize({ width: process.platform === "darwin" ? 18 : 24, height: process.platform === "darwin" ? 18 : 24 });
+  if (process.platform === "darwin") trayImage.setTemplateImage(true);
+  try {
+    tray = new Tray(trayImage);
+  } catch (error) {
+    tray = null;
+    console.warn("The desktop environment does not provide a system tray; Companion will remain available in its main window.", error);
+    const revealWithoutTray = () => {
+      if (!quitting && mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+    };
+    if (mainWindow?.webContents.isLoading()) mainWindow.once("ready-to-show", revealWithoutTray);
+    else revealWithoutTray();
+    return false;
+  }
   tray.setToolTip("AgenticThat Companion");
   const rebuildMenu = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open AgenticThat Companion", click: () => showCompanion("activity") },
@@ -1354,11 +1431,16 @@ function createTray() {
     { label: "Emergency stop all activity", click: () => void emergencyStop() },
     { type: "separator" },
     {
-      label: "Start with Windows",
+      label: DESKTOP_PLATFORM.autoStartLabel,
       type: "checkbox",
       checked: settings.autoStart,
       click: item => {
-        saveAutoStart(item.checked);
+        try {
+          saveAutoStart(item.checked);
+        } catch (error) {
+          item.checked = settings.autoStart;
+          console.warn("Could not update Companion login startup:", error instanceof Error ? error.message : error);
+        }
         rebuildMenu();
       },
     },
@@ -1371,6 +1453,7 @@ function createTray() {
   rebuildTrayMenu = rebuildMenu;
   rebuildMenu();
   tray.on("double-click", () => showCompanion(scrapingWorkCount() > 0 ? "scraping" : "activity"));
+  return true;
 }
 
 function safeProxyPath(value) {
@@ -1505,12 +1588,17 @@ if (started || !ownsSingleInstanceLock) {
   ));
 
   app.whenReady().then(async () => {
-    if (app.isPackaged && !safeStorage.isEncryptionAvailable()) {
+    if (app.isPackaged && !secureStorageAvailable()) {
+      const detail = process.platform === "linux"
+        ? "Install and unlock GNOME Keyring/libsecret or KWallet, then start Companion again. Companion refuses Linux's basic-text fallback."
+        : process.platform === "darwin"
+          ? "Unlock macOS Keychain and try again. A signed Companion build is required for consistent Keychain access."
+          : "Restart Windows and try again.";
       await dialog.showMessageBox({
         type: "error",
         title: "Secure storage is unavailable",
         message: "AgenticThat Companion cannot start without operating-system encryption.",
-        detail: "Restart Windows and try again. Companion will not store workspace or social-session secrets as plain text.",
+        detail: `${detail} Companion will not store workspace or social-session secrets as plain text.`,
         buttons: ["Close"],
       });
       app.quit();
@@ -1524,7 +1612,11 @@ if (started || !ownsSingleInstanceLock) {
     createWindow();
     installPublishingDesktopHost();
     createTray();
-    saveAutoStart(settings.autoStart);
+    try {
+      saveAutoStart(settings.autoStart);
+    } catch (error) {
+      console.warn("Could not configure Companion login startup:", error instanceof Error ? error.message : error);
+    }
     try {
       await configureServiceTokenVerifier();
       await desktopDebugEndpoint();

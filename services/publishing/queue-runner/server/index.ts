@@ -2283,7 +2283,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
     assertCentralPlatformAccess(req, existing.platform, "configure");
     const { surface } = manualLoginRequestSchema.parse(req.body ?? {});
     const { account, started, surface: activeSurface } = await startManualAccountSession(accountId, surface);
-    const surfaceLabel = activeSurface === "embedded" ? "Companion" : "Chrome or Edge";
+    const surfaceLabel = activeSurface === "embedded" ? "Companion" : "Chrome, Edge, or Chromium";
     await logActivity(
       user.id,
       started ? "account.manual_login_started" : "account.manual_login_already_running",
@@ -2298,7 +2298,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       message: started
         ? activeSurface === "embedded"
           ? "Secure login opened inside Companion. Complete sign-in there; Companion will detect success, protect the local account session, and close the login pane automatically."
-          : "Secure login opened in Chrome or Edge. Complete sign-in there; Companion will transfer it into the embedded browser when the provider permits, or retain the protected Companion-managed Chrome profile when the provider binds the session to Chrome."
+          : "Secure login opened in Chrome, Edge, or Chromium. Complete sign-in there; Companion will transfer it into the embedded browser when the provider permits, or retain the protected Companion-managed browser profile when the provider binds the session to that browser."
         : "Manual login is already running for this account.",
       started,
       surface: activeSurface,

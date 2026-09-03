@@ -296,7 +296,7 @@ async function launchAccountBrowser(
   if (selectedEngine === "companion") {
     if (!desktopHost) {
       releaseAccount();
-      throw new Error("Publishing requires the Publishing Companion desktop app. Open Companion and try again; Chrome or Edge is available only as a login fallback.");
+      throw new Error("Publishing requires the Publishing Companion desktop app. Open Companion and try again; Chrome, Edge, or Chromium is available only as a login fallback.");
     }
     return launchCompanionEngineBrowser({
       account,
@@ -522,7 +522,7 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   try {
     await externalBrowser.update({
       state: "waiting",
-      detail: `Complete ${account.platform} login in Chrome or Edge. Companion will transfer and verify the session before saving it.`,
+      detail: `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will transfer and verify the session before saving it.`,
     });
     await loginOnly(externalBrowser.page, account, { ignoreLoginErrors: true });
     await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);

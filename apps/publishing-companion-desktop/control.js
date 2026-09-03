@@ -176,7 +176,7 @@ function createLiveCard(session) {
   const detail = document.createElement("small");
   detail.textContent = session.activity?.detail
     || (session.engine === "external_browser"
-      ? session.purpose === "login" ? "The dedicated Chrome or Edge login window is active." : "Companion is publishing through the provider-bound protected Chrome profile."
+      ? session.purpose === "login" ? "The dedicated Chrome, Edge, or Chromium login window is active." : "Companion is publishing through the provider-bound protected browser profile."
       : session.purpose === "login" ? "Complete login in this pane." : "Preparing the publishing page.");
   identity.append(purpose, name, detail);
 
@@ -234,8 +234,8 @@ function createLiveCard(session) {
       : layout ? `Window ${layout.index} of ${layout.total}` : "Arranging browser window";
     const externalDetail = document.createElement("small");
     externalDetail.textContent = layout
-      ? `Row ${layout.row}, ${layout.centered ? "centered" : `column ${layout.column}`} - dedicated Chrome or Edge profile`
-      : session.purpose === "login" ? "Preparing a dedicated Chrome or Edge profile." : "Preparing the protected Companion-managed Chrome profile.";
+      ? `Row ${layout.row}, ${layout.centered ? "centered" : `column ${layout.column}`} - dedicated browser profile`
+      : session.purpose === "login" ? "Preparing a dedicated Chrome, Edge, or Chromium profile." : "Preparing the protected Companion-managed browser profile.";
     const focusWindow = document.createElement("button");
     focusWindow.type = "button";
     focusWindow.className = "external-focus-window";
@@ -307,7 +307,7 @@ function renderWorkspace() {
     : "Login and publishing activity";
   byId("live-description").textContent = active.length
     ? externalLoginSessions.length
-      ? "External Chrome or Edge windows are fitted into a two-column workspace while Companion keeps every account and status together."
+      ? "External Chrome, Edge, or Chromium windows are fitted into a two-column workspace while Companion keeps every account and status together."
       : externalSessions.length
         ? "Provider-bound publishing stays controlled by Companion and appears here as a secure local live preview."
       : "Every active Companion browser remains visible in the live workspace."
@@ -500,10 +500,11 @@ function renderStatus(status) {
   currentStatus = status;
   byId("version").textContent = status.version;
   byId("auto-start").checked = status.autoStart;
+  byId("auto-start-label").textContent = status.autoStartLabel || "Start automatically when I log in";
   byId("service-check").textContent = status.connected ? "Connected" : "Offline";
   byId("browser-check").textContent = status.embeddedBrowser
     ? status.chromeInstalled ? "Companion + Chrome fallback" : "Companion browser"
-    : status.chromeInstalled ? "Chrome or Edge" : "Install Chrome/Edge";
+    : status.chromeInstalled ? "Chrome, Edge, or Chromium" : "Install Chrome/Edge/Chromium";
   byId("scheduler-check").textContent = status.connected ? "Ready" : "Stopped";
   const controlPlane = status.controlPlane || {};
   byId("heartbeat-check").textContent = !status.paired

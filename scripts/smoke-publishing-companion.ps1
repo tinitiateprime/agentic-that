@@ -270,12 +270,16 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
     Origin = $productionOrigin
     "Access-Control-Request-Method" = "GET"
     "Access-Control-Request-Headers" = "authorization,content-type"
+    "Access-Control-Request-Private-Network" = "true"
   } -TimeoutSec 5
   if ($preflight.StatusCode -ne 204) {
     throw "The production dashboard CORS preflight returned $($preflight.StatusCode)."
   }
   if ($preflight.Headers["Access-Control-Allow-Origin"] -ne $productionOrigin) {
     throw "The packaged companion does not allow the production dashboard origin."
+  }
+  if ($preflight.Headers["Access-Control-Allow-Private-Network"] -ne "true") {
+    throw "The packaged companion does not allow extension-free private-network pairing from the website."
   }
 
   if (-not (Test-Path -LiteralPath (Join-Path $smokeRoot "companion-settings.json"))) {

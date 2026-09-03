@@ -25,7 +25,11 @@ The console is served at `/scraper/facebook`. The Server engine uses:
 2. `POST /api/scraping/facebook/jobs/:id/run`
 3. `GET /api/scraping/facebook/jobs/:id`
 
-The Local Companion exposes the same job shape on `127.0.0.1:8792`, transported through the existing Companion extension with a Facebook-scraping-only bearer session.
+The production website stores the same job shape in Supabase, where the paired
+Companion claims it with a token-scoped Facebook-scraping session. Companion
+also exposes a loopback-only API on `127.0.0.1:8792` for its own UI and local
+diagnostics. The optional browser extension can relay that local API for legacy
+use, but is not required by the website flow.
 
 ## Development
 

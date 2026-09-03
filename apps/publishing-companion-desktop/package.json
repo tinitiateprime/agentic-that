@@ -1,7 +1,7 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Companion",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Secure desktop execution engine for AgenticThat publishing, sessions, and scraping",
   "author": "AgenticThat",
   "repository": "https://github.com/tinitiateprime/agentic-that",
@@ -10,11 +10,17 @@
   "main": "main.js",
   "scripts": {
     "prepare-runtime": "node ../../scripts/build-publishing-companion-runtime.mjs",
+    "prepare-assets": "node ../../scripts/build-publishing-brand-assets.mjs",
+    "prepare-app": "npm run prepare-runtime && npm run prepare-assets && npm run prepare-forge",
     "start": "npm run prepare-runtime && electron-forge start",
     "prepare-forge": "node scripts/patch-forge-packager-v20.cjs",
-    "package": "npm run prepare-runtime && npm run prepare-forge && electron-forge package --platform=win32 --arch=x64",
-    "make": "npm run prepare-runtime && npm run prepare-forge && electron-forge make --platform=win32 --arch=x64",
-    "make:store": "npm run prepare-runtime && npm run prepare-forge && electron-forge make --platform=win32 --arch=x64 --targets @electron-forge/maker-msix"
+    "package": "npm run prepare-app && electron-forge package",
+    "make": "npm run prepare-app && electron-forge make",
+    "make:windows": "npm run prepare-app && electron-forge make --platform=win32 --arch=x64",
+    "make:macos": "npm run prepare-app && electron-forge make --platform=darwin --arch=universal",
+    "make:linux": "npm run prepare-app && electron-forge make --platform=linux",
+    "make:store": "npm run prepare-app && electron-forge make --platform=win32 --arch=x64 --targets @electron-forge/maker-msix",
+    "test:platform": "node --test platform-support.test.js"
   },
   "dependencies": {
     "electron-squirrel-startup": "1.0.1",
@@ -23,7 +29,10 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-deb": "7.11.2",
+    "@electron-forge/maker-dmg": "7.11.2",
     "@electron-forge/maker-msix": "7.11.2",
+    "@electron-forge/maker-rpm": "7.11.2",
     "@electron-forge/maker-squirrel": "7.11.2",
     "@electron-forge/maker-zip": "7.11.2",
     "electron": "43.1.1"
