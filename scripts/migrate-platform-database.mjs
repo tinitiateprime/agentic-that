@@ -13,11 +13,13 @@ const { getPlatformSql } = await import("../src/platform/server/auth-store.js");
 const sql = await getPlatformSql();
 
 try {
-  const jobControlMigration = await readFile(
-    new URL("../supabase/migrations/202609020001_companion_job_control.sql", import.meta.url),
-    "utf8",
-  );
-  await sql.unsafe(jobControlMigration);
+  const jobControlMigrations = [
+    "../supabase/migrations/202609020001_companion_job_control.sql",
+    "../supabase/migrations/202609030001_external_browser_session_status.sql",
+  ];
+  for (const migrationPath of jobControlMigrations) {
+    await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
+  }
   const [documentRelation] = await sql`SELECT to_regclass('agentic_that.app_document_store') AS relation`;
   if (documentRelation?.relation) {
     const [legacy] = await sql`
@@ -47,9 +49,11 @@ try {
       to_regclass('public.rbac_roles') IS NOT NULL AS roles_ready,
       to_regclass('public.companion_devices') IS NOT NULL AS companion_devices_ready,
       to_regclass('public.jobs') IS NOT NULL AS jobs_ready,
-      to_regprocedure('public.companion_claim_jobs(text,text,integer)') IS NOT NULL AS companion_rpc_ready`;
+      to_regprocedure('public.companion_claim_jobs(text,text,integer)') IS NOT NULL AS companion_rpc_ready,
+      (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   if (!status?.platform_users_ready || !status?.memberships_ready || !status?.roles_ready
-      || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready) {
+      || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready
+      || status?.minimum_companion_version !== "2.1.2") {
     throw new Error("The platform database migration did not create every required table.");
   }
   process.stdout.write("Platform and Companion job-control database migrations are ready.\n");

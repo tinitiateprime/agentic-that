@@ -12,7 +12,20 @@ type ManualLoginSurfaceInput = {
   embeddedBrowserAvailable: boolean;
 };
 
-const externalLoginFirstPlatforms = new Set<Platform>(["x", "youtube"]);
+const externalBrowserRequiredPlatforms = new Set<Platform>(["x", "youtube"]);
+
+export function platformRequiresExternalBrowser(platform: Platform) {
+  return externalBrowserRequiredPlatforms.has(platform);
+}
+
+export function publishingEngineForPlatform(
+  platform: Platform,
+  requestedEngine: PublishingEngine = "companion",
+): PublishingEngine {
+  return platformRequiresExternalBrowser(platform) || requestedEngine === "external_browser"
+    ? "external_browser"
+    : "companion";
+}
 
 export function selectManualLoginSurface({
   platform,
@@ -22,13 +35,13 @@ export function selectManualLoginSurface({
   externalProfilePresent,
   embeddedBrowserAvailable,
 }: ManualLoginSurfaceInput): ManualLoginSurface {
+  // X and Google deliberately block or distrust embedded sign-in surfaces.
+  // Never offer an embedded override: the dedicated browser profile is the
+  // durable account session used for both login and publishing.
+  if (platformRequiresExternalBrowser(platform)) return "external";
   if (requestedSurface === "external") return "external";
   if (requestedSurface === "embedded") return embeddedBrowserAvailable ? "embedded" : "external";
   if (!embeddedBrowserAvailable) return "external";
-
-  // Google and X reject embedded sign-in frequently. Start their normal login
-  // flow in a dedicated Chrome/Edge profile owned and verified by Companion.
-  if (externalLoginFirstPlatforms.has(platform)) return "external";
 
   // Continue provider-bound and incomplete external sessions in the same
   // isolated profile instead of opening a fresh embedded partition.

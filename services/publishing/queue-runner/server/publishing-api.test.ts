@@ -111,6 +111,19 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   assert.equal(account.safetyMode, "protected");
   assert.equal(account.twoFactorEnabled, false);
 
+  const youtubeAccountResponse = await api("/api/platforms/youtube/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: "YouTube test account",
+      handle: "@agenticthat-video-test",
+      enabled: true,
+      executionEngine: "companion",
+    }),
+  });
+  assert.equal(youtubeAccountResponse.status, 201);
+  const youtubeAccount = await youtubeAccountResponse.json() as { executionEngine?: string };
+  assert.equal(youtubeAccount.executionEngine, "external_browser");
+
   const importedAccountResponse = await api("/api/companion/accounts/import", {
     method: "POST",
     body: JSON.stringify({ account: { ...account, platform: "facebook", companionId: "stale-central-companion", displayName: "Facebook test account", handle: "@agenticthat-test", loginIdentifier: "", credentialConfigured: false, enabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }),
@@ -152,12 +165,13 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   assert.equal(resumeResponse.status, 200);
   const resumedAccount = await resumeResponse.json() as { enabled: boolean; credentialConfigured: boolean; executionEngine?: string; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
   assert.equal(resumedAccount.enabled, true);
-  assert.equal(resumedAccount.executionEngine, "companion");
-  assert.equal(resumedAccount.credentialConfigured, true);
+  assert.equal(resumedAccount.executionEngine, "external_browser");
+  assert.equal(resumedAccount.credentialConfigured, false);
   assert.equal(resumedAccount.safetyStatus, "healthy");
   assert.equal(resumedAccount.safetyReason, undefined);
   assert.equal(resumedAccount.safetyMode, "standard");
   assert.equal(resumedAccount.twoFactorEnabled, true);
+  await updatePlatformAccountCredentialState(account.id, true);
 
   const unsafeLinkResponse = await api("/api/posts/unified/text", {
     method: "POST",

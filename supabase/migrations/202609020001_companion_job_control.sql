@@ -172,7 +172,7 @@ create table if not exists public.job_control_settings (
 );
 
 insert into public.job_control_settings(key, value)
-values ('minimum_companion_version', '2.0.0')
+values ('minimum_companion_version', '2.1.2')
 on conflict (key) do nothing;
 
 alter table public.companion_pairing_challenges enable row level security;
@@ -384,7 +384,11 @@ begin
         case when coalesce((account->>'credentialConfigured')::boolean, false) then 'connected' else 'reconnect_required' end,
         left(coalesce(nullif(account->>'safetyStatus', ''), 'healthy'), 60),
         jsonb_build_object(
-          'executionEngine', 'companion',
+          'executionEngine', case
+            when account->>'platform' in ('x', 'youtube') or account->>'executionEngine' = 'external_browser'
+              then 'external_browser'
+            else 'companion'
+          end,
           'safetyMode', coalesce(account->>'safetyMode', ''),
           'twoFactorEnabled', coalesce((account->>'twoFactorEnabled')::boolean, false)
         )

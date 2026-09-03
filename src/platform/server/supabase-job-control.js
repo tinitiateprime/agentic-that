@@ -24,6 +24,12 @@ function safeText(value, maximum = 500) {
   return String(value || "").trim().slice(0, maximum);
 }
 
+function publishingEngineForPlatform(platform, requestedEngine = "companion") {
+  return platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
+    ? "external_browser"
+    : "companion";
+}
+
 function camelJob(row) {
   if (!row) return null;
   return {
@@ -76,7 +82,7 @@ function camelAccount(row, companion) {
     safetyStatus: readiness === "reconnect_required" ? "restricted" : row.safety_status,
     readiness,
     companionStatus,
-    executionEngine: "companion",
+    executionEngine: publishingEngineForPlatform(row.platform, row.metadata?.executionEngine),
     metadata: row.metadata || {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -98,7 +104,7 @@ function versionAtLeast(value, minimum) {
   return true;
 }
 
-function publicDevice(row, minimumVersion = "2.0.0") {
+function publicDevice(row, minimumVersion = "2.1.2") {
   if (!row) return null;
   const seenAt = Date.parse(row.last_seen_at || "");
   const online = !row.revoked_at && Number.isFinite(seenAt) && Date.now() - seenAt < COMPANION_ONLINE_MS;
@@ -133,7 +139,7 @@ function publicDevice(row, minimumVersion = "2.0.0") {
 
 async function minimumVersion(sql) {
   const [row] = await sql`SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'`;
-  return row?.value || "2.0.0";
+  return row?.value || "2.1.2";
 }
 
 export function supabasePublicConfiguration() {
@@ -327,12 +333,22 @@ export async function upsertSupabaseAccount(account) {
       ${account.displayName}, ${account.handle || ""}, ${account.loginIdentifier || ""},
       ${account.enabled !== false}, ${Boolean(account.credentialConfigured)},
       ${account.credentialConfigured ? "connected" : "reconnect_required"}, ${account.safetyStatus || "healthy"},
-      ${sql.json({ executionEngine: "companion" })}, ${account.createdAt || new Date().toISOString()}, now()
+      ${sql.json({ executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine) })}, ${account.createdAt || new Date().toISOString()}, now()
     ) ON CONFLICT (id) DO UPDATE SET
       companion_device_id = coalesce(EXCLUDED.companion_device_id, public.social_accounts.companion_device_id),
       display_name = EXCLUDED.display_name, handle = EXCLUDED.handle,
       login_identifier = EXCLUDED.login_identifier, enabled = EXCLUDED.enabled,
-      safety_status = EXCLUDED.safety_status, updated_at = now()
+      credential_configured = CASE
+        WHEN public.social_accounts.metadata->>'executionEngine' IS DISTINCT FROM EXCLUDED.metadata->>'executionEngine' THEN false
+        ELSE public.social_accounts.credential_configured
+      END,
+      session_status = CASE
+        WHEN public.social_accounts.metadata->>'executionEngine' IS DISTINCT FROM EXCLUDED.metadata->>'executionEngine' THEN 'reconnect_required'
+        ELSE public.social_accounts.session_status
+      END,
+      safety_status = EXCLUDED.safety_status,
+      metadata = coalesce(public.social_accounts.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+      updated_at = now()
     WHERE public.social_accounts.workspace_id = EXCLUDED.workspace_id
     RETURNING *`;
   return camelAccount(row, companion);
@@ -488,6 +504,7 @@ export const supabaseJobControlTestHelpers = {
   camelAccount,
   camelJob,
   publicDevice,
+  publishingEngineForPlatform,
   supabaseApiHeaders,
   versionAtLeast,
 };

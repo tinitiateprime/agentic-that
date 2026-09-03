@@ -49,10 +49,13 @@ import {
 } from "../engines/external-browser/index.js";
 import type { PublishingBrowserSession } from "../engines/types.js";
 import {
+  platformRequiresExternalBrowser,
+  publishingEngineForPlatform,
   selectManualLoginSurface,
   type ManualLoginRequest,
   type ManualLoginSurface,
 } from "./login-surface.js";
+import { requestCentralWorkspaceSync } from "../central-sync.js";
 
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
 const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
@@ -121,11 +124,14 @@ function markManagedChromeSession(account: PublishingAccount) {
   })}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
-function accountEngine(account: PublishingAccount): PublishingEngine {
+export function resolvedAccountEngine(account: PublishingAccount): PublishingEngine {
+  const configuredEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
   // Some providers bind a successful login to the Chrome profile that created
-  // it. Companion first tries its embedded partition; this protected profile is
-  // the reliable local fallback when the provider rejects a state transfer.
-  return hasManagedChromeSession(account) ? "external_browser" : "companion";
+  // it. X and YouTube always keep that profile; other providers use it when a
+  // session transfer is rejected or the external engine was explicitly chosen.
+  return configuredEngine === "external_browser" || hasManagedChromeSession(account)
+    ? "external_browser"
+    : "companion";
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
@@ -250,7 +256,15 @@ export async function reconcileSavedAccountSessions() {
     console.log(`Bound ${binding.rebound} publishing account(s) to this Companion instance.`);
   }
   const accounts = await listPlatformAccounts();
-  accounts.forEach(migrateLegacyAccountSessionState);
+  for (const account of accounts) {
+    migrateLegacyAccountSessionState(account);
+    // Older releases could transfer an X/YouTube login into Electron and then
+    // delete the external profile. Request one clean reconnect instead of
+    // claiming that a missing provider-safe profile is ready.
+    if (platformRequiresExternalBrowser(account.platform) && !hasManagedChromeSession(account)) {
+      await updatePlatformAccountCredentialState(account.id, false);
+    }
+  }
 }
 
 export function publishingBrowserRuntimeHealth() {
@@ -289,7 +303,7 @@ function reserveAccountBrowser(account: PublishingAccount, purpose: DesktopBrows
 async function launchAccountBrowser(
   account: PublishingAccount,
   purpose: DesktopBrowserPurpose,
-  selectedEngine: PublishingEngine = accountEngine(account),
+  selectedEngine: PublishingEngine = resolvedAccountEngine(account),
 ): Promise<PublishingBrowserSession> {
   const releaseAccount = reserveAccountBrowser(account, purpose);
   const desktopHost = publishingDesktopHost();
@@ -522,7 +536,9 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
   try {
     await externalBrowser.update({
       state: "waiting",
-      detail: `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will transfer and verify the session before saving it.`,
+      detail: resolvedAccountEngine(account) === "external_browser"
+        ? `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will retain and restart-check this dedicated browser profile.`
+        : `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will transfer and verify the session before saving it.`,
     });
     await loginOnly(externalBrowser.page, account, { ignoreLoginErrors: true });
     await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
@@ -545,6 +561,14 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
 
   if (exportError) {
     await verifyManagedExternalSession(account, exportError);
+    return;
+  }
+
+  // X, YouTube, explicitly external accounts, and provider-bound fallbacks use
+  // the exact persistent browser profile that authenticated. Moving cookies to
+  // Electron can invalidate device-bound Google/X sessions.
+  if (resolvedAccountEngine(account) === "external_browser") {
+    await verifyManagedExternalSession(account);
     return;
   }
 
@@ -910,7 +934,7 @@ export async function startManualAccountSession(
   const surface = selectManualLoginSurface({
     platform: account.platform,
     requestedSurface,
-    activeEngine: accountEngine(account),
+    activeEngine: resolvedAccountEngine(account),
     credentialConfigured: account.credentialConfigured,
     externalProfilePresent: hasExternalAccountProfile(account),
     embeddedBrowserAvailable: Boolean(publishingDesktopHost()),
@@ -932,6 +956,9 @@ export async function startManualAccountSession(
       if (requeued.length > 0) {
         console.log(`Requeued ${requeued.length} post(s) after the Companion login was verified.`);
       }
+      await requestCentralWorkspaceSync().catch(error => {
+        console.warn("The login was saved locally; central account status will retry on the next heartbeat:", errorMessage(error));
+      });
     })
     .catch(async error => {
       if (surface === "external") {
@@ -941,6 +968,7 @@ export async function startManualAccountSession(
         clearSavedAccountSession(account);
       }
       await updatePlatformAccountCredentialState(account.id, hasManagedChromeSession(account)).catch(() => undefined);
+      await requestCentralWorkspaceSync().catch(() => undefined);
       console.error(
         `Manual session preparation failed for ${account.platform} account ${account.handle}:`,
         errorMessage(error),

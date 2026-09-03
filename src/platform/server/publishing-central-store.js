@@ -24,14 +24,16 @@ const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.0.0";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.2";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
 
-function companionPublishingEngine() {
-  return "companion";
+function companionPublishingEngine(platformName, requestedEngine = "companion") {
+  return platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
+    ? "external_browser"
+    : "companion";
 }
 
 function now() {
@@ -76,7 +78,7 @@ function documentValue(value) {
   }
   empty.accounts = empty.accounts.map((account) => ({
     ...account,
-    executionEngine: companionPublishingEngine(),
+    executionEngine: companionPublishingEngine(account.platform, account.executionEngine),
   }));
   return empty;
 }
@@ -592,14 +594,15 @@ export async function heartbeatCentralCompanion(token, input = {}) {
           id: incoming.id || id("account"), workspaceId: companion.workspaceId, platform: incoming.platform,
           displayName: incoming.displayName || incoming.handle || incoming.platform, handle: incoming.handle || "",
           loginIdentifier: incoming.loginIdentifier || "", credentialConfigured: Boolean(incoming.credentialConfigured),
-          enabled: incoming.enabled !== false, executionEngine: companionPublishingEngine(),
+          enabled: incoming.enabled !== false,
+          executionEngine: companionPublishingEngine(incoming.platform, incoming.executionEngine),
           companionId: companion.id, safetyStatus: incoming.safetyStatus || "healthy", createdAt: timestamp, updatedAt: timestamp,
         };
         document.accounts.push(account);
       } else {
         account.credentialConfigured = Boolean(incoming.credentialConfigured);
         account.enabled = incoming.enabled !== false;
-        account.executionEngine = companionPublishingEngine();
+        account.executionEngine = companionPublishingEngine(incoming.platform, incoming.executionEngine);
         account.safetyStatus = incoming.safetyStatus || account.safetyStatus || "healthy";
         account.companionId = companion.id;
         account.updatedAt = timestamp;
@@ -630,7 +633,7 @@ export async function createCentralAccount(principal, platformName, input = {}) 
       displayName: String(input.displayName || handle).trim().slice(0, 120) || handle,
       handle, loginIdentifier: String(input.loginIdentifier || "").trim().slice(0, 160),
       credentialConfigured: false, enabled: input.enabled !== false,
-      executionEngine: companionPublishingEngine(), safetyStatus: "healthy",
+      executionEngine: companionPublishingEngine(selectedPlatform, input.executionEngine), safetyStatus: "healthy",
       companionId: companion?.id || null, createdAt: timestamp, updatedAt: timestamp,
     };
     document.accounts.push(account);
@@ -648,7 +651,9 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
     for (const key of ["displayName", "handle", "loginIdentifier", "enabled"]) {
       if (input[key] !== undefined) account[key] = key === "enabled" ? Boolean(input[key]) : String(input[key]).trim();
     }
-    account.executionEngine = companionPublishingEngine();
+    const executionEngine = companionPublishingEngine(account.platform, input.executionEngine ?? account.executionEngine);
+    if (executionEngine !== account.executionEngine) account.credentialConfigured = false;
+    account.executionEngine = executionEngine;
     account.updatedAt = now();
     return { document, result: publicAccount(document, account) };
   });

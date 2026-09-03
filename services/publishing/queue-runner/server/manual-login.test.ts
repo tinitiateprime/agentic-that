@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "playwright-core";
-import { selectManualLoginSurface } from "./services/login-surface.js";
+import { publishingEngineForPlatform, selectManualLoginSurface } from "./services/login-surface.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification } from "./services/publishers/manual-login.js";
 
 test("normal X and YouTube login opens in external Chrome or Edge", () => {
@@ -41,7 +41,7 @@ test("normal reconnect preserves a provider-bound managed Chrome session", () =>
   }), "external");
 });
 
-test("explicit embedded login remains available when Companion supports it", () => {
+test("X and YouTube cannot be forced into an embedded login surface", () => {
   assert.equal(selectManualLoginSurface({
     platform: "youtube",
     requestedSurface: "embedded",
@@ -49,7 +49,14 @@ test("explicit embedded login remains available when Companion supports it", () 
     credentialConfigured: false,
     externalProfilePresent: false,
     embeddedBrowserAvailable: true,
-  }), "embedded");
+  }), "external");
+});
+
+test("X and YouTube always use the persistent external publishing engine", () => {
+  assert.equal(publishingEngineForPlatform("x", "companion"), "external_browser");
+  assert.equal(publishingEngineForPlatform("youtube", "companion"), "external_browser");
+  assert.equal(publishingEngineForPlatform("instagram", "companion"), "companion");
+  assert.equal(publishingEngineForPlatform("instagram", "external_browser"), "external_browser");
 });
 
 test("manual login reports a closed browser with a useful retry message", async () => {

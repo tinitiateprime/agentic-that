@@ -37,6 +37,7 @@ kanban
     done9[Extension Dependency Removed]
     done10[Invitation System]
     done11[Companion v2.1 Windows macOS Linux Builds]
+    done12[Companion v2.1.2 Account Sync and Persistent X YouTube Sessions]
 
   future[Future]
     future1[Android Companion]

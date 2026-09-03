@@ -60,6 +60,7 @@ const publishingEngineLabels = {
   companion: "Companion",
   external_browser: "External browser"
 };
+const externalBrowserRequiredPlatforms = new Set(["x", "youtube"]);
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
   telegram: "Telegram",
@@ -321,14 +322,30 @@ export default function ConfigManager({
     }
   }, [publishingIdentityToken]);
 
+  const refreshPublishingAccounts = useCallback(async () => {
+    const token = publishingIdentityToken || publishingSession?.token;
+    if (!token) return;
+    try {
+      const accounts = await publishingRequest("/api/accounts", token);
+      const accountList = Array.isArray(accounts) ? accounts : [];
+      setPublishingAccounts(accountList);
+      rememberPublishingAccounts(accountList);
+    } catch (error) {
+      if (error.status === 401) setPublishingStatus("needs-login");
+    }
+  }, [publishingIdentityToken, publishingSession?.token]);
+
   useEffect(() => {
     void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion()]);
   }, [connectPublishing, loadTelegram, loadWorkspaceCompanion]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void loadWorkspaceCompanion(), 10_000);
+    const timer = window.setInterval(() => {
+      void loadWorkspaceCompanion();
+      void refreshPublishingAccounts();
+    }, 3_000);
     return () => window.clearInterval(timer);
-  }, [loadWorkspaceCompanion]);
+  }, [loadWorkspaceCompanion, refreshPublishingAccounts]);
 
   const connectedCount = telegramAccounts.length + publishingAccounts.length;
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
@@ -1203,7 +1220,10 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
   const [handle, setHandle] = useState(account?.handle || "");
   const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
-  const [executionEngine, setExecutionEngine] = useState(account?.executionEngine || "companion");
+  const externalBrowserRequired = externalBrowserRequiredPlatforms.has(platform);
+  const [executionEngine, setExecutionEngine] = useState(
+    externalBrowserRequired ? "external_browser" : account?.executionEngine || "companion"
+  );
   const engineChanged = Boolean(account && executionEngine !== (account.executionEngine || "companion"));
 
   const submit = (event) => {
@@ -1234,9 +1254,10 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
           <fieldset className="config-engine-field wide">
             <legend>Publishing engine</legend>
             <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
-              <button type="button" className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>Runs in the background and opens only when attention is needed</small></span></button>
+              <button type="button" disabled={externalBrowserRequired} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>{externalBrowserRequired ? "Embedded login is blocked by this provider" : "Runs in the background and opens only when attention is needed"}</small></span></button>
               <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome, Edge, or Chromium profile</small></span></button>
             </div>
+            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />X and YouTube require a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
             {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
           </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>

@@ -99,14 +99,17 @@ import {
   upsertSyncedUpload,
 } from "./local-storage.js";
 import {
+  assertAccountEngineChangeAllowed,
   cancelAutomation,
   isAutomationRunning,
   publishingBrowserRuntimeHealth,
   reconcileSavedAccountSessions,
   removeSavedAccountProfile,
+  resolvedAccountEngine,
   runAutomation,
   startManualAccountSession,
 } from "./services/publisher.js";
+import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
 import { publishingCompanionId } from "./companion-identity.js";
@@ -326,7 +329,10 @@ async function supabaseRpc<T>(pairing: Pick<CentralCompanionPairing, "supabaseUr
 }
 
 async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
-  const accounts = await listPlatformAccounts(undefined, pairing.workspaceId);
+  const accounts = (await listPlatformAccounts(undefined, pairing.workspaceId)).map(account => ({
+    ...account,
+    executionEngine: resolvedAccountEngine(account),
+  }));
   const companion = await supabaseRpc<Record<string, unknown>>(pairing, "companion_heartbeat", {
     p_token: pairing.pairingToken,
     p_instance_id: publishingCompanionId(),
@@ -349,6 +355,12 @@ async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
     lastError: null,
     companion: companion || null,
   };
+}
+
+async function syncCentralWorkspaceAccountInventory() {
+  const pairing = await readCentralPairing();
+  if (!pairing) return;
+  await heartbeatCentralPairing(pairing);
 }
 
 async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string, artifact?: CentralJobArtifact | null) {
@@ -650,6 +662,8 @@ async function pollCentralWorkspaceCompanion() {
     centralPollInFlight = false;
   }
 }
+
+setCentralWorkspaceSyncHandler(syncCentralWorkspaceAccountInventory);
 
 function startCentralWorkspaceCompanionPolling() {
   if (centralPollingTimer) return;
@@ -2014,7 +2028,7 @@ app.post("/api/companion/accounts/import", requireRoles("operations_manager"), a
       companionId: publishingCompanionId(),
       credentialConfigured: Boolean(account.credentialConfigured),
       enabled: account.enabled !== false,
-      executionEngine: "companion",
+      executionEngine: account.executionEngine,
       displayName: String(account.displayName || account.handle || selectedPlatform),
       handle: String(account.handle || ""),
       loginIdentifier: String(account.loginIdentifier || ""),
@@ -2196,7 +2210,6 @@ app.post("/api/platforms/:platform/accounts", requireRoles("operations_manager")
     const user = currentUser(req);
     const account = await createPlatformAccount(platform, {
       ...payload,
-      executionEngine: "companion",
       companionId: publishingCompanionId(),
     }, user.workspaceId);
     await logActivity(user.id, "account.created", "publishing_account", account.id, `${account.displayName} account was added for ${platform}.`, { platform, handle: account.handle });
@@ -2217,14 +2230,21 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
       return;
     }
     assertCentralPlatformAccess(req, existing.platform, "configure");
+    if (payload.executionEngine && payload.executionEngine !== existing.executionEngine) {
+      assertAccountEngineChangeAllowed(accountId);
+    }
     const account = await updatePlatformAccount(accountId, {
       ...payload,
-      executionEngine: "companion",
       companionId: publishingCompanionId(),
     }, user.workspaceId);
     if (!account) {
       res.status(404).json({ message: "Publishing account not found" });
       return;
+    }
+    if (account.executionEngine !== existing.executionEngine) {
+      await removeSavedAccountProfile(existing).catch(error => {
+        console.warn(`Could not clear the previous browser session for ${existing.handle}:`, error instanceof Error ? error.message : error);
+      });
     }
     await logActivity(
       user.id,
@@ -2235,7 +2255,7 @@ app.patch("/api/accounts/:id", requireRoles("operations_manager"), async (req: R
       {
         platform: account.platform,
         handle: account.handle,
-        executionEngine: "companion",
+        executionEngine: account.executionEngine,
       },
     );
     res.json(account);
@@ -2298,11 +2318,13 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
       message: started
         ? activeSurface === "embedded"
           ? "Secure login opened inside Companion. Complete sign-in there; Companion will detect success, protect the local account session, and close the login pane automatically."
-          : "Secure login opened in Chrome, Edge, or Chromium. Complete sign-in there; Companion will transfer it into the embedded browser when the provider permits, or retain the protected Companion-managed browser profile when the provider binds the session to that browser."
+          : resolvedAccountEngine(account) === "external_browser"
+            ? "Secure login opened in a dedicated Chrome, Edge, or Chromium profile. Complete sign-in there; Companion will retain and restart-check that same protected profile for future publishing."
+            : "Secure login opened in Chrome, Edge, or Chromium. Complete sign-in there; Companion will transfer it into the embedded browser when the provider permits, or retain the protected Companion-managed browser profile when the provider binds the session to that browser."
         : "Manual login is already running for this account.",
       started,
       surface: activeSurface,
-      executionEngine: "companion",
+      executionEngine: resolvedAccountEngine(account),
     });
   } catch (error) {
     next(error);

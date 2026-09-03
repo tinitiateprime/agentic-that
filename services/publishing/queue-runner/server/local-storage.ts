@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
 import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
+import { publishingEngineForPlatform } from "./services/login-surface.js";
 import {
   type ActivityLog,
   type AutomationInput,
@@ -282,7 +283,7 @@ function normalizeStore(value: unknown): Store {
     ? input.accounts.map(account => ({
       ...account,
       workspaceId: account.workspaceId || legacyWorkspaceId,
-      executionEngine: account.executionEngine ?? "companion",
+      executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
       safetyStatus: account.safetyStatus || (account.enabled ? "healthy" : "paused"),
       safetyMode: account.safetyMode ?? "standard",
       twoFactorEnabled: account.twoFactorEnabled ?? false,
@@ -1197,9 +1198,7 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
-      // Chrome or Edge is only a login fallback. All actual publishing runs
-      // through the protected Companion partition.
-      executionEngine: "companion",
+      executionEngine: publishingEngineForPlatform(platform, input.executionEngine),
       safetyStatus: input.enabled === false ? "paused" : "healthy",
       safetyMode: input.safetyMode ?? "protected",
       twoFactorEnabled: input.twoFactorEnabled ?? false,
@@ -1223,13 +1222,14 @@ export async function updatePlatformAccount(accountId: string, input: UpsertPlat
       && account.handle.toLowerCase() === input.handle.toLowerCase()
     );
     if (duplicate) throw new Error(platformLabels[existing.platform] + " account " + input.handle + " already exists.");
-    const executionEngine = "companion" as const;
+    const executionEngine = publishingEngineForPlatform(existing.platform, input.executionEngine ?? existing.executionEngine);
+    const engineChanged = executionEngine !== existing.executionEngine;
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName,
       handle: input.handle,
       loginIdentifier: input.loginIdentifier ?? "",
-      credentialConfigured: existing.credentialConfigured,
+      credentialConfigured: engineChanged ? false : existing.credentialConfigured,
       enabled: input.enabled ?? existing.enabled,
       executionEngine,
       companionId: input.companionId ?? existing.companionId,
@@ -1275,14 +1275,13 @@ export async function bindPublishingAccountsToCompanion(companionId: string) {
     const updatedAt = nowIso();
     let rebound = 0;
     store.accounts = store.accounts.map(account => {
-      if (account.executionEngine === "companion" && account.companionId === normalizedCompanionId) return account;
-      const requiresExternalSessionTransfer = account.executionEngine === "external_browser";
+      const executionEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
+      if (account.executionEngine === executionEngine && account.companionId === normalizedCompanionId) return account;
       rebound += 1;
       return {
         ...account,
-        executionEngine: "companion" as const,
+        executionEngine,
         companionId: normalizedCompanionId,
-        credentialConfigured: requiresExternalSessionTransfer ? false : account.credentialConfigured,
         updatedAt,
       };
     });
@@ -1332,7 +1331,7 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
   return mutateStore(store => {
     const index = store.accounts.findIndex(account => account.id === input.id && account.workspaceId === input.workspaceId);
     const timestamp = nowIso();
-    const executionEngine = "companion" as const;
+    const executionEngine = publishingEngineForPlatform(input.platform, input.executionEngine);
     if (index < 0) {
       const created: PlatformAccount = {
         id: input.id,

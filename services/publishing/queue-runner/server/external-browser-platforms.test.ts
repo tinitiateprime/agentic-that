@@ -7,6 +7,7 @@ test("external browser discovery covers standard Windows installations", () => {
   const candidates = externalBrowserExecutableCandidates({
     platform: "win32",
     environment: {
+      NODE_ENV: "test",
       ProgramFiles: "C:\\Program Files",
       "ProgramFiles(x86)": "C:\\Program Files (x86)",
       LOCALAPPDATA: "C:\\Users\\Test\\AppData\\Local",
@@ -20,7 +21,7 @@ test("external browser discovery covers standard Windows installations", () => {
 test("external browser discovery covers system and user macOS applications", () => {
   const candidates = externalBrowserExecutableCandidates({
     platform: "darwin",
-    environment: {},
+    environment: { NODE_ENV: "test" },
     homeDirectory: "/Users/test",
   });
   assert.ok(candidates.includes("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
@@ -32,6 +33,7 @@ test("external browser discovery covers Linux packages, PATH, Snap, and explicit
   const candidates = externalBrowserExecutableCandidates({
     platform: "linux",
     environment: {
+      NODE_ENV: "test",
       PATH: "/custom/bin:/usr/bin",
       CHROMIUM_PATH: "/managed/chromium",
     },
