@@ -13,8 +13,8 @@ test("external browser discovery covers standard Windows installations", () => {
     },
     homeDirectory: "C:\\Users\\Test",
   });
-  assert.ok(candidates.some(candidate => candidate.endsWith(path.join("Google", "Chrome", "Application", "chrome.exe"))));
-  assert.ok(candidates.some(candidate => candidate.endsWith(path.join("Microsoft", "Edge", "Application", "msedge.exe"))));
+  assert.ok(candidates.some(candidate => candidate.endsWith(path.win32.join("Google", "Chrome", "Application", "chrome.exe"))));
+  assert.ok(candidates.some(candidate => candidate.endsWith(path.win32.join("Microsoft", "Edge", "Application", "msedge.exe"))));
 });
 
 test("external browser discovery covers system and user macOS applications", () => {
