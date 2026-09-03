@@ -294,8 +294,8 @@ jobs:
       - name: Validate Linux packages
         run: |
           version=$(node -p "require('./apps/publishing-companion-desktop/package.json').version")
-          deb="artifacts/AgenticThat-Publishing-Companion-$version-Linux-${{ matrix.arch }}.deb"
-          rpm_file="artifacts/AgenticThat-Publishing-Companion-$version-Linux-${{ matrix.arch }}.rpm"
+          deb="artifacts/AgenticThat-Publishing-Companion-Linux-${{ matrix.arch }}.deb"
+          rpm_file="artifacts/AgenticThat-Publishing-Companion-Linux-${{ matrix.arch }}.rpm"
           expected_deb_arch=${{ matrix.arch }}
           expected_rpm_arch=${{ matrix.arch }}
           if [[ "${{ matrix.arch }}" == "x64" ]]; then
