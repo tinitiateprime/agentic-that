@@ -71,7 +71,9 @@ if (platform === "win32") {
   );
 } else if (platform === "darwin") {
   const dmg = requireFile(
-    file => file.toLowerCase().endsWith(".dmg") && artifactForVersion(file),
+    file => file.toLowerCase().endsWith(".dmg") && (
+      artifactForVersion(file) || path.basename(file) === "AgenticThat Companion.dmg"
+    ),
     `macOS Companion ${manifest.version} DMG`,
   );
   await copyAs(dmg,
