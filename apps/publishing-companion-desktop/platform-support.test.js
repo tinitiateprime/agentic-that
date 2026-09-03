@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -29,4 +30,14 @@ test("Linux autostart safely quotes executable paths and Desktop Entry field cod
   assert.match(entry, /Exec="\/opt\/AgenticThat 100%%\/agenticthat-companion" --hidden/);
   assert.match(entry, /Icon=\/opt\/AgenticThat 100%\/icon\.png/);
   assert.match(entry, /X-GNOME-Autostart-enabled=true/);
+});
+
+test("desktop host configures the identity variable consumed by its embedded service", async () => {
+  const [mainSource, identitySource] = await Promise.all([
+    readFile(new URL("./main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../services/publishing/queue-runner/server/companion-identity.ts", import.meta.url), "utf8"),
+  ]);
+  const identityVariable = identitySource.match(/process\.env\.([A-Z_]+)\?\.trim\(\)/)?.[1];
+  assert.ok(identityVariable, "embedded service identity environment variable was not found");
+  assert.match(mainSource, new RegExp(`process\\.env\\.${identityVariable}\\s*=\\s*settings\\.instanceId`));
 });

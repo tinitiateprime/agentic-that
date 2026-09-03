@@ -51,6 +51,7 @@ try {
   $smokeUsername = "operations.manager"
   $smokePassword = "CompanionSmoke@2026"
   $smokeSecret = "companion-smoke-auth-secret-that-is-long-enough-for-local-token-signing"
+  $smokeInstanceId = [guid]::NewGuid().ToString("N")
   $encode = {
     param([string]$Value)
     [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value))
@@ -60,7 +61,7 @@ try {
     username = $smokeUsername
     password = @{ protected = $false; value = (& $encode $smokePassword) }
     authSecret = @{ protected = $false; value = (& $encode $smokeSecret) }
-    instanceId = [guid]::NewGuid().ToString("N")
+    instanceId = $smokeInstanceId
     autoStart = $false
     publishingInteractionConsent = $true
     createdAt = [DateTime]::UtcNow.ToString("o")
@@ -133,7 +134,9 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
 
   if (-not $health) { throw "The packaged companion did not become healthy within 30 seconds." }
   if (-not $health.extensionBridge) { throw "The extension bridge is not enabled." }
-  if (-not $health.companionInstanceId) { throw "The packaged companion instance was not identified." }
+  if ($health.companionInstanceId -ne $smokeInstanceId) {
+    throw "The packaged companion service did not use the desktop host identity."
+  }
   if (-not $health.embeddedBrowser) { throw "The embedded live publishing browser is not enabled." }
   if (-not $health.automationReady) { throw "Browser automation is not ready." }
   if ($health.companionVersion -ne $expectedVersion) { throw "The packaged Companion version heartbeat is incorrect." }

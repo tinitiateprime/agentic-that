@@ -285,7 +285,11 @@ function configureRuntimeEnvironment() {
   if (settings.sessionEncryptionKeyPlain) {
     process.env.PUBLISH_QUEUE_SESSION_ENCRYPTION_KEY = settings.sessionEncryptionKeyPlain;
   }
-  process.env.PUBLISH_QUEUE_COMPANION_INSTANCE_ID = settings.instanceId;
+  // Keep this in sync with publishingCompanionId() in the embedded runtime.
+  // The watchdog compares the health response with this exact local identity;
+  // using a different variable name makes it mistake its own server for a
+  // second Companion process.
+  process.env.PUBLISHING_COMPANION_ID = settings.instanceId;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = settings.username;
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = settings.passwordPlain;
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "retry";

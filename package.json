@@ -26,6 +26,7 @@
     "publishing:desktop:make:macos": "npm --prefix apps/publishing-companion-desktop run make:macos",
     "publishing:desktop:make:linux": "npm --prefix apps/publishing-companion-desktop run make:linux",
     "publishing:desktop:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-publishing-companion.ps1",
+    "publishing:desktop:smoke:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installed-publishing-companion.ps1",
     "publishing:release:windows": "npm run publishing:desktop:make:windows && node scripts/collect-publishing-release-artifacts.mjs --platform=win32 --arch=x64",
     "publishing:release:macos": "npm run publishing:desktop:make:macos && node scripts/collect-publishing-release-artifacts.mjs --platform=darwin --arch=universal",
     "publishing:release:linux": "npm run publishing:desktop:make:linux && node scripts/collect-publishing-release-artifacts.mjs --platform=linux",
