@@ -108,11 +108,6 @@ jobs:
       - name: Build Windows Companion
         run: npm --prefix apps/publishing-companion-desktop run make:windows
 
-      - name: Package optional Chrome extension
-        run: |
-          npm run publishing:extension:validate
-          npm run publishing:extension:package
-
       - name: Verify packaged Windows Companion
         run: node scripts/verify-packaged-companion.mjs --platform=win32 --arch=x64
 

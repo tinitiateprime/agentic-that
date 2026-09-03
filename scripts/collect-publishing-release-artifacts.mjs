@@ -59,15 +59,9 @@ if (platform === "win32") {
   await copyAs(releases, "RELEASES");
   await copyAs(updatePackage, path.basename(updatePackage));
   await copyAs(zip,
-    `AgenticThat-Publishing-Companion-${manifest.version}-Windows-x64-Portable.zip`,
     "AgenticThat-Publishing-Companion-Windows-x64-Portable.zip",
-    `AgenticThat-Companion-${manifest.version}-Windows-x64-Portable.zip`,
-    "AgenticThat-Companion-Windows-x64-Portable.zip",
-    // Retain the v2.0 aliases used by existing deployments.
-    `AgenticThat-Publishing-Companion-${manifest.version}-Portable.zip`,
+    // Retain the stable alias used by existing deployments.
     "AgenticThat-Publishing-Companion-Portable.zip",
-    `AgenticThat-Companion-${manifest.version}-Portable.zip`,
-    "AgenticThat-Companion-Portable.zip",
   );
 } else if (platform === "darwin") {
   const dmg = requireFile(
@@ -77,11 +71,9 @@ if (platform === "win32") {
     `macOS Companion ${manifest.version} DMG`,
   );
   await copyAs(dmg,
-    `AgenticThat-Publishing-Companion-${manifest.version}-macOS-${architecture}.dmg`,
     `AgenticThat-Publishing-Companion-macOS-${architecture}.dmg`,
   );
   await copyAs(zip,
-    `AgenticThat-Publishing-Companion-${manifest.version}-darwin-${architecture}.zip`,
     `AgenticThat-Publishing-Companion-darwin-${architecture}.zip`,
   );
 } else {
@@ -94,15 +86,12 @@ if (platform === "win32") {
     `Linux Companion ${manifest.version} RPM`,
   );
   await copyAs(deb,
-    `AgenticThat-Publishing-Companion-${manifest.version}-Linux-${architecture}.deb`,
     `AgenticThat-Publishing-Companion-Linux-${architecture}.deb`,
   );
   await copyAs(rpm,
-    `AgenticThat-Publishing-Companion-${manifest.version}-Linux-${architecture}.rpm`,
     `AgenticThat-Publishing-Companion-Linux-${architecture}.rpm`,
   );
   await copyAs(zip,
-    `AgenticThat-Publishing-Companion-${manifest.version}-Linux-${architecture}.zip`,
     `AgenticThat-Publishing-Companion-Linux-${architecture}.zip`,
   );
 }

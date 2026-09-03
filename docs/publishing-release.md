@@ -102,8 +102,9 @@ git push origin v2.1.0
 Use a SemVer tag (`vX.Y.Z`) so Electron's public update service can discover the
 release. GitHub Actions builds the Windows Squirrel installer/update package,
 universal macOS DMG/ZIP, Linux DEB/RPM/ZIP for x64 and ARM64, checksums, and the
-optional Chrome extension. The final GitHub release is created only after every
-native job succeeds and the production release gates pass.
+Windows updater metadata. The optional Chrome extension is distributed
+separately. The final GitHub release is created only after every native job
+succeeds and the production release gates pass.
 
 For a dry run without publishing a release, open the repository's **Actions**
 tab, select **Publishing Companion Release**, and choose **Run workflow**. The
