@@ -19,6 +19,7 @@ import {
 import started from "electron-squirrel-startup";
 import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -69,6 +70,11 @@ const REQUESTED_DESKTOP_DEBUG_PORT = Number.isInteger(configuredDesktopDebugPort
   ? configuredDesktopDebugPort
   : 0;
 const MAX_ACTIVITY_HISTORY = 20;
+const LEGACY_PRODUCT_NAME = "AgenticThat Publishing Companion";
+const LEGACY_WINDOWS_AUTOSTART_NAMES = [
+  "electron.app.AgenticThat Publishing Companion",
+  "electron.app.AgenticThat Companion",
+];
 
 const userDataOverride = process.env.AGENTICTHAT_COMPANION_DATA_DIR?.trim();
 if (userDataOverride) {
@@ -280,6 +286,15 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDirectory;
   process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = browserDataDirectory;
+  const legacyUserDataDirectory = legacyCompanionUserDataDirectory();
+  if (legacyUserDataDirectory) {
+    process.env.PUBLISH_QUEUE_LEGACY_DATA_PATH = path.join(
+      legacyUserDataDirectory,
+      "publishing-data",
+      "data",
+      "store.json",
+    );
+  }
   process.env.PUBLISH_QUEUE_LOCAL_AUTH_SECRET_PATH = path.join(dataDirectory, ".auth-token-secret");
   process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET = settings.authSecretPlain;
   if (settings.sessionEncryptionKeyPlain) {
@@ -294,6 +309,43 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = settings.passwordPlain;
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "retry";
   process.env.AGENTICTHAT_COMPANION_UPDATE_STATUS = updateStatus;
+}
+
+function legacyCompanionUserDataDirectory() {
+  if (!app.isPackaged || userDataOverride) return null;
+  const currentDirectory = path.resolve(app.getPath("userData"));
+  const legacyDirectory = path.resolve(app.getPath("appData"), LEGACY_PRODUCT_NAME);
+  return legacyDirectory !== currentDirectory && fs.existsSync(legacyDirectory)
+    ? legacyDirectory
+    : null;
+}
+
+function migrateLegacyAccountBrowserData(accountId, platform) {
+  const legacyDirectory = legacyCompanionUserDataDirectory();
+  if (!legacyDirectory) return 0;
+  if (!/^[A-Za-z0-9_-]{1,180}$/.test(accountId) || !["instagram", "facebook", "x", "linkedin", "youtube"].includes(platform)) {
+    throw new Error("The legacy account session path is invalid.");
+  }
+  const currentDirectory = app.getPath("userData");
+  const partitionName = browserPartition(accountId).replace(/^persist:/, "");
+  const candidates = [
+    {
+      source: path.join(legacyDirectory, "Partitions", partitionName),
+      target: path.join(currentDirectory, "Partitions", partitionName),
+    },
+    {
+      source: path.join(legacyDirectory, "publishing-data", "browser-data", "accounts", platform, accountId),
+      target: path.join(currentDirectory, "publishing-data", "browser-data", "accounts", platform, accountId),
+    },
+  ];
+  let copied = 0;
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate.source) || fs.existsSync(candidate.target)) continue;
+    fs.mkdirSync(path.dirname(candidate.target), { recursive: true });
+    fs.cpSync(candidate.source, candidate.target, { recursive: true, force: false, errorOnExist: false });
+    copied += 1;
+  }
+  return copied;
 }
 
 async function configureServiceTokenVerifier() {
@@ -606,6 +658,19 @@ function saveAutoStart(enabled) {
     } else if (process.platform === "darwin") {
       app.setLoginItemSettings({ openAtLogin: enabled, type: "mainAppService" });
     } else if (process.platform === "win32") {
+      for (const legacyName of LEGACY_WINDOWS_AUTOSTART_NAMES) {
+        try {
+          execFileSync("reg.exe", [
+            "delete",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            legacyName,
+            "/f",
+          ], { stdio: "ignore", windowsHide: true });
+        } catch {
+          // The legacy launch entry is normally absent after the first repair.
+        }
+      }
       const installedLauncher = squirrelInstalledBuild()
         ? path.resolve(path.dirname(process.execPath), "..", path.basename(process.execPath))
         : process.execPath;
@@ -1311,6 +1376,7 @@ function installPublishingDesktopHost() {
     closeBrowser: closeManagedBrowser,
     stopPublishingBrowsers,
     clearAccountBrowserData,
+    migrateLegacyAccountBrowserData,
   };
   globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {
     openBrowser: openInstagramScrapingBrowser,

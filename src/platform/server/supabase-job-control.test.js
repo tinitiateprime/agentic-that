@@ -37,7 +37,7 @@ test("Companion status is derived from heartbeat freshness and minimum version",
     workspace_id: "workspace_1",
     label: "Office PC",
     companion_instance_id: "instance_1",
-    version: "2.1.2",
+    version: "2.1.3",
     runtime_status: "ready",
     update_status: "idle",
     last_error: null,
@@ -49,9 +49,9 @@ test("Companion status is derived from heartbeat freshness and minimum version",
     updated_at: current,
     revoked_at: null,
   };
-  assert.equal(supabaseJobControlTestHelpers.publicDevice(base, "2.1.2").status, "online");
-  assert.equal(supabaseJobControlTestHelpers.publicDevice({ ...base, version: "2.1.1" }, "2.1.2").status, "outdated");
-  assert.equal(supabaseJobControlTestHelpers.publicDevice({ ...base, revoked_at: current }, "2.1.2").status, "offline");
+  assert.equal(supabaseJobControlTestHelpers.publicDevice(base, "2.1.3").status, "online");
+  assert.equal(supabaseJobControlTestHelpers.publicDevice({ ...base, version: "2.1.2" }, "2.1.3").status, "outdated");
+  assert.equal(supabaseJobControlTestHelpers.publicDevice({ ...base, revoked_at: current }, "2.1.3").status, "offline");
 });
 
 test("normalized account readiness never exposes local credentials", () => {

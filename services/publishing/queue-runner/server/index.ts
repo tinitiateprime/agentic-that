@@ -74,6 +74,7 @@ import {
   getPlatformAccount,
   getUserProfile,
   listPlatformAccounts,
+  migrateLegacyPlatformAccounts,
   listContentSubmissions,
   listPublishingSchedules,
   listSocialMediaSchedules,
@@ -329,6 +330,11 @@ async function supabaseRpc<T>(pairing: Pick<CentralCompanionPairing, "supabaseUr
 }
 
 async function heartbeatCentralPairing(pairing: CentralCompanionPairing) {
+  const legacyMigration = await migrateLegacyPlatformAccounts(pairing.workspaceId, publishingCompanionId());
+  if (legacyMigration.imported > 0) {
+    console.log(`Recovered ${legacyMigration.imported} workspace publishing account(s) from the previous Companion name.`);
+    await reconcileSavedAccountSessions();
+  }
   const accounts = (await listPlatformAccounts(undefined, pairing.workspaceId)).map(account => ({
     ...account,
     executionEngine: resolvedAccountEngine(account),

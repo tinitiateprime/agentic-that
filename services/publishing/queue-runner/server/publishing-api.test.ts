@@ -132,7 +132,50 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   const importedAccount = await importedAccountResponse.json() as { companionId?: string };
   assert.equal(importedAccount.companionId, health.companionInstanceId);
 
-  const { bindPublishingAccountsToCompanion, getPlatformAccount, pausePlatformAccountForSafety, updatePlatformAccountCredentialState } = await import("./local-storage.js");
+  const {
+    bindPublishingAccountsToCompanion,
+    getPlatformAccount,
+    migrateLegacyPlatformAccounts,
+    pausePlatformAccountForSafety,
+    updatePlatformAccountCredentialState,
+  } = await import("./local-storage.js");
+  const legacyStorePath = path.join(temporaryRoot, "legacy-store.json");
+  const legacyAccountId = "account_legacy_workspace_session";
+  await fs.writeFile(legacyStorePath, JSON.stringify({
+    version: 1,
+    users: [],
+    accounts: [
+      { ...account, credentialConfigured: true },
+      {
+        ...account,
+        id: legacyAccountId,
+        platform: "youtube",
+        displayName: "Migrated YouTube account",
+        handle: "@migrated-video",
+        credentialConfigured: true,
+        executionEngine: "companion",
+      },
+    ],
+    schedules: [],
+    socialMediaSchedules: [],
+    uploads: [],
+    submissions: [],
+    activityLogs: [],
+    automationRuns: [],
+    automationRunPosts: [],
+  }));
+  const legacyMigration = await migrateLegacyPlatformAccounts(account.workspaceId, health.companionInstanceId!, legacyStorePath);
+  assert.deepEqual(legacyMigration, { imported: 1, accountIds: [legacyAccountId] });
+  assert.equal((await getPlatformAccount(account.id))?.credentialConfigured, false, "current account state must win over stale legacy data");
+  const migratedLegacyAccount = await getPlatformAccount(legacyAccountId, account.workspaceId);
+  assert.equal(migratedLegacyAccount?.credentialConfigured, true);
+  assert.equal(migratedLegacyAccount?.executionEngine, "external_browser");
+  assert.equal(migratedLegacyAccount?.companionId, health.companionInstanceId);
+  assert.deepEqual(
+    await migrateLegacyPlatformAccounts(account.workspaceId, health.companionInstanceId!, legacyStorePath),
+    { imported: 0, accountIds: [] },
+    "legacy account migration must be idempotent",
+  );
   await updatePlatformAccountCredentialState(account.id, true);
   const binding = await bindPublishingAccountsToCompanion("companion_test_rebound");
   assert.ok(binding.rebound > 0);

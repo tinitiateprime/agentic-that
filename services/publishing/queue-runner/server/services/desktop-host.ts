@@ -60,6 +60,7 @@ export type PublishingDesktopHost = {
   closeBrowser(sessionId: string): Promise<void> | void;
   stopPublishingBrowsers(reason: string): Promise<void> | void;
   clearAccountBrowserData(accountId: string): Promise<void> | void;
+  migrateLegacyAccountBrowserData?(accountId: string, platform: Platform): Promise<number> | number;
 };
 
 declare global {

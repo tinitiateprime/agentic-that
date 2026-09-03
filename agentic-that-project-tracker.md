@@ -38,6 +38,7 @@ kanban
     done10[Invitation System]
     done11[Companion v2.1 Windows macOS Linux Builds]
     done12[Companion v2.1.2 Account Sync and Persistent X YouTube Sessions]
+    done13[Companion v2.1.3 Legacy Session and Account Recovery]
 
   future[Future]
     future1[Android Companion]

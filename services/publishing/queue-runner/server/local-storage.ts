@@ -1170,6 +1170,63 @@ export async function listPlatformAccounts(platform?: Platform, workspaceId?: st
     .sort((a, b) => a.platform.localeCompare(b.platform) || a.displayName.localeCompare(b.displayName));
 }
 
+export async function migrateLegacyPlatformAccounts(
+  workspaceId: string,
+  companionId: string,
+  legacyStorePath = process.env.PUBLISH_QUEUE_LEGACY_DATA_PATH?.trim(),
+) {
+  const selectedWorkspaceId = workspaceId.trim();
+  const selectedCompanionId = companionId.trim();
+  if (useNetlifyBlobs || !legacyStorePath || !selectedWorkspaceId || !selectedCompanionId) {
+    return { imported: 0, accountIds: [] as string[] };
+  }
+
+  const resolvedLegacyStore = path.resolve(legacyStorePath);
+  if (resolvedLegacyStore === path.resolve(localStoreFile)) return { imported: 0, accountIds: [] as string[] };
+
+  let legacyStore: Store;
+  try {
+    legacyStore = normalizeStore(JSON.parse(await fs.readFile(resolvedLegacyStore, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { imported: 0, accountIds: [] as string[] };
+    throw error;
+  }
+
+  const candidates = legacyStore.accounts.filter(account => (
+    account.workspaceId === selectedWorkspaceId
+    && typeof account.id === "string"
+    && account.id.trim().length > 0
+    && platforms.includes(account.platform)
+  ));
+  if (candidates.length === 0) return { imported: 0, accountIds: [] as string[] };
+
+  return mutateStore(store => {
+    let imported = 0;
+    const accountIds: string[] = [];
+    for (const account of candidates) {
+      const exists = store.accounts.some(existing => (
+        existing.id === account.id && existing.workspaceId === selectedWorkspaceId
+      ));
+      if (exists) continue;
+      store.accounts.push({
+        ...account,
+        workspaceId: selectedWorkspaceId,
+        companionId: selectedCompanionId,
+        credentialConfigured: Boolean(account.credentialConfigured),
+        enabled: account.enabled !== false,
+        executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
+        safetyStatus: account.safetyStatus || (account.enabled === false ? "paused" : "healthy"),
+        safetyMode: account.safetyMode || "protected",
+        twoFactorEnabled: Boolean(account.twoFactorEnabled),
+        updatedAt: nowIso(),
+      });
+      imported += 1;
+      accountIds.push(account.id);
+    }
+    return { imported, accountIds };
+  });
+}
+
 export async function getPlatformAccount(accountId: string, workspaceId?: string) {
   const store = await readStore();
   return store.accounts.find(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId)) ?? null;

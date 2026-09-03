@@ -104,7 +104,7 @@ function versionAtLeast(value, minimum) {
   return true;
 }
 
-function publicDevice(row, minimumVersion = "2.1.2") {
+function publicDevice(row, minimumVersion = "2.1.3") {
   if (!row) return null;
   const seenAt = Date.parse(row.last_seen_at || "");
   const online = !row.revoked_at && Number.isFinite(seenAt) && Date.now() - seenAt < COMPANION_ONLINE_MS;
@@ -139,7 +139,7 @@ function publicDevice(row, minimumVersion = "2.1.2") {
 
 async function minimumVersion(sql) {
   const [row] = await sql`SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'`;
-  return row?.value || "2.1.2";
+  return row?.value || "2.1.3";
 }
 
 export function supabasePublicConfiguration() {

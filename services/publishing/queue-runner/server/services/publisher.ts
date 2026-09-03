@@ -256,6 +256,12 @@ export async function reconcileSavedAccountSessions() {
     console.log(`Bound ${binding.rebound} publishing account(s) to this Companion instance.`);
   }
   const accounts = await listPlatformAccounts();
+  const migratedDirectories = (await Promise.all(accounts.map(account => Promise.resolve(
+    publishingDesktopHost()?.migrateLegacyAccountBrowserData?.(account.id, account.platform) ?? 0,
+  ).catch(() => 0)))).reduce((total, migrated) => total + migrated, 0);
+  if (migratedDirectories > 0) {
+    console.log(`Recovered ${migratedDirectories} protected browser session director${migratedDirectories === 1 ? "y" : "ies"} from the previous Companion name.`);
+  }
   for (const account of accounts) {
     migrateLegacyAccountSessionState(account);
     // Older releases could transfer an X/YouTube login into Electron and then
