@@ -39,6 +39,7 @@ kanban
     done11[Companion v2.1 Windows macOS Linux Builds]
     done12[Companion v2.1.2 Account Sync and Persistent X YouTube Sessions]
     done13[Companion v2.1.3 Legacy Session and Account Recovery]
+    done14[Companion v2.1.4 Chunked Large Media Delivery]
 
   future[Future]
     future1[Android Companion]
