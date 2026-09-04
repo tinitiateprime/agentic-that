@@ -41,3 +41,11 @@ test("desktop host configures the identity variable consumed by its embedded ser
   assert.ok(identityVariable, "embedded service identity environment variable was not found");
   assert.match(mainSource, new RegExp(`process\\.env\\.${identityVariable}\\s*=\\s*settings\\.instanceId`));
 });
+
+test("desktop scrapers use isolated public compositor-visible workers", async () => {
+  const mainSource = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(mainSource, /agenticthat-instagram-scrape-\$\{id\}/);
+  assert.match(mainSource, /agenticthat-facebook-scrape-\$\{id\}/);
+  assert.match(mainSource, /workerWindow\.showInactive\(\)/);
+  assert.match(mainSource, /opacity:\s*0/);
+});

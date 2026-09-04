@@ -18,6 +18,7 @@ try {
     "../supabase/migrations/202609030001_external_browser_session_status.sql",
     "../supabase/migrations/202609040001_companion_legacy_session_recovery.sql",
     "../supabase/migrations/202609040002_chunked_publishing_artifacts.sql",
+    "../supabase/migrations/202609040003_instagram_media_compatibility.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
@@ -55,7 +56,7 @@ try {
       (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   if (!status?.platform_users_ready || !status?.memberships_ready || !status?.roles_ready
       || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready
-      || status?.minimum_companion_version !== "2.1.4") {
+      || status?.minimum_companion_version !== "2.1.5") {
     throw new Error("The platform database migration did not create every required table.");
   }
   process.stdout.write("Platform and Companion job-control database migrations are ready.\n");

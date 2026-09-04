@@ -3,6 +3,7 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { prepareInstagramMedia } from "./instagram-media.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 const INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/";
@@ -441,6 +442,18 @@ async function clickDoneAfterInstagramShared(page: Page) {
   while (Date.now() < deadline) {
     await cancelDiscardPromptIfVisible(page);
 
+    const platformError = await firstVisible([
+      page.getByText(/Your post could not be shared/i),
+      page.getByText(/Couldn't create (?:post|thread)/i),
+      page.getByText(/Something went wrong\. Please try again/i),
+      page.getByText(/Try again later/i),
+      page.getByText(/Uploaded image isn['’]t in an allowed aspect ratio/i),
+    ]);
+    if (platformError) {
+      const message = (await platformError.textContent().catch(() => null))?.replace(/\s+/g, " ").trim();
+      throw new Error((message || "Instagram showed an error after Share was submitted.").slice(0, 700));
+    }
+
     const sharedScreen = await firstVisible([
       page.getByText(/^Reel shared$/i),
       page.getByText(/^Post shared$/i),
@@ -624,19 +637,23 @@ export async function postToInstagram(page: Page, upload: PlatformUpload, accoun
   }
   const filePath = publishingUploadFilePath(upload.fileName);
   if (!fs.existsSync(filePath)) throw new Error(`Instagram upload file not found: ${filePath}`);
+  const preparedMedia = await prepareInstagramMedia(filePath, upload.mimeType);
+  try {
+    if (preparedMedia.normalized) console.log("Prepared a non-cropping Instagram-compatible image.");
+    await loginToInstagram(page, upload, false, accountLogin);
+    await clickCreateButton(page);
+    await uploadInstagramMedia(page, preparedMedia.filePath);
+    await dismissInstagramReelsInfo(page);
+    await selectOriginalAspectAndClickNext(page);
+    await clickInstagramEditNext(page);
+    await fillInstagramCaption(page, upload.caption ?? "");
+    await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
 
-  await loginToInstagram(page, upload, false, accountLogin);
-  await clickCreateButton(page);
-  await uploadInstagramMedia(page, filePath);
-  await dismissInstagramReelsInfo(page);
-  await selectOriginalAspectAndClickNext(page);
-  await clickInstagramEditNext(page);
-  await fillInstagramCaption(page, upload.caption ?? "");
-  await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
-
-  const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
-  console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);
-  await page.waitForTimeout(holdTime);
-
-  return { success: true };
+    const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
+    console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);
+    await page.waitForTimeout(holdTime);
+    return { success: true };
+  } finally {
+    await preparedMedia.cleanup().catch(() => undefined);
+  }
 }

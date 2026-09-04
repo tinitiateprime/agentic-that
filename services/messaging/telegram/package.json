@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --import tsx --test src/store.test.ts src/server-errors.test.ts console/src/recipient-utils.test.js",
+    "test": "node --import tsx --test src/store.test.ts src/server-errors.test.ts src/account-client.test.ts src/media-store.test.ts src/post-scheduler.test.ts console/src/recipient-utils.test.js console/src/media-kind.test.js console/src/media-upload.test.js console/src/server-scheduling.test.js",
     "login": "tsx src/login.ts",
     "send": "tsx src/send-direct.ts",
     "issue-token": "tsx src/issue-token.ts",

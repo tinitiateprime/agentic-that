@@ -1,7 +1,7 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Companion",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "Secure desktop execution engine for AgenticThat publishing, sessions, and scraping",
   "author": "AgenticThat",
   "repository": "https://github.com/tinitiateprime/agentic-that",
@@ -25,6 +25,7 @@
   "dependencies": {
     "electron-squirrel-startup": "1.0.1",
     "playwright-core": "1.61.1",
+    "sharp": "0.35.3",
     "update-electron-app": "^3.1.1"
   },
   "devDependencies": {

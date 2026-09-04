@@ -439,6 +439,33 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
   background: var(--field);
 }
 .post-preview img, .post-preview video { width: 100%; max-height: 420px; border-radius: 8px; object-fit: cover; background: #000; }
+.post-preview audio { width: 100%; }
+.telegram-upload-box {
+  display: grid;
+  justify-items: center;
+  gap: .42rem;
+  min-height: 10rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 1.2rem;
+  color: var(--ink);
+  background: var(--surface-raised);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
+}
+.telegram-upload-box:hover,
+.telegram-upload-box:focus-visible,
+.telegram-upload-box.is-dragging { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+.telegram-upload-box.is-dragging { transform: translateY(-1px); }
+.telegram-upload-box.is-uploading { opacity: .68; cursor: progress; }
+.telegram-upload-box.has-file { border-style: solid; border-color: rgba(60, 178, 111, .55); }
+.telegram-upload-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.telegram-upload-icon { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 50%; color: #062018; background: var(--accent); font-size: 1.25rem; font-weight: 800; }
+.telegram-upload-copy { color: var(--muted); font-size: .8rem; }
+.telegram-upload-button { margin-top: .18rem; border: 1px solid var(--line-strong); border-radius: 8px; padding: .5rem .75rem; color: var(--ink); background: var(--surface); font-size: .78rem; font-weight: 700; }
+.uploaded-media-summary { display: grid; gap: .2rem; padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); overflow-wrap: anywhere; }
+.uploaded-media-summary small { color: var(--muted); }
 .preview-text { white-space: pre-wrap; line-height: 1.5; }
 .poll-preview { display: grid; gap: .45rem; }
 .poll-preview span { border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem; background: var(--surface); }

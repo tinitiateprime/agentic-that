@@ -1,4 +1,9 @@
 import bigInt from "big-integer";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { open, mkdtemp, rm } from "node:fs/promises";
+import { isIP } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { Api, TelegramClient } from "telegram";
 import { NewMessage } from "telegram/events/index.js";
 import { StringSession } from "telegram/sessions/index.js";
@@ -29,6 +34,11 @@ export type SendMessageInput = {
   recipient: string;
   message: string;
   mediaUrl?: string;
+  mediaFile?: {
+    name: string;
+    path: string;
+    size: number;
+  };
   mediaType?: string;
   firstName?: string;
   lastName?: string;
@@ -65,6 +75,15 @@ export function normalizePhone(phone: string) {
     throw new Error("Phone number must include country code, for example +919876543210.");
   }
   return normalized;
+}
+
+export function telegramPhoneMatchesUser(phoneInput: string, telegramUserPhone = "") {
+  if (!telegramUserPhone.trim()) return false;
+  try {
+    return normalizePhone(phoneInput).slice(1) === telegramUserPhone.replace(/\D/g, "");
+  } catch {
+    return false;
+  }
 }
 
 function createClient(credentials: TelegramApiCredentials, sessionString = "") {
@@ -206,10 +225,9 @@ function extensionForMime(mimeType: string, mediaType = "") {
   return known[clean] || (mediaType === "video" ? "mp4" : mediaType === "image" ? "jpg" : "bin");
 }
 
-function mediaFileFromUrl(mediaUrl: string, mediaType = "") {
+function inlineMediaFile(mediaUrl: string, mediaType = "") {
   const trimmed = mediaUrl.trim();
   if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
 
   const dataUrl = /^data:([^;,]+);base64,(.+)$/i.exec(trimmed);
   if (!dataUrl) {
@@ -221,8 +239,171 @@ function mediaFileFromUrl(mediaUrl: string, mediaType = "") {
   return new CustomFile(`telegram-post.${extensionForMime(mimeType, mediaType)}`, buffer.length, "", buffer);
 }
 
-function shouldForceDocument(mediaType = "") {
-  return ["document", "audio", "voice", "forwarded"].includes(mediaType);
+type TelegramMediaDependencies = {
+  fetcher?: typeof fetch;
+  resolver?: (hostname: string, options: { all: true; verbatim: true }) => Promise<Array<{ address: string }>>;
+  tempRoot?: string;
+  maxBytes?: number;
+};
+
+type PreparedTelegramMedia = {
+  file: CustomFile;
+  cleanup: () => Promise<void>;
+};
+
+export function telegramMediaMaxBytes() {
+  const configured = Number(process.env.TELEGRAM_MEDIA_MAX_BYTES);
+  if (!Number.isFinite(configured) || configured < 1) return 2 * 1024 * 1024 * 1024;
+  return Math.min(Math.floor(configured), 4 * 1024 * 1024 * 1024);
+}
+
+function telegramMediaDownloadTimeout() {
+  const configured = Number(process.env.TELEGRAM_MEDIA_DOWNLOAD_TIMEOUT_MS);
+  if (!Number.isFinite(configured)) return 20 * 60_000;
+  return Math.max(30_000, Math.min(60 * 60_000, Math.floor(configured)));
+}
+
+function privateIpv4(address: string) {
+  const octets = address.split(".").map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [first, second] = octets;
+  return first === 0
+    || first === 10
+    || first === 127
+    || first >= 224
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && (second === 0 || second === 168))
+    || (first === 198 && (second === 18 || second === 19 || second === 51))
+    || (first === 203 && second === 0);
+}
+
+function privateNetworkAddress(address: string) {
+  const clean = address.toLowerCase().split("%")[0];
+  if (clean.startsWith("::ffff:")) return privateIpv4(clean.slice("::ffff:".length));
+  if (isIP(clean) === 4) return privateIpv4(clean);
+  if (isIP(clean) !== 6) return true;
+  return clean === "::"
+    || clean === "::1"
+    || clean.startsWith("fc")
+    || clean.startsWith("fd")
+    || /^fe[89ab]/.test(clean)
+    || clean.startsWith("2001:db8:");
+}
+
+async function assertPublicTelegramMediaUrl(
+  url: URL,
+  resolver: NonNullable<TelegramMediaDependencies["resolver"]>,
+) {
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error("Telegram media must use an http(s) URL or base64 data URL.");
+  if (url.username || url.password) throw new Error("Telegram media URLs cannot contain embedded credentials.");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new Error("Telegram media URLs must use a public host.");
+  }
+  const addresses = isIP(hostname) ? [{ address: hostname }] : await resolver(hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(result => privateNetworkAddress(result.address))) {
+    throw new Error("Telegram media URLs cannot point to this server or another private network.");
+  }
+}
+
+function safeTelegramMediaName(url: URL, mimeType: string, mediaType: string) {
+  let candidate = "telegram-post";
+  try { candidate = decodeURIComponent(path.basename(url.pathname)) || candidate; } catch { /* Keep the safe fallback. */ }
+  candidate = candidate.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 120) || "telegram-post";
+  if (!path.extname(candidate)) candidate += `.${extensionForMime(mimeType, mediaType)}`;
+  return candidate;
+}
+
+/**
+ * Downloads public media to this Ubuntu host before handing it to Telegram.
+ * This avoids Telegram's WEBPAGE_CURL_FAILED response for temporary tunnel
+ * URLs and ensures that the connected account uploads the actual file bytes.
+ */
+export async function prepareTelegramMedia(
+  mediaUrl: string,
+  mediaType = "",
+  dependencies: TelegramMediaDependencies = {},
+): Promise<PreparedTelegramMedia | null> {
+  const trimmed = mediaUrl.trim();
+  if (!trimmed) return null;
+  if (/^data:/i.test(trimmed)) {
+    const file = inlineMediaFile(trimmed, mediaType);
+    return file ? { file, cleanup: async () => undefined } : null;
+  }
+
+  let current: URL;
+  try { current = new URL(trimmed); } catch { throw new Error("Media URL must be a direct public http(s) URL or a base64 data URL."); }
+  const fetcher = dependencies.fetcher || fetch;
+  const resolver = dependencies.resolver || dnsLookup;
+  const maxBytes = dependencies.maxBytes || telegramMediaMaxBytes();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error("Telegram media download timed out.")), telegramMediaDownloadTimeout());
+  timeout.unref();
+  let directory = "";
+  try {
+    let response: Response | null = null;
+    for (let redirects = 0; redirects <= 5; redirects += 1) {
+      await assertPublicTelegramMediaUrl(current, resolver);
+      response = await fetcher(current, { redirect: "manual", signal: controller.signal });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => undefined);
+      if (!location) throw new Error("The Telegram media URL returned an invalid redirect.");
+      if (redirects === 5) throw new Error("The Telegram media URL redirected too many times.");
+      current = new URL(location, current);
+      response = null;
+    }
+    if (!response?.ok) throw new Error(`The Telegram media URL returned HTTP ${response?.status || 502}.`);
+    if (!response.body) throw new Error("The Telegram media URL returned no file data.");
+    const declaredSize = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredSize) && declaredSize > maxBytes) {
+      throw new Error("The Telegram media exceeds the configured Telegram upload size.");
+    }
+    const mimeType = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (mimeType === "text/html") throw new Error("The Telegram media URL returned a web page instead of a media file.");
+
+    directory = await mkdtemp(path.join(dependencies.tempRoot || os.tmpdir(), "agenticthat-telegram-media-"));
+    const fileName = safeTelegramMediaName(current, mimeType, mediaType);
+    const filePath = path.join(directory, fileName);
+    const handle = await open(filePath, "wx", 0o600);
+    let size = 0;
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.byteLength;
+        if (size > maxBytes) throw new Error("The Telegram media exceeds the configured Telegram upload size.");
+        await handle.write(chunk.value);
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      await handle.close();
+    }
+    if (!size) throw new Error("The Telegram media URL returned an empty file.");
+    return {
+      file: new CustomFile(fileName, size, filePath),
+      cleanup: () => rm(directory, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    if (controller.signal.aborted) throw new Error("Telegram media download timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function telegramMediaSendOptions(mediaType = "") {
+  const normalized = mediaType.trim().toLowerCase();
+  return {
+    forceDocument: normalized === "document" || normalized === "forwarded",
+    voiceNote: normalized === "voice",
+    videoNote: normalized === "video_note",
+    supportsStreaming: normalized === "video",
+  };
 }
 function floodWaitSeconds(error: unknown) {
   if (error && typeof error === "object" && "seconds" in error) {
@@ -238,6 +419,29 @@ async function inputEntityFromUser(client: TelegramClient, user: Api.User) {
   return client.getInputEntity(user);
 }
 
+function userMatchesPhone(user: Api.User, phone: string) {
+  return Boolean(user.phone) && `+${user.phone?.replace(/\D/g, "")}` === phone;
+}
+
+async function resolvePhoneFromTelegramContacts(client: TelegramClient, phone: string) {
+  const contacts = await client.invoke(new Api.contacts.GetContacts({ hash: bigInt.zero }));
+  if (!(contacts instanceof Api.contacts.Contacts)) return null;
+  const user = contacts.users.find(
+    (item): item is Api.User => item instanceof Api.User && userMatchesPhone(item, phone)
+  );
+  return user ? inputEntityFromUser(client, user) : null;
+}
+
+async function resolvePhoneFromTelegramDialogs(client: TelegramClient, phone: string) {
+  for await (const dialog of client.iterDialogs({ limit: 500 })) {
+    const entity = dialog.entity;
+    if (entity instanceof Api.User && userMatchesPhone(entity, phone)) {
+      return inputEntityFromUser(client, entity);
+    }
+  }
+  return null;
+}
+
 async function resolveExistingPhoneContact(client: TelegramClient, phoneInput: string) {
   const phone = normalizePhone(phoneInput);
   const lookups = [phone, phone.slice(1)];
@@ -250,49 +454,73 @@ async function resolveExistingPhoneContact(client: TelegramClient, phoneInput: s
     }
   }
 
-  const resolved = await client.invoke(new Api.contacts.ResolvePhone({ phone: phone.slice(1) }));
-  const users = "users" in resolved ? resolved.users : [];
-  const user = users.find((item): item is Api.User => item instanceof Api.User);
-  if (!user) throw new Error("Telegram could not resolve this phone number from existing contacts.");
-  return inputEntityFromUser(client, user);
+  try {
+    const resolved = await client.invoke(new Api.contacts.ResolvePhone({ phone: phone.slice(1) }));
+    const users = "users" in resolved ? resolved.users : [];
+    const user = users.find((item): item is Api.User => item instanceof Api.User);
+    if (user) return inputEntityFromUser(client, user);
+  } catch (error) {
+    const seconds = floodWaitSeconds(error);
+    if (seconds) {
+      throw new Error(`Telegram asked to wait ${seconds} seconds before resolving this phone number. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+    }
+    // The recipient may still be an existing contact or dialog whose phone is
+    // available to this connected account, so inspect those authoritative
+    // collections before attempting a new contact import.
+  }
+
+  const contact = await resolvePhoneFromTelegramContacts(client, phone).catch(() => null);
+  if (contact) return contact;
+  const dialog = await resolvePhoneFromTelegramDialogs(client, phone).catch(() => null);
+  if (dialog) return dialog;
+  throw new Error("Telegram could not resolve this phone number from the account's contacts or existing chats.");
 }
 
 async function importPhoneContact(client: TelegramClient, input: SendMessageInput) {
   const phone = normalizePhone(input.recipient);
-  const clientId = bigInt(Date.now()).multiply(1000).add(Math.floor(Math.random() * 1000));
-  let result;
-  try {
-    result = await client.invoke(
-      new Api.contacts.ImportContacts({
-        contacts: [
-          new Api.InputPhoneContact({
-            clientId,
-            phone: phone.slice(1),
-            firstName: input.firstName?.trim() || "Telegram",
-            lastName: input.lastName?.trim() || "Contact"
-          })
-        ]
-      })
-    );
-  } catch (error) {
-    const seconds = floodWaitSeconds(error);
-    if (seconds) {
-      throw new Error(`Telegram asked to wait ${seconds} seconds before importing this phone contact. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const clientId = bigInt(Date.now()).multiply(1000).add(Math.floor(Math.random() * 1000));
+    let result;
+    try {
+      result = await client.invoke(
+        new Api.contacts.ImportContacts({
+          contacts: [
+            new Api.InputPhoneContact({
+              clientId,
+              phone: phone.slice(1),
+              firstName: input.firstName?.trim() || "Telegram",
+              lastName: input.lastName?.trim() || "Contact"
+            })
+          ]
+        })
+      );
+    } catch (error) {
+      const seconds = floodWaitSeconds(error);
+      if (seconds) {
+        throw new Error(`Telegram asked to wait ${seconds} seconds before importing this phone contact. Use the contact's @username if available, or try again after ${seconds} seconds.`);
+      }
+      throw error;
     }
-    throw error;
-  }
-  const imported = "imported" in result ? result.imported : [];
-  const users = "users" in result ? result.users : [];
-  const userId = imported[0]?.userId?.toString();
-  const user = users.find(
-    (item): item is Api.User => item instanceof Api.User && (!userId || item.id.toString() === userId)
-  );
+    const imported = "imported" in result ? result.imported : [];
+    const users = "users" in result ? result.users : [];
+    const userId = imported[0]?.userId?.toString();
+    const user = users.find(
+      (item): item is Api.User => item instanceof Api.User && (!userId || item.id.toString() === userId)
+    );
+    if (user) return inputEntityFromUser(client, user);
 
-  if (!user) {
-    throw new Error("Telegram could not resolve this phone number. It may be incorrect, private, or not on Telegram.");
+    // Importing can update Telegram's server-side contact list even when the
+    // immediate response omits the entity. Re-read the exact phone before
+    // concluding that the recipient's privacy setting prevents discovery.
+    const refreshed = await resolvePhoneFromTelegramContacts(client, phone).catch(() => null);
+    if (refreshed) return refreshed;
+
+    const retryContacts = "retryContacts" in result ? result.retryContacts : [];
+    const shouldRetry = retryContacts.some(value => value.toString() === clientId.toString());
+    if (!shouldRetry) break;
   }
 
-  return inputEntityFromUser(client, user);
+  throw new Error("Telegram's phone privacy prevented this account from being resolved. Ask the recipient to message the connected account first, or save the recipient's @username and retry.");
 }
 
 async function resolveMessagePeer(client: TelegramClient, input: SendMessageInput, allowImport: boolean) {
@@ -304,7 +532,7 @@ async function resolveMessagePeer(client: TelegramClient, input: SendMessageInpu
   try {
     return await resolveExistingPhoneContact(client, recipient);
   } catch (error) {
-    if (!allowImport) throw error;
+    if (!allowImport || /asked to wait \d+ seconds/i.test(errorMessage(error))) throw error;
   }
 
   return importPhoneContact(client, input);
@@ -313,24 +541,32 @@ async function resolveMessagePeer(client: TelegramClient, input: SendMessageInpu
 export async function sendTelegramMessage(credentials: TelegramApiCredentials, sessionString: string, input: SendMessageInput): Promise<SentMessage> {
   const recipient = input.recipient.trim();
   const message = input.message.trim();
-  const mediaFile = mediaFileFromUrl(input.mediaUrl || "", input.mediaType || "");
   if (!recipient) throw new Error("Recipient is required.");
+  const preparedMedia = input.mediaFile
+    ? {
+        file: new CustomFile(input.mediaFile.name, input.mediaFile.size, input.mediaFile.path),
+        cleanup: async () => undefined,
+      }
+    : await prepareTelegramMedia(input.mediaUrl || "", input.mediaType || "");
+  const mediaFile = preparedMedia?.file || null;
   if (!message && !mediaFile) throw new Error("Message or media is required.");
 
   const client = createClient(credentials, sessionString);
   try {
     await client.connect();
-    await client.getMe();
-    const peer = await resolveMessagePeer(client, input, true);
+    const currentUser = await client.getMe();
+    const peer = recipient.startsWith("+") && telegramPhoneMatchesUser(recipient, currentUser.phone || "")
+      ? await inputEntityFromUser(client, currentUser)
+      : await resolveMessagePeer(client, input, true);
     const sentIds: string[] = [];
     const textChunks = mediaFile ? [] : splitTelegramMessage(message);
     if (mediaFile) {
       const { caption, remaining } = splitCaptionAndText(message);
+      const sendOptions = telegramMediaSendOptions(input.mediaType);
       const sent = await client.sendFile(peer, {
         file: mediaFile,
         caption,
-        forceDocument: shouldForceDocument(input.mediaType),
-        supportsStreaming: input.mediaType === "video"
+        ...sendOptions,
       });
       if (sent.id) sentIds.push(sent.id.toString());
       textChunks.push(...splitTelegramMessage(remaining));
@@ -339,9 +575,16 @@ export async function sendTelegramMessage(credentials: TelegramApiCredentials, s
       const sent = await client.sendMessage(peer, { message: chunk });
       if (sent.id) sentIds.push(sent.id.toString());
     }
+    if (!sentIds.length) {
+      throw new Error("Telegram did not return a message ID, so delivery could not be confirmed.");
+    }
     return { recipient, messageId: sentIds.join(","), sentAt: new Date().toISOString() };
   } finally {
-    await client.disconnect();
+    try {
+      await client.disconnect();
+    } finally {
+      await preparedMedia?.cleanup();
+    }
   }
 }
 

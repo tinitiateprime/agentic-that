@@ -4,6 +4,8 @@ import {
   recipientFromGroupLine as normalizeTelegramRecipient,
   savedContactRecipient
 } from "./recipient-utils.js";
+import { uploadTelegramDeviceFile } from "./media-upload.js";
+import { inferTelegramUploadPostType, telegramUploadTypeHint } from "./media-kind.js";
 
 export function initTelegramConsole(options = {}) {
 let centralServiceToken = String(options.serviceToken || "");
@@ -37,7 +39,7 @@ const titles = {
   backup: ["Workspace tools", "Backup and restore"]
 };
 
-const postLabels = { text: "Text only", image: "Image + text", video: "Video + text", document: "Document", audio: "Audio", voice: "Voice", poll: "Poll", quiz: "Quiz", forwarded: "Forwarded" };
+const postLabels = { text: "Text only", image: "Image + text", video: "Video + text", animation: "GIF / animation", document: "Document", audio: "Audio", voice: "Voice message", video_note: "Video note", poll: "Poll", quiz: "Quiz", forwarded: "Forwarded" };
 const inboxViewLabels = { split: "Split", compact: "Compact", focus: "Focus", multi: "Multi" };
 const apps = ["Telegram Workflow", "WhatsApp Workflow", "Discord Workflow", "Slack Workflow"];
 const contactCountries = Array.from(document.querySelectorAll("#phone-country-code option"))
@@ -92,15 +94,26 @@ const state = {
   accounts: [],
   selected: localStorage.getItem(keys.selected) || "",
   login: { challengeId: "", stage: "phone" },
-  profiles: read(keys.profiles, {}),
-  contacts: read(keys.contacts, []),
-  groups: read(keys.groups, []),
-  channels: read(keys.channels, []),
-  posts: read(keys.posts, []),
-  postHistory: read(keys.postHistory, []),
-  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Browser session", proxy: "", storage: "Browser local workspace", theme: "Dark mode" }),
+  profiles: {},
+  contacts: [],
+  groups: [],
+  channels: [],
+  legacyWorkspace: {
+    profiles: read(keys.profiles, {}),
+    contacts: read(keys.contacts, []),
+    groups: read(keys.groups, []),
+    channels: read(keys.channels, []),
+  },
+  posts: [],
+  postHistory: [],
+  legacyPosts: read(keys.posts, []),
+  formPost: null,
+  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Server session", proxy: "", storage: "Private Ubuntu server", theme: "Dark mode" }),
   activeView: "dashboard",
-  inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} }
+  inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} },
+  postsLoading: false,
+  mediaUploading: false,
+  mediaPreviewUrl: ""
 };
 
 const el = {
@@ -114,8 +127,8 @@ const el = {
   profileForm: $("profile-form"), profileList: $("profile-list"), profileStatusMessage: $("profile-status-message"), applicationList: $("application-list"),
   contactForm: $("contact-form"), contactCountryCode: $("contact-country-code"), contactList: $("contact-list"), contactCount: $("contact-count"), contactStatus: $("contact-status"),
   inboxSearch: $("inbox-search"), inboxShell: $("inbox-shell"), inboxViewButtons: $$(".inbox-view-control button[data-inbox-view]"), inboxThreadList: $("inbox-thread-list"), inboxActiveHeading: $("inbox-active-heading"), inboxThread: $("inbox-thread"), inboxMultiBoard: $("inbox-multi-board"), inboxForm: $("inbox-form"), inboxMessage: $("inbox-message"), inboxSendButton: $("inbox-send-button"), inboxRefresh: $("inbox-refresh"), inboxStatus: $("inbox-status"),
-  groupForm: $("group-form"), groupList: $("group-list"), channelForm: $("channel-form"), channelList: $("channel-list"),
-  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
+  groupForm: $("group-form"), groupList: $("group-list"), groupStatusMessage: $("group-status-message"), channelForm: $("channel-form"), channelList: $("channel-list"), channelStatusMessage: $("channel-status-message"),
+  postForm: $("post-form"), postPreview: $("post-preview"), postList: $("post-list"), postContactTargets: $("post-contact-targets"), postGroupTargets: $("post-group-targets"), postStatusMessage: $("post-status-message"), postMediaDropzone: $("post-media-dropzone"), postMediaFile: $("post-media-file"), postMediaStatus: $("post-media-status"), postSearch: $("post-search"), postFilterType: $("post-filter-type"), postSort: $("post-sort"),
   postHistorySent: $("post-history-sent"), postHistoryPending: $("post-history-pending"),
   globalSearch: $("global-search"), globalResults: $("global-results"), settingsForm: $("settings-form"), settingsStatus: $("settings-status"), backupJson: $("backup-json"), backupStatus: $("backup-status")
 };
@@ -148,14 +161,21 @@ function toggleTelegramGuide() {
 
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, options = {}) {
+  return apiRequest(path, options, true);
+}
+
+async function apiBinary(path, options = {}) {
+  return apiRequest(path, options, false);
+}
+
+async function apiRequest(path, options = {}, jsonBody = true) {
   const endpoint = apiBase
     ? apiBase + path.replace(/^\/v1/, "")
     : path;
 
   const makeRequest = async (forceRefresh = false) => {
-    const headers = options.body
-      ? { "content-type": "application/json" }
-      : {};
+    const headers = { ...(options.headers || {}) };
+    if (options.body && jsonBody) headers["content-type"] = "application/json";
 
     if (centralServiceToken) {
       try {
@@ -180,7 +200,7 @@ async function api(path, options = {}) {
       credentials: "same-origin",
       headers,
       body: options.body
-        ? JSON.stringify(options.body)
+        ? jsonBody ? JSON.stringify(options.body) : options.body
         : undefined,
     });
   };
@@ -287,6 +307,7 @@ function clearLocalWorkspace() {
   state.contacts = [];
   state.groups = [];
   state.channels = [];
+  state.legacyWorkspace = { profiles: {}, contacts: [], groups: [], channels: [] };
   state.posts = [];
   state.postHistory = [];
   state.inbox = { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: "split", drafts: {} };
@@ -296,8 +317,7 @@ function signedIn(user) { state.user = user; el.signInView.hidden = true; el.wor
 function currentAccount() { return state.accounts.find((account) => account.id === state.selected) || null; }
 function profileFor(account) {
   if (!account) return null;
-  state.profiles[account.id] ||= { profileName: account.displayName || "Telegram profile", displayName: account.displayName || "", username: account.username || "", phone: "", status: "Active", avatar: "", configNumbers: "", description: "" };
-  return state.profiles[account.id];
+  return state.profiles[account.id] || { profileName: account.displayName || "Telegram profile", displayName: account.displayName || "", username: account.username || "", phone: "", status: "Active", avatar: "", configNumbers: "", description: "" };
 }
 function initials(value) {
   const parts = String(value || "T").trim().split(/\s+/).filter(Boolean);
@@ -306,7 +326,7 @@ function initials(value) {
 }
 function avatar(profile, fallback) { return profile?.avatar ? `<span class="account-avatar"><img src="${esc(profile.avatar)}" alt=""></span>` : `<span class="account-avatar">${esc(initials(fallback))}</span>`; }
 function chatAvatar(label, extraClass = "") { return `<span class="chat-avatar${extraClass ? ` ${extraClass}` : ""}" aria-hidden="true">${esc(initials(label))}</span>`; }
-function saveAll() { write(keys.profiles, state.profiles); write(keys.contacts, state.contacts); write(keys.groups, state.groups); write(keys.channels, state.channels); write(keys.posts, state.posts); write(keys.postHistory, state.postHistory); write(keys.settings, state.settings); }
+function saveAll() { write(keys.settings, state.settings); }
 function selectAccount(id) { state.selected = id || ""; state.selected ? localStorage.setItem(keys.selected, state.selected) : localStorage.removeItem(keys.selected); state.inbox.messages = []; state.inbox.selectedThread = ""; state.inbox.lastSyncAt = 0; state.inbox.drafts = {}; render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 function ensureSelected() { if (!state.accounts.some((account) => account.id === state.selected)) state.selected = state.accounts[0]?.id || ""; }
 
@@ -326,7 +346,6 @@ function renderProfileSelect() {
   el.profileSelect.value = state.selected;
   el.profileSelect.disabled = false;
   el.quickSendButton.disabled = false;
-  write(keys.profiles, state.profiles);
 }
 
 function renderDashboard() {
@@ -464,13 +483,13 @@ function contactRecipient(contact) {
 function postTargets(post) {
   const rows = [];
   const seen = new Set();
-  const add = (recipient, source, firstName = "") => {
+  const add = (recipient, source, firstName = "", kind = "manual") => {
     const clean = recipientFromGroupLine(recipient);
     if (!clean) return;
     const key = clean.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ recipient: clean, source, firstName });
+    rows.push({ recipient: clean, source, firstName, kind });
   };
   add(post.recipient, "Manual");
   (post.contacts || []).forEach((id) => {
@@ -483,6 +502,15 @@ function postTargets(post) {
     if (!group) return;
     groupRecipients(group).forEach((recipient) => add(recipient, group.name || "Group", group.name || "Telegram Group", "group"));
   });
+  if (Array.isArray(post.targets)) {
+    const unresolvedContacts = (post.contacts || []).some((id) => !state.contacts.some((contact) => contact.id === id));
+    const unresolvedGroups = (post.groups || []).some((id) => !state.groups.some((group) => group.id === id));
+    post.targets.forEach((target) => {
+      if ((target.kind === "contact" && unresolvedContacts) || (target.kind === "group" && unresolvedGroups)) {
+        add(target.recipient, target.source, target.firstName, target.kind);
+      }
+    });
+  }
   return rows;
 }
 function renderPostContacts(selectedIds = selectedPostContactIds()) {
@@ -504,36 +532,69 @@ function renderPostGroups(selectedIds = selectedPostGroupIds()) {
   }).join("") : empty("No groups saved.");
 }
 function postFromForm() {
-  const existing = state.posts.find((item) => item.id === $("post-id").value);
-  return { id: $("post-id").value || uid("post"), title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: existing?.scheduledAt || "", mediaUrl: $("post-media-url").value.trim(), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: selectedPostContactIds(), groups: selectedPostGroupIds(), accountId: currentAccount()?.id || existing?.accountId || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const existing = state.posts.find((item) => item.id === $("post-id").value) || state.formPost;
+  const selectedContacts = selectedPostContactIds();
+  const selectedGroups = selectedPostGroupIds();
+  const unavailableContacts = (existing?.contacts || []).filter((id) => !state.contacts.some((contact) => contact.id === id));
+  const unavailableGroups = (existing?.groups || []).filter((id) => !state.groups.some((group) => group.id === id));
+  return { id: $("post-id").value || "", title: $("post-title").value.trim(), type: $("post-type").value, category: $("post-category").value.trim(), tags: $("post-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), status: $("post-status").value, scheduledAt: $("post-scheduled-at").value, mediaUrl: $("post-media-url").value.trim(), mediaUploadId: $("post-media-upload-id").value.trim(), mediaName: $("post-media-name").value.trim(), mediaMimeType: $("post-media-mime").value.trim(), mediaSize: Number($("post-media-size").value || 0), body: $("post-body").value.trim(), recipient: $("post-recipient").value.trim(), contacts: [...new Set([...selectedContacts, ...unavailableContacts])], groups: [...new Set([...selectedGroups, ...unavailableGroups])], targets: existing?.targets || [], accountId: $("post-account-id").value || existing?.accountId || currentAccount()?.id || "", createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
-function savePost(statusOverride = "") {
+function scheduleIso(value) {
+  const date = new Date(value);
+  return value && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
+}
+function scheduleInputValue(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+function postApiPayload(post) {
+  return { ...post, scheduledAt: scheduleIso(post.scheduledAt), targets: postTargets(post) };
+}
+async function savePost() {
+  if (state.mediaUploading) { status(el.postStatusMessage, "Wait for the device file upload to finish.", "error"); return null; }
   const post = postFromForm();
   if (!post.title) { status(el.postStatusMessage, "Post title is required.", "error"); return null; }
-  if (statusOverride) post.status = statusOverride;
-  const index = state.posts.findIndex((item) => item.id === post.id);
-  index === -1 ? state.posts.unshift(post) : state.posts[index] = post;
-  $("post-id").value = post.id;
-  $("post-status").value = post.status;
-  write(keys.posts, state.posts);
-  render();
-  status(el.postStatusMessage, "Post saved.", "success");
-  return post;
+  if (!post.accountId) { status(el.postStatusMessage, "Select a connected sending profile.", "error"); return null; }
+  const existing = post.id.startsWith("telegram_post_");
+  try {
+    const data = await api(existing ? `/v1/posts/${encodeURIComponent(post.id)}` : "/v1/posts", {
+      method: existing ? "PUT" : "POST",
+      body: postApiPayload(post),
+    });
+    const saved = data.post;
+    state.formPost = saved;
+    const index = state.posts.findIndex((item) => item.id === saved.id);
+    index === -1 ? state.posts.unshift(saved) : state.posts[index] = saved;
+    $("post-id").value = saved.id;
+    $("post-status").value = saved.status;
+    render();
+    status(el.postStatusMessage, "Post saved on the Ubuntu server.", "success");
+    return saved;
+  } catch (error) {
+    onError(error, el.postStatusMessage);
+    return null;
+  }
 }
 function fillPost(post) {
-  $("post-id").value = post.id; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status === "Scheduled" ? "Ready" : post.status || "Draft"; $("post-media-url").value = post.mediaUrl || ""; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
+  state.formPost = post; revokePostMediaPreview(); $("post-id").value = post.id; $("post-account-id").value = post.accountId || ""; $("post-title").value = post.title || ""; $("post-type").value = post.type || "text"; $("post-category").value = post.category || ""; $("post-tags").value = (post.tags || []).join(", "); $("post-status").value = post.status || "Draft"; $("post-scheduled-at").value = scheduleInputValue(post.scheduledAt); $("post-media-url").value = post.mediaUrl || ""; $("post-media-upload-id").value = post.mediaUploadId || ""; $("post-media-name").value = post.mediaName || ""; $("post-media-mime").value = post.mediaMimeType || ""; $("post-media-size").value = post.mediaSize || ""; el.postMediaFile.value = ""; el.postMediaDropzone.classList.toggle("has-file", Boolean(post.mediaUploadId)); el.postMediaStatus.textContent = post.mediaUploadId ? `${post.mediaName || "Uploaded file"} is stored privately and ready. ${telegramUploadTypeHint(post.type)}` : `Choose a file. ${telegramUploadTypeHint(post.type)}`; $("post-body").value = post.body || ""; $("post-recipient").value = post.recipient || ""; renderPostContacts(post.contacts || []); renderPostGroups(post.groups || []); renderPostPreview();
 }
-function clearPost() { el.postForm.reset(); $("post-id").value = ""; $("post-status").value = "Draft"; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
+function revokePostMediaPreview() { if (state.mediaPreviewUrl) URL.revokeObjectURL(state.mediaPreviewUrl); state.mediaPreviewUrl = ""; }
+function clearPost() { state.formPost = null; revokePostMediaPreview(); el.postForm.reset(); $("post-id").value = ""; $("post-account-id").value = ""; $("post-status").value = "Draft"; ["post-media-url", "post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; }); el.postMediaDropzone.classList.remove("has-file", "is-uploading", "is-dragging"); el.postMediaStatus.textContent = `Choose a file. ${telegramUploadTypeHint("text")}`; renderPostContacts([]); renderPostGroups([]); renderPostPreview(); }
 function formatDate(value) { const date = new Date(value); return value && !Number.isNaN(date.getTime()) ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : value; }
 function renderPostPreview() {
   const post = postFromForm();
   const contactNames = (post.contacts || []).map((id) => state.contacts.find((contact) => contact.id === id)?.name).filter(Boolean);
   const groupNames = (post.groups || []).map((id) => state.groups.find((group) => group.id === id)?.name).filter(Boolean);
-  const tags = [postLabels[post.type], post.category, post.status, ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
+  const tags = [postLabels[post.type], post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : "", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).map((tag) => `<span class="badge">${esc(tag)}</span>`).join("");
   let media = "";
-  if (post.mediaUrl && post.type === "image") media = `<img src="${esc(post.mediaUrl)}" alt="">`;
-  else if (post.mediaUrl && post.type === "video") media = `<video src="${esc(post.mediaUrl)}" controls></video>`;
-  else if (post.mediaUrl) media = `<a href="${esc(post.mediaUrl)}" target="_blank" rel="noreferrer">${esc(post.mediaUrl)}</a>`;
+  const previewSource = state.mediaPreviewUrl && post.mediaUploadId ? state.mediaPreviewUrl : post.mediaUrl;
+  if (previewSource && ["image", "animation"].includes(post.type)) media = `<img src="${esc(previewSource)}" alt="">`;
+  else if (previewSource && ["video", "video_note"].includes(post.type)) media = `<video src="${esc(previewSource)}" controls></video>`;
+  else if (previewSource && ["audio", "voice"].includes(post.type)) media = `<audio src="${esc(previewSource)}" controls></audio>`;
+  else if (post.mediaUploadId) media = `<div class="uploaded-media-summary"><strong>${esc(post.mediaName || "Uploaded file")}</strong><small>${post.mediaSize ? `${(post.mediaSize / 1024 / 1024).toFixed(2)} MB` : "Ready on server"}</small></div>`;
+  else if (post.mediaUrl) media = `<span class="uploaded-media-summary">Legacy media attachment</span>`;
   const body = (post.type === "poll" || post.type === "quiz")
     ? `<div class="poll-preview">${(lines(post.body).length ? lines(post.body) : ["Poll options will appear here."]).map((line) => `<span>${esc(line)}</span>`).join("")}</div>`
     : `<p class="preview-text">${esc(post.body || "Post text or caption will appear here.")}</p>`;
@@ -545,13 +606,11 @@ function renderPosts() {
   const type = el.postFilterType.value;
   const sort = el.postSort.value;
   let posts = state.posts.filter((post) => (!type || post.type === type) && (!query || [post.title, post.type, post.category, (post.tags || []).join(" "), post.status, post.body, post.recipient].join(" ").toLowerCase().includes(query)));
-  posts = posts.slice().sort((a, b) => sort === "created-asc" ? a.createdAt.localeCompare(b.createdAt) : sort === "category" ? (a.category || "").localeCompare(b.category || "") : b.createdAt.localeCompare(a.createdAt));
-  el.postList.innerHTML = posts.length ? posts.map((post) => record(post.title, [postLabels[post.type] || post.type, post.category, post.status === "Scheduled" ? "Ready" : post.status].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button><button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`)).join("") : empty("No posts found.");
-}
-function savePostHistory(records) {
-  if (!records.length) return;
-  state.postHistory = [...records, ...state.postHistory].slice(0, 1000);
-  write(keys.postHistory, state.postHistory);
+  posts = posts.slice().sort((a, b) => sort === "created-asc" ? a.createdAt.localeCompare(b.createdAt) : sort === "category" ? (a.category || "").localeCompare(b.category || "") : sort === "scheduled" ? (a.scheduledAt || "9999").localeCompare(b.scheduledAt || "9999") : b.createdAt.localeCompare(a.createdAt));
+  el.postList.innerHTML = posts.length ? posts.map((post) => {
+    const cancel = post.status === "Scheduled" ? `<button class="mini-button" data-cancel-post="${esc(post.id)}" type="button">Cancel schedule</button>` : "";
+    return record(post.title, [postLabels[post.type] || post.type, post.category, post.status, post.scheduledAt ? formatDate(post.scheduledAt) : ""].filter(Boolean).join(" | "), post.body, `<button class="mini-button" data-edit-post="${esc(post.id)}" type="button">Edit</button><button class="mini-button" data-copy-post="${esc(post.id)}" type="button">Copy</button>${cancel}<button class="mini-button" data-delete-post="${esc(post.id)}" type="button">Delete</button>`);
+  }).join("") : empty("No posts found.");
 }
 function historyRow(item) {
   const meta = [
@@ -569,14 +628,14 @@ function pendingPostRow(post) {
   const targets = postTargets(post);
   const contactNames = (post.contacts || []).map((id) => state.contacts.find((contact) => contact.id === id)?.name).filter(Boolean);
   const groupNames = (post.groups || []).map((id) => state.groups.find((group) => group.id === id)?.name).filter(Boolean);
-  const meta = [post.status === "Scheduled" ? "Ready" : post.status || "Draft", targets.length ? `${targets.length} recipient${targets.length === 1 ? "" : "s"}` : "No recipients", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).join(" | ");
+  const meta = [post.status || "Draft", post.scheduledAt ? `Schedule: ${formatDate(post.scheduledAt)}` : "", targets.length ? `${targets.length} recipient${targets.length === 1 ? "" : "s"}` : "No recipients", ...contactNames.map((name) => `Contact: ${name}`), ...groupNames.map((name) => `Group: ${name}`)].filter(Boolean).join(" | ");
   return record(post.title || "Untitled post", meta, post.lastError || post.body || "", `<button class="mini-button" data-view="posts" data-edit-post="${esc(post.id)}" type="button">Open post</button>`);
 }
 function renderPostHistory() {
   if (!el.postHistorySent || !el.postHistoryPending) return;
   const sent = state.postHistory.filter((item) => item.deliveryStatus === "Sent");
   const failed = state.postHistory.filter((item) => item.deliveryStatus === "Failed");
-  const pending = state.posts.filter((post) => post.status !== "Posted");
+  const pending = state.posts.filter((post) => ["Draft", "Scheduled", "Sending"].includes(post.status));
   el.postHistorySent.innerHTML = sent.length || failed.length
     ? [...sent, ...failed].map(historyRow).join("")
     : empty("No post sharing history yet.");
@@ -888,72 +947,128 @@ async function loadInboxMessages(options = {}) {
     renderInbox();
   }
 }
-function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Browser session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Browser local workspace"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
+function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private Ubuntu server"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
 function applyTheme() { document.body.classList.toggle("light-mode", state.settings.theme === "Light mode"); }
-function backupData() { return { version: 1, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
+function backupData() { return { version: 2, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
 function render() { renderProfileSelect(); renderDashboard(); renderAccounts(); renderProfileForm(); renderProfileList(); renderApplications(); renderContacts(); renderInbox(); renderGroups(); renderChannels(); renderPostContacts(); renderPostGroups(); renderPostPreview(); renderPosts(); renderPostHistory(); renderSearch(); renderSettings(); }
 function setView(view) { state.activeView = titles[view] ? view : "dashboard"; const [kicker, title] = titles[state.activeView] || titles.dashboard; el.viewKicker.textContent = kicker; el.viewTitle.textContent = title; $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === state.activeView)); $$(".view").forEach((section) => { const active = section.id === `view-${state.activeView}`; section.hidden = !active; section.classList.toggle("active-view", active); }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
-async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; state.accounts.forEach(profileFor); ensureSelected(); write(keys.profiles, state.profiles); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
+function workspaceImportPayload(source, overwrite = false) {
+  const now = new Date().toISOString();
+  const records = (items, prefix) => (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    id: new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,100}$`).test(item?.id || "") ? item.id : uid(prefix),
+    createdAt: item?.createdAt || item?.updatedAt || now,
+    updatedAt: item?.updatedAt || item?.createdAt || now,
+  }));
+  const profileEntries = Array.isArray(source?.profiles)
+    ? source.profiles.map((profile) => [profile.accountId, profile])
+    : Object.entries(source?.profiles || {});
+  return {
+    overwrite,
+    contacts: records(source?.contacts, "contact"),
+    groups: records(source?.groups, "group"),
+    channels: records(source?.channels, "channel"),
+    profiles: profileEntries.filter(([accountId]) => state.accounts.some((account) => account.id === accountId)).map(([accountId, profile]) => ({ ...profile, accountId, updatedAt: profile?.updatedAt || now })),
+  };
+}
+function hasLegacyWorkspaceData() {
+  return Object.keys(state.legacyWorkspace.profiles || {}).length > 0 ||
+    [state.legacyWorkspace.contacts, state.legacyWorkspace.groups, state.legacyWorkspace.channels]
+      .some((records) => Array.isArray(records) && records.length > 0);
+}
+function applyWorkspaceData(data) {
+  state.contacts = Array.isArray(data.contacts) ? data.contacts : [];
+  state.groups = Array.isArray(data.groups) ? data.groups : [];
+  state.channels = Array.isArray(data.channels) ? data.channels : [];
+  state.profiles = Object.fromEntries((Array.isArray(data.profiles) ? data.profiles : []).map((profile) => [profile.accountId, profile]));
+}
+async function migrateLegacyWorkspaceData() {
+  if (!hasLegacyWorkspaceData()) return;
+  const data = await api("/v1/workspace-data/import", { method: "POST", body: workspaceImportPayload(state.legacyWorkspace) });
+  applyWorkspaceData(data);
+  state.legacyWorkspace = { profiles: {}, contacts: [], groups: [], channels: [] };
+  [keys.profiles, keys.contacts, keys.groups, keys.channels].forEach((key) => localStorage.removeItem(key));
+}
+async function loadWorkspaceData(options = {}) {
+  const data = await api("/v1/workspace-data");
+  applyWorkspaceData(data);
+  if (options.migrate === false || state.user?.accessLevel === "view" || !hasLegacyWorkspaceData()) return;
+  try {
+    await migrateLegacyWorkspaceData();
+  } catch {
+    status(el.messageStatus, "Old browser records remain on this device because server migration could not finish.", "error");
+  }
+}
+function deliveryHistoryFromPosts(posts) {
+  return posts.flatMap((post) => (post.deliveries || [])
+    .filter((delivery) => delivery.status === "Sent" || delivery.status === "Failed")
+    .map((delivery) => ({
+      id: delivery.id,
+      postId: post.id,
+      postTitle: post.title || "Untitled post",
+      accountId: post.accountId,
+      recipient: delivery.recipient,
+      contactName: delivery.kind === "contact" ? delivery.source : "",
+      groupName: delivery.kind === "group" ? delivery.source : "",
+      source: delivery.source,
+      mediaType: post.mediaUploadId || post.mediaUrl ? post.type : "text",
+      mediaName: post.mediaName || "",
+      messagePreview: (post.body || "").slice(0, 240),
+      deliveryStatus: delivery.status,
+      sentAt: delivery.sentAt || post.updatedAt,
+      telegramMessageId: delivery.telegramMessageId || "",
+      error: delivery.error || "",
+    })));
+}
+async function migrateLegacyPosts() {
+  if (!state.legacyPosts.length) return;
+  const remaining = [];
+  for (const legacy of state.legacyPosts) {
+    if (!state.accounts.some((account) => account.id === legacy.accountId)) { remaining.push(legacy); continue; }
+    try {
+      const created = await api("/v1/posts", { method: "POST", body: postApiPayload({ ...legacy, id: "" }) });
+      if (legacy.status === "Scheduled" && scheduleIso(legacy.scheduledAt)) {
+        await api(`/v1/posts/${encodeURIComponent(created.post.id)}/schedule`, { method: "POST", body: { scheduledAt: scheduleIso(legacy.scheduledAt) } });
+      }
+    } catch {
+      remaining.push(legacy);
+    }
+  }
+  state.legacyPosts = remaining;
+  if (remaining.length) write(keys.posts, remaining);
+  else {
+    localStorage.removeItem(keys.posts);
+    localStorage.removeItem(keys.postHistory);
+  }
+}
+async function loadServerPosts(options = {}) {
+  if (!state.user || state.postsLoading) return;
+  state.postsLoading = true;
+  try {
+    let data = await api("/v1/posts");
+    state.posts = data.posts || [];
+    if (options.migrate !== false) {
+      await migrateLegacyPosts();
+      data = await api("/v1/posts");
+      state.posts = data.posts || state.posts;
+    }
+    state.postHistory = deliveryHistoryFromPosts(state.posts);
+    render();
+  } catch (error) {
+    if (!options.quiet) onError(error, el.postStatusMessage);
+  } finally {
+    state.postsLoading = false;
+  }
+}
+async function loadAccounts() { const data = await api("/v1/telegram/accounts"); state.accounts = data.accounts; await loadWorkspaceData({ migrate: true }); ensureSelected(); await loadServerPosts({ migrate: true, quiet: true }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }
 async function sendMessage(recipient, message, node, accountId = "", options = {}) {
   const account = state.accounts.find((item) => item.id === accountId) || currentAccount();
   const mediaUrl = (options.mediaUrl || "").trim();
-  if (!account || !recipient || (!message && !mediaUrl)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
-  return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
+  const mediaUploadId = (options.mediaUploadId || "").trim();
+  if (!account || !recipient || (!message && !mediaUrl && !mediaUploadId)) { status(node, "Choose a profile, recipient, and message or media.", "error"); return null; }
+  return api("/v1/messages", { method: "POST", body: { accountId: account.id, recipient, message, mediaUrl, mediaUploadId, mediaType: options.mediaType || "", firstName: options.firstName || "", lastName: options.lastName || "" } });
 }
-function postMessage(post) { return (post.body || post.title || "").trim(); }
-function postMediaUrl(post) { return post.mediaUrl && post.type !== "text" ? post.mediaUrl.trim() : ""; }
-async function sendPostToTargets(post, node, options = {}) {
-  const message = postMessage(post);
-  const mediaUrl = postMediaUrl(post);
-  const targets = postTargets(post);
-  if (!targets.length || (!message && !mediaUrl)) {
-    const messageText = "Choose a manual target, saved contact, or saved group, and add text or media.";
-    if (options.throwOnError) throw new Error(messageText);
-    status(node, messageText, "error");
-    return { sentCount: 0, targets, failures: [messageText] };
-  }
-  const sender = state.accounts.find((account) => account.id === post.accountId) || currentAccount();
-  if (!sender) {
-    const messageText = "Select a connected profile first.";
-    if (options.throwOnError) throw new Error(messageText);
-    status(node, messageText, "error");
-    return { sentCount: 0, targets, failures: [messageText] };
-  }
-  if (node) status(node, `Sending to ${targets.length} recipient${targets.length === 1 ? "" : "s"}...`);
-  const senderProfile = profileFor(sender);
-  const history = [];
-  const failures = [];
-  let sentCount = 0;
-  for (const target of targets) {
-    const baseHistory = {
-      id: uid("share"),
-      postId: post.id,
-      postTitle: post.title || "Untitled post",
-      accountId: sender.id,
-      profileName: senderProfile?.profileName || sender.displayName || "Telegram profile",
-      recipient: target.recipient,
-      contactName: target.kind === "contact" ? target.source : "",
-      groupName: target.kind === "group" ? target.source : "",
-      source: target.source,
-      mediaType: mediaUrl ? post.type : "text",
-      mediaUrl,
-      messagePreview: message.slice(0, 240)
-    };
-    try {
-      const response = await sendMessage(target.recipient, message, node, sender.id, { mediaUrl, mediaType: mediaUrl ? post.type : "", firstName: target.firstName || target.source || "" });
-      sentCount += 1;
-      history.push({ ...baseHistory, deliveryStatus: "Sent", sentAt: response?.sent?.sentAt || new Date().toISOString(), telegramMessageId: response?.sent?.messageId || "", error: "" });
-    } catch (error) {
-      const errorText = error instanceof Error ? error.message : "failed";
-      failures.push(`${target.recipient}: ${errorText}`);
-      history.push({ ...baseHistory, deliveryStatus: "Failed", sentAt: new Date().toISOString(), telegramMessageId: "", error: errorText });
-    }
-  }
-  savePostHistory(history);
-  renderPostHistory();
-  return { sentCount, targets, failures };
-}
-async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); delete state.profiles[account.id]; write(keys.profiles, state.profiles); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
+async function deleteAccount(account) { if (!confirm(`Delete ${profileFor(account)?.profileName || account.displayName}?`)) return; await api(`/v1/telegram/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" }); await loadAccounts(); }function resetLogin() { state.login = { challengeId: "", stage: "phone" }; if (el.code) el.code.value = ""; if (el.telegramPassword) el.telegramPassword.value = ""; setLoginStage("phone"); if (el.connectStatus) status(el.connectStatus); }
 function setLoginStage(stage) {
   state.login.stage = stage;
   const isPhone = stage === "phone", isCode = stage === "code", isPassword = stage === "password";
@@ -1029,12 +1144,19 @@ el.passwordForm.addEventListener("submit", async (event) => {
   finally { busy(el.passwordForm, false); el.telegramPassword.value = ""; }
 });
 
-el.profileForm.addEventListener("submit", (event) => {
+el.profileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const account = currentAccount();
   if (!account) return status(el.profileStatusMessage, "Select a profile first.", "error");
-  state.profiles[account.id] = { profileName: $("profile-name").value.trim() || account.displayName, displayName: $("profile-display-name").value.trim(), username: $("profile-username").value.trim(), phone: $("profile-phone").value.trim(), status: $("profile-status").value, avatar: $("profile-avatar").value.trim(), configNumbers: $("profile-config-numbers").value.trim(), description: $("profile-description").value.trim() };
-  write(keys.profiles, state.profiles); render(); status(el.profileStatusMessage, "Profile saved.", "success");
+  const body = { profileName: $("profile-name").value.trim() || account.displayName, displayName: $("profile-display-name").value.trim(), username: $("profile-username").value.trim(), phone: $("profile-phone").value.trim(), status: $("profile-status").value, avatar: $("profile-avatar").value.trim(), configNumbers: $("profile-config-numbers").value.trim(), description: $("profile-description").value.trim() };
+  busy(el.profileForm, true);
+  try {
+    const data = await api(`/v1/profiles/${encodeURIComponent(account.id)}`, { method: "PUT", body });
+    state.profiles[account.id] = data.profile;
+    render();
+    status(el.profileStatusMessage, "Profile saved on the server.", "success");
+  } catch (error) { onError(error, el.profileStatusMessage); }
+  finally { busy(el.profileForm, false); }
 });
 el.quickSendForm.addEventListener("submit", async (event) => {
   event.preventDefault(); busy(el.quickSendForm, true); status(el.messageStatus, "Sending from selected profile...");
@@ -1043,29 +1165,122 @@ el.quickSendForm.addEventListener("submit", async (event) => {
   finally { busy(el.quickSendForm, false); }
 });
 
-el.contactForm.addEventListener("submit", (event) => {
+el.contactForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = $("contact-name").value.trim(); if (!name) return status(el.contactStatus, "Contact name is required.", "error");
   const existingId = $("contact-id").value;
-  const existing = state.contacts.find((row) => row.id === existingId);
-  const now = new Date().toISOString();
-  const item = { id: existingId || uid("contact"), name, handle: $("contact-handle").value.trim(), countryCode: el.contactCountryCode.value || "+91", phone: contactPhoneFromForm(), group: $("contact-group").value.trim(), notes: $("contact-notes").value.trim(), createdAt: existing?.createdAt || now, updatedAt: now };
-  const index = state.contacts.findIndex((row) => row.id === item.id); index === -1 ? state.contacts.unshift(item) : state.contacts[index] = item;
-  write(keys.contacts, state.contacts); clearContactForm(); render(); status(el.contactStatus, "Contact saved.", "success");
+  const body = { name, handle: $("contact-handle").value.trim(), countryCode: el.contactCountryCode.value || "+91", phone: contactPhoneFromForm(), group: $("contact-group").value.trim(), notes: $("contact-notes").value.trim() };
+  busy(el.contactForm, true);
+  try {
+    const data = await api(existingId ? `/v1/contacts/${encodeURIComponent(existingId)}` : "/v1/contacts", { method: existingId ? "PUT" : "POST", body });
+    const index = state.contacts.findIndex((row) => row.id === data.contact.id);
+    index === -1 ? state.contacts.unshift(data.contact) : state.contacts[index] = data.contact;
+    clearContactForm(); render(); status(el.contactStatus, "Contact saved on the server.", "success");
+  } catch (error) { onError(error, el.contactStatus); }
+  finally { busy(el.contactForm, false); }
 });
-el.groupForm.addEventListener("submit", (event) => {
-  event.preventDefault(); const name = $("group-name").value.trim(); if (!name) return;
-  const item = { id: $("group-id").value || uid("group"), name, type: $("group-type").value, status: $("group-status").value, members: $("group-members").value.trim(), notes: $("group-notes").value.trim(), updatedAt: new Date().toISOString() };
-  const index = state.groups.findIndex((row) => row.id === item.id); index === -1 ? state.groups.unshift(item) : state.groups[index] = item;
-  write(keys.groups, state.groups); el.groupForm.reset(); $("group-id").value = ""; render();
+el.groupForm.addEventListener("submit", async (event) => {
+  event.preventDefault(); const name = $("group-name").value.trim(); if (!name) return status(el.groupStatusMessage, "Group name is required.", "error");
+  const existingId = $("group-id").value;
+  const body = { name, type: $("group-type").value, status: $("group-status").value, members: $("group-members").value.trim(), notes: $("group-notes").value.trim() };
+  busy(el.groupForm, true);
+  try {
+    const data = await api(existingId ? `/v1/groups/${encodeURIComponent(existingId)}` : "/v1/groups", { method: existingId ? "PUT" : "POST", body });
+    const index = state.groups.findIndex((row) => row.id === data.group.id);
+    index === -1 ? state.groups.unshift(data.group) : state.groups[index] = data.group;
+    el.groupForm.reset(); $("group-id").value = ""; render(); status(el.groupStatusMessage, "Group saved on the server.", "success");
+  } catch (error) { onError(error, el.groupStatusMessage); }
+  finally { busy(el.groupForm, false); }
 });
-el.channelForm.addEventListener("submit", (event) => {
-  event.preventDefault(); const name = $("channel-name").value.trim(); if (!name) return;
-  const item = { id: $("channel-id").value || uid("channel"), name, privacy: $("channel-privacy").value, invites: $("channel-invites").value.trim(), notes: $("channel-notes").value.trim(), updatedAt: new Date().toISOString() };
-  const index = state.channels.findIndex((row) => row.id === item.id); index === -1 ? state.channels.unshift(item) : state.channels[index] = item;
-  write(keys.channels, state.channels); el.channelForm.reset(); $("channel-id").value = ""; render();
-});el.postForm.addEventListener("submit", (event) => { event.preventDefault(); savePost(); });
-["post-title", "post-type", "post-category", "post-tags", "post-status", "post-media-url", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
+el.channelForm.addEventListener("submit", async (event) => {
+  event.preventDefault(); const name = $("channel-name").value.trim(); if (!name) return status(el.channelStatusMessage, "Channel name is required.", "error");
+  const existingId = $("channel-id").value;
+  const body = { name, privacy: $("channel-privacy").value, invites: $("channel-invites").value.trim(), notes: $("channel-notes").value.trim() };
+  busy(el.channelForm, true);
+  try {
+    const data = await api(existingId ? `/v1/channels/${encodeURIComponent(existingId)}` : "/v1/channels", { method: existingId ? "PUT" : "POST", body });
+    const index = state.channels.findIndex((row) => row.id === data.channel.id);
+    index === -1 ? state.channels.unshift(data.channel) : state.channels[index] = data.channel;
+    el.channelForm.reset(); $("channel-id").value = ""; render(); status(el.channelStatusMessage, "Channel saved on the server.", "success");
+  } catch (error) { onError(error, el.channelStatusMessage); }
+  finally { busy(el.channelForm, false); }
+});el.postForm.addEventListener("submit", async (event) => { event.preventDefault(); await savePost(); });
+["post-title", "post-type", "post-category", "post-tags", "post-status", "post-scheduled-at", "post-body", "post-recipient"].forEach((id) => { $(id).addEventListener("input", renderPostPreview); $(id).addEventListener("change", renderPostPreview); });
+$("post-type").addEventListener("change", () => {
+  const uploadName = $("post-media-name").value.trim();
+  el.postMediaStatus.textContent = uploadName
+    ? `${uploadName} is stored privately and ready. ${telegramUploadTypeHint($("post-type").value)}`
+    : `Choose a file. ${telegramUploadTypeHint($("post-type").value)}`;
+});
+
+async function uploadPostMediaFile(file) {
+  if (!file) return;
+  const account = currentAccount();
+  if (!account) { el.postMediaFile.value = ""; return status(el.postStatusMessage, "Select the sending Telegram profile first.", "error"); }
+  state.mediaUploading = true;
+  el.postMediaDropzone.classList.remove("has-file");
+  el.postMediaDropzone.classList.add("is-uploading");
+  el.postMediaDropzone.setAttribute("aria-busy", "true");
+  status(el.postStatusMessage, "Uploading the file privately to Ubuntu...");
+  try {
+    const upload = await uploadTelegramDeviceFile({
+      file,
+      accountId: account.id,
+      requestJson: api,
+      requestBinary: apiBinary,
+      onProgress: (sent, total) => { el.postMediaStatus.textContent = `Uploading ${file.name}: ${Math.round(sent / total * 100)}%`; },
+    });
+    revokePostMediaPreview();
+    state.mediaPreviewUrl = URL.createObjectURL(file);
+    $("post-media-url").value = "";
+    $("post-media-upload-id").value = upload.id;
+    $("post-account-id").value = account.id;
+    $("post-media-name").value = upload.fileName;
+    $("post-media-mime").value = upload.mimeType;
+    $("post-media-size").value = String(upload.size);
+    const mediaType = inferTelegramUploadPostType(file, $("post-type").value);
+    $("post-type").value = mediaType;
+    el.postMediaDropzone.classList.add("has-file");
+    el.postMediaStatus.textContent = `${upload.fileName} uploaded and ready. ${telegramUploadTypeHint(mediaType)}`;
+    status(el.postStatusMessage, "File upload complete.", "success");
+    renderPostPreview();
+  } catch (error) {
+    ["post-media-upload-id", "post-media-name", "post-media-mime", "post-media-size"].forEach((id) => { $(id).value = ""; });
+    el.postMediaFile.value = "";
+    el.postMediaStatus.textContent = "Upload failed. Choose the file and try again.";
+    onError(error, el.postStatusMessage);
+  } finally {
+    state.mediaUploading = false;
+    el.postMediaFile.value = "";
+    el.postMediaDropzone.classList.remove("is-uploading");
+    el.postMediaDropzone.removeAttribute("aria-busy");
+  }
+}
+
+el.postMediaFile.addEventListener("change", async () => {
+  await uploadPostMediaFile(el.postMediaFile.files?.[0]);
+});
+el.postMediaDropzone.addEventListener("click", (event) => {
+  if (event.target !== el.postMediaFile && !state.mediaUploading) el.postMediaFile.click();
+});
+el.postMediaDropzone.addEventListener("keydown", (event) => {
+  if ((event.key === "Enter" || event.key === " ") && !state.mediaUploading) {
+    event.preventDefault();
+    el.postMediaFile.click();
+  }
+});
+["dragenter", "dragover"].forEach((eventName) => el.postMediaDropzone.addEventListener(eventName, (event) => {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  if (!state.mediaUploading) el.postMediaDropzone.classList.add("is-dragging");
+}));
+["dragleave", "drop"].forEach((eventName) => el.postMediaDropzone.addEventListener(eventName, (event) => {
+  event.preventDefault();
+  el.postMediaDropzone.classList.remove("is-dragging");
+}));
+el.postMediaDropzone.addEventListener("drop", async (event) => {
+  if (!state.mediaUploading) await uploadPostMediaFile(event.dataTransfer?.files?.[0]);
+});
 el.postContactTargets.addEventListener("change", renderPostPreview);
 el.postGroupTargets.addEventListener("change", renderPostPreview);
 [el.numberSearch, el.numberStatusFilter].forEach((node) => node.addEventListener("input", renderAccounts));
@@ -1097,6 +1312,8 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   await sendInboxThreadMessage(form.dataset.inboxQuickForm, form.querySelector("textarea"));
 });
+let postSendPending = false;
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -1110,20 +1327,47 @@ document.addEventListener("click", async (event) => {
   if (button.id === "group-clear") { el.groupForm.reset(); $("group-id").value = ""; }
   if (button.id === "channel-clear") { el.channelForm.reset(); $("channel-id").value = ""; }
   if (button.id === "post-clear") clearPost();
-  if (button.id === "post-send-now") {
-    const post = savePost();
+  if (button.id === "post-schedule") {
+    const scheduledAt = scheduleIso($("post-scheduled-at").value);
+    if (!scheduledAt) return status(el.postStatusMessage, "Choose a valid scheduled date.", "error");
+    const post = await savePost();
     if (!post) return;
-    const result = await sendPostToTargets(post, el.postStatusMessage);
-    if (result.failures.length) {
-      status(el.postStatusMessage, `Sent ${result.sentCount}/${result.targets.length}. Failed: ${result.failures.slice(0, 3).join("; ")}`, "error");
-      return;
+    try {
+      await api(`/v1/posts/${encodeURIComponent(post.id)}/schedule`, { method: "POST", body: { scheduledAt } });
+      await loadServerPosts({ migrate: false, quiet: true });
+      status(el.postStatusMessage, "Scheduled on the Ubuntu server. You may close this browser.", "success");
+    } catch (error) { onError(error, el.postStatusMessage); }
+  }
+  if (button.id === "post-send-now") {
+    if (postSendPending) return;
+    postSendPending = true;
+    button.disabled = true;
+    try {
+      const post = await savePost();
+      if (!post) return;
+      await api(`/v1/posts/${encodeURIComponent(post.id)}/send-now`, { method: "POST", body: {} });
+      await loadServerPosts({ migrate: false, quiet: true });
+      status(el.postStatusMessage, "Queued on the Ubuntu server for immediate delivery.", "success");
+    } catch (error) {
+      onError(error, el.postStatusMessage);
+    } finally {
+      postSendPending = false;
+      button.disabled = false;
     }
-    $("post-status").value = "Posted";
-    savePost("Posted");
-    status(el.postStatusMessage, `Post sent to ${result.sentCount} recipient${result.sentCount === 1 ? "" : "s"}.`, "success");
   }  if (button.id === "backup-export") { el.backupJson.value = JSON.stringify(backupData(), null, 2); status(el.backupStatus, "Backup exported.", "success"); }
   if (button.id === "backup-import") {
-    try { const data = JSON.parse(el.backupJson.value || "{}"); state.profiles = data.profiles && typeof data.profiles === "object" ? data.profiles : state.profiles; state.contacts = Array.isArray(data.contacts) ? data.contacts : state.contacts; state.groups = Array.isArray(data.groups) ? data.groups : state.groups; state.channels = Array.isArray(data.channels) ? data.channels : state.channels; state.posts = Array.isArray(data.posts) ? data.posts : state.posts; state.postHistory = Array.isArray(data.postHistory) ? data.postHistory : state.postHistory; state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings; saveAll(); applyTheme(); render(); status(el.backupStatus, "Backup restored.", "success"); }
+    try {
+      const data = JSON.parse(el.backupJson.value || "{}");
+      const restored = await api("/v1/workspace-data/import", { method: "POST", body: workspaceImportPayload(data, true) });
+      applyWorkspaceData(restored);
+      state.legacyPosts = Array.isArray(data.posts) ? data.posts : [];
+      state.settings = data.settings && typeof data.settings === "object" ? { ...state.settings, ...data.settings } : state.settings;
+      saveAll();
+      [keys.profiles, keys.contacts, keys.groups, keys.channels].forEach((key) => localStorage.removeItem(key));
+      await migrateLegacyPosts();
+      await loadServerPosts({ migrate: false, quiet: true });
+      applyTheme(); render(); status(el.backupStatus, "Backup restored to the server workspace.", "success");
+    }
     catch (error) { status(el.backupStatus, error instanceof Error ? error.message : "Restore failed.", "error"); }
   }
   const inboxThread = button.dataset.inboxThread; if (inboxThread) { state.inbox.selectedThread = inboxThread; renderInbox(); if (state.inbox.view === "multi") requestAnimationFrame(() => el.inboxMultiBoard?.querySelector(".multi-chat-column.active textarea:not(:disabled)")?.focus()); }
@@ -1131,14 +1375,15 @@ document.addEventListener("click", async (event) => {
   const editAccount = button.dataset.editAccount; if (editAccount) { selectAccount(editAccount); setView("profiles"); }
   const deleteAccountId = button.dataset.deleteAccount; if (deleteAccountId) { const account = state.accounts.find((item) => item.id === deleteAccountId); if (account) { try { await deleteAccount(account); status(el.messageStatus, "Profile deleted.", "success"); } catch (error) { onError(error, el.messageStatus); } } }
   const editContact = button.dataset.editContact; if (editContact) { const item = state.contacts.find((row) => row.id === editContact); if (item) fillContactForm(item); }
-  const deleteContact = button.dataset.deleteContact; if (deleteContact) { state.contacts = state.contacts.filter((row) => row.id !== deleteContact); write(keys.contacts, state.contacts); render(); }
+  const deleteContact = button.dataset.deleteContact; if (deleteContact) { try { await api(`/v1/contacts/${encodeURIComponent(deleteContact)}`, { method: "DELETE" }); state.contacts = state.contacts.filter((row) => row.id !== deleteContact); render(); status(el.contactStatus, "Contact deleted from the server.", "success"); } catch (error) { onError(error, el.contactStatus); } }
   const editGroup = button.dataset.editGroup; if (editGroup) { const item = state.groups.find((row) => row.id === editGroup); if (item) { $("group-id").value = item.id; $("group-name").value = item.name || ""; $("group-type").value = item.type || "Private"; $("group-status").value = item.status || "Created"; $("group-members").value = item.members || ""; $("group-notes").value = item.notes || ""; } }
-  const deleteGroup = button.dataset.deleteGroup; if (deleteGroup) { state.groups = state.groups.filter((row) => row.id !== deleteGroup); write(keys.groups, state.groups); render(); }
+  const deleteGroup = button.dataset.deleteGroup; if (deleteGroup) { try { await api(`/v1/groups/${encodeURIComponent(deleteGroup)}`, { method: "DELETE" }); state.groups = state.groups.filter((row) => row.id !== deleteGroup); render(); status(el.groupStatusMessage, "Group deleted from the server.", "success"); } catch (error) { onError(error, el.groupStatusMessage); } }
   const editChannel = button.dataset.editChannel; if (editChannel) { const item = state.channels.find((row) => row.id === editChannel); if (item) { $("channel-id").value = item.id; $("channel-name").value = item.name || ""; $("channel-privacy").value = item.privacy || "Private"; $("channel-invites").value = item.invites || ""; $("channel-notes").value = item.notes || ""; } }
-  const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { state.channels = state.channels.filter((row) => row.id !== deleteChannel); write(keys.channels, state.channels); render(); }
+  const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { try { await api(`/v1/channels/${encodeURIComponent(deleteChannel)}`, { method: "DELETE" }); state.channels = state.channels.filter((row) => row.id !== deleteChannel); render(); status(el.channelStatusMessage, "Channel deleted from the server.", "success"); } catch (error) { onError(error, el.channelStatusMessage); } }
   const editPost = button.dataset.editPost; if (editPost) { const item = state.posts.find((row) => row.id === editPost); if (item) fillPost(item); }
-  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { state.posts.unshift({ ...item, id: uid("post"), title: `${item.title} copy`, status: "Draft", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); write(keys.posts, state.posts); render(); } }
-  const deletePost = button.dataset.deletePost; if (deletePost) { state.posts = state.posts.filter((row) => row.id !== deletePost); write(keys.posts, state.posts); render(); }
+  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { fillPost({ ...item, id: "", title: `${item.title} copy`, status: "Draft", scheduledAt: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); status(el.postStatusMessage, "Copy is ready. Save or schedule it when finished.", "success"); } }
+  const cancelPost = button.dataset.cancelPost; if (cancelPost) { try { await api(`/v1/posts/${encodeURIComponent(cancelPost)}/cancel`, { method: "POST", body: {} }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Scheduled post cancelled.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
+  const deletePost = button.dataset.deletePost; if (deletePost) { try { await api(`/v1/posts/${encodeURIComponent(deletePost)}`, { method: "DELETE" }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Post deleted from the server.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -1155,6 +1400,7 @@ document.addEventListener("keydown", (event) => {
     signedOut(error instanceof ApiError && error.status === 401 ? "" : "The service is unavailable. Please try again.");
   }
   setView("dashboard");
+  setInterval(() => { if (state.user) void loadServerPosts({ migrate: false, quiet: true }); }, 5000);
   setInterval(() => { if (state.user && state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }, 10000);
 })();
 }

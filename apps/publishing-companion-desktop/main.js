@@ -1025,9 +1025,12 @@ async function openInstagramScrapingBrowser(request) {
   const targetUrl = `about:blank#agenticthat-instagram-scrape-${id}`;
   const partition = `agenticthat-instagram-scrape-${id}`;
   const workerWindow = new BrowserWindow({
+    x: -10_000,
+    y: -10_000,
     width: 1280,
     height: 900,
     show: false,
+    opacity: 0,
     skipTaskbar: true,
     focusable: false,
     backgroundColor: "#ffffff",
@@ -1037,7 +1040,6 @@ async function openInstagramScrapingBrowser(request) {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
-      backgroundThrottling: false,
       backgroundThrottling: false,
     },
   });
@@ -1058,6 +1060,8 @@ async function openInstagramScrapingBrowser(request) {
   workerWindow.webContents.on("will-redirect", protectNavigation);
   workerWindow.on("closed", () => instagramScrapingBrowsers.delete(id));
 
+  console.log(`Instagram scrape ${String(request?.jobId || "")}: opening isolated public browser session.`);
+
   instagramScrapingBrowsers.set(id, {
     id,
     jobId: String(request?.jobId || ""),
@@ -1066,6 +1070,9 @@ async function openInstagramScrapingBrowser(request) {
   });
   try {
     await workerWindow.loadURL(targetUrl);
+    // Instagram defers its Reels grid and data requests while the document is
+    // hidden. Keep the worker compositor-visible but transparent and off-screen.
+    workerWindow.showInactive();
     return { id, debugEndpoint, targetUrl };
   } catch (error) {
     await closeInstagramScrapingBrowser(id);
@@ -1108,8 +1115,6 @@ async function openFacebookScrapingBrowser(request) {
   const id = randomUUID();
   const targetUrl = `about:blank#agenticthat-facebook-scrape-${id}`;
   const partition = `agenticthat-facebook-scrape-${id}`;
-  const sessionMode = "anonymous";
-  console.log(`Facebook scrape ${String(request?.jobId || "")}: opening ${sessionMode} browser session.`);
   const workerWindow = new BrowserWindow({
     x: -10_000,
     y: -10_000,
@@ -1145,6 +1150,8 @@ async function openFacebookScrapingBrowser(request) {
   workerWindow.webContents.on("will-navigate", protectNavigation);
   workerWindow.webContents.on("will-redirect", protectNavigation);
   workerWindow.on("closed", () => facebookScrapingBrowsers.delete(id));
+  const sessionMode = "anonymous";
+  console.log(`Facebook scrape ${String(request?.jobId || "")}: opening ${sessionMode} browser session.`);
   facebookScrapingBrowsers.set(id, {
     id,
     jobId: String(request?.jobId || ""),

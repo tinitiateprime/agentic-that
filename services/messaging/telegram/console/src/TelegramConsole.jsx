@@ -2317,7 +2317,8 @@ export function TelegramConsole({ integrated = false }) {
                       h("button", {"id":"group-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"group-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"group-list","className":"record-list"})
                 )
@@ -2368,7 +2369,8 @@ export function TelegramConsole({ integrated = false }) {
                       h("button", {"id":"channel-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"channel-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"channel-list","className":"record-list"})
                 )
@@ -2389,6 +2391,7 @@ export function TelegramConsole({ integrated = false }) {
                   ),
                   h("form", {"id":"post-form","className":"stack","noValidate":true},
                     h("input", {"id":"post-id","type":"hidden"}),
+                    h("input", {"id":"post-account-id","type":"hidden"}),
                     h("label", {"htmlFor":"post-title"},
                       "Post title"
                     ),
@@ -2406,6 +2409,9 @@ export function TelegramConsole({ integrated = false }) {
                           h("option", {"value":"video"},
                             "Video + text"
                           ),
+                          h("option", {"value":"animation"},
+                            "GIF / animation"
+                          ),
                           h("option", {"value":"document"},
                             "Document"
                           ),
@@ -2414,6 +2420,9 @@ export function TelegramConsole({ integrated = false }) {
                           ),
                           h("option", {"value":"voice"},
                             "Voice message"
+                          ),
+                          h("option", {"value":"video_note"},
+                            "Video note"
                           ),
                           h("option", {"value":"poll"},
                             "Poll"
@@ -2436,23 +2445,61 @@ export function TelegramConsole({ integrated = false }) {
                       ),
                       h("label", null,
                         "Status",
-                        h("select", {"id":"post-status"},
+                        h("select", {"id":"post-status","disabled":true,"aria-describedby":"post-status-help"},
                           h("option", null,
                             "Draft"
                           ),
                           h("option", null,
-                            "Ready"
+                            "Scheduled"
+                          ),
+                          h("option", null,
+                            "Sending"
                           ),
                           h("option", null,
                             "Posted"
+                          ),
+                          h("option", null,
+                            "Partially failed"
+                          ),
+                          h("option", null,
+                            "Failed"
+                          ),
+                          h("option", null,
+                            "Cancelled"
                           )
+                        ),
+                        h("small", {"id":"post-status-help"},
+                          "Managed by the Ubuntu server"
                         )
                       )
                     ),
-                    h("label", {"htmlFor":"post-media-url"},
-                      "Media URL"
+                    h("label", {"htmlFor":"post-scheduled-at"},
+                      "Scheduled date"
                     ),
-                    h("input", {"id":"post-media-url","type":"url","placeholder":"https://example.com/media.jpg"}),
+                    h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
+                    h("section", {"id":"post-media-dropzone","className":"telegram-upload-box","tabIndex":"0","role":"button","aria-label":"Upload Telegram media from this device","aria-describedby":"post-media-status"},
+                      h("input", {"id":"post-media-file","className":"telegram-upload-input","type":"file","accept":"*/*"}),
+                      h("span", {"className":"telegram-upload-icon","aria-hidden":"true"},
+                        "↑"
+                      ),
+                      h("strong", null,
+                        "Drop a file here or choose from device"
+                      ),
+                      h("span", {"className":"telegram-upload-copy"},
+                        "Images, videos, GIFs, audio, voice messages, video notes, and documents"
+                      ),
+                      h("span", {"className":"telegram-upload-button"},
+                        "Choose file"
+                      )
+                    ),
+                    h("input", {"id":"post-media-url","type":"hidden"}),
+                    h("input", {"id":"post-media-upload-id","type":"hidden"}),
+                    h("input", {"id":"post-media-name","type":"hidden"}),
+                    h("input", {"id":"post-media-mime","type":"hidden"}),
+                    h("input", {"id":"post-media-size","type":"hidden"}),
+                    h("small", {"id":"post-media-status","className":"muted","role":"status","aria-live":"polite"},
+                      "Choose any supported file. It will be stored privately on the Ubuntu server for sending or scheduling."
+                    ),
                     h("label", {"htmlFor":"post-body"},
                       "Text or caption"
                     ),
@@ -2475,6 +2522,9 @@ export function TelegramConsole({ integrated = false }) {
                       ),
                       h("button", {"id":"post-send-now","className":"button ghost","type":"button"},
                         "Post now"
+                      ),
+                      h("button", {"id":"post-schedule","className":"button ghost","type":"button"},
+                        "Schedule"
                       ),
                       h("button", {"id":"post-clear","className":"button text","type":"button"},
                         "Clear"
@@ -2539,6 +2589,9 @@ export function TelegramConsole({ integrated = false }) {
                       h("option", {"value":"category"},
                         "Category"
                       ),
+                      h("option", {"value":"scheduled"},
+                        "Scheduled date"
+                      )
                     )
                   ),
                   h("div", {"id":"post-list","className":"record-list"})
