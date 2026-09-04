@@ -44,6 +44,15 @@ await Promise.all([
   access(path.join(applicationRoot, "assets", "app-icon-1024.png")),
 ]);
 
+if (platform === "darwin" && architecture === "universal") {
+  await Promise.all([
+    access(path.join(applicationRoot, "node_modules", "@img", "sharp-darwin-x64", "lib", `sharp-darwin-x64-${manifest.dependencies.sharp}.node`)),
+    access(path.join(applicationRoot, "node_modules", "@img", "sharp-darwin-arm64", "lib", `sharp-darwin-arm64-${manifest.dependencies.sharp}.node`)),
+    access(path.join(applicationRoot, "node_modules", "@img", "sharp-libvips-darwin-x64", "lib")),
+    access(path.join(applicationRoot, "node_modules", "@img", "sharp-libvips-darwin-arm64", "lib")),
+  ]);
+}
+
 const packagedManifest = JSON.parse(await readFile(path.join(applicationRoot, "package.json"), "utf8"));
 if (packagedManifest.version !== manifest.version) {
   throw new Error(`Packaged version ${packagedManifest.version} does not match expected version ${manifest.version}.`);

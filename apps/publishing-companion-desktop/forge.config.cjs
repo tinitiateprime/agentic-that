@@ -55,6 +55,12 @@ module.exports = {
     executableName,
     appBundleId: "com.agenticthat.companion",
     appCategoryType: "public.app-category.productivity",
+    osxUniversal: {
+      // Sharp ships each macOS architecture in a separate package. Both packages are
+      // deliberately bundled, so their already architecture-specific binaries must
+      // not be combined with lipo while Electron itself is stitched as universal.
+      x64ArchFiles: "Contents/Resources/app/node_modules/@img/**",
+    },
     win32metadata: {
       CompanyName: "AgenticThat",
       FileDescription: "AgenticThat local publishing, account-session, and scraping Companion",

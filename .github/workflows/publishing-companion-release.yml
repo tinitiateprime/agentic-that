@@ -203,6 +203,11 @@ jobs:
         run: |
           npm ci
           npm ci --prefix apps/publishing-companion-desktop
+          npm install --prefix apps/publishing-companion-desktop --no-save --ignore-scripts --force \
+            @img/sharp-darwin-x64@0.35.3 \
+            @img/sharp-libvips-darwin-x64@1.3.2 \
+            @img/sharp-darwin-arm64@0.35.3 \
+            @img/sharp-libvips-darwin-arm64@1.3.2
 
       - name: Import macOS signing certificate
         id: macos_signing
@@ -269,6 +274,20 @@ jobs:
 
       - name: Verify packaged macOS Companion
         run: node scripts/verify-packaged-companion.mjs --platform=darwin --arch=universal
+
+      - name: Verify Intel and Apple Silicon media binaries
+        shell: bash
+        run: |
+          app_root="apps/publishing-companion-desktop/out/AgenticThat Companion-darwin-universal/AgenticThat Companion.app/Contents/Resources/app/node_modules/@img"
+          x64_sharp=$(find "$app_root/sharp-darwin-x64" -name 'sharp-darwin-x64-*.node' -print -quit)
+          arm64_sharp=$(find "$app_root/sharp-darwin-arm64" -name 'sharp-darwin-arm64-*.node' -print -quit)
+          x64_vips=$(find "$app_root/sharp-libvips-darwin-x64" -name 'libvips-cpp.*.dylib' -print -quit)
+          arm64_vips=$(find "$app_root/sharp-libvips-darwin-arm64" -name 'libvips-cpp.*.dylib' -print -quit)
+          test -n "$x64_sharp" && test -n "$arm64_sharp" && test -n "$x64_vips" && test -n "$arm64_vips"
+          lipo -verify_arch x86_64 "$x64_sharp"
+          lipo -verify_arch arm64 "$arm64_sharp"
+          lipo -verify_arch x86_64 "$x64_vips"
+          lipo -verify_arch arm64 "$arm64_vips"
 
       - name: Verify macOS signature and Gatekeeper assessment when configured
         if: env.MACOS_RELEASE_SIGNED == 'true'
