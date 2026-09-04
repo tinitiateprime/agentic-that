@@ -1196,6 +1196,11 @@ async function clearAccountBrowserData(accountId) {
   await accountSession.clearCache();
 }
 
+async function flushAccountBrowserData(accountId) {
+  const accountSession = session.fromPartition(browserPartition(accountId));
+  await accountSession.flushStorageData();
+}
+
 async function openManagedBrowser(request) {
   if (request.purpose === "publish") await ensurePublishingInteractionConsent();
 
@@ -1383,6 +1388,7 @@ function installPublishingDesktopHost() {
     closeBrowser: closeManagedBrowser,
     stopPublishingBrowsers,
     clearAccountBrowserData,
+    flushAccountBrowserData,
     migrateLegacyAccountBrowserData,
   };
   globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {

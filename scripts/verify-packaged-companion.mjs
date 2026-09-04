@@ -59,10 +59,10 @@ if (packagedManifest.version !== manifest.version) {
 }
 const mainSource = await readFile(path.join(applicationRoot, "main.js"), "utf8");
 const runtimeSource = await readFile(path.join(applicationRoot, "runtime", "server.mjs"), "utf8");
-for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session"]) {
+for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session", "flushAccountBrowserData"]) {
   if (!mainSource.includes(requiredText)) throw new Error(`Packaged main process is missing ${requiredText}.`);
 }
-for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg"]) {
+for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user"]) {
   if (!runtimeSource.includes(requiredText)) throw new Error(`Packaged runtime is missing ${requiredText}.`);
 }
 

@@ -40,6 +40,7 @@ kanban
     done12[Companion v2.1.2 Account Sync and Persistent X YouTube Sessions]
     done13[Companion v2.1.3 Legacy Session and Account Recovery]
     done14[Companion v2.1.5 Instagram Publishing and Scraping Compatibility]
+    done15[Companion v2.1.6 Durable Facebook Session Recovery]
 
   future[Future]
     future1[Android Companion]

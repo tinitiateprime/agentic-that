@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { FACEBOOK_COMPOSER_EDITOR_SELECTORS } from "./services/publishers/facebook.js";
+import { FACEBOOK_COMPOSER_EDITOR_SELECTORS, hasFacebookAuthenticationCookies } from "./services/publishers/facebook.js";
 import {
   LINKEDIN_COMPOSER_EDITOR_SELECTORS,
   visibleIntersectionPoint,
@@ -25,6 +25,15 @@ test("LinkedIn publishing recognizes the current TipTap composer editor", () => 
 
 test("Facebook publishing recognizes delayed Lexical composer editors", () => {
   assert.ok(FACEBOOK_COMPOSER_EDITOR_SELECTORS.includes('[contenteditable="true"][data-lexical-editor="true"]'));
+});
+
+test("Facebook recognizes its durable authenticated cookie pair", () => {
+  assert.equal(hasFacebookAuthenticationCookies([
+    { name: "c_user", value: "123456" },
+    { name: "xs", value: "session-proof" },
+  ]), true);
+  assert.equal(hasFacebookAuthenticationCookies([{ name: "c_user", value: "123456" }]), false);
+  assert.equal(hasFacebookAuthenticationCookies([{ name: "datr", value: "browser-only" }]), false);
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {

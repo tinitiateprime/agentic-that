@@ -354,6 +354,7 @@ async function saveAccountSessionState(
     // Chromium/OS encryption. Asking CDP for cookies after a large media post
     // can block the embedded service, so no duplicate export is needed here.
     if (engine === "companion") {
+      await Promise.resolve(publishingDesktopHost()?.flushAccountBrowserData?.(account.id));
       fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
       console.log(`Retained protected Companion session for ${account.platform} account ${account.handle}.`);
       return;
@@ -602,7 +603,6 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
       embeddedLogin: true,
     });
     await saveAccountSessionState(account, companionBrowser.context, "companion");
-    clearSavedAccountSession(account);
     await companionBrowser.update({
       state: "posted",
       detail: "Login confirmed, transferred, and verified inside Companion. The account is ready to publish.",
@@ -636,6 +636,9 @@ async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
       detail: `Sign in to ${account.platform} inside Companion. Passwords and verification codes stay on the provider page.`,
     });
     await loginOnly(browser.page, account, { ignoreLoginErrors: true, embeddedLogin: true });
+    await exportStandardBrowserSession(account, browser.context).catch(error => {
+      console.warn(`Could not create the encrypted ${account.platform} session recovery copy:`, errorMessage(error));
+    });
     await saveAccountSessionState(account, browser.context, "companion");
     await removeExternalAccountProfile(account).catch(() => undefined);
     await browser.update({

@@ -4,7 +4,7 @@ import { centralPublishingTestHelpers } from "./publishing-central-store.js";
 
 test("central publishing resumes reconnect-required jobs only after the paired Companion is online", () => {
   const timestamp = Date.now();
-  const companion = { id: "companion_1", status: "online", version: "2.1.5", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
+  const companion = { id: "companion_1", status: "online", version: "2.1.6", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
   const account = { id: "account_1", workspaceId: "workspace_1", credentialConfigured: true };
   const document = {
     uploads: [
@@ -28,7 +28,7 @@ test("central publishing resumes reconnect-required jobs only after the paired C
 
 test("central publishing reports account readiness and accepts only the active Companion job lease", () => {
   const timestamp = Date.now();
-  const online = { status: "online", version: "2.1.5", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
+  const online = { status: "online", version: "2.1.6", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
   const offline = { status: "offline", lastSeenAt: new Date(timestamp).toISOString() };
   assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, online), "ready");
   assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, offline), "waiting_for_companion");
@@ -55,18 +55,18 @@ test("central publishing accepts a confirmed late success without reopening othe
 
 test("central publishing enforces Companion compatibility and reports operational states", () => {
   const timestamp = Date.now();
-  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.5"), true);
-  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.4"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.6"), true);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.5"), false);
   assert.equal(centralPublishingTestHelpers.versionAtLeast("1.9.0"), false);
   assert.equal(centralPublishingTestHelpers.versionAtLeast("1.8.9"), false);
   assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.2"), false);
   assert.equal(centralPublishingTestHelpers.companionCompatibility({ version: "1.8.0" }), "outdated");
   assert.equal(centralPublishingTestHelpers.companionStatus({
-    status: "online", version: "2.1.5", runtimeStatus: "ready", updateStatus: "downloading",
+    status: "online", version: "2.1.6", runtimeStatus: "ready", updateStatus: "downloading",
     lastSeenAt: new Date(timestamp).toISOString(),
   }), "updating");
   assert.equal(centralPublishingTestHelpers.companionStatus({
-    status: "online", version: "2.1.5", runtimeStatus: "error", lastSeenAt: new Date(timestamp).toISOString(),
+    status: "online", version: "2.1.6", runtimeStatus: "error", lastSeenAt: new Date(timestamp).toISOString(),
   }), "error");
 });
 

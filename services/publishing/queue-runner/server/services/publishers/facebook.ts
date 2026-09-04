@@ -92,6 +92,27 @@ async function dismissCookiePrompt(page: Page) {
   }
 }
 
+async function dismissPostLoginPrompts(page: Page) {
+  const dismissButtons = [
+    page.getByRole("button", { name: /^Not now$/i }),
+    page.getByRole("button", { name: /^Maybe later$/i }),
+    page.getByText(/^Not now$/i),
+    page.getByText(/^Maybe later$/i),
+  ];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let dismissed = false;
+    for (const button of dismissButtons) {
+      if (await clickIfVisible(button, 1200)) {
+        dismissed = true;
+        await page.waitForTimeout(400);
+        break;
+      }
+    }
+    if (!dismissed) break;
+  }
+}
+
 async function blockNotificationPrompt(page: Page) {
   try {
     const client = await page.context().newCDPSession(page);
@@ -120,9 +141,17 @@ async function blockNotificationPrompt(page: Page) {
   await page.keyboard.press("Escape").catch(() => undefined);
 }
 
+export function hasFacebookAuthenticationCookies(cookies: Array<{ name: string; value?: string }>) {
+  const values = new Map(cookies.map(cookie => [cookie.name, cookie.value ?? ""]));
+  return Boolean(values.get("c_user")?.trim() && values.get("xs")?.trim());
+}
+
 async function isLoggedIn(page: Page) {
   const url = page.url();
   if (/facebook\.com\/login|checkpoint|two_step|recover|captcha/i.test(url)) return false;
+
+  const cookies = await page.context().cookies(FACEBOOK_HOME_URL).catch(() => []);
+  if (hasFacebookAuthenticationCookies(cookies)) return true;
 
   const loggedInSignals = [
     page.getByRole("link", { name: /^Home$/i }),
@@ -130,6 +159,8 @@ async function isLoggedIn(page: Page) {
     page.locator('[aria-label="Facebook"]'),
     page.locator('[aria-label="Home"]'),
     page.locator('[aria-label="Create"]'),
+    page.locator('[aria-label*="Your profile" i]'),
+    page.locator('a[href="/me/"]'),
     page.locator('[role="feed"]'),
   ];
 
@@ -188,6 +219,7 @@ async function waitForFacebookHome(page: Page) {
 
 async function clickWhatsOnYourMind(page: Page) {
   console.log("Clicking Facebook What's on your mind bar...");
+  await dismissPostLoginPrompts(page);
   await blockNotificationPrompt(page);
   await waitForFacebookHome(page);
 
@@ -606,6 +638,10 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     isManualVerificationVisible: (url) => isManualVerificationVisible(page, url),
     isLoginFormVisible: () => loginFormIsVisible(page),
     getLoginError: () => getLoginError(page),
+    beforeCheck: async () => {
+      await dismissCookiePrompt(page);
+      await dismissPostLoginPrompts(page);
+    },
     allowManualLoginFromStart,
     ignoreLoginErrors,
     embeddedLogin,
@@ -629,7 +665,10 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
       page,
       platform: "Facebook",
       isLoggedIn: () => isLoggedIn(page),
-      beforeCheck: () => dismissCookiePrompt(page),
+      beforeCheck: async () => {
+        await dismissCookiePrompt(page);
+        await dismissPostLoginPrompts(page);
+      },
     });
   } else {
     console.log("Complete the full Facebook login manually in the visible browser; Companion will save the session after the account opens.");
@@ -645,6 +684,7 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
     await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
+  await dismissPostLoginPrompts(page);
   await blockNotificationPrompt(page);
 
   if (holdAfterLogin) {
