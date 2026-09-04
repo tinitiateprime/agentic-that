@@ -19,6 +19,7 @@ try {
     "../supabase/migrations/202609040001_companion_legacy_session_recovery.sql",
     "../supabase/migrations/202609040002_chunked_publishing_artifacts.sql",
     "../supabase/migrations/202609040003_instagram_media_compatibility.sql",
+    "../supabase/migrations/202609040004_facebook_session_persistence.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
