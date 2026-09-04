@@ -284,10 +284,10 @@ jobs:
           x64_vips=$(find "$app_root/sharp-libvips-darwin-x64" -name 'libvips-cpp.*.dylib' -print -quit)
           arm64_vips=$(find "$app_root/sharp-libvips-darwin-arm64" -name 'libvips-cpp.*.dylib' -print -quit)
           test -n "$x64_sharp" && test -n "$arm64_sharp" && test -n "$x64_vips" && test -n "$arm64_vips"
-          lipo -verify_arch x86_64 "$x64_sharp"
-          lipo -verify_arch arm64 "$arm64_sharp"
-          lipo -verify_arch x86_64 "$x64_vips"
-          lipo -verify_arch arm64 "$arm64_vips"
+          lipo "$x64_sharp" -verify_arch x86_64
+          lipo "$arm64_sharp" -verify_arch arm64
+          lipo "$x64_vips" -verify_arch x86_64
+          lipo "$arm64_vips" -verify_arch arm64
 
       - name: Verify macOS signature and Gatekeeper assessment when configured
         if: env.MACOS_RELEASE_SIGNED == 'true'
