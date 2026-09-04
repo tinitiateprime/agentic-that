@@ -17,6 +17,7 @@ try {
     "../supabase/migrations/202609020001_companion_job_control.sql",
     "../supabase/migrations/202609030001_external_browser_session_status.sql",
     "../supabase/migrations/202609040001_companion_legacy_session_recovery.sql",
+    "../supabase/migrations/202609040002_chunked_publishing_artifacts.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
