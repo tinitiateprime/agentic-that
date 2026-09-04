@@ -313,10 +313,12 @@ export async function revokeSupabaseCompanions(principal) {
 
 export async function listSupabaseAccounts(workspaceId, platform) {
   const sql = await getDatabaseSql();
-  const companion = await latestSupabaseCompanion(workspaceId);
-  const rows = platform
-    ? await sql`SELECT * FROM public.social_accounts WHERE workspace_id = ${workspaceId} AND platform = ${platform} ORDER BY created_at`
-    : await sql`SELECT * FROM public.social_accounts WHERE workspace_id = ${workspaceId} ORDER BY created_at`;
+  const [companion, rows] = await Promise.all([
+    latestSupabaseCompanion(workspaceId),
+    platform
+      ? sql`SELECT * FROM public.social_accounts WHERE workspace_id = ${workspaceId} AND platform = ${platform} ORDER BY created_at`
+      : sql`SELECT * FROM public.social_accounts WHERE workspace_id = ${workspaceId} ORDER BY created_at`,
+  ]);
   return rows.map((row) => camelAccount(row, companion));
 }
 
@@ -422,13 +424,15 @@ export async function createSupabaseJob({
 export async function synchronizePublishingJobs(workspaceId, jobs, uploads, accounts) {
   const uploadsById = new Map(uploads.map((item) => [item.id, item]));
   const accountsById = new Map(accounts.map((item) => [item.id, item]));
-  const synchronized = [];
-  for (const source of jobs) {
+  const work = jobs.flatMap((source) => {
     const upload = uploadsById.get(source.uploadId);
     const account = accountsById.get(source.accountId);
-    if (!upload || !account || !ACTIVE_JOB_STATES.has(source.state)) continue;
-    await upsertSupabaseAccount(account);
-    synchronized.push(await createSupabaseJob({
+    if (!upload || !account || !ACTIVE_JOB_STATES.has(source.state)) return [];
+    return [{ source, upload, account }];
+  });
+  const uniqueAccounts = [...new Map(work.map(({ account }) => [account.id, account])).values()];
+  await Promise.all(uniqueAccounts.map((account) => upsertSupabaseAccount(account)));
+  return Promise.all(work.map(({ source, upload, account }) => createSupabaseJob({
       id: source.id,
       workspaceId,
       userId: upload.createdByUserId,
@@ -440,9 +444,7 @@ export async function synchronizePublishingJobs(workspaceId, jobs, uploads, acco
       priority: 200,
       maxAttempts: 3,
       notBefore: source.notBefore || null,
-    }));
-  }
-  return synchronized;
+    })));
 }
 
 export async function listSupabaseJobs(workspaceId, options = {}) {

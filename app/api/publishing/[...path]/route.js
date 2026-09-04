@@ -6,7 +6,7 @@ import {
   centralMediaFileName,
   createCentralAccount,
   createCentralStagedUpload,
-  createCentralUpload,
+  createCentralUploads,
   createCompanionPairing,
   deleteCentralAccount,
   deleteCentralStagedUpload,
@@ -26,7 +26,7 @@ import {
   updateCentralUploadStatus,
   consumeCentralStagedUpload,
 } from "@platform/server/publishing-central-store";
-import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
+import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
 import { storeSupabaseJobArtifact } from "@platform/server/supabase-job-control";
 
@@ -79,10 +79,30 @@ async function visibleWorkspacePublishing(principalValue) {
 }
 
 async function centralAccountForPrincipal(principalValue, accountId, level = "view") {
-  const account = (await listCentralAccounts(principalValue.workspaceId)).find((item) => item.id === accountId);
-  if (!account) throw new Error("Account was not found.");
-  assertPlatformAccess(principalValue, account.platform, level);
+  const [account] = await centralAccountsForPrincipal(principalValue, [accountId], level);
   return account;
+}
+
+async function centralAccountsForPrincipal(principalValue, accountIds, level = "view") {
+  const requestedIds = [...new Set((Array.isArray(accountIds) ? accountIds : []).map(String))];
+  const accountsById = new Map((await listCentralAccounts(principalValue.workspaceId)).map((item) => [item.id, item]));
+  return requestedIds.map((accountId) => {
+    const account = accountsById.get(accountId);
+    if (!account) throw new Error("Account was not found.");
+    assertPlatformAccess(principalValue, account.platform, level);
+    return account;
+  });
+}
+
+async function centralUploadsForPrincipal(principalValue, uploadIds, level = "view") {
+  const requestedIds = [...new Set((Array.isArray(uploadIds) ? uploadIds : []).map(String))];
+  const uploadsById = new Map((await listCentralUploads(principalValue.workspaceId)).map((item) => [item.id, item]));
+  return requestedIds.map((uploadId) => {
+    const upload = uploadsById.get(uploadId);
+    if (!upload) throw new Error("Post was not found.");
+    assertPlatformAccess(principalValue, upload.platform, level);
+    return upload;
+  });
 }
 
 async function centralUploadForPrincipal(principalValue, uploadId, level = "view") {
@@ -148,20 +168,19 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
   const bytes = await readStageBytes(stage);
   if (bytes.length !== stage.size) throw new Error("The media upload size is invalid. Please upload the file again.");
-  const filePath = path.join(publishingUploadDirectory(), stage.fileName);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temporary, bytes, { mode: 0o600 });
-  await fs.rename(temporary, filePath);
-  await storePublishingMedia(stage.fileName, principalValue.workspaceId, stage.mimeType);
-  const artifact = await storeSupabaseJobArtifact(bytes, {
-    workspaceId: principalValue.workspaceId,
-    fileName: stage.fileName,
-    originalName: stage.originalName,
-    mimeType: stage.mimeType,
-  });
-  await consumeCentralStagedUpload(principalValue, stagedUploadId);
-  await removeStageBytes(stage);
+  const [, artifact] = await Promise.all([
+    storePublishingMediaBytes(stage.fileName, principalValue.workspaceId, stage.mimeType, bytes),
+    storeSupabaseJobArtifact(bytes, {
+      workspaceId: principalValue.workspaceId,
+      fileName: stage.fileName,
+      originalName: stage.originalName,
+      mimeType: stage.mimeType,
+    }),
+  ]);
+  await Promise.all([
+    consumeCentralStagedUpload(principalValue, stagedUploadId),
+    removeStageBytes(stage),
+  ]);
   return {
     originalName: stage.originalName,
     fileName: stage.fileName,
@@ -179,11 +198,11 @@ async function createPosts(principalValue, input) {
   if (destinations.some((destination) => destination.scheduledAt || destination.scheduleId)) {
     throw new Error("Scheduling is temporarily unavailable. Publish or queue the post now instead.");
   }
-  await Promise.all(destinations.map((destination) => centralAccountForPrincipal(principalValue, destination.accountId, "operate")));
-  return Promise.all(destinations.map((destination) => createCentralUpload(principalValue, {
+  await centralAccountsForPrincipal(principalValue, destinations.map((destination) => destination.accountId), "operate");
+  return createCentralUploads(principalValue, destinations.map((destination) => ({
     ...input,
     accountId: destination.accountId,
-    caption: destination.caption ?? input.description ?? input.caption,
+    caption: destination.caption ?? destination.description ?? input.description ?? input.caption,
     scheduledAt: destination.scheduledAt || null,
     scheduleId: destination.scheduleId || null,
   })));
@@ -339,12 +358,12 @@ export async function POST(request, context) {
     }
     if (parts[0] === "publishing-safety" && parts[1] === "assess") {
       const user = await principal("publishing.execute");
-      await Promise.all((body.destinations || []).map((destination) => centralAccountForPrincipal(user, destination.accountId, "operate")));
+      await centralAccountsForPrincipal(user, (body.destinations || []).map((destination) => destination.accountId), "operate");
       return Response.json({ allowed: true, issues: [], assessments: [] });
     }
     if (parts[0] === "automation" && parts[1] === "run") {
       const user = await principal("publishing.execute");
-      await Promise.all((body.uploadIds || []).map((uploadId) => centralUploadForPrincipal(user, uploadId, "operate")));
+      await centralUploadsForPrincipal(user, body.uploadIds || [], "operate");
       const jobs = await queueCentralUploads(user, body.uploadIds);
       return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: jobs.map((job) => job.uploadId) });
     }

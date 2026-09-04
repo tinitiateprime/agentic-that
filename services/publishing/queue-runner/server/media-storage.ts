@@ -27,6 +27,18 @@ export async function storePublishingMedia(fileName: string, workspaceId: string
   const localPath = path.join(publishingUploadDirectory(), safeFileName(fileName));
   if (!sharedMediaEnabled()) return localPath;
   const bytes = await fs.readFile(localPath);
+  await storePublishingMediaBytes(fileName, workspaceId, mimeType, bytes);
+  return localPath;
+}
+
+export async function storePublishingMediaBytes(fileName: string, workspaceId: string, mimeType: string, bytes: Uint8Array) {
+  const safeName = safeFileName(fileName);
+  const localPath = path.join(publishingUploadDirectory(), safeName);
+  if (!sharedMediaEnabled()) {
+    await fs.mkdir(path.dirname(localPath), { recursive: true });
+    await fs.writeFile(localPath, bytes, { mode: 0o600 });
+    return localPath;
+  }
   const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   await (await netlifyBlobStore("agentic-that-publishing-media")).set(mediaKey(workspaceId, fileName), payload, {
     metadata: { workspaceId, fileName, mimeType },

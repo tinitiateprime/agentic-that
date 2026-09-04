@@ -112,3 +112,32 @@ test("central publishing skips a disconnected account without starving later rea
   assert.equal(selected.length, 1);
   assert.equal(selected[0].job.id, "job_ready");
 });
+
+test("central publishing creates a multi-destination release atomically in one document mutation", () => {
+  const platforms = ["instagram", "facebook", "x", "linkedin", "youtube"];
+  const document = {
+    accounts: platforms.map((platform, index) => ({
+      id: `account_${index}`,
+      workspaceId: "workspace_1",
+      platform,
+      enabled: true,
+      credentialConfigured: true,
+    })),
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+
+  const uploads = platforms.map((platform, index) => centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: `account_${index}`,
+    postFormat: "image",
+    originalName: "release.jpg",
+    mimeType: "image/jpeg",
+    caption: `${platform} caption`,
+    rightsConfirmed: true,
+  }));
+
+  assert.equal(uploads.length, 5);
+  assert.equal(document.uploads.length, 5);
+  assert.equal(document.jobs.length, 5);
+  assert.deepEqual(document.uploads.map((upload) => upload.caption), platforms.map((platform) => `${platform} caption`));
+});

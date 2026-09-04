@@ -436,11 +436,12 @@ export async function getPublishingSnapshot(workspaceId) {
   return documentValue(await readDatabaseDocument(DOCUMENT_KEY));
 }
 
-async function synchronizePublishingControlPlane(workspaceId) {
+async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
   const document = await getPublishingSnapshot(workspaceId);
+  const selectedUploads = Array.isArray(uploadIds) && uploadIds.length ? new Set(uploadIds) : null;
   const workspaceAccounts = document.accounts.filter((item) => item.workspaceId === workspaceId);
   const workspaceUploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
-  const workspaceJobs = document.jobs.filter((item) => item.workspaceId === workspaceId);
+  const workspaceJobs = document.jobs.filter((item) => item.workspaceId === workspaceId && (!selectedUploads || selectedUploads.has(item.uploadId)));
   await synchronizePublishingJobs(workspaceId, workspaceJobs, workspaceUploads, workspaceAccounts);
   return document;
 }
@@ -683,49 +684,60 @@ export async function listCentralUploads(workspaceId) {
   return document.uploads.filter((item) => item.workspaceId === workspaceId).map((item) => uploadPublic(document, item));
 }
 
-export async function createCentralUpload(principal, input = {}) {
+function createUploadInDocument(document, principal, input = {}) {
+  const account = findOwned(document, "accounts", principal.workspaceId, input.accountId, "Account");
+  if (!account.enabled) throw new Error("This publishing account is disabled.");
+  const caption = String(input.caption || "").trim();
+  const format = input.postFormat || postFormat(input.mimeType, input.originalName);
+  if (!caption) throw new Error("Post text or description is required.");
+  if (caption.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This ${account.platform} post is longer than the platform limit.`);
+  if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
+  if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
+  if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
+  if (input.scheduleId && !document.schedules.some((item) => item.id === Number(input.scheduleId) && item.workspaceId === principal.workspaceId && item.status === "active")) {
+    throw new Error("The selected schedule is unavailable.");
+  }
+  const scheduledTimestamp = input.scheduledAt ? Date.parse(input.scheduledAt) : null;
+  if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
+  const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
+  if (scheduledAt && input.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
+  if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === account.id && item.status === "queued"
+    && item.caption === caption && item.originalName === (input.originalName || "Text post") && item.size === Number(input.size || 0)
+    && (item.scheduledAt || null) === scheduledAt && Number(item.scheduleId || 0) === Number(input.scheduleId || 0))) {
+    throw new Error("This exact post is already queued for the same account and time.");
+  }
+  const timestamp = now();
+  const upload = {
+    id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
+    postFormat: format, originalName: input.originalName || "Text post",
+    fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
+    size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
+    caption, status: "queued", publishActionState: "not_started",
+    uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
+    createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
+    sourceSubmissionId: input.sourceSubmissionId || null, automation: { safetyDeferredUntil: null },
+  };
+  document.uploads.push(upload);
+  if (!upload.scheduleId) queueJob(document, upload);
+  activity(document, principal.workspaceId, { type: "post.queued", summary: `A ${account.platform} post was queued.`, uploadId: upload.id });
+  return uploadPublic(document, upload);
+}
+
+export async function createCentralUploads(principal, inputs = []) {
+  if (!Array.isArray(inputs) || !inputs.length) throw new Error("Choose at least one workspace account.");
   await initialize();
   await reconcilePublishingControlPlane(principal.workspaceId);
-  const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const uploads = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
-    const account = findOwned(document, "accounts", principal.workspaceId, input.accountId, "Account");
-    if (!account.enabled) throw new Error("This publishing account is disabled.");
-    const caption = String(input.caption || "").trim();
-    const format = input.postFormat || postFormat(input.mimeType, input.originalName);
-    if (!caption) throw new Error("Post text or description is required.");
-    if (caption.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This ${account.platform} post is longer than the platform limit.`);
-    if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
-    if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
-    if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
-    if (input.scheduleId && !document.schedules.some((item) => item.id === Number(input.scheduleId) && item.workspaceId === principal.workspaceId && item.status === "active")) {
-      throw new Error("The selected schedule is unavailable.");
-    }
-    const scheduledTimestamp = input.scheduledAt ? Date.parse(input.scheduledAt) : null;
-    if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
-    const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
-    if (scheduledAt && input.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
-    if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === account.id && item.status === "queued"
-      && item.caption === caption && item.originalName === (input.originalName || "Text post") && item.size === Number(input.size || 0)
-      && (item.scheduledAt || null) === scheduledAt && Number(item.scheduleId || 0) === Number(input.scheduleId || 0))) {
-      throw new Error("This exact post is already queued for the same account and time.");
-    }
-    const timestamp = now();
-    const upload = {
-      id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
-      postFormat: format, originalName: input.originalName || "Text post",
-      fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
-      size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
-      caption, status: "queued", publishActionState: "not_started",
-      uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
-      createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
-      sourceSubmissionId: input.sourceSubmissionId || null, automation: { safetyDeferredUntil: null },
-    };
-    document.uploads.push(upload);
-    if (!upload.scheduleId) queueJob(document, upload);
-    activity(document, principal.workspaceId, { type: "post.queued", summary: `A ${account.platform} post was queued.`, uploadId: upload.id });
-    return { document, result: uploadPublic(document, upload) };
+    const result = inputs.map((input) => createUploadInDocument(document, principal, input));
+    return { document, result };
   });
-  await synchronizePublishingControlPlane(principal.workspaceId);
+  await synchronizePublishingControlPlane(principal.workspaceId, uploads.map((upload) => upload.id));
+  return uploads;
+}
+
+export async function createCentralUpload(principal, input = {}) {
+  const [upload] = await createCentralUploads(principal, [input]);
   return upload;
 }
 
@@ -770,7 +782,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     }
     return { document, result: uploadPublic(document, upload) };
   });
-  await synchronizePublishingControlPlane(principal.workspaceId);
+  await synchronizePublishingControlPlane(principal.workspaceId, [upload.id]);
   return upload;
 }
 
@@ -1021,14 +1033,14 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
 export async function queueCentralUploads(principal, uploadIds) {
   await initialize();
   await reconcilePublishingControlPlane(principal.workspaceId);
+  const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
   const jobs = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
-    const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
     if (ids?.length) ids.forEach((item) => findOwned(document, "uploads", principal.workspaceId, item, "Post"));
     refreshDueJobs(document, principal.workspaceId, ids);
     return { document, result: document.jobs.filter((item) => item.workspaceId === principal.workspaceId && !TERMINAL_JOB_STATES.has(item.state)).map((item) => ({ ...item })) };
   });
-  await synchronizePublishingControlPlane(principal.workspaceId);
+  await synchronizePublishingControlPlane(principal.workspaceId, ids);
   return jobs;
 }
 
@@ -1214,6 +1226,7 @@ export const centralPublishingTestHelpers = {
   companionCompatibility,
   companionPublishingEngine,
   companionStatus,
+  createUploadInDocument,
   hasActiveJobLease,
   recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
