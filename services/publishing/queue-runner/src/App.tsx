@@ -1095,8 +1095,8 @@ function UnifiedComposer({
     .map(accountId => accounts.find(account => account.id === accountId))
     .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
-  const selectedNeedsTitle = showYoutubeTitle;
+  const showYoutubeTitle = postFormat === 'video';
+  const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
@@ -1348,7 +1348,7 @@ function UnifiedComposer({
               </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
             </div>}
 
-            {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Required only when YouTube is selected'} maxLength={100} /></label>}
+            {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Enter a title to enable YouTube publishing'} maxLength={100} /></label>}
             <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
               <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
               <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />

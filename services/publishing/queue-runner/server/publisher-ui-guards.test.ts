@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { FACEBOOK_COMPOSER_EDITOR_SELECTORS } from "./services/publishers/facebook.js";
 import {
@@ -37,4 +38,11 @@ test("X publishing retains initial file acceptance after X clears the input", ()
   const currentInputFileCountAfterXProcessing = 0;
   assert.equal(currentInputFileCountAfterXProcessing, 0);
   assert.equal(hasReadyXMedia(initialFileSelectionCompleted, true), true);
+});
+
+test("video composer exposes the YouTube title before destination selection", async () => {
+  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /const showYoutubeTitle = postFormat === 'video';/);
+  assert.match(appSource, /const selectedNeedsTitle = Boolean\(postFormat === 'video' && selectedPlatforms\.includes\('youtube'\)\);/);
+  assert.match(appSource, /placeholder=.*Enter a title to enable YouTube publishing/);
 });
