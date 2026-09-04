@@ -61,7 +61,7 @@ jobs:
             done
             return 1
           }
-          audit_with_retry --omit=dev
+          audit_with_retry --omit=dev --workspaces=false
           audit_with_retry --omit=dev --prefix apps/publishing-companion-desktop
 
       - name: Verify release tag matches Companion version
