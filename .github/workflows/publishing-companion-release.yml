@@ -43,9 +43,26 @@ jobs:
           npm run build
 
       - name: Audit production dependencies
+        env:
+          npm_config_fetch_retries: 2
+          npm_config_fetch_retry_mintimeout: 1000
+          npm_config_fetch_retry_maxtimeout: 10000
+          npm_config_fetch_timeout: 60000
         run: |
-          npm audit --omit=dev
-          npm audit --omit=dev --prefix apps/publishing-companion-desktop
+          audit_with_retry() {
+            for attempt in 1 2 3; do
+              if npm audit "$@"; then
+                return 0
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                echo "Registry audit request failed; retrying ($attempt/3)."
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+          audit_with_retry --omit=dev
+          audit_with_retry --omit=dev --prefix apps/publishing-companion-desktop
 
       - name: Verify release tag matches Companion version
         if: startsWith(github.ref, 'refs/tags/')
