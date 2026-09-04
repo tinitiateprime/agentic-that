@@ -205,14 +205,22 @@ async function ensureArtifactBucket(configuration) {
         allowed_mime_types: ["image/*", "video/*"],
       }),
     });
-    if (!response.ok && response.status !== 409) {
-      throw new Error(await storageErrorMessage(response, `Could not initialize private media storage (${response.status}).`));
+    if (!response.ok) {
+      const message = await storageErrorMessage(response, `Could not initialize private media storage (${response.status}).`);
+      if (!storageResourceAlreadyExists(response.status, message)) throw new Error(message);
     }
   })().catch((error) => {
     artifactBucketReady = null;
     throw error;
   });
   return artifactBucketReady;
+}
+
+function storageResourceAlreadyExists(status, message) {
+  return status === 409 || (
+    status === 400
+    && /(?:resource|bucket)\s+(?:already\s+)?exists|already\s+exists/i.test(String(message || ""))
+  );
 }
 
 async function signedArtifactUrl(configuration, objectPath) {
@@ -604,5 +612,6 @@ export const supabaseJobControlTestHelpers = {
   publicDevice,
   publishingEngineForPlatform,
   supabaseApiHeaders,
+  storageResourceAlreadyExists,
   versionAtLeast,
 };

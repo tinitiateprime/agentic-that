@@ -30,6 +30,13 @@ test("new Supabase API keys are never misused as bearer JWTs", () => {
   );
 });
 
+test("an existing private media bucket is accepted during cold starts", () => {
+  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(409, "Conflict"), true);
+  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "The resource already exists"), true);
+  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Bucket already exists"), true);
+  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Invalid bucket configuration"), false);
+});
+
 test("Companion status is derived from heartbeat freshness and minimum version", () => {
   const current = new Date().toISOString();
   const base = {
