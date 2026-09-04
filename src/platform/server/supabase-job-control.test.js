@@ -129,3 +129,33 @@ test("normalized job rows preserve durable lease and outcome fields", () => {
   assert.equal(job.attemptCount, 1);
   assert.equal(job.progress.stage, "scraping");
 });
+
+test("publishing synchronization batches only active jobs with complete relations", () => {
+  const account = {
+    id: "account_1",
+    workspaceId: "workspace_1",
+    platform: "instagram",
+    executionEngine: "companion",
+  };
+  const upload = {
+    id: "upload_1",
+    accountId: account.id,
+    createdByUserId: "user_1",
+    artifact: { bucket: "job-artifacts", path: "workspace_1/file.png", fileName: "file.png" },
+  };
+  const plan = supabaseJobControlTestHelpers.publishingSynchronizationPlan(
+    "workspace_1",
+    [
+      { id: "job_1", uploadId: upload.id, accountId: account.id, state: "queued" },
+      { id: "job_done", uploadId: upload.id, accountId: account.id, state: "published" },
+      { id: "job_missing", uploadId: "upload_missing", accountId: account.id, state: "queued" },
+    ],
+    [upload],
+    [account],
+  );
+  assert.equal(plan.accounts.length, 1);
+  assert.equal(plan.jobs.length, 1);
+  assert.equal(plan.jobs[0].id, "job_1");
+  assert.equal(plan.jobs[0].idempotencyKey, "publish:job_1");
+  assert.equal(plan.jobs[0].payload.upload.artifact.path, "workspace_1/file.png");
+});

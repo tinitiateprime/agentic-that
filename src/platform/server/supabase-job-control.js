@@ -525,7 +525,7 @@ export async function createSupabaseJob({
   });
 }
 
-export async function synchronizePublishingJobs(workspaceId, jobs, uploads, accounts) {
+function publishingSynchronizationPlan(workspaceId, jobs, uploads, accounts) {
   const uploadsById = new Map(uploads.map((item) => [item.id, item]));
   const accountsById = new Map(accounts.map((item) => [item.id, item]));
   const work = jobs.flatMap((source) => {
@@ -534,9 +534,9 @@ export async function synchronizePublishingJobs(workspaceId, jobs, uploads, acco
     if (!upload || !account || !ACTIVE_JOB_STATES.has(source.state)) return [];
     return [{ source, upload, account }];
   });
-  const uniqueAccounts = [...new Map(work.map(({ account }) => [account.id, account])).values()];
-  await Promise.all(uniqueAccounts.map((account) => upsertSupabaseAccount(account)));
-  return Promise.all(work.map(({ source, upload, account }) => createSupabaseJob({
+  return {
+    accounts: [...new Map(work.map(({ account }) => [account.id, account])).values()],
+    jobs: work.map(({ source, upload, account }) => ({
       id: source.id,
       workspaceId,
       userId: upload.createdByUserId,
@@ -547,8 +547,175 @@ export async function synchronizePublishingJobs(workspaceId, jobs, uploads, acco
       payload: { upload, account },
       priority: 200,
       maxAttempts: 3,
-      notBefore: source.notBefore || null,
-    })));
+      notBefore: source.notBefore || new Date().toISOString(),
+    })),
+  };
+}
+
+async function synchronizePublishingJobsWithSql(sql, plan) {
+  if (!plan.jobs.length) return [];
+  const accountRows = plan.accounts.map((account) => ({
+    id: account.id,
+    workspace_id: account.workspaceId,
+    platform: account.platform,
+    display_name: account.displayName,
+    handle: account.handle || "",
+    login_identifier: account.loginIdentifier || "",
+    enabled: account.enabled !== false,
+    credential_configured: Boolean(account.credentialConfigured),
+    session_status: account.credentialConfigured ? "connected" : "reconnect_required",
+    safety_status: account.safetyStatus || "healthy",
+    metadata: { executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine) },
+    created_at: account.createdAt || new Date().toISOString(),
+  }));
+  await sql`
+    WITH incoming AS (
+      SELECT * FROM jsonb_to_recordset(${sql.json(accountRows)}::jsonb) AS item(
+        id text, workspace_id text, platform text, display_name text, handle text,
+        login_identifier text, enabled boolean, credential_configured boolean,
+        session_status text, safety_status text, metadata jsonb, created_at timestamptz
+      )
+    ), companion AS (
+      SELECT id FROM public.companion_devices
+       WHERE workspace_id = ${plan.jobs[0].workspaceId} AND revoked_at IS NULL
+       ORDER BY updated_at DESC LIMIT 1
+    )
+    INSERT INTO public.social_accounts(
+      id, workspace_id, companion_device_id, platform, display_name, handle,
+      login_identifier, enabled, credential_configured, session_status, safety_status,
+      metadata, created_at, updated_at
+    )
+    SELECT incoming.id, incoming.workspace_id, companion.id, incoming.platform,
+      incoming.display_name, incoming.handle, incoming.login_identifier, incoming.enabled,
+      incoming.credential_configured, incoming.session_status, incoming.safety_status,
+      incoming.metadata, incoming.created_at, now()
+    FROM incoming LEFT JOIN companion ON true
+    ON CONFLICT (id) DO UPDATE SET
+      companion_device_id = coalesce(EXCLUDED.companion_device_id, public.social_accounts.companion_device_id),
+      display_name = EXCLUDED.display_name,
+      handle = EXCLUDED.handle,
+      login_identifier = EXCLUDED.login_identifier,
+      enabled = EXCLUDED.enabled,
+      credential_configured = CASE
+        WHEN public.social_accounts.metadata->>'executionEngine' IS DISTINCT FROM EXCLUDED.metadata->>'executionEngine' THEN false
+        ELSE public.social_accounts.credential_configured
+      END,
+      session_status = CASE
+        WHEN public.social_accounts.metadata->>'executionEngine' IS DISTINCT FROM EXCLUDED.metadata->>'executionEngine' THEN 'reconnect_required'
+        ELSE public.social_accounts.session_status
+      END,
+      safety_status = EXCLUDED.safety_status,
+      metadata = coalesce(public.social_accounts.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+      updated_at = now()
+    WHERE public.social_accounts.workspace_id = EXCLUDED.workspace_id
+  `;
+
+  const jobRows = plan.jobs.map((job) => ({
+    id: job.id,
+    workspace_id: job.workspaceId,
+    job_type: job.type,
+    platform: job.platform,
+    account_id: job.accountId,
+    requested_by_user_id: job.userId || null,
+    idempotency_key: safeText(job.idempotencyKey || job.id, 240),
+    priority: Math.max(1, Math.min(Number(job.priority) || 100, 1000)),
+    payload: job.payload || {},
+    max_attempts: Math.max(1, Math.min(Number(job.maxAttempts) || 3, 10)),
+    not_before: job.notBefore || new Date().toISOString(),
+  }));
+  const rows = await sql`
+    WITH incoming AS (
+      SELECT * FROM jsonb_to_recordset(${sql.json(jobRows)}::jsonb) AS item(
+        id text, workspace_id text, job_type text, platform text, account_id text,
+        requested_by_user_id text, idempotency_key text, priority integer,
+        payload jsonb, max_attempts integer, not_before timestamptz
+      )
+    ), inserted AS (
+      INSERT INTO public.jobs(
+        id, workspace_id, job_type, platform, account_id, requested_by_user_id,
+        idempotency_key, priority, payload, max_attempts, not_before
+      )
+      SELECT id, workspace_id, job_type, platform, account_id, requested_by_user_id,
+        idempotency_key, priority, payload, max_attempts, not_before
+      FROM incoming
+      ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
+      RETURNING *
+    ), refreshed AS (
+      UPDATE public.jobs AS stored SET
+        payload = CASE
+          WHEN stored.status IN ('queued', 'waiting_for_companion', 'reconnect_required') THEN incoming.payload
+          ELSE stored.payload
+        END,
+        updated_at = CASE
+          WHEN stored.status IN ('queued', 'waiting_for_companion', 'reconnect_required') THEN now()
+          ELSE stored.updated_at
+        END
+      FROM incoming
+      WHERE stored.workspace_id = incoming.workspace_id
+        AND stored.idempotency_key = incoming.idempotency_key
+        AND NOT EXISTS (SELECT 1 FROM inserted WHERE inserted.id = stored.id)
+      RETURNING stored.*
+    ), events AS (
+      INSERT INTO public.job_events(job_id, workspace_id, event_type, status, message)
+      SELECT id, workspace_id, 'job.queued', status, 'Queued for the workspace Companion.'
+      FROM inserted
+      RETURNING id
+    ), combined AS (
+      SELECT * FROM inserted
+      UNION ALL
+      SELECT * FROM refreshed
+    )
+    SELECT combined.*, (SELECT count(*)::integer FROM events) AS queued_event_count
+    FROM combined
+  `;
+
+  const jobsByKey = new Map(rows.map((row) => [row.idempotency_key, row]));
+  const artifactRows = plan.jobs.flatMap((job) => {
+    const artifact = job.payload?.upload?.artifact;
+    const stored = jobsByKey.get(safeText(job.idempotencyKey || job.id, 240));
+    if (!stored || !artifact?.bucket || !artifact?.path || !artifact?.fileName) return [];
+    return [{
+      id: `artifact_${stored.id}`,
+      job_id: stored.id,
+      workspace_id: job.workspaceId,
+      storage_bucket: artifact.bucket,
+      storage_path: artifact.path,
+      file_name: artifact.fileName,
+      mime_type: artifact.mimeType || null,
+      byte_size: Number(artifact.byteSize) || null,
+      sha256: artifact.sha256 || null,
+    }];
+  });
+  if (artifactRows.length) {
+    await sql`
+      WITH incoming AS (
+        SELECT * FROM jsonb_to_recordset(${sql.json(artifactRows)}::jsonb) AS item(
+          id text, job_id text, workspace_id text, storage_bucket text, storage_path text,
+          file_name text, mime_type text, byte_size bigint, sha256 text
+        )
+      )
+      INSERT INTO public.job_artifacts(
+        id, job_id, workspace_id, storage_bucket, storage_path, file_name, mime_type, byte_size, sha256
+      )
+      SELECT id, job_id, workspace_id, storage_bucket, storage_path, file_name, mime_type, byte_size, sha256
+      FROM incoming
+      ON CONFLICT (job_id, storage_bucket, storage_path) DO UPDATE SET
+        workspace_id = EXCLUDED.workspace_id,
+        file_name = EXCLUDED.file_name,
+        mime_type = EXCLUDED.mime_type,
+        byte_size = EXCLUDED.byte_size,
+        sha256 = EXCLUDED.sha256
+    `;
+  }
+  return rows.map(camelJob);
+}
+
+export async function synchronizePublishingJobs(workspaceId, jobs, uploads, accounts, transaction = null) {
+  const plan = publishingSynchronizationPlan(workspaceId, jobs, uploads, accounts);
+  if (!plan.jobs.length) return [];
+  if (transaction) return synchronizePublishingJobsWithSql(transaction, plan);
+  const sql = await getDatabaseSql();
+  return sql.begin((tx) => synchronizePublishingJobsWithSql(tx, plan));
 }
 
 export async function listSupabaseJobs(workspaceId, options = {}) {
@@ -611,6 +778,7 @@ export const supabaseJobControlTestHelpers = {
   camelJob,
   publicDevice,
   publishingEngineForPlatform,
+  publishingSynchronizationPlan,
   supabaseApiHeaders,
   storageResourceAlreadyExists,
   versionAtLeast,

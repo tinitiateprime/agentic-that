@@ -725,15 +725,22 @@ function createUploadInDocument(document, principal, input = {}) {
 
 export async function createCentralUploads(principal, inputs = []) {
   if (!Array.isArray(inputs) || !inputs.length) throw new Error("Choose at least one workspace account.");
-  await initialize();
-  await reconcilePublishingControlPlane(principal.workspaceId);
-  const uploads = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value, transaction) => {
     const document = documentValue(value);
     const result = inputs.map((input) => createUploadInDocument(document, principal, input));
+    const uploadIds = new Set(result.map((upload) => upload.id));
+    const workspaceAccounts = document.accounts.filter((item) => item.workspaceId === principal.workspaceId);
+    const workspaceUploads = document.uploads.filter((item) => item.workspaceId === principal.workspaceId && uploadIds.has(item.id));
+    const workspaceJobs = document.jobs.filter((item) => item.workspaceId === principal.workspaceId && uploadIds.has(item.uploadId));
+    await synchronizePublishingJobs(
+      principal.workspaceId,
+      workspaceJobs,
+      workspaceUploads,
+      workspaceAccounts,
+      transaction,
+    );
     return { document, result };
   });
-  await synchronizePublishingControlPlane(principal.workspaceId, uploads.map((upload) => upload.id));
-  return uploads;
 }
 
 export async function createCentralUpload(principal, input = {}) {
