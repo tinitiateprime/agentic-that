@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
+import { downloadCentralArtifact, type CentralJobArtifact } from "./central-artifact.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import {
   cancelAllInstagramCompanionJobs,
@@ -186,17 +187,6 @@ type CentralPublishingJob = {
     upload: PlatformUpload & { artifact?: CentralJobArtifact | null };
     account: PlatformAccount;
   };
-};
-
-type CentralJobArtifact = {
-  bucket: string;
-  path: string;
-  fileName: string;
-  mimeType?: string;
-  byteSize?: number;
-  sha256?: string;
-  downloadUrl: string;
-  expiresAt?: string;
 };
 
 type CentralCompanionJob = CentralPublishingJob | {
@@ -379,25 +369,7 @@ async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, 
   } catch {
     // Download only after the local copy is confirmed absent.
   }
-  if (!artifact?.downloadUrl || artifact.fileName !== safeName) {
-    throw new Error("This publishing job has no authorized private media download.");
-  }
-  const downloadUrl = new URL(artifact.downloadUrl);
-  if (downloadUrl.protocol !== "https:" || downloadUrl.origin !== pairing.supabaseUrl) {
-    throw new Error("The private media download URL is invalid.");
-  }
-  const response = await fetch(downloadUrl);
-  if (!response.ok) throw new Error(`Private media download failed (${response.status}).`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (!bytes.length) throw new Error("The publishing media file is empty.");
-  if (artifact.sha256 && createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) {
-    throw new Error("The publishing media integrity check failed.");
-  }
-  const temporary = `${localPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-  await fs.promises.writeFile(temporary, bytes, { mode: 0o600 });
-  await fs.promises.rename(temporary, localPath);
-  return localPath;
+  return downloadCentralArtifact({ artifact, fileName: safeName, localPath, supabaseUrl: pairing.supabaseUrl });
 }
 
 async function updateCentralJobStatus(
@@ -471,7 +443,16 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
       await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
       return;
     }
-    if (upload.fileName) await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
+    if (upload.fileName) {
+      await updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.");
+      leaseHeartbeat = setInterval(() => {
+        void updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.")
+          .catch(() => undefined);
+      }, 30_000);
+      await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
+      clearInterval(leaseHeartbeat);
+      leaseHeartbeat = null;
+    }
     await upsertSyncedUpload(upload);
     await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
     await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");

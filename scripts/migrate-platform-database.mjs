@@ -54,7 +54,7 @@ try {
       (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   if (!status?.platform_users_ready || !status?.memberships_ready || !status?.roles_ready
       || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready
-      || status?.minimum_companion_version !== "2.1.3") {
+      || status?.minimum_companion_version !== "2.1.4") {
     throw new Error("The platform database migration did not create every required table.");
   }
   process.stdout.write("Platform and Companion job-control database migrations are ready.\n");

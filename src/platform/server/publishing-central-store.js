@@ -24,7 +24,7 @@ const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.3";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.4";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
@@ -825,6 +825,7 @@ export async function createCentralStagedUpload(principal, input = {}) {
     const stage = {
       id: id("stage"), workspaceId: principal.workspaceId, originalName, mimeType,
       size, offset: 0, chunkSize: 2 * 1024 * 1024, fileName: cleanFileName(originalName),
+      artifactParts: [],
       createdAt: now(), updatedAt: now(), createdByUserId: principal.userId,
     };
     document.stagedUploads.push(stage);
@@ -838,12 +839,19 @@ export async function getCentralStagedUpload(workspaceId, stagedUploadId) {
   return findOwned(document, "stagedUploads", workspaceId, stagedUploadId, "Upload session");
 }
 
-export async function advanceCentralStagedUpload(principal, stagedUploadId, nextOffset) {
+export async function advanceCentralStagedUpload(principal, stagedUploadId, nextOffset, artifactPart = null) {
   await initialize();
   return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const stage = findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
     if (!Number.isInteger(nextOffset) || nextOffset < stage.offset || nextOffset > stage.size) throw new Error("The media upload offset is invalid.");
+    if (artifactPart) {
+      if (artifactPart.offset !== stage.offset || artifactPart.byteSize !== nextOffset - stage.offset || artifactPart.index !== Math.floor(stage.offset / stage.chunkSize)) {
+        throw new Error("The private media upload part does not match this upload session.");
+      }
+      stage.artifactParts = (Array.isArray(stage.artifactParts) ? stage.artifactParts : []).filter((part) => part.index !== artifactPart.index);
+      stage.artifactParts.push(artifactPart);
+    }
     stage.offset = nextOffset;
     stage.updatedAt = now();
     return { document, result: { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize } };

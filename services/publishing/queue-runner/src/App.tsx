@@ -2502,10 +2502,12 @@ function useSecurePublishingMedia(fileName: string, enabled: boolean) {
 
 function PostMediaPreview({ upload, compact = false, networkPreview = false }: { upload: PlatformUpload; compact?: boolean; networkPreview?: boolean }) {
   const postFormat = uploadPostFormat(upload);
-  const mediaUrl = useSecurePublishingMedia(upload.fileName, postFormat !== 'text');
+  const browserPreviewAvailable = Number(upload.size || 0) <= 5 * 1024 * 1024;
+  const mediaUrl = useSecurePublishingMedia(upload.fileName, postFormat !== 'text' && browserPreviewAvailable);
   if (postFormat === 'text') {
     return compact ? <div className='post-preview-text'><FileText size={22} /><span>Text</span></div> : null;
   }
+  if (!browserPreviewAvailable) return <div className='post-preview-file'>{postFormat === 'video' ? <Video size={28} /> : <ImageIcon size={28} />}<span>{upload.originalName}</span></div>;
   if (!mediaUrl) return <div className='post-preview-file'><Loader2 className='spin' size={22} /><span>Loading media</span></div>;
   if (upload.mimeType.startsWith('image/')) return <img src={mediaUrl} alt='' />;
   if (upload.mimeType.startsWith('video/')) return <video src={mediaUrl} controls={!compact && !networkPreview} muted playsInline autoPlay={compact} loop={compact} />;

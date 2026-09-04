@@ -28,7 +28,13 @@ import {
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
-import { storeSupabaseJobArtifact } from "@platform/server/supabase-job-control";
+import {
+  deleteSupabaseJobArtifactParts,
+  finalizeSupabaseJobArtifact,
+  storeSupabaseJobArtifact,
+  storeSupabaseJobArtifactPart,
+  SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
+} from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
 
@@ -166,6 +172,26 @@ async function removeStageBytes(stage) {
 async function finishStagedMedia(principalValue, stagedUploadId) {
   const stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
+  if (stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+    const artifact = await finalizeSupabaseJobArtifact({
+      workspaceId: principalValue.workspaceId,
+      fileName: stage.fileName,
+      originalName: stage.originalName,
+      mimeType: stage.mimeType,
+      byteSize: stage.size,
+      parts: stage.artifactParts,
+    });
+    await consumeCentralStagedUpload(principalValue, stagedUploadId);
+    return {
+      originalName: stage.originalName,
+      fileName: stage.fileName,
+      mimeType: stage.mimeType,
+      size: stage.size,
+      extension: path.extname(stage.originalName),
+      url: "",
+      artifact,
+    };
+  }
   const bytes = await readStageBytes(stage);
   if (bytes.length !== stage.size) throw new Error("The media upload size is invalid. Please upload the file again.");
   const [, artifact] = await Promise.all([
@@ -316,8 +342,19 @@ export async function POST(request, context) {
       if (!bytes.length || bytes.length > MAX_CHUNK_BYTES || offset + bytes.length > stage.size) {
         throw new Error("The media upload chunk is invalid.");
       }
-      await putStageChunk(stage, offset, bytes);
-      return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + bytes.length));
+      let artifactPart = null;
+      if (stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+        artifactPart = await storeSupabaseJobArtifactPart(bytes, {
+          workspaceId: user.workspaceId,
+          fileName: stage.fileName,
+          mimeType: stage.mimeType,
+          index: Math.floor(offset / stage.chunkSize),
+          offset,
+        });
+      } else {
+        await putStageChunk(stage, offset, bytes);
+      }
+      return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + bytes.length, artifactPart));
     }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {
@@ -423,7 +460,10 @@ export async function DELETE(request, context) {
       const user = await principal("publishing.content.create");
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       await deleteCentralStagedUpload(user, parts[1]);
-      await removeStageBytes(stage);
+      await Promise.all([
+        removeStageBytes(stage),
+        deleteSupabaseJobArtifactParts(stage.artifactParts).catch(() => undefined),
+      ]);
       return new Response(null, { status: 204 });
     }
     if (parts[0] === "accounts" && parts[1]) {
