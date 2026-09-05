@@ -2,6 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { centralPublishingTestHelpers } from "./publishing-central-store.js";
 
+test("central publishing polling does not rewrite an unchanged workspace document", () => {
+  const updatedAt = "2026-09-05T10:00:00.000Z";
+  const document = {
+    jobs: [{
+      id: "job_1", workspaceId: "workspace_1", uploadId: "upload_1", state: "queued",
+      message: null, attemptCount: 0, leaseOwner: null, leaseExpiresAt: null, updatedAt,
+    }],
+    uploads: [{
+      id: "upload_1", workspaceId: "workspace_1", status: "queued", updatedAt,
+    }],
+  };
+  const remote = [{
+    id: "job_1", type: "publish", status: "queued", message: null, attemptCount: 0,
+    assignedDeviceId: null, leaseExpiresAt: null, updatedAt, completedAt: null,
+  }];
+
+  assert.equal(centralPublishingTestHelpers.applyRemotePublishingJobs(document, "workspace_1", remote), false);
+  remote[0].status = "running";
+  remote[0].updatedAt = "2026-09-05T10:01:00.000Z";
+  assert.equal(centralPublishingTestHelpers.applyRemotePublishingJobs(document, "workspace_1", remote), true);
+  assert.equal(document.jobs[0].state, "running");
+  assert.equal(document.uploads[0].status, "processing");
+});
+
 test("central publishing resumes reconnect-required jobs only after the paired Companion is online", () => {
   const timestamp = Date.now();
   const companion = { id: "companion_1", status: "online", version: "2.1.8", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };

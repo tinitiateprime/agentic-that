@@ -450,24 +450,22 @@ async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
   return document;
 }
 
-async function reconcilePublishingControlPlane(workspaceId) {
-  const remoteJobs = await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
-  if (!remoteJobs.length) return;
+function applyRemotePublishingJobs(document, workspaceId, remoteJobs) {
   const jobsById = new Map(remoteJobs.map((item) => [item.id, item]));
-  await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    for (const job of document.jobs) {
-      if (job.workspaceId !== workspaceId) continue;
-      const remote = jobsById.get(job.id);
-      if (!remote) continue;
-      const upload = document.uploads.find((item) => item.id === job.uploadId && item.workspaceId === workspaceId);
-      job.state = remote.status === "success" ? "published" : remote.status;
-      job.message = remote.message;
-      job.attemptCount = remote.attemptCount;
-      job.leaseOwner = remote.assignedDeviceId;
-      job.leaseExpiresAt = remote.leaseExpiresAt;
-      job.updatedAt = remote.updatedAt;
-      if (!upload) continue;
+  let changed = false;
+  for (const job of document.jobs) {
+    if (job.workspaceId !== workspaceId) continue;
+    const remote = jobsById.get(job.id);
+    if (!remote) continue;
+    const upload = document.uploads.find((item) => item.id === job.uploadId && item.workspaceId === workspaceId);
+    const before = JSON.stringify([job, upload]);
+    job.state = remote.status === "success" ? "published" : remote.status;
+    job.message = remote.message;
+    job.attemptCount = remote.attemptCount;
+    job.leaseOwner = remote.assignedDeviceId;
+    job.leaseExpiresAt = remote.leaseExpiresAt;
+    job.updatedAt = remote.updatedAt;
+    if (upload) {
       if (remote.status === "success") {
         upload.status = "posted";
         upload.postedAt = remote.completedAt;
@@ -483,7 +481,21 @@ async function reconcilePublishingControlPlane(workspaceId) {
       }
       upload.updatedAt = remote.updatedAt;
     }
-    return { document, result: null };
+    if (before !== JSON.stringify([job, upload])) changed = true;
+  }
+  return changed;
+}
+
+async function reconcilePublishingControlPlane(workspaceId, knownRemoteJobs) {
+  const remoteJobs = Array.isArray(knownRemoteJobs)
+    ? knownRemoteJobs.filter((item) => item.type === "publish")
+    : await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
+  const current = await getPublishingSnapshot(workspaceId);
+  if (!remoteJobs.length || !applyRemotePublishingJobs(current, workspaceId, remoteJobs)) return current;
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+    const document = documentValue(value);
+    applyRemotePublishingJobs(document, workspaceId, remoteJobs);
+    return { document, result: document };
   });
 }
 
@@ -683,8 +695,7 @@ export async function deleteCentralAccount(principal, accountId) {
 }
 
 export async function listCentralUploads(workspaceId) {
-  await reconcilePublishingControlPlane(workspaceId);
-  const document = await getPublishingSnapshot(workspaceId);
+  const document = await reconcilePublishingControlPlane(workspaceId);
   return document.uploads.filter((item) => item.workspaceId === workspaceId).map((item) => uploadPublic(document, item));
 }
 
@@ -1320,8 +1331,7 @@ export async function updateCentralJob(token, jobId, input = {}) {
 }
 
 export async function publishingDashboard(workspaceId) {
-  await reconcilePublishingControlPlane(workspaceId);
-  const document = await getPublishingSnapshot(workspaceId);
+  const document = await reconcilePublishingControlPlane(workspaceId);
   const uploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
   const control = await supabaseJobDashboard(workspaceId);
   const jobs = control.jobs.filter((item) => item.type === "publish").map((item) => {
@@ -1343,6 +1353,44 @@ export async function publishingDashboard(workspaceId) {
   };
 }
 
+export async function publishingWorkspaceSnapshot(workspaceId) {
+  const [control, normalizedAccounts] = await Promise.all([
+    supabaseJobDashboard(workspaceId),
+    listSupabaseAccounts(workspaceId),
+  ]);
+  const document = await reconcilePublishingControlPlane(workspaceId, control.jobs);
+  const normalizedById = new Map(normalizedAccounts.map((item) => [item.id, item]));
+  const accounts = document.accounts
+    .filter((item) => item.workspaceId === workspaceId)
+    .map((item) => {
+      const account = publicAccount(document, item);
+      return { ...account, ...(normalizedById.get(account.id) || {}) };
+    });
+  const uploads = document.uploads
+    .filter((item) => item.workspaceId === workspaceId)
+    .map((item) => uploadPublic(document, item));
+  const jobs = control.jobs
+    .filter((item) => item.type === "publish")
+    .map((item) => {
+      const safeJob = { ...item };
+      delete safeJob.payload;
+      return { ...safeJob, state: item.status === "success" ? "published" : item.status };
+    });
+  return {
+    accounts,
+    uploads,
+    submissions: document.submissions
+      .filter((item) => item.workspaceId === workspaceId)
+      .map(normalizeCentralSubmission),
+    schedules: [],
+    activityLogs: document.activityLogs
+      .filter((item) => item.workspaceId === workspaceId)
+      .slice(0, 100),
+    companion: control.companion,
+    jobs,
+  };
+}
+
 export function centralMediaFileName(originalName) {
   return cleanFileName(originalName);
 }
@@ -1352,6 +1400,7 @@ export function centralMediaFileName(originalName) {
 export const centralPublishingTestHelpers = {
   accountReadiness,
   advanceStagedUploadPartsInDocument,
+  applyRemotePublishingJobs,
   centralJobUpdateIsAllowed,
   companionCompatibility,
   companionPublishingEngine,

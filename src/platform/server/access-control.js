@@ -332,6 +332,10 @@ export async function requireCapability(capability, returnTo = "/apps") {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect(`/?auth=login&next=${encodeURIComponent(returnTo)}`);
   if (principal.status === "pending") redirect("/pending-approval");
+  return requirePrincipalCapability(principal, capability, returnTo);
+}
+
+export async function requirePrincipalCapability(principal, capability, returnTo = "/apps") {
   try {
     return await assertPrincipalCapability(principal, capability);
   } catch (error) {

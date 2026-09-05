@@ -67,6 +67,30 @@ export type MediaPreparationProgress = {
   percent: number;
 };
 
+type PublishingHealth = {
+  ok: boolean;
+  automationReady: boolean;
+  automationRunning: boolean;
+  chromeInstalled?: boolean;
+  embeddedBrowser?: boolean;
+  engines?: {
+    companion: { available: boolean };
+    external_browser: { available: boolean };
+  };
+  extensionBridge?: boolean;
+  platforms?: Platform[];
+};
+
+export type PublishingWorkspaceSnapshot = {
+  health: PublishingHealth & { transport: "central" | "desktop" | "extension" | "direct" };
+  uploads: PlatformUpload[];
+  submissions: ContentSubmission[];
+  accounts: PlatformAccount[];
+  schedules: PublishingSchedule[];
+  users: UserProfile[];
+  activityLogs: ActivityLog[];
+};
+
 type StagedUploadSession = {
   id: string;
   offset: number;
@@ -345,35 +369,46 @@ export function assetUrl(url: string, options: { compact?: boolean; controls?: b
   return publishingAssetUrl(url, options);
 }
 
+async function publishingHealth(): Promise<PublishingWorkspaceSnapshot["health"]> {
+  const health = await request<PublishingHealth>("/api/health");
+  if (!centralIdentitySeed && isPublishingExtensionActive() && !health.extensionBridge) {
+    throw new Error("Restart Start Publishing Companion.cmd to load the extension-compatible publishing service.");
+  }
+  if (centralIdentitySeed) return { ...health, transport: "central" };
+  const bridge = await detectPublishingExtension();
+  return {
+    ...health,
+    transport: bridge?.version === "desktop"
+      ? "desktop"
+      : isPublishingExtensionActive()
+        ? "extension"
+        : "direct",
+  };
+}
+
 export const api = {
   media: mediaBlob,
-  health: async () => {
-    const health = await request<{
-      ok: boolean;
-      automationReady: boolean;
-      automationRunning: boolean;
-      chromeInstalled?: boolean;
-      embeddedBrowser?: boolean;
-      engines?: {
-        companion: { available: boolean };
-        external_browser: { available: boolean };
-      };
-      extensionBridge?: boolean;
-      platforms?: Platform[];
-    }>("/api/health");
-    if (!centralIdentitySeed && isPublishingExtensionActive() && !health.extensionBridge) {
-      throw new Error("Restart Start Publishing Companion.cmd to load the extension-compatible publishing service.");
+  health: publishingHealth,
+
+  workspaceSnapshot: async (includeUsers = false): Promise<PublishingWorkspaceSnapshot> => {
+    if (centralIdentitySeed) {
+      const snapshot = await request<Omit<PublishingWorkspaceSnapshot, "health"> & { health: PublishingHealth }>("/api/workspace-snapshot");
+      return { ...snapshot, health: { ...snapshot.health, transport: "central" } };
     }
-    if (centralIdentitySeed) return { ...health, transport: "central" as const };
-    const bridge = await detectPublishingExtension();
-    return {
-      ...health,
-      transport: bridge?.version === "desktop"
-        ? "desktop" as const
-        : isPublishingExtensionActive()
-          ? "extension" as const
-          : "direct" as const
-    };
+    const [health, uploads, submissions, accounts, schedules] = await Promise.all([
+      publishingHealth(),
+      request<PlatformUpload[]>("/api/uploads"),
+      request<ContentSubmission[]>("/api/submissions"),
+      request<PlatformAccount[]>("/api/accounts"),
+      request<PublishingSchedule[]>("/api/schedules"),
+    ]);
+    const [users, activityLogs] = includeUsers
+      ? await Promise.all([
+        request<UserProfile[]>("/api/users"),
+        request<ActivityLog[]>("/api/activity-logs?limit=100"),
+      ])
+      : [[], []];
+    return { health, uploads, submissions, accounts, schedules, users, activityLogs };
   },
 
   assessPublishingSafety: async (postFormat: PostFormat, destinations: UnifiedPostDestinationInput[]) => {

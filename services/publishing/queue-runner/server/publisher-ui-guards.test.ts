@@ -112,3 +112,22 @@ test("large-media finalization is split, retried, and never deletes finalized pa
   assert.match(storeSource, /item\.sourceSubmissionId === sourceSubmissionId/);
   assert.match(storeSource, /artifact_manifest/);
 });
+
+test("central publishing refresh uses one non-overlapping workspace request", async () => {
+  const [appSource, clientSource, routeSource, accessSource, detailSource, documentStoreSource] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../src/platform/server/access-control.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/apps/[category]/[slug]/page.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../../../../lib/database-document-store.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /refreshInFlight\.current/);
+  assert.match(appSource, /api\.workspaceSnapshot\(permissions\.canManageUsers\)/);
+  assert.match(appSource, /setInterval\(\(\) => void refresh\(false\), 10000\)/);
+  assert.match(clientSource, /request<.*>\("\/api\/workspace-snapshot"\)/);
+  assert.match(routeSource, /parts\[0\] === "workspace-snapshot"/);
+  assert.match(accessSource, /export async function requirePrincipalCapability/);
+  assert.match(detailSource, /requirePrincipalCapability\(user,/);
+  assert.match(documentStoreSource, /process\.env\.NETLIFY === "true" \? 1 : 5/);
+});

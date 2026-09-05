@@ -70,8 +70,8 @@ function client() {
       // Safe with Supabase's transaction pooler (pgbouncer), which can't hold
       // server-side prepared statements across pooled connections.
       prepare: false,
-      max: Number(process.env.PG_POOL_MAX || 5),
-      idle_timeout: 20,
+      max: Number(process.env.PG_POOL_MAX || (process.env.NETLIFY === "true" ? 1 : 5)),
+      idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.NETLIFY === "true" ? 5 : 20)),
       connect_timeout: 15,
       onnotice: () => {}, // silence "column already exists, skipping" etc.
       types: { timestamp: timestampAsIso },

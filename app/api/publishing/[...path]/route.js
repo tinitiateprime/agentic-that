@@ -20,6 +20,7 @@ import {
   listCentralUploads,
   minimumCompanionVersion,
   publishingDashboard,
+  publishingWorkspaceSnapshot,
   publishingUserFromPrincipal,
   queueCentralUploads,
   removeCentralCompanion,
@@ -300,6 +301,30 @@ export async function GET(request, context) {
     }
     const user = await principal("publishing.view");
     const query = new URL(request.url).searchParams;
+    if (parts[0] === "workspace-snapshot") {
+      const snapshot = await publishingWorkspaceSnapshot(user.workspaceId);
+      const accounts = visibleForPrincipal(user, snapshot.accounts);
+      const accountIds = new Set(accounts.map((account) => account.id));
+      const uploads = snapshot.uploads.filter((upload) => accountIds.has(upload.accountId));
+      const uploadIds = new Set(uploads.map((upload) => upload.id));
+      const jobs = snapshot.jobs.filter((job) => accountIds.has(job.accountId));
+      return Response.json({
+        health: {
+          ok: true,
+          automationReady: true,
+          automationRunning: jobs.some((job) => ["opening_platform", "uploading", "publishing"].includes(job.state)),
+          companion: snapshot.companion,
+          minimumCompanionVersion: minimumCompanionVersion(),
+          transport: "central",
+        },
+        uploads,
+        submissions: snapshot.submissions.filter((submission) => submission.selectedAccountIds.some((accountId) => accountIds.has(accountId))),
+        accounts,
+        schedules: snapshot.schedules,
+        users: [],
+        activityLogs: snapshot.activityLogs.filter((entry) => entry.uploadId && uploadIds.has(entry.uploadId)),
+      });
+    }
     if (parts[0] === "health") {
       const dashboard = await publishingDashboard(user.workspaceId);
       const companionValue = dashboard.companion;

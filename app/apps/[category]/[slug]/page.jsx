@@ -6,7 +6,7 @@ import {
   getServicesByCategory,
 } from "@platform/product-catalog";
 import { accessResourceForService } from "@platform/access-catalog";
-import { requireAccess, requireCapability } from "@platform/server/access-control";
+import { requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +28,7 @@ export default async function AppDetailPage({ params }) {
 
   let user = await requireAccess(accessResourceForService(service), "view", `/apps/${categoryId}/${slug}`);
   if (service.availability === "live" && ["messaging", "publishing", "scraping"].includes(categoryId)) {
-    user = await requireCapability(`${categoryId}.view`, `/apps/${categoryId}/${slug}`);
+    user = await requirePrincipalCapability(user, `${categoryId}.view`, `/apps/${categoryId}/${slug}`);
   }
 
   const related = getServicesByCategory(categoryId)

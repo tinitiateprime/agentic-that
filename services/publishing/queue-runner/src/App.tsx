@@ -9,7 +9,7 @@ import {
   Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
@@ -540,43 +540,34 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [editingUpload, setEditingUpload] = useState<PlatformUpload | null>(null);
   const [schedulingSubmission, setSchedulingSubmission] = useState<ContentSubmission | null>(null);
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async (showLoading = true) => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setError(null);
     if (showLoading) setLoading(true);
     try {
-      const baseRequests = [
-        api.health(),
-        api.uploads(),
-        api.submissions(),
-        api.accounts(),
-        Promise.resolve([] as PublishingSchedule[]),
-      ] as const;
-      const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
-      setConnectionMode(health.transport);
-      setIsRunning(health.automationRunning);
-      setUploads(latestUploads);
-      setSubmissions(latestSubmissions);
-      setAccounts(latestAccounts);
-      setSchedules(latestSchedules);
-      if (permissions.canManageUsers) {
-        const [latestUsers, latestActivity] = await Promise.all([
-          api.users(),
-          api.activityLogs(100),
-        ]);
-        setUsers(latestUsers);
-        setActivityLogs(latestActivity);
-      }
+      const snapshot = await api.workspaceSnapshot(permissions.canManageUsers);
+      setConnectionMode(snapshot.health.transport);
+      setIsRunning(snapshot.health.automationRunning);
+      setUploads(snapshot.uploads);
+      setSubmissions(snapshot.submissions);
+      setAccounts(snapshot.accounts);
+      setSchedules(snapshot.schedules);
+      setUsers(snapshot.users);
+      setActivityLogs(snapshot.activityLogs);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed.');
     } finally {
+      refreshInFlight.current = false;
       if (showLoading) setLoading(false);
     }
   }, [permissions.canManageUsers]);
 
   useEffect(() => {
     void refresh();
-    const refreshTimer = window.setInterval(() => void refresh(false), 5000);
+    const refreshTimer = window.setInterval(() => void refresh(false), 10000);
     return () => window.clearInterval(refreshTimer);
   }, [refresh]);
 
