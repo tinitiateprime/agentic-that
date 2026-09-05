@@ -37,6 +37,20 @@ test("an existing private media bucket is accepted during cold starts", () => {
   assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Invalid bucket configuration"), false);
 });
 
+test("direct media upload parts use bounded, workspace-scoped object paths", () => {
+  assert.equal(
+    supabaseJobControlTestHelpers.artifactPartObjectPath("workspace_1", "media_demo.mp4", 7),
+    "workspace_1/media_demo.mp4.parts/0007",
+  );
+  assert.doesNotThrow(() => supabaseJobControlTestHelpers.validateArtifactPartInput({
+    index: 0,
+    offset: 0,
+    byteSize: 5 * 1024 * 1024,
+  }));
+  assert.throws(() => supabaseJobControlTestHelpers.validateArtifactPartInput({ index: 0, offset: 0, byteSize: 5 * 1024 * 1024 + 1 }));
+  assert.throws(() => supabaseJobControlTestHelpers.validateArtifactPartInput({ index: -1, offset: 0, byteSize: 1 }));
+});
+
 test("Companion status is derived from heartbeat freshness and minimum version", () => {
   const current = new Date().toISOString();
   const base = {

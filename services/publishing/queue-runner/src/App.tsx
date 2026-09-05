@@ -1059,6 +1059,7 @@ function UnifiedComposer({
   const [scheduleOverrides, setScheduleOverrides] = useState<Record<string, ComposerScheduleDraft>>({});
   const [dragActive, setDragActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [preparationProgress, setPreparationProgress] = useState<{ label: string; percent?: number } | null>(null);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -1211,6 +1212,7 @@ function UnifiedComposer({
     if (handoffOnly) {
       if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
       setSubmitting(true);
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Preparing posts…' });
       try {
         await api.createSubmission({
           postFormat,
@@ -1221,6 +1223,9 @@ function UnifiedComposer({
           rightsConfirmed,
           destinations: selectedAccounts.map(account => ({ accountId: account.id })),
           confirmWarnings,
+          onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+            ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+            : { label: 'Creating destination posts…', percent: 100 }),
         });
         resetComposer();
         setMessage({ type: 'success', text: 'Saved and sent to the scheduler. This submission remains available after you sign out.' });
@@ -1236,6 +1241,7 @@ function UnifiedComposer({
         }
       } finally {
         setSubmitting(false);
+        setPreparationProgress(null);
       }
       return;
     }
@@ -1266,9 +1272,12 @@ function UnifiedComposer({
     }));
 
     setSubmitting(true);
+    setPreparationProgress({ label: 'Checking destinations…' });
     try {
       const safety = await api.assessPublishingSafety(postFormat, destinations);
+      setPreparationProgress({ label: 'Authorizing publishing…' });
       await api.authorizePublishing();
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Creating destination posts…' });
       const created = await api.createUnifiedPost({
         postFormat,
         file,
@@ -1278,6 +1287,9 @@ function UnifiedComposer({
         destinations,
         rightsConfirmed,
         confirmWarnings,
+        onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+          ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+          : { label: 'Creating destination posts…', percent: 100 }),
       });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
       const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId && !upload.safetyDeferredUntil);
@@ -1287,6 +1299,7 @@ function UnifiedComposer({
         : '';
       let publishingError = '';
       if (canPublishNow && immediateUploads.length > 0) {
+        setPreparationProgress({ label: 'Starting Companion publishing…', percent: 100 });
         try {
           await api.runAutomation(immediateUploads.map(upload => upload.id));
         } catch (error) {
@@ -1320,6 +1333,7 @@ function UnifiedComposer({
       }
     } finally {
       setSubmitting(false);
+      setPreparationProgress(null);
     }
   };
 
@@ -1426,8 +1440,10 @@ function UnifiedComposer({
       </div>
 
       <footer className='composer-footer'>
-        <div>{message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <div>{submitting && preparationProgress?.percent !== undefined
+          ? <div className='composer-upload-progress' role='progressbar' aria-valuemin={0} aria-valuemax={100} aria-valuenow={preparationProgress.percent}><span>{preparationProgress.label}</span><i><b style={{ width: `${preparationProgress.percent}%` }} /></i></div>
+          : message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );

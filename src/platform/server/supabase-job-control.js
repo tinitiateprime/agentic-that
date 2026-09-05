@@ -298,6 +298,80 @@ function artifactPartObjectPath(workspaceId, fileName, index) {
   return `${storageObjectPath(workspaceId, fileName)}.parts/${String(index).padStart(4, "0")}`;
 }
 
+function validateArtifactPartInput({ index, offset, byteSize }) {
+  if (!Number.isInteger(index) || index < 0 || index > 9999) throw new Error("The private media part number is invalid.");
+  if (!Number.isInteger(offset) || offset < 0) throw new Error("The private media part offset is invalid.");
+  if (!Number.isInteger(byteSize) || byteSize < 1 || byteSize > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+    throw new Error("The private media part size is invalid.");
+  }
+}
+
+export async function authorizeSupabaseJobArtifactPartUpload({ workspaceId, fileName, mimeType, index, offset, byteSize }) {
+  validateArtifactPartInput({ index, offset, byteSize });
+  const configuration = supabaseServiceConfiguration();
+  await ensureArtifactBucket(configuration);
+  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
+  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/upload/sign/${ARTIFACT_BUCKET}/${objectPath}`, {
+    method: "POST",
+    headers: {
+      ...supabaseApiHeaders(configuration.serviceKey),
+      "content-type": "application/json",
+      "x-upsert": "true",
+    },
+    body: "{}",
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.url) {
+    throw new Error(safeText(payload.message || payload.error || `Could not authorize private media upload (${response.status}).`, 1000));
+  }
+  const signedUrl = /^https:\/\//i.test(payload.url)
+    ? payload.url
+    : `${configuration.supabaseUrl}/storage/v1${String(payload.url).startsWith("/") ? "" : "/"}${payload.url}`;
+  const parsed = new URL(signedUrl);
+  if (parsed.origin !== configuration.supabaseUrl || !parsed.pathname.startsWith("/storage/v1/object/upload/sign/")) {
+    throw new Error("The private media upload URL is invalid.");
+  }
+  return {
+    signedUrl: parsed.toString(),
+    index,
+    offset,
+    byteSize,
+    path: decodeURIComponent(objectPath),
+    mimeType: mimeType || "application/octet-stream",
+  };
+}
+
+export async function verifySupabaseJobArtifactPartUpload({ workspaceId, fileName, index, offset, byteSize }) {
+  validateArtifactPartInput({ index, offset, byteSize });
+  const configuration = supabaseServiceConfiguration();
+  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
+  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/info/${ARTIFACT_BUCKET}/${objectPath}`, {
+    headers: supabaseApiHeaders(configuration.serviceKey),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(safeText(payload.message || payload.error || `Private media upload verification failed (${response.status}).`, 1000));
+  }
+  const storedSize = Number(payload?.metadata?.size ?? payload?.size);
+  if (!Number.isInteger(storedSize) || storedSize !== byteSize) {
+    throw new Error("The uploaded private media part has the wrong size.");
+  }
+  return {
+    index,
+    offset,
+    path: decodeURIComponent(objectPath),
+    byteSize,
+  };
+}
+
+export async function deleteSupabaseStagedArtifactParts({ workspaceId, fileName, partCount }) {
+  const count = Number(partCount);
+  if (!Number.isInteger(count) || count < 0 || count > 1000) throw new Error("The private media part count is invalid.");
+  await deleteSupabaseJobArtifactParts(Array.from({ length: count }, (_, index) => ({
+    path: decodeURIComponent(artifactPartObjectPath(workspaceId, fileName, index)),
+  })));
+}
+
 export async function storeSupabaseJobArtifactPart(bytes, { workspaceId, fileName, mimeType, index, offset }) {
   if (!bytes?.length || bytes.length > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) throw new Error("The private media part size is invalid.");
   const configuration = supabaseServiceConfiguration();
@@ -774,6 +848,7 @@ export async function supabaseJobDashboard(workspaceId) {
 
 export const supabaseJobControlTestHelpers = {
   absoluteSignedArtifactUrl,
+  artifactPartObjectPath,
   camelAccount,
   camelJob,
   publicDevice,
@@ -781,5 +856,6 @@ export const supabaseJobControlTestHelpers = {
   publishingSynchronizationPlan,
   supabaseApiHeaders,
   storageResourceAlreadyExists,
+  validateArtifactPartInput,
   versionAtLeast,
 };

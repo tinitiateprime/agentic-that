@@ -6,6 +6,7 @@
 - Keywords and hashtags read the anonymous public feed, with public search discovery when needed. Search links are only candidates: dates, content, and metrics must be checked on the actual Facebook post. Indexed coverage can be partial and older than the latest feed.
 - YouTube videos require explicit audience (made for kids / not made for kids) and visibility (private / unlisted / public) choices. These survive intake, editing, queue transport, and Companion execution. Studio radio selection must be confirmed before Save or Publish.
 - Existing YouTube video jobs without choices need to be edited before retrying. Companion 2.1.7 is the minimum version so earlier versions cannot ignore private or unlisted choices.
+- Website media preparation uploads 5 MB private parts directly to Supabase in parallel instead of relaying every byte through Netlify. The composer shows live percentage progress, retries interrupted parts, verifies each stored size, and removes incomplete uploads safely.
 
 Validation: automated Facebook and publishing tests, production website build, and local Chromium checks for all six YouTube option combinations. Anonymous live checks returned results for the supplied numeric Facebook profile, direct Reel views and followers, direct post followers, hashtags, and keyword search. Live YouTube publishing and installation on each user's OS still require account/device testing.
 

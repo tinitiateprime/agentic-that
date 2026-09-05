@@ -60,6 +60,27 @@ export type PublishingSafetyApiIssue = {
   message: string;
 };
 
+export type MediaPreparationProgress = {
+  phase: "uploading" | "finalizing";
+  loaded: number;
+  total: number;
+  percent: number;
+};
+
+type StagedUploadSession = {
+  id: string;
+  offset: number;
+  chunkSize: number;
+  uploadStrategy?: "signed_parts";
+};
+
+type SignedUploadPart = {
+  signedUrl: string;
+  index: number;
+  offset: number;
+  byteSize: number;
+};
+
 export class PublishingSafetyApiError extends Error {
   readonly code = "PUBLISHING_SAFETY_SCHEDULE" as const;
   readonly issues: PublishingSafetyApiIssue[];
@@ -161,6 +182,143 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function mediaProgress(phase: MediaPreparationProgress["phase"], loaded: number, total: number): MediaPreparationProgress {
+  const boundedLoaded = Math.max(0, Math.min(loaded, total));
+  return {
+    phase,
+    loaded: boundedLoaded,
+    total,
+    percent: total > 0 ? Math.min(100, Math.round((boundedLoaded / total) * 100)) : 100,
+  };
+}
+
+function retryableUploadError(error: unknown) {
+  return !(error instanceof PublishingApiRequestError) || error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+}
+
+async function retryUploadStep<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!retryableUploadError(error) || attempt === attempts - 1) throw error;
+      await new Promise(resolve => globalThis.setTimeout(resolve, 600 * (2 ** attempt)));
+    }
+  }
+  throw lastError;
+}
+
+function uploadSignedMediaPart(
+  signedUrl: string,
+  body: Blob,
+  mimeType: string,
+  onProgress: (loaded: number) => void,
+) {
+  return new Promise<void>((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(signedUrl);
+      const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+      if (parsed.username || parsed.password || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && local))) {
+        throw new Error("invalid");
+      }
+    } catch {
+      reject(new Error("The private media upload URL is invalid."));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", parsed.toString(), true);
+    xhr.timeout = 180_000;
+    xhr.setRequestHeader("Content-Type", mimeType || "application/octet-stream");
+    xhr.setRequestHeader("Cache-Control", "max-age=3600");
+    xhr.setRequestHeader("X-Upsert", "true");
+    xhr.upload.onprogress = event => {
+      if (event.lengthComputable) onProgress(Math.min(event.loaded, body.size));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(body.size);
+        resolve();
+        return;
+      }
+      const detail = String(xhr.responseText || "").trim().slice(0, 400);
+      reject(new Error(detail || `Private media upload failed (${xhr.status}).`));
+    };
+    xhr.onerror = () => reject(new Error("The private media upload connection was interrupted."));
+    xhr.ontimeout = () => reject(new Error("The private media upload timed out."));
+    xhr.onabort = () => reject(new Error("The private media upload was cancelled."));
+    xhr.send(body);
+  });
+}
+
+async function uploadStagedFile(
+  file: File,
+  session: StagedUploadSession,
+  onProgress?: (progress: MediaPreparationProgress) => void,
+) {
+  const maximumChunkSize = session.uploadStrategy === "signed_parts" ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
+  const chunkSize = Math.min(maximumChunkSize, Math.max(64 * 1024, session.chunkSize || maximumChunkSize));
+  let offset = session.offset;
+  onProgress?.(mediaProgress("uploading", offset, file.size));
+  while (offset < file.size) {
+    if (session.uploadStrategy === "signed_parts") {
+      const batchStart = offset;
+      const batch = Array.from({ length: 3 }, (_, batchIndex) => {
+        const partOffset = batchStart + batchIndex * chunkSize;
+        if (partOffset >= file.size) return null;
+        const chunk = file.slice(partOffset, Math.min(file.size, partOffset + chunkSize));
+        return { index: Math.floor(partOffset / chunkSize), offset: partOffset, chunk };
+      }).filter((part): part is { index: number; offset: number; chunk: Blob } => Boolean(part));
+      const uploadedByPart = new Map(batch.map(part => [part.index, 0]));
+      const uploadResults = await Promise.allSettled(batch.map(async ({ index, offset: partOffset, chunk }) => {
+        const part = await retryUploadStep(() => request<SignedUploadPart>(`/api/staged-uploads/${session.id}/parts/authorize`, {
+          method: "POST",
+          body: JSON.stringify({ index, offset: partOffset, byteSize: chunk.size }),
+        }));
+        if (part.index !== index || part.offset !== partOffset || part.byteSize !== chunk.size || !part.signedUrl) {
+          throw new Error("The server returned an invalid private media upload authorization.");
+        }
+        await retryUploadStep(() => uploadSignedMediaPart(part.signedUrl, chunk, file.type, loaded => {
+          uploadedByPart.set(index, loaded);
+          const batchLoaded = [...uploadedByPart.values()].reduce((total, value) => total + value, 0);
+          onProgress?.(mediaProgress("uploading", batchStart + batchLoaded, file.size));
+        }));
+      }));
+      const failedUpload = uploadResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failedUpload) throw failedUpload.reason;
+      for (const { index, offset: partOffset, chunk } of batch) {
+        const result = await retryUploadStep(() => request<{ offset: number }>(`/api/staged-uploads/${session.id}/parts/complete`, {
+          method: "POST",
+          body: JSON.stringify({ index, offset: partOffset, byteSize: chunk.size }),
+        }));
+        if (!Number.isInteger(result.offset) || result.offset <= offset) {
+          throw new Error("The server returned an invalid direct upload offset.");
+        }
+        offset = result.offset;
+        onProgress?.(mediaProgress("uploading", offset, file.size));
+      }
+    } else {
+      const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
+      const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Upload-Offset": String(offset),
+        },
+        body: await chunk.arrayBuffer(),
+      });
+      if (!Number.isInteger(result.offset) || result.offset <= offset) {
+        throw new Error("The companion returned an invalid upload offset.");
+      }
+      offset = result.offset;
+      onProgress?.(mediaProgress("uploading", offset, file.size));
+    }
+  }
+  onProgress?.(mediaProgress("finalizing", file.size, file.size));
 }
 
 async function mediaBlob(fileName: string) {
@@ -314,6 +472,7 @@ export const api = {
     destinations: UnifiedPostDestinationInput[];
     rightsConfirmed: boolean;
     confirmWarnings?: boolean;
+    onProgress?: (progress: MediaPreparationProgress) => void;
   }) => {
     if (payload.postFormat === "text") {
       return request<PlatformUpload[]>("/api/posts/unified/text", {
@@ -329,7 +488,7 @@ export const api = {
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
     try {
-      const session = await request<{ id: string; offset: number; chunkSize: number }>("/api/staged-uploads", {
+      const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
         body: JSON.stringify({
           originalName: payload.file.name,
@@ -338,23 +497,7 @@ export const api = {
         }),
       });
       stagedUploadId = session.id;
-      const chunkSize = Math.min(2 * 1024 * 1024, Math.max(64 * 1024, session.chunkSize || 2 * 1024 * 1024));
-      let offset = session.offset;
-      while (offset < payload.file.size) {
-        const chunk = payload.file.slice(offset, Math.min(payload.file.size, offset + chunkSize));
-        const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Upload-Offset": String(offset),
-          },
-          body: await chunk.arrayBuffer(),
-        });
-        if (!Number.isInteger(result.offset) || result.offset <= offset) {
-          throw new Error("The companion returned an invalid upload offset.");
-        }
-        offset = result.offset;
-      }
+      await uploadStagedFile(payload.file, session, payload.onProgress);
 
       const uploads = await request<PlatformUpload[]>("/api/posts/unified/staged", {
         method: "POST",
@@ -386,6 +529,7 @@ export const api = {
     rightsConfirmed: boolean;
     destinations: UnifiedPostDestinationInput[];
     confirmWarnings?: boolean;
+    onProgress?: (progress: MediaPreparationProgress) => void;
   }) => {
     if (payload.postFormat === "text") {
       return request<ContentSubmission>("/api/submissions/text", {
@@ -401,7 +545,7 @@ export const api = {
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
     try {
-      const session = await request<{ id: string; offset: number; chunkSize: number }>("/api/staged-uploads", {
+      const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
         body: JSON.stringify({
           originalName: payload.file.name,
@@ -410,23 +554,7 @@ export const api = {
         }),
       });
       stagedUploadId = session.id;
-      const chunkSize = Math.min(2 * 1024 * 1024, Math.max(64 * 1024, session.chunkSize || 2 * 1024 * 1024));
-      let offset = session.offset;
-      while (offset < payload.file.size) {
-        const chunk = payload.file.slice(offset, Math.min(payload.file.size, offset + chunkSize));
-        const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Upload-Offset": String(offset),
-          },
-          body: await chunk.arrayBuffer(),
-        });
-        if (!Number.isInteger(result.offset) || result.offset <= offset) {
-          throw new Error("The companion returned an invalid upload offset.");
-        }
-        offset = result.offset;
-      }
+      await uploadStagedFile(payload.file, session, payload.onProgress);
 
       const submission = await request<ContentSubmission>("/api/submissions/staged", {
         method: "POST",

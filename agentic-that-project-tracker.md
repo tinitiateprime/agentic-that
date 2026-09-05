@@ -42,6 +42,7 @@ kanban
     done14[Companion v2.1.5 Instagram Publishing and Scraping Compatibility]
     done15[Companion v2.1.6 Durable Facebook Session Recovery]
     done16[Companion v2.1.7 Public Facebook Discovery and Explicit YouTube Options]
+    done17[Direct Resilient Media Uploads with Live Progress]
 
   future[Future]
     future1[Android Companion]

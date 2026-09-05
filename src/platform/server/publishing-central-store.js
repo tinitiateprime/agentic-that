@@ -27,6 +27,7 @@ const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
 const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.7";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
+const CENTRAL_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
@@ -834,13 +835,13 @@ export async function createCentralStagedUpload(principal, input = {}) {
     const document = documentValue(value);
     const stage = {
       id: id("stage"), workspaceId: principal.workspaceId, originalName, mimeType,
-      size, offset: 0, chunkSize: 2 * 1024 * 1024, fileName: cleanFileName(originalName),
+      size, offset: 0, chunkSize: CENTRAL_UPLOAD_CHUNK_BYTES, uploadStrategy: "signed_parts", fileName: cleanFileName(originalName),
       artifactParts: [],
       createdAt: now(), updatedAt: now(), createdByUserId: principal.userId,
     };
     document.stagedUploads.push(stage);
     document.stagedUploads = document.stagedUploads.filter((item) => Date.now() - Date.parse(item.updatedAt || 0) < 24 * 60 * 60 * 1000);
-    return { document, result: { id: stage.id, offset: 0, chunkSize: stage.chunkSize, fileName: stage.fileName } };
+    return { document, result: { id: stage.id, offset: 0, chunkSize: stage.chunkSize, uploadStrategy: stage.uploadStrategy, fileName: stage.fileName } };
   });
 }
 

@@ -29,11 +29,14 @@ import {
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
 import {
+  authorizeSupabaseJobArtifactPartUpload,
   deleteSupabaseJobArtifactParts,
+  deleteSupabaseStagedArtifactParts,
   finalizeSupabaseJobArtifact,
   storeSupabaseJobArtifact,
   storeSupabaseJobArtifactPart,
   SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
+  verifySupabaseJobArtifactPartUpload,
 } from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
@@ -172,7 +175,7 @@ async function removeStageBytes(stage) {
 async function finishStagedMedia(principalValue, stagedUploadId) {
   const stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
-  if (stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  if (stage.uploadStrategy === "signed_parts" || stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
     const artifact = await finalizeSupabaseJobArtifact({
       workspaceId: principalValue.workspaceId,
       fileName: stage.fileName,
@@ -356,6 +359,56 @@ export async function POST(request, context) {
       }
       return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + bytes.length, artifactPart));
     }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "authorize") {
+      const user = await principal("publishing.content.create");
+      const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
+      if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
+      const input = await requestJson(request);
+      const offset = Number(input.offset);
+      const byteSize = Number(input.byteSize);
+      const index = Number(input.index);
+      const expectedByteSize = Number.isInteger(offset) ? Math.min(stage.chunkSize, stage.size - offset) : 0;
+      if (!Number.isInteger(offset) || offset < stage.offset || offset % stage.chunkSize !== 0
+        || expectedByteSize < 1 || !Number.isInteger(index) || index !== Math.floor(offset / stage.chunkSize)
+        || !Number.isInteger(byteSize) || byteSize !== expectedByteSize || offset + byteSize > stage.size) {
+        throw new Error("The direct media part does not match the upload session.");
+      }
+      return Response.json(await authorizeSupabaseJobArtifactPartUpload({
+        workspaceId: user.workspaceId,
+        fileName: stage.fileName,
+        mimeType: stage.mimeType,
+        index,
+        offset,
+        byteSize,
+      }));
+    }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "complete") {
+      const user = await principal("publishing.content.create");
+      const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
+      if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
+      const input = await requestJson(request);
+      const offset = Number(input.offset);
+      const byteSize = Number(input.byteSize);
+      const index = Number(input.index);
+      const completedPart = (Array.isArray(stage.artifactParts) ? stage.artifactParts : []).find((part) => part.index === index);
+      if (completedPart && completedPart.offset === offset && completedPart.byteSize === byteSize && stage.offset >= offset + byteSize) {
+        return Response.json({ id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize });
+      }
+      const expectedByteSize = Number.isInteger(offset) ? Math.min(stage.chunkSize, stage.size - offset) : 0;
+      if (!Number.isInteger(offset) || offset !== stage.offset || offset % stage.chunkSize !== 0
+        || expectedByteSize < 1 || !Number.isInteger(index) || index !== Math.floor(offset / stage.chunkSize)
+        || !Number.isInteger(byteSize) || byteSize !== expectedByteSize || offset + byteSize > stage.size) {
+        throw new Error("The completed media part does not match the upload session.");
+      }
+      const artifactPart = await verifySupabaseJobArtifactPartUpload({
+        workspaceId: user.workspaceId,
+        fileName: stage.fileName,
+        index,
+        offset,
+        byteSize,
+      });
+      return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + byteSize, artifactPart));
+    }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {
       const user = await principal("publishing.content.create");
@@ -462,7 +515,9 @@ export async function DELETE(request, context) {
       await deleteCentralStagedUpload(user, parts[1]);
       await Promise.all([
         removeStageBytes(stage),
-        deleteSupabaseJobArtifactParts(stage.artifactParts).catch(() => undefined),
+        (stage.uploadStrategy === "signed_parts"
+          ? deleteSupabaseStagedArtifactParts({ workspaceId: stage.workspaceId, fileName: stage.fileName, partCount: Math.ceil(stage.size / stage.chunkSize) })
+          : deleteSupabaseJobArtifactParts(stage.artifactParts)).catch(() => undefined),
       ]);
       return new Response(null, { status: 204 });
     }
