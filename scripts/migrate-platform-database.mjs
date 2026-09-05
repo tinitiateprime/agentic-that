@@ -23,6 +23,7 @@ try {
     "../supabase/migrations/202609050001_youtube_options_and_facebook_scraping.sql",
     "../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql",
     "../supabase/migrations/202609050003_large_media_companion.sql",
+    "../supabase/migrations/202609050004_isolated_publishing_staged_uploads.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
@@ -56,10 +57,11 @@ try {
       to_regclass('public.rbac_roles') IS NOT NULL AS roles_ready,
       to_regclass('public.companion_devices') IS NOT NULL AS companion_devices_ready,
       to_regclass('public.jobs') IS NOT NULL AS jobs_ready,
+      to_regclass('agentic_that.publishing_staged_uploads') IS NOT NULL AS staged_uploads_ready,
       to_regprocedure('public.companion_claim_jobs(text,text,integer)') IS NOT NULL AS companion_rpc_ready,
       (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   if (!status?.platform_users_ready || !status?.memberships_ready || !status?.roles_ready
-      || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready
+      || !status?.companion_devices_ready || !status?.jobs_ready || !status?.staged_uploads_ready || !status?.companion_rpc_ready
       || status?.minimum_companion_version !== "2.1.8") {
     throw new Error("The platform database migration did not create every required table.");
   }

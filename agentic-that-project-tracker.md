@@ -47,6 +47,7 @@ kanban
     done19[Duplicate-safe Companion Login Status Sync]
     done20[Companion v2.1.8 Large Media Publishing]
     done21[Batched Resilient Supabase Media Uploads]
+    done22[Isolated Timeout Safe Publishing Upload Sessions]
 
   future[Future]
     future1[Android Companion]

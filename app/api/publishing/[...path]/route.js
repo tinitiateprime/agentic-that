@@ -390,7 +390,13 @@ export async function POST(request, context) {
       if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
       const input = await requestJson(request);
       const requested = requestedArtifactParts(stage, input);
-      if (requested[0].offset !== stage.offset) throw new Error("The direct media batch does not match the upload session.");
+      // Companion UI builds released before batched authorization request the
+      // next few parts concurrently. Keep that safe look-ahead compatible while
+      // the committed upload offset remains strictly contiguous.
+      if (requested[0].offset < stage.offset
+        || requested.at(-1).offset >= stage.offset + (8 * stage.chunkSize)) {
+        throw new Error("The direct media batch does not match the upload session.");
+      }
       const authorized = await authorizeSupabaseJobArtifactPartUploads(requested.map((part) => ({
         workspaceId: user.workspaceId,
         fileName: stage.fileName,

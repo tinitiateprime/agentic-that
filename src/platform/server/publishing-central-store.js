@@ -3,6 +3,7 @@ import path from "node:path";
 import nodeCron from "node-cron";
 import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
 import {
+  getDatabaseSql,
   initializeDatabaseDocument,
   mutateDatabaseDocument,
   readDatabaseDocument,
@@ -831,31 +832,66 @@ export async function createCentralStagedUpload(principal, input = {}) {
   const size = Number(input.size || 0);
   if (!originalName || !Number.isFinite(size) || size < 1) throw new Error("Choose a valid media file.");
   if (size > MAX_MEDIA_UPLOAD_BYTES) throw new Error("Media files must be 2 GB or smaller.");
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = {
-      id: id("stage"), workspaceId: principal.workspaceId, originalName, mimeType,
-      size, offset: 0, chunkSize: CENTRAL_UPLOAD_CHUNK_BYTES, uploadStrategy: "signed_parts", fileName: cleanFileName(originalName),
-      artifactParts: [],
-      createdAt: now(), updatedAt: now(), createdByUserId: principal.userId,
-    };
-    document.stagedUploads.push(stage);
-    document.stagedUploads = document.stagedUploads.filter((item) => Date.now() - Date.parse(item.updatedAt || 0) < 24 * 60 * 60 * 1000);
-    return { document, result: { id: stage.id, offset: 0, chunkSize: stage.chunkSize, uploadStrategy: stage.uploadStrategy, fileName: stage.fileName } };
-  });
+  const sql = await getDatabaseSql();
+  const stageId = id("stage");
+  const fileName = cleanFileName(originalName);
+  await sql`DELETE FROM agentic_that.publishing_staged_uploads WHERE updated_at < now() - interval '24 hours'`;
+  await sql`
+    INSERT INTO agentic_that.publishing_staged_uploads
+      (id, workspace_id, created_by_user_id, original_name, mime_type, byte_size, upload_offset,
+       chunk_size, upload_strategy, file_name, artifact_parts)
+    VALUES
+      (${stageId}, ${principal.workspaceId}, ${principal.userId}, ${originalName}, ${mimeType}, ${size}, 0,
+       ${CENTRAL_UPLOAD_CHUNK_BYTES}, 'signed_parts', ${fileName}, ${sql.json([])})
+  `;
+  return { id: stageId, offset: 0, chunkSize: CENTRAL_UPLOAD_CHUNK_BYTES, uploadStrategy: "signed_parts", fileName };
+}
+
+function stagedUploadFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    originalName: row.original_name,
+    mimeType: row.mime_type || "",
+    size: Number(row.byte_size),
+    offset: Number(row.upload_offset),
+    chunkSize: Number(row.chunk_size),
+    uploadStrategy: row.upload_strategy,
+    fileName: row.file_name,
+    artifactParts: Array.isArray(row.artifact_parts) ? row.artifact_parts : [],
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    createdByUserId: row.created_by_user_id,
+  };
+}
+
+async function lockedStagedUpload(transaction, workspaceId, stagedUploadId) {
+  const [row] = await transaction`
+    SELECT * FROM agentic_that.publishing_staged_uploads
+    WHERE id = ${stagedUploadId} AND workspace_id = ${workspaceId}
+    FOR UPDATE
+  `;
+  const stage = stagedUploadFromRow(row);
+  if (!stage) throw new Error("Upload session was not found.");
+  return stage;
 }
 
 export async function getCentralStagedUpload(workspaceId, stagedUploadId) {
-  const document = await getPublishingSnapshot(workspaceId);
-  return findOwned(document, "stagedUploads", workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  const [row] = await sql`
+    SELECT * FROM agentic_that.publishing_staged_uploads
+    WHERE id = ${stagedUploadId} AND workspace_id = ${workspaceId}
+  `;
+  const stage = stagedUploadFromRow(row);
+  if (!stage) throw new Error("Upload session was not found.");
+  return stage;
 }
 
 export async function advanceCentralStagedUpload(principal, stagedUploadId, nextOffset, artifactPart = null) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
     if (!Number.isInteger(nextOffset) || nextOffset < stage.offset || nextOffset > stage.size) throw new Error("The media upload offset is invalid.");
     if (artifactPart) {
       if (artifactPart.offset !== stage.offset || artifactPart.byteSize !== nextOffset - stage.offset || artifactPart.index !== Math.floor(stage.offset / stage.chunkSize)) {
@@ -866,7 +902,12 @@ export async function advanceCentralStagedUpload(principal, stagedUploadId, next
     }
     stage.offset = nextOffset;
     stage.updatedAt = now();
-    return { document, result: { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize } };
+    await transaction`
+      UPDATE agentic_that.publishing_staged_uploads
+      SET upload_offset = ${stage.offset}, artifact_parts = ${transaction.json(stage.artifactParts)}, updated_at = now()
+      WHERE id = ${stage.id}
+    `;
+    return { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize };
   });
 }
 
@@ -896,32 +937,36 @@ function advanceStagedUploadPartsInDocument(document, workspaceId, stagedUploadI
 }
 
 export async function advanceCentralStagedUploadParts(principal, stagedUploadId, artifactParts) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    const document = { stagedUploads: [stage] };
     const result = advanceStagedUploadPartsInDocument(document, principal.workspaceId, stagedUploadId, artifactParts);
-    return { document, result };
+    await transaction`
+      UPDATE agentic_that.publishing_staged_uploads
+      SET upload_offset = ${stage.offset}, artifact_parts = ${transaction.json(stage.artifactParts)}, updated_at = now()
+      WHERE id = ${stage.id}
+    `;
+    return result;
   });
 }
 
 export async function consumeCentralStagedUpload(principal, stagedUploadId) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
     if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
-    document.stagedUploads = document.stagedUploads.filter((item) => item.id !== stage.id);
-    return { document, result: stage };
+    await transaction`DELETE FROM agentic_that.publishing_staged_uploads WHERE id = ${stage.id}`;
+    return stage;
   });
 }
 
 export async function deleteCentralStagedUpload(principal, stagedUploadId) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
-    document.stagedUploads = document.stagedUploads.filter((item) => item.id !== stagedUploadId);
-    return { document, result: { ok: true } };
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    await transaction`DELETE FROM agentic_that.publishing_staged_uploads WHERE id = ${stage.id}`;
+    return { ok: true };
   });
 }
 

@@ -71,13 +71,17 @@ test("all publishers attach Companion-local media through CDP without Playwright
 });
 
 test("large website media batches gateway authorization and completion requests", async () => {
-  const [clientSource, routeSource] = await Promise.all([
+  const [clientSource, routeSource, storeSource] = await Promise.all([
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
     readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../src/platform/server/publishing-central-store.js", import.meta.url), "utf8"),
   ]);
   assert.match(clientSource, /Array\.from\(\{ length: 4 \}/);
   assert.equal((clientSource.match(/JSON\.stringify\(\{ parts: requestedParts \}\)/g) || []).length, 2);
   assert.match(routeSource, /authorizeSupabaseJobArtifactPartUploads/);
   assert.match(routeSource, /verifySupabaseJobArtifactPartUploads/);
   assert.match(routeSource, /advanceCentralStagedUploadParts/);
+  assert.match(routeSource, /requested\[0\]\.offset < stage\.offset/);
+  assert.doesNotMatch(routeSource, /requested\[0\]\.offset !== stage\.offset/);
+  assert.match(storeSource, /agentic_that\.publishing_staged_uploads/);
 });
