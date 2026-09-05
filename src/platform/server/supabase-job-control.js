@@ -26,7 +26,7 @@ function safeText(value, maximum = 500) {
 }
 
 function publishingEngineForPlatform(platform, requestedEngine = "companion") {
-  return platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
+  return platform === "facebook" || platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }

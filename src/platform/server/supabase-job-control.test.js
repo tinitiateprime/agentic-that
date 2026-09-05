@@ -101,6 +101,7 @@ test("normalized account readiness never exposes local credentials", () => {
 test("Supabase account metadata preserves provider-safe publishing engines", () => {
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("instagram", "companion"), "companion");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("instagram", "external_browser"), "external_browser");
+  assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("facebook", "companion"), "external_browser");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("x", "companion"), "external_browser");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("youtube", "companion"), "external_browser");
   const account = supabaseJobControlTestHelpers.camelAccount({

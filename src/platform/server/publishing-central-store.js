@@ -36,7 +36,7 @@ const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancel
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
 
 function companionPublishingEngine(platformName, requestedEngine = "companion") {
-  return platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
+  return platformName === "facebook" || platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }

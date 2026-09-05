@@ -4,6 +4,8 @@ import test from "node:test";
 import { FACEBOOK_COMPOSER_EDITOR_SELECTORS, FACEBOOK_POST_ACCEPTED_TEXT, hasFacebookAuthenticationCookies } from "./services/publishers/facebook.js";
 import {
   LINKEDIN_COMPOSER_EDITOR_SELECTORS,
+  LINKEDIN_POST_ACCEPTED_TEXT,
+  isLinkedInPublishResponse,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
@@ -22,6 +24,23 @@ test("LinkedIn publishing ignores role-button duplicates outside the current vie
 
 test("LinkedIn publishing recognizes the current TipTap composer editor", () => {
   assert.ok(LINKEDIN_COMPOSER_EDITOR_SELECTORS.includes('.tiptap.ProseMirror[contenteditable="true"]'));
+});
+
+test("LinkedIn publishing waits for durable provider acceptance", () => {
+  assert.equal(isLinkedInPublishResponse(
+    "POST",
+    "https://www.linkedin.com/voyager/api/contentcreation/normShares",
+    201,
+  ), true);
+  assert.equal(isLinkedInPublishResponse(
+    "POST",
+    "https://www.linkedin.com/voyager/api/voyagerIdentityDashShares",
+    200,
+  ), true);
+  assert.equal(isLinkedInPublishResponse("GET", "https://www.linkedin.com/voyager/api/contentcreation/normShares", 200), false);
+  assert.equal(isLinkedInPublishResponse("POST", "https://www.linkedin.com/voyager/api/contentcreation/normShares", 500), false);
+  assert.equal(isLinkedInPublishResponse("POST", "https://www.linkedin.com/voyager/api/feed/updates", 200), false);
+  assert.match("Post successful", LINKEDIN_POST_ACCEPTED_TEXT);
 });
 
 test("Facebook publishing recognizes delayed Lexical composer editors", () => {

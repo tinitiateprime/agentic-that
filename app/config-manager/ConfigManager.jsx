@@ -62,7 +62,7 @@ const publishingEngineLabels = {
   companion: "Companion",
   external_browser: "External browser"
 };
-const externalBrowserRequiredPlatforms = new Set(["x", "youtube"]);
+const externalBrowserRequiredPlatforms = new Set(["facebook", "x", "youtube"]);
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
   telegram: "Telegram",
@@ -1807,7 +1807,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
               <button type="button" disabled={externalBrowserRequired} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>{externalBrowserRequired ? "Embedded login is blocked by this provider" : "Runs in the background and opens only when attention is needed"}</small></span></button>
               <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome, Edge, or Chromium profile</small></span></button>
             </div>
-            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />X and YouTube require a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
+            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />Facebook, X, and YouTube use a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
             {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
           </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>

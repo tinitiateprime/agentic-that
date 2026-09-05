@@ -9,10 +9,11 @@ The Chrome extension is optional and is not part of the core workflow. Website
 publishing and scraping enter the durable Supabase queue, and Companion claims
 them directly using its encrypted, revocable device token.
 
-X and YouTube sign-in opens in a Companion-managed Chrome, Edge, or Chromium profile by
-default because those providers can reject embedded authentication. Companion
+Facebook, X, and YouTube sign-in opens in a Companion-managed Chrome, Edge, or
+Chromium profile by default because those providers can reject or repeatedly
+challenge embedded authentication. Companion
 retains that dedicated profile, verifies the signed-in state, and reuses it for
-publishing. Instagram, Facebook, and LinkedIn keep the embedded login flow with
+publishing. Instagram and LinkedIn keep the embedded login flow with
 the same external-browser fallback available when needed. Passwords and
 verification codes are entered only on the provider page.
 

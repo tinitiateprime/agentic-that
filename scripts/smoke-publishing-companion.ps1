@@ -197,6 +197,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   $facebookManualLogin = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/accounts/$($facebookAccount.id)/manual-login" `
     -Headers $authorization -ContentType "application/json" -Body "{}" -TimeoutSec 5
   if (-not $facebookManualLogin.started) { throw "The Facebook manual-login smoke session did not start." }
+  if ($facebookManualLogin.surface -ne "external") { throw "Facebook login did not select the required external Chrome or Edge flow." }
 
   $linkedinAccount = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/platforms/linkedin/accounts" `
     -Headers $authorization -ContentType "application/json" -Body (@{
@@ -237,7 +238,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
     $loginLog = Get-Content -LiteralPath $companionLog -Raw
     if (
       $loginLog -match "Opening instagram login page .* using the embedded login surface" -and
-      $loginLog -match "Opening facebook login page .* using the embedded login surface" -and
+      $loginLog -match "Opening facebook login page .* using the external login surface" -and
       $loginLog -match "Opening linkedin login page .* using the embedded login surface" -and
       $loginLog -match "Opening x login page .* using the external login surface" -and
       $loginLog -match "Opening youtube login page .* using the external login surface" -and
@@ -253,11 +254,11 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   }
   if (-not $loginNavigationReady) {
     $logTail = (Get-Content -LiteralPath $companionLog -Tail 24) -join [Environment]::NewLine
-    throw "The embedded Companion login panes did not all begin navigation.$([Environment]::NewLine)$logTail"
+    throw "The Companion login surfaces did not all begin navigation.$([Environment]::NewLine)$logTail"
   }
   $loginLog = Get-Content -LiteralPath $companionLog -Raw
   if ($loginLog -match "ECONNREFUSED|Manual session preparation failed") {
-    throw "An embedded manual-login browser connection failed."
+    throw "A manual-login browser connection failed."
   }
 
   try {
@@ -300,7 +301,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
   Write-Host "Process: $($process.Id)"
   Write-Host "SaaS workspace embedding: disabled by default"
   Write-Host "Embedded live browser: enabled"
-  Write-Host "Login surfaces: Instagram/Facebook/LinkedIn embedded; X/YouTube external"
+  Write-Host "Login surfaces: Instagram/LinkedIn embedded; Facebook/X/YouTube external"
   Write-Host "Isolated browser-debug port: $debugPort"
   Write-Host "Live publishing overlay: removed"
   Write-Host "Extension bridge: enabled"

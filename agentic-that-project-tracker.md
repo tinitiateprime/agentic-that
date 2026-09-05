@@ -52,6 +52,7 @@ kanban
     done24[Companion v2.1.10 Testing Pace Without Posting Delays]
     done25[Resumable Idempotent Large Media Finalization]
     done26[Concurrent Multi User Publishing Workspace Stability]
+    done27[Companion v2.1.11 Durable Facebook Login and LinkedIn Confirmation]
 
   future[Future]
     future1[Android Companion]

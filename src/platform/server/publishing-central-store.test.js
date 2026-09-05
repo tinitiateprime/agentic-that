@@ -59,6 +59,7 @@ test("central publishing reports account readiness and accepts only the active C
   assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: false }, online), "reconnect_required");
   assert.equal(centralPublishingTestHelpers.companionPublishingEngine("instagram", "companion"), "companion");
   assert.equal(centralPublishingTestHelpers.companionPublishingEngine("instagram", "external_browser"), "external_browser");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("facebook", "companion"), "external_browser");
   assert.equal(centralPublishingTestHelpers.companionPublishingEngine("x", "companion"), "external_browser");
   assert.equal(centralPublishingTestHelpers.companionPublishingEngine("youtube", "companion"), "external_browser");
 

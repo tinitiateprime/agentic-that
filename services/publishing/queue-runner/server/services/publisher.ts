@@ -127,7 +127,7 @@ function markManagedChromeSession(account: PublishingAccount) {
 export function resolvedAccountEngine(account: PublishingAccount): PublishingEngine {
   const configuredEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
   // Some providers bind a successful login to the Chrome profile that created
-  // it. X and YouTube always keep that profile; other providers use it when a
+  // it. Facebook, X, and YouTube always keep that profile; other providers use it when a
   // session transfer is rejected or the external engine was explicitly chosen.
   return configuredEngine === "external_browser" || hasManagedChromeSession(account)
     ? "external_browser"
@@ -264,7 +264,7 @@ export async function reconcileSavedAccountSessions() {
   }
   for (const account of accounts) {
     migrateLegacyAccountSessionState(account);
-    // Older releases could transfer an X/YouTube login into Electron and then
+    // Older releases could transfer a Facebook/X/YouTube login into Electron and then
     // delete the external profile. Request one clean reconnect instead of
     // claiming that a missing provider-safe profile is ready.
     if (platformRequiresExternalBrowser(account.platform) && !hasManagedChromeSession(account)) {
@@ -571,7 +571,7 @@ async function prepareStandardBrowserSession(account: PublishingAccount) {
     return;
   }
 
-  // X, YouTube, explicitly external accounts, and provider-bound fallbacks use
+  // Facebook, X, YouTube, explicitly external accounts, and provider-bound fallbacks use
   // the exact persistent browser profile that authenticated. Moving cookies to
   // Electron can invalidate device-bound Google/X sessions.
   if (resolvedAccountEngine(account) === "external_browser") {
