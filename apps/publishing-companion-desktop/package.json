@@ -17,7 +17,7 @@
     "package": "npm run prepare-app && electron-forge package",
     "make": "npm run prepare-app && electron-forge make",
     "make:windows": "npm run prepare-app && electron-forge make --platform=win32 --arch=x64",
-    "make:macos": "npm run prepare-app && electron-forge make --platform=darwin --arch=universal",
+    "make:macos": "npm run prepare-app && node scripts/make-macos-artifacts.mjs",
     "make:linux": "npm run prepare-app && electron-forge make --platform=linux",
     "make:store": "npm run prepare-app && electron-forge make --platform=win32 --arch=x64 --targets @electron-forge/maker-msix",
     "test:platform": "node --test platform-support.test.js"
