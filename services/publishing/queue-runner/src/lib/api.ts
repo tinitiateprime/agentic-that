@@ -198,7 +198,7 @@ function retryableUploadError(error: unknown) {
   return !(error instanceof PublishingApiRequestError) || error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
 }
 
-async function retryUploadStep<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+async function retryUploadStep<T>(operation: () => Promise<T>, attempts = 5): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -267,18 +267,29 @@ async function uploadStagedFile(
   while (offset < file.size) {
     if (session.uploadStrategy === "signed_parts") {
       const batchStart = offset;
-      const batch = Array.from({ length: 3 }, (_, batchIndex) => {
+      const batch = Array.from({ length: 4 }, (_, batchIndex) => {
         const partOffset = batchStart + batchIndex * chunkSize;
         if (partOffset >= file.size) return null;
         const chunk = file.slice(partOffset, Math.min(file.size, partOffset + chunkSize));
         return { index: Math.floor(partOffset / chunkSize), offset: partOffset, chunk };
       }).filter((part): part is { index: number; offset: number; chunk: Blob } => Boolean(part));
+      const requestedParts = batch.map(({ index, offset: partOffset, chunk }) => ({
+        index,
+        offset: partOffset,
+        byteSize: chunk.size,
+      }));
+      const authorizedParts = await retryUploadStep(() => request<SignedUploadPart[]>(`/api/staged-uploads/${session.id}/parts/authorize`, {
+        method: "POST",
+        body: JSON.stringify({ parts: requestedParts }),
+      }));
+      if (!Array.isArray(authorizedParts) || authorizedParts.length !== batch.length) {
+        throw new Error("The server returned an invalid private media upload batch.");
+      }
+      const authorizedByIndex = new Map(authorizedParts.map(part => [part.index, part]));
       const uploadedByPart = new Map(batch.map(part => [part.index, 0]));
       const uploadResults = await Promise.allSettled(batch.map(async ({ index, offset: partOffset, chunk }) => {
-        const part = await retryUploadStep(() => request<SignedUploadPart>(`/api/staged-uploads/${session.id}/parts/authorize`, {
-          method: "POST",
-          body: JSON.stringify({ index, offset: partOffset, byteSize: chunk.size }),
-        }));
+        const part = authorizedByIndex.get(index);
+        if (!part) throw new Error("The server omitted a private media upload authorization.");
         if (part.index !== index || part.offset !== partOffset || part.byteSize !== chunk.size || !part.signedUrl) {
           throw new Error("The server returned an invalid private media upload authorization.");
         }
@@ -290,17 +301,15 @@ async function uploadStagedFile(
       }));
       const failedUpload = uploadResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
       if (failedUpload) throw failedUpload.reason;
-      for (const { index, offset: partOffset, chunk } of batch) {
-        const result = await retryUploadStep(() => request<{ offset: number }>(`/api/staged-uploads/${session.id}/parts/complete`, {
-          method: "POST",
-          body: JSON.stringify({ index, offset: partOffset, byteSize: chunk.size }),
-        }));
-        if (!Number.isInteger(result.offset) || result.offset <= offset) {
-          throw new Error("The server returned an invalid direct upload offset.");
-        }
-        offset = result.offset;
-        onProgress?.(mediaProgress("uploading", offset, file.size));
+      const result = await retryUploadStep(() => request<{ offset: number }>(`/api/staged-uploads/${session.id}/parts/complete`, {
+        method: "POST",
+        body: JSON.stringify({ parts: requestedParts }),
+      }));
+      if (!Number.isInteger(result.offset) || result.offset <= offset) {
+        throw new Error("The server returned an invalid direct upload offset.");
       }
+      offset = result.offset;
+      onProgress?.(mediaProgress("uploading", offset, file.size));
     } else {
       const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
       const result = await request<{ offset: number }>(`/api/staged-uploads/${session.id}/chunks`, {

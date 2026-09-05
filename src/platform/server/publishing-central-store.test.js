@@ -144,3 +144,30 @@ test("central publishing creates a multi-destination release atomically in one d
   assert.equal(document.jobs.length, 5);
   assert.deepEqual(document.uploads.map((upload) => upload.caption), platforms.map((platform) => `${platform} caption`));
 });
+
+test("large media parts advance in one contiguous batch", () => {
+  const chunkSize = 5 * 1024 * 1024;
+  const document = {
+    stagedUploads: [{
+      id: "stage_1", workspaceId: "workspace_1", size: chunkSize * 4,
+      offset: 0, chunkSize, artifactParts: [], updatedAt: new Date(0).toISOString(),
+    }],
+  };
+  const parts = Array.from({ length: 4 }, (_, index) => ({
+    index,
+    offset: index * chunkSize,
+    byteSize: chunkSize,
+    path: `workspace/media.parts/${index}`,
+  }));
+
+  const result = centralPublishingTestHelpers.advanceStagedUploadPartsInDocument(
+    document, "workspace_1", "stage_1", parts,
+  );
+
+  assert.equal(result.offset, chunkSize * 4);
+  assert.equal(document.stagedUploads[0].artifactParts.length, 4);
+  assert.deepEqual(document.stagedUploads[0].artifactParts.map((part) => part.index), [0, 1, 2, 3]);
+  assert.throws(() => centralPublishingTestHelpers.advanceStagedUploadPartsInDocument(
+    document, "workspace_1", "stage_1", [{ index: 5, offset: chunkSize * 5, byteSize: chunkSize }],
+  ), /does not match/);
+});

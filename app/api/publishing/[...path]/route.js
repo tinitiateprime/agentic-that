@@ -3,6 +3,7 @@ import path from "node:path";
 import { accessErrorResponse, authorizeApiCapability, principalHasAccess } from "@platform/server/access-control";
 import {
   advanceCentralStagedUpload,
+  advanceCentralStagedUploadParts,
   centralMediaFileName,
   createCentralAccount,
   createCentralStagedUpload,
@@ -29,14 +30,14 @@ import {
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
 import {
-  authorizeSupabaseJobArtifactPartUpload,
+  authorizeSupabaseJobArtifactPartUploads,
   deleteSupabaseJobArtifactParts,
   deleteSupabaseStagedArtifactParts,
   finalizeSupabaseJobArtifact,
   storeSupabaseJobArtifact,
   storeSupabaseJobArtifactPart,
   SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
-  verifySupabaseJobArtifactPartUpload,
+  verifySupabaseJobArtifactPartUploads,
 } from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
@@ -64,6 +65,30 @@ async function segments(context) {
 function parseBoolean(value, fallback = false) {
   if (value === undefined) return fallback;
   return value === true || value === "true";
+}
+
+function requestedArtifactParts(stage, input) {
+  const values = Array.isArray(input?.parts) ? input.parts : [input];
+  if (values.length < 1 || values.length > 8) throw new Error("The private media upload batch is invalid.");
+  const parts = values.map((value) => ({
+    index: Number(value?.index),
+    offset: Number(value?.offset),
+    byteSize: Number(value?.byteSize),
+  })).sort((left, right) => left.offset - right.offset);
+  let expectedOffset = parts[0]?.offset;
+  const indexes = new Set();
+  for (const part of parts) {
+    const expectedByteSize = Number.isInteger(part.offset) ? Math.min(stage.chunkSize, stage.size - part.offset) : 0;
+    if (!Number.isInteger(part.offset) || part.offset < 0 || part.offset % stage.chunkSize !== 0
+      || expectedByteSize < 1 || !Number.isInteger(part.index) || part.index !== Math.floor(part.offset / stage.chunkSize)
+      || indexes.has(part.index) || !Number.isInteger(part.byteSize) || part.byteSize !== expectedByteSize
+      || part.offset + part.byteSize > stage.size || part.offset !== expectedOffset) {
+      throw new Error("The private media parts do not match the upload session.");
+    }
+    indexes.add(part.index);
+    expectedOffset += part.byteSize;
+  }
+  return parts;
 }
 
 async function principal(capability) {
@@ -364,50 +389,43 @@ export async function POST(request, context) {
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
       const input = await requestJson(request);
-      const offset = Number(input.offset);
-      const byteSize = Number(input.byteSize);
-      const index = Number(input.index);
-      const expectedByteSize = Number.isInteger(offset) ? Math.min(stage.chunkSize, stage.size - offset) : 0;
-      if (!Number.isInteger(offset) || offset < stage.offset || offset % stage.chunkSize !== 0
-        || expectedByteSize < 1 || !Number.isInteger(index) || index !== Math.floor(offset / stage.chunkSize)
-        || !Number.isInteger(byteSize) || byteSize !== expectedByteSize || offset + byteSize > stage.size) {
-        throw new Error("The direct media part does not match the upload session.");
-      }
-      return Response.json(await authorizeSupabaseJobArtifactPartUpload({
+      const requested = requestedArtifactParts(stage, input);
+      if (requested[0].offset !== stage.offset) throw new Error("The direct media batch does not match the upload session.");
+      const authorized = await authorizeSupabaseJobArtifactPartUploads(requested.map((part) => ({
         workspaceId: user.workspaceId,
         fileName: stage.fileName,
         mimeType: stage.mimeType,
-        index,
-        offset,
-        byteSize,
-      }));
+        ...part,
+      })));
+      return Response.json(Array.isArray(input.parts) ? authorized : authorized[0]);
     }
     if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "complete") {
       const user = await principal("publishing.content.create");
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
       const input = await requestJson(request);
-      const offset = Number(input.offset);
-      const byteSize = Number(input.byteSize);
-      const index = Number(input.index);
-      const completedPart = (Array.isArray(stage.artifactParts) ? stage.artifactParts : []).find((part) => part.index === index);
-      if (completedPart && completedPart.offset === offset && completedPart.byteSize === byteSize && stage.offset >= offset + byteSize) {
-        return Response.json({ id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize });
+      const requested = requestedArtifactParts(stage, input);
+      const recordedParts = new Map((Array.isArray(stage.artifactParts) ? stage.artifactParts : []).map((part) => [part.index, part]));
+      const pending = [];
+      for (const part of requested) {
+        if (part.offset + part.byteSize <= stage.offset) {
+          const recorded = recordedParts.get(part.index);
+          if (!recorded || recorded.offset !== part.offset || recorded.byteSize !== part.byteSize) {
+            throw new Error("The completed media batch conflicts with the upload session.");
+          }
+        } else {
+          if (part.offset < stage.offset) throw new Error("The completed media batch overlaps the upload session.");
+          pending.push(part);
+        }
       }
-      const expectedByteSize = Number.isInteger(offset) ? Math.min(stage.chunkSize, stage.size - offset) : 0;
-      if (!Number.isInteger(offset) || offset !== stage.offset || offset % stage.chunkSize !== 0
-        || expectedByteSize < 1 || !Number.isInteger(index) || index !== Math.floor(offset / stage.chunkSize)
-        || !Number.isInteger(byteSize) || byteSize !== expectedByteSize || offset + byteSize > stage.size) {
-        throw new Error("The completed media part does not match the upload session.");
-      }
-      const artifactPart = await verifySupabaseJobArtifactPartUpload({
+      if (!pending.length) return Response.json({ id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize });
+      if (pending[0].offset !== stage.offset) throw new Error("The completed media batch does not match the upload session.");
+      const verified = await verifySupabaseJobArtifactPartUploads(pending.map((part) => ({
         workspaceId: user.workspaceId,
         fileName: stage.fileName,
-        index,
-        offset,
-        byteSize,
-      });
-      return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + byteSize, artifactPart));
+        ...part,
+      })));
+      return Response.json(await advanceCentralStagedUploadParts(user, stage.id, verified));
     }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {

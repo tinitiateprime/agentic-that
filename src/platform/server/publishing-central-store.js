@@ -870,6 +870,40 @@ export async function advanceCentralStagedUpload(principal, stagedUploadId, next
   });
 }
 
+function advanceStagedUploadPartsInDocument(document, workspaceId, stagedUploadId, artifactParts) {
+  if (!Array.isArray(artifactParts) || artifactParts.length < 1 || artifactParts.length > 8) {
+    throw new Error("The completed private media batch is invalid.");
+  }
+  const stage = findOwned(document, "stagedUploads", workspaceId, stagedUploadId, "Upload session");
+  const ordered = [...artifactParts].sort((left, right) => left.offset - right.offset);
+  let nextOffset = stage.offset;
+  for (const part of ordered) {
+    if (!Number.isInteger(part.offset) || !Number.isInteger(part.byteSize) || part.byteSize < 1
+      || part.offset !== nextOffset || part.index !== Math.floor(part.offset / stage.chunkSize)
+      || nextOffset + part.byteSize > stage.size) {
+      throw new Error("The private media upload batch does not match this upload session.");
+    }
+    nextOffset += part.byteSize;
+  }
+  const completedIndexes = new Set(ordered.map((part) => part.index));
+  stage.artifactParts = (Array.isArray(stage.artifactParts) ? stage.artifactParts : [])
+    .filter((part) => !completedIndexes.has(part.index))
+    .concat(ordered)
+    .sort((left, right) => left.index - right.index);
+  stage.offset = nextOffset;
+  stage.updatedAt = now();
+  return { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize };
+}
+
+export async function advanceCentralStagedUploadParts(principal, stagedUploadId, artifactParts) {
+  await initialize();
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+    const document = documentValue(value);
+    const result = advanceStagedUploadPartsInDocument(document, principal.workspaceId, stagedUploadId, artifactParts);
+    return { document, result };
+  });
+}
+
 export async function consumeCentralStagedUpload(principal, stagedUploadId) {
   await initialize();
   return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
@@ -1245,6 +1279,7 @@ export function centralMediaFileName(originalName) {
 // without connecting a test run to a production document store.
 export const centralPublishingTestHelpers = {
   accountReadiness,
+  advanceStagedUploadPartsInDocument,
   centralJobUpdateIsAllowed,
   companionCompatibility,
   companionPublishingEngine,

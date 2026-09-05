@@ -69,3 +69,15 @@ test("all publishers attach Companion-local media through CDP without Playwright
     assert.doesNotMatch(source, /\.(?:setInputFiles|setFiles)\(/);
   }
 });
+
+test("large website media batches gateway authorization and completion requests", async () => {
+  const [clientSource, routeSource] = await Promise.all([
+    readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(clientSource, /Array\.from\(\{ length: 4 \}/);
+  assert.equal((clientSource.match(/JSON\.stringify\(\{ parts: requestedParts \}\)/g) || []).length, 2);
+  assert.match(routeSource, /authorizeSupabaseJobArtifactPartUploads/);
+  assert.match(routeSource, /verifySupabaseJobArtifactPartUploads/);
+  assert.match(routeSource, /advanceCentralStagedUploadParts/);
+});

@@ -341,6 +341,13 @@ export async function authorizeSupabaseJobArtifactPartUpload({ workspaceId, file
   };
 }
 
+export async function authorizeSupabaseJobArtifactPartUploads(inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 8) {
+    throw new Error("The private media upload batch is invalid.");
+  }
+  return Promise.all(inputs.map((input) => authorizeSupabaseJobArtifactPartUpload(input)));
+}
+
 export async function verifySupabaseJobArtifactPartUpload({ workspaceId, fileName, index, offset, byteSize }) {
   validateArtifactPartInput({ index, offset, byteSize });
   const configuration = supabaseServiceConfiguration();
@@ -362,6 +369,13 @@ export async function verifySupabaseJobArtifactPartUpload({ workspaceId, fileNam
     path: decodeURIComponent(objectPath),
     byteSize,
   };
+}
+
+export async function verifySupabaseJobArtifactPartUploads(inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 8) {
+    throw new Error("The completed private media batch is invalid.");
+  }
+  return Promise.all(inputs.map((input) => verifySupabaseJobArtifactPartUpload(input)));
 }
 
 export async function deleteSupabaseStagedArtifactParts({ workspaceId, fileName, partCount }) {
