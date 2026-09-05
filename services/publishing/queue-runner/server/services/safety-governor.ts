@@ -3,6 +3,14 @@ import type { AccountSafetyMode, Platform, PlatformUpload, PostFormat } from "..
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
+export function publishingSafetyPacingEnabled(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  return ["1", "true", "yes", "on"].includes(
+    String(environment.PUBLISHING_SAFETY_PACING_ENABLED || "").trim().toLowerCase(),
+  );
+}
+
 export type PublishingSafetyRule = {
   hourlyLimit: number;
   dailyLimit: number;
@@ -66,6 +74,7 @@ export function assessPublishingSafety(
   accountUploads: PlatformUpload[],
   now = Date.now(),
   safetyMode: AccountSafetyMode = "standard",
+  enforcePacing = publishingSafetyPacingEnabled(),
 ): PublishingSafetyAssessment {
   const rule = publishingSafetyRule(upload, safetyMode);
   const postedTimes = accountUploads
@@ -98,9 +107,9 @@ export function assessPublishingSafety(
 
   const controllingLimit = retryCandidates.sort((left, right) => right.at - left.at)[0];
   return {
-    allowed: !controllingLimit,
-    retryAt: controllingLimit ? new Date(controllingLimit.at).toISOString() : undefined,
-    reason: controllingLimit?.reason,
+    allowed: !enforcePacing || !controllingLimit,
+    retryAt: enforcePacing && controllingLimit ? new Date(controllingLimit.at).toISOString() : undefined,
+    reason: enforcePacing ? controllingLimit?.reason : undefined,
     rule,
     postsLastHour: hourlyTimes.length,
     postsLastDay: dailyTimes.length,
@@ -123,6 +132,7 @@ export function assessScheduledPublishingSafety(
   accountUploads: PlatformUpload[],
   requestedAt: number,
   safetyMode: AccountSafetyMode = "standard",
+  enforcePacing = publishingSafetyPacingEnabled(),
 ): ScheduledPublishingSafetyAssessment {
   if (!Number.isFinite(requestedAt)) throw new Error("A valid publishing time is required.");
   const rule = publishingSafetyRule(upload, safetyMode);
@@ -131,6 +141,19 @@ export function assessScheduledPublishingSafety(
     .map(reservedPublishingTime)
     .filter((timestamp): timestamp is number => timestamp !== null)
     .sort((left, right) => left - right);
+  if (!enforcePacing) {
+    const hourlyTimes = reservedTimes.filter(timestamp => timestamp <= requestedAt && timestamp > requestedAt - HOUR_MS);
+    const dailyTimes = reservedTimes.filter(timestamp => timestamp <= requestedAt && timestamp > requestedAt - DAY_MS);
+    const requestedAtIso = new Date(requestedAt).toISOString();
+    return {
+      allowed: true,
+      requestedAt: requestedAtIso,
+      earliestAt: requestedAtIso,
+      rule,
+      postsLastHour: hourlyTimes.length,
+      postsLastDay: dailyTimes.length,
+    };
+  }
   let candidate = requestedAt;
   let reason: string | undefined;
 

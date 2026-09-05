@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
 import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
 import { publishingEngineForPlatform } from "./services/login-surface.js";
+import { publishingSafetyPacingEnabled } from "./services/safety-governor.js";
 import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import {
   type ActivityLog,
@@ -1769,7 +1770,7 @@ function isStoreUploadReadyForAutomation(
   const account = store.accounts.find(item => item.id === upload.accountId);
   if (!account?.enabled) return false;
   if (upload.scheduledAt || upload.scheduleId) return false;
-  if (upload.safetyDeferredUntil) {
+  if (publishingSafetyPacingEnabled() && upload.safetyDeferredUntil) {
     const deferredUntil = Date.parse(upload.safetyDeferredUntil);
     if (Number.isFinite(deferredUntil)) {
       return upload.status === "queued" && deferredUntil <= now;

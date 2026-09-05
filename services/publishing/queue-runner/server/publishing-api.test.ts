@@ -15,6 +15,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = "operations.manager";
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = "Testing@2026";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
+  process.env.PUBLISHING_SAFETY_PACING_ENABLED = "true";
 
   const { centralDeliveryFailure, createPublishingHttpServer } = await import("./index.js");
   assert.deepEqual(centralDeliveryFailure(undefined), {
@@ -40,6 +41,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   context.after(async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await fs.rm(temporaryRoot, { recursive: true, force: true });
+    delete process.env.PUBLISHING_SAFETY_PACING_ENABLED;
   });
 
   const address = server.address() as AddressInfo;
