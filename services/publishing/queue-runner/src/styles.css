@@ -985,14 +985,17 @@
 .publish-queue-runner .composer-field > span small { color: #8A9993; font-size: 9px; font-weight: 600; }
 .publish-queue-runner .composer-field input,
 .publish-queue-runner .composer-field textarea,
+.publish-queue-runner .composer-field select,
 .publish-queue-runner .composer-shared-schedule input,
 .publish-queue-runner .composer-shared-schedule select,
 .publish-queue-runner .composer-override-fields input,
 .publish-queue-runner .composer-override-fields select { width: 100%; border: 1px solid #C8D7D0; border-radius: 8px; background: #FFFFFF; color: #1D372E; font: inherit; outline: none; }
 .publish-queue-runner .composer-field input { min-height: 43px; padding: 0 12px; font-size: 12px; }
+.publish-queue-runner .composer-field select { min-height: 43px; padding: 0 12px; font-size: 12px; }
 .publish-queue-runner .composer-field textarea { resize: vertical; min-height: 128px; padding: 11px 12px; font-size: 12px; line-height: 1.55; }
 .publish-queue-runner .composer-field input:focus,
 .publish-queue-runner .composer-field textarea:focus,
+.publish-queue-runner .composer-field select:focus,
 .publish-queue-runner .composer-shared-schedule input:focus,
 .publish-queue-runner .composer-shared-schedule select:focus,
 .publish-queue-runner .composer-override-fields input:focus,
@@ -3995,6 +3998,7 @@
 
 .publish-queue-runner .composer-field input,
 .publish-queue-runner .composer-field textarea,
+.publish-queue-runner .composer-field select,
 .publish-queue-runner .composer-shared-schedule input,
 .publish-queue-runner .composer-shared-schedule select,
 .publish-queue-runner .composer-override-fields input,
@@ -4005,6 +4009,7 @@
 
 .publish-queue-runner .composer-field input:focus,
 .publish-queue-runner .composer-field textarea:focus,
+.publish-queue-runner .composer-field select:focus,
 .publish-queue-runner .composer-shared-schedule input:focus,
 .publish-queue-runner .composer-shared-schedule select:focus,
 .publish-queue-runner .composer-override-fields input:focus,

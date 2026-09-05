@@ -121,7 +121,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
     }),
   });
   assert.equal(youtubeAccountResponse.status, 201);
-  const youtubeAccount = await youtubeAccountResponse.json() as { executionEngine?: string };
+  const youtubeAccount = await youtubeAccountResponse.json() as { id: string; executionEngine?: string };
   assert.equal(youtubeAccount.executionEngine, "external_browser");
 
   const importedAccountResponse = await api("/api/companion/accounts/import", {
@@ -767,6 +767,28 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   const failedPost = await failedResponse.json() as { status: string; failureReason?: string };
   assert.equal(failedPost.status, "failed");
   assert.match(failedPost.failureReason || "", /Test failure details/);
+
+  const videoBytes = Buffer.from("000000186674797069736f6d0000020069736f6d69736f32", "hex");
+  const videoStageResponse = await api("/api/staged-uploads", {
+    method: "POST", body: JSON.stringify({ originalName: "options-test.mp4", mimeType: "video/mp4", size: videoBytes.length }),
+  });
+  assert.equal(videoStageResponse.status, 201);
+  const videoStage = await videoStageResponse.json() as { id: string };
+  assert.equal((await api(`/api/staged-uploads/${videoStage.id}/chunks`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Upload-Offset": "0" }, body: videoBytes,
+  })).status, 200);
+  const youtubeOptions = { youtube: { audience: "not_made_for_kids", visibility: "private" } };
+  const videoResponse = await api("/api/posts/unified/staged", {
+    method: "POST", body: JSON.stringify({ stagedUploadId: videoStage.id, title: "Private video", description: "Audience and visibility transport check", rightsConfirmed: true,
+      platformOptions: youtubeOptions, destinations: [{ accountId: youtubeAccount.id }] }),
+  });
+  assert.equal(videoResponse.status, 201, await videoResponse.clone().text());
+  const [queuedVideo] = await videoResponse.json() as Array<{ id: string; platformOptions: unknown }>;
+  assert.deepEqual(queuedVideo.platformOptions, youtubeOptions);
+  const editedOptions = { youtube: { audience: "made_for_kids", visibility: "unlisted" } };
+  const editedVideo = await api(`/api/uploads/${queuedVideo.id}`, { method: "PATCH", body: JSON.stringify({ title: "Updated video", caption: "Updated metadata", platformOptions: editedOptions }) });
+  assert.equal(editedVideo.status, 200, await editedVideo.clone().text());
+  assert.deepEqual((await editedVideo.json() as { platformOptions: unknown }).platformOptions, editedOptions);
 
   await fs.writeFile(process.env.PUBLISH_QUEUE_DATA_PATH!, "{corrupt", "utf8");
   const durableRecoveryResponse = await api("/api/uploads");

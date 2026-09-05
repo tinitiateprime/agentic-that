@@ -75,7 +75,7 @@ function facebookUrlType(value) {
 
 function detectFacebookInput(value) {
   const text = String(value || "").trim();
-  if (text.startsWith("#")) return { mode: "keyword", value: cleanFacebookValue("keyword", text) };
+  if (text.startsWith("#")) return { mode: "keyword", value: text };
   if (text.startsWith("@")) return { mode: "profile", value: cleanFacebookValue("profile", text) };
   if (/^(?:https?:\/\/|www\.|facebook\.com\/|fb\.watch\/)/i.test(text)) {
     return { mode: facebookUrlType(text) === "post" ? "post_url" : "profile_url", value: text };
@@ -249,7 +249,7 @@ const facebookPlatformConfig = {
     : message,
   resultNotice: ({ status, count, requested, inputMode, engine }) => {
     if (status === "partial" && inputMode === "keyword") {
-      return `Facebook returned ${count} of ${requested} requested current keyword results. Facebook limits its anonymous public hashtag feed; no login session or private data was used.`;
+      return `Facebook returned ${count} of ${requested} requested public matches. Search coverage is partial; dates and available metrics are verified on the public posts.`;
     }
     if (status === "partial") return "Facebook returned a partial dataset. Items without a trustworthy visible date or metric were not invented or forced into the results.";
     return "";

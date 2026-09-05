@@ -12,6 +12,14 @@ export const accountSafetyModes = ["standard", "protected"] as const;
 export const publishingEngines = ["companion", "external_browser"] as const;
 export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
 
+export const youtubeOptionsSchema = z.object({
+  audience: z.enum(["made_for_kids", "not_made_for_kids"]),
+  visibility: z.enum(["private", "unlisted", "public"]),
+});
+export const platformOptionsSchema = z.object({ youtube: youtubeOptionsSchema.optional() });
+export type PlatformOptions = z.infer<typeof platformOptionsSchema>;
+export type YouTubeOptions = z.infer<typeof youtubeOptionsSchema>;
+
 export const platformSchema = z.enum(platforms);
 export const postFormatSchema = z.enum(postFormats);
 export const uploadStatusSchema = z.enum(uploadStatuses);
@@ -253,6 +261,7 @@ export const platformUploadSchema = z.object({
   size: z.number(),
   url: z.string(),
   title: z.string().optional(),
+  platformOptions: platformOptionsSchema.optional(),
 
   caption: z.string().min(1, "Caption is required"),
 
@@ -304,6 +313,7 @@ export const contentSubmissionSchema = z.object({
   url: z.string(),
   title: z.string().optional(),
   description: z.string().min(1),
+  platformOptions: platformOptionsSchema.optional(),
   rightsConfirmed: z.boolean(),
   status: submissionStatusSchema,
   createdByUserId: z.string(),
@@ -321,6 +331,7 @@ export const contentSubmissionSchema = z.object({
 
 export const updateUploadDetailsSchema = z.object({
   title: z.string().trim().optional(),
+  platformOptions: platformOptionsSchema.optional(),
   caption: z.string().trim().min(1, "Caption is required"),
   scheduledAt: z.string().nullable().optional(),
   scheduleId: scheduleIdSchema.nullable().optional(),

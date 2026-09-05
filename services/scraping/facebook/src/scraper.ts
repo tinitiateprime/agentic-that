@@ -119,6 +119,7 @@ export type FacebookScrapeDiagnostics = {
   dom_candidates: number;
   payload_candidates: number;
   timeline_plugin_candidates?: number;
+  indexed_candidates?: number;
   reels_grid_candidates: number;
   unique_candidates: number;
   accepted_results: number;
@@ -134,7 +135,7 @@ export type FacebookScrapeDiagnostics = {
   final_url: string;
   page_title: string;
   discovery_path?: string[];
-  stage_failures?: Partial<Record<"all" | "timeline" | "reels" | "details" | "comments", string>>;
+  stage_failures?: Partial<Record<"all" | "timeline" | "reels" | "details" | "comments" | "search" | "profile", string>>;
   range_coverage?: FacebookRangeCoverage;
 };
 
@@ -242,6 +243,7 @@ function text(value: unknown) {
 }
 
 function finiteNumber(value: unknown) {
+  if (value === null || value === undefined || typeof value === "boolean" || (typeof value === "string" && !value.trim())) return null;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
 }
@@ -308,11 +310,10 @@ export function normalizeFacebookQuery(input: FacebookScrapeInput): NormalizedFa
       mode: "keyword",
       label: hashtag ? `#${tag}` : keyword,
       profileType,
-      // Logged-out Facebook Search can close a serverless Chromium target before
-      // it renders. The public hashtag surface is the stable anonymous source,
-      // so use it first and retain general Search only as a best-effort fallback.
-      startUrl: `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`,
-      fallbackStartUrl: hashtag ? undefined : `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(keyword)}`,
+      startUrl: hashtag || !/\s/.test(keyword)
+        ? `${FACEBOOK_ORIGIN}/hashtag/${encodeURIComponent(tag)}`
+        : `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(keyword)}`,
+      fallbackStartUrl: hashtag || !/\s/.test(keyword) ? `${FACEBOOK_ORIGIN}/search/posts/?q=${encodeURIComponent(hashtag ? `#${tag}` : keyword)}` : undefined,
     };
   }
 
@@ -470,20 +471,23 @@ export function facebookProfileTabUrl(value: string, tab: "all" | "reels") {
   const profileUrl = absoluteFacebookUrl(value);
   if (!profileUrl || facebookUrlType(profileUrl) !== "profile") return null;
   const url = new URL(profileUrl);
+  const numericId = targetProfileKey(profileUrl)?.match(/^id:(\d+)$/)?.[1];
+  if (numericId && tab === "reels") return `${FACEBOOK_ORIGIN}/profile.php?id=${numericId}&sk=reels_tab`;
   if (/\/reels\/?$/i.test(url.pathname)) url.pathname = url.pathname.replace(/\/reels\/?$/i, "/");
   if (/\/profile\.php$/i.test(url.pathname)) {
-    if (tab === "reels") url.searchParams.set("sk", "reels");
+    if (tab === "reels") url.searchParams.set("sk", "reels_tab");
     else url.searchParams.delete("sk");
   } else if (tab === "reels") {
     url.pathname = `${url.pathname.replace(/\/+$/, "")}/reels/`;
   }
+  if (tab === "all") url.searchParams.delete("sk");
   return url.toString();
 }
 
 export function parseFacebookReelViewLabel(value: unknown) {
   const label = text(value).replace(/\u00a0/g, " ").replace(/\s+/g, " ");
   if (!label) return null;
-  const labeled = label.match(/([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)\s+views?\b/i);
+  const labeled = label.match(/([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)\s+(?:views?|plays?)\b/i);
   const bare = label.match(/^([0-9][0-9,]*(?:\.[0-9]+)?\s*[KMB]?)$/i);
   const display = (labeled?.[1] || bare?.[1] || "").replace(/\s+/g, "").toUpperCase();
   const count = parseFacebookCount(display);
@@ -492,6 +496,8 @@ export function parseFacebookReelViewLabel(value: unknown) {
 }
 
 export function facebookPostIdentity(post: Pick<FacebookPost, "post_id" | "post_url">) {
+  const id = postIdFromUrl(post.post_url);
+  if (id && /^\d+$/.test(id)) return `post:${id}`;
   return `url:${post.post_url}`;
 }
 
@@ -717,23 +723,26 @@ function timestampMs(post: FacebookPost) {
   return Number.isFinite(value) ? value : null;
 }
 
-function targetProfileKey(value: string | undefined) {
+export function targetProfileKey(value: string | null | undefined) {
   if (!value) return null;
   try {
     const url = new URL(value);
     if (url.pathname.toLowerCase() === "/profile.php") return `id:${url.searchParams.get("id") || ""}`;
     const numericProfile = url.pathname.match(/^\/people\/[^/]+\/(\d+)(?:\/|$)/i);
     if (numericProfile) return `id:${numericProfile[1]}`;
+    const pageProfile = url.pathname.match(/^\/p\/[^/]+-(\d+)(?:\/|$)/i)
+      || url.pathname.match(/^\/(\d+)(?:\/|$)/);
+    if (pageProfile) return `id:${pageProfile[1]}`;
     return url.pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.toLowerCase() || null;
   } catch {
     return null;
   }
 }
 
-function candidateMatchesProfile(post: FacebookPost, targetUrl: string | undefined) {
+export function candidateMatchesProfile(post: Pick<FacebookPost, "author_url">, targetUrl: string | undefined, aliases: string[] = []) {
   const target = targetProfileKey(targetUrl);
   if (!target || !post.author_url) return true;
-  return targetProfileKey(post.author_url) === target;
+  return [targetUrl, ...aliases].some(url => targetProfileKey(url) === targetProfileKey(post.author_url));
 }
 
 function rankMetric(posts: FacebookPost[], key: keyof FacebookPost, limit = 5) {
@@ -1321,9 +1330,18 @@ async function loadFacebookDirectPostCandidate(page: Page, postUrl: string): Pro
     page.locator('meta[property="og:image"],meta[name="twitter:image"]').first().getAttribute("content").catch(() => null),
   ]);
   const details = facebookPostDetailsFromHtml(html, postId);
-  const authorName = text(title).split("|").at(-1)?.trim() || null;
-  if (!details.timestamp && details.reactionsCount === null && details.commentsCount === null
-    && !text(description) && !text(image)) return null;
+  const payloads = await extractFacebookPagePayloads(page).catch(() => []);
+  const targetUrl = canonicalPostUrl(page.url()) || postUrl;
+  const matched = payloads.filter(candidate => candidate.post_url === targetUrl
+    || (postIdFromUrl(text(candidate.post_url)) && postIdFromUrl(text(candidate.post_url)) === postIdFromUrl(targetUrl)));
+  let payloadPost: FacebookPost | null = null;
+  for (const raw of matched) {
+    const candidate = candidateFromRaw(raw, "page", new Date().toISOString());
+    if (candidate) payloadPost = payloadPost ? mergePosts(payloadPost, candidate) : candidate;
+  }
+  const authorName = text(title).replace(/\s*\|\s*Facebook.*$/i, "").split("|").at(-1)?.trim() || null;
+  if (!payloadPost && !details.timestamp && details.reactionsCount === null && details.commentsCount === null
+    && (!text(description) || !authorName || /^(?:Facebook|Log in|Log into|Sign up)|log in to (?:Facebook|continue)/i.test(`${authorName} ${description}`))) return null;
   return {
     post_id: postId,
     post_url: postUrl,
@@ -1339,6 +1357,7 @@ async function loadFacebookDirectPostCandidate(page: Page, postUrl: string): Pro
     comments_display: formatMetric(details.commentsCount),
     comments_exact: details.commentsCount !== null,
     top_comments: [],
+    ...(payloadPost || {}),
     _source: "visible_page",
   };
 }
@@ -1368,57 +1387,101 @@ function nestedString(object: Record<string, unknown>, paths: string[][]) {
 }
 
 export function facebookPayloadCandidates(payload: unknown): RawCandidate[] {
-  const results: RawCandidate[] = [];
+  const objects: Record<string, unknown>[] = [];
+  const entities = new Map<string, Record<string, unknown>>();
   const seen = new WeakSet<object>();
-  let visited = 0;
+  const combine = (left: unknown, right: unknown, depth = 0): unknown => {
+    if (right === null || right === undefined) return left;
+    if (left === undefined || left === null || depth > 10) return right;
+    if (Array.isArray(left) && Array.isArray(right)) {
+      return Array.from({ length: Math.max(left.length, right.length) }, (_, i) => combine(left[i], right[i], depth + 1));
+    }
+    if (typeof left === "object" && typeof right === "object" && !Array.isArray(left) && !Array.isArray(right)) {
+      const merged = { ...left } as Record<string, unknown>;
+      for (const [key, value] of Object.entries(right)) merged[key] = combine(merged[key], value, depth + 1);
+      return merged;
+    }
+    return right;
+  };
   const visit = (value: unknown) => {
     const object = directObject(value);
-    if (!object || seen.has(object) || visited >= 30_000) return;
+    if (!object || seen.has(object) || objects.length >= 30_000) return;
     seen.add(object);
-    visited += 1;
-    const permalink = nestedString(object, [
-      ["permalink_url"], ["permalinkUrl"], ["wwwURL"], ["url"], ["story", "url"], ["shareable", "url"],
-    ]);
-    const postUrl = permalink && !/[?&](?:comment_id|reply_comment_id)=/i.test(permalink)
-      ? canonicalPostUrl(permalink)
-      : null;
-    const creationTime = object.creation_time ?? object.publish_time ?? object.created_time ?? object.creationTime;
-    const message = nestedString(object, [
-      ["message", "text"], ["message"], ["story", "message", "text"], ["comet_sections", "content", "story", "message", "text"],
-    ]);
-    if (postUrl && (creationTime !== undefined || message || object.feedback || object.actors)) {
-      const actor = Array.isArray(object.actors) ? directObject(object.actors[0]) : directObject(object.author) || directObject(object.owner) || directObject(object.from);
-      const reactions = nestedNumber(object, [["feedback", "reaction_count", "count"], ["feedback", "reaction_count"], ["reaction_count", "count"], ["reaction_count"]]);
-      const comments = nestedNumber(object, [
-        ["feedback", "comment_rendering_instance", "comments", "total_count"],
-        ["feedback", "comment_count", "total_count"],
-        ["feedback", "comment_count"],
-        ["comments", "total_count"],
-        ["comment_count"],
-      ]);
-      results.push({
-        post_id: text(object.post_id || object.id) || postIdFromUrl(postUrl),
-        post_url: postUrl,
-        author_name: actor ? nestedString(actor, [["name"], ["title", "text"]]) : null,
-        author_url: actor ? nestedString(actor, [["url"], ["profile_url"]]) : null,
-        content: message,
-        timestamp: isoTimestamp(creationTime),
-        reactions_count: reactions,
-        reactions_display: formatMetric(reactions),
-        reactions_exact: reactions !== null,
-        comments_count: comments,
-        comments_display: formatMetric(comments),
-        comments_exact: comments !== null,
-        _source: "current_page_payload",
-      });
-    }
-    for (const child of Object.values(object)) {
-      if (Array.isArray(child)) child.forEach(visit);
-      else if (child && typeof child === "object") visit(child);
-    }
+    objects.push(object);
+    const id = text(object.id);
+    if (id) entities.set(id, combine(entities.get(id), object) as Record<string, unknown>);
+    for (const child of Object.values(object)) if (child && typeof child === "object") visit(child);
   };
   visit(payload);
+  const resolve = (value: unknown): Record<string, unknown> | null => {
+    const object = directObject(value);
+    return object ? entities.get(text(object.id)) || object : null;
+  };
+  const feedbackByPost = new Map<string, Record<string, unknown>>();
+  for (const item of objects) {
+    const id = text(item.subscription_target_id || item.top_level_post_id);
+    if (id && (item.reaction_count || item.total_comment_count !== undefined || item.comment_count)) {
+      feedbackByPost.set(id, resolve(item)!);
+    }
+  }
+  const results: RawCandidate[] = [];
+  const emitted = new Set<Record<string, unknown>>();
+  for (const fragment of objects) {
+    const object = resolve(fragment)!;
+    if (emitted.has(object)) continue;
+    emitted.add(object);
+    const permalink = nestedString(object, [["permalink_url"], ["permalinkUrl"], ["wwwURL"], ["url"], ["story", "url"], ["shareable", "url"]]);
+    const postUrl = permalink && !/[?&](?:comment_id|reply_comment_id)=/i.test(permalink) ? canonicalPostUrl(permalink) : null;
+    if (!postUrl) continue;
+    const creationTime = object.creation_time ?? object.publish_time ?? object.created_time ?? object.creationTime;
+    const message = nestedString(object, [
+      ["message", "text"], ["message"], ["story", "message", "text"], ["savable_title", "text"],
+      ["comet_sections", "content", "story", "message", "text"],
+      ["comet_sections", "message", "story", "message", "text"],
+      ["comet_sections", "message_container", "story", "message", "text"],
+    ]);
+    if (creationTime === undefined && !message && !object.feedback && !object.actors && !object.owner) continue;
+    const actor = resolve(Array.isArray(object.actors) ? object.actors[0] : object.author || object.owner || object.from);
+    const feedback = feedbackByPost.get(text(object.post_id)) || resolve(object.feedback) || object;
+    const reactions = nestedNumber(feedback, [["reaction_count", "count"], ["reaction_count"], ["unified_reactors", "count"], ["likers", "count"]]);
+    const comments = nestedNumber(feedback, [["comment_rendering_instance", "comments", "total_count"], ["comment_count", "total_count"], ["comment_count"], ["comments", "total_count"], ["total_comment_count"]]);
+    // View totals are usable only on the identified Video itself, never from
+    // unrelated feedback, recommended videos, or a generic page view_count.
+    const video = object.__typename === "Video" && text(object.id) === postIdFromUrl(postUrl) ? object : null;
+    const views = video ? nestedNumber(video, [["video_view_count"], ["video_play_count"], ["play_count"], ["view_count"]]) : null;
+    const followers = actor ? nestedNumber(actor, [["followers", "count"], ["followers_count"], ["follower_count"], ["page_followers", "count"]]) : null;
+    results.push({
+      post_id: postIdFromUrl(postUrl),
+      post_url: postUrl,
+      author_name: actor ? nestedString(actor, [["name"], ["title", "text"]]) : null,
+      author_url: actor ? nestedString(actor, [["url"], ["profile_url"]])
+        || (/^\d+$/.test(text(actor.id)) ? FACEBOOK_ORIGIN + "/profile.php?id=" + actor.id : null) : null,
+      content: message,
+      media_type: /\/reel\//i.test(postUrl) ? "reel" : video || /\/(?:videos|watch)(?:\/|\?|$)/i.test(postUrl) ? "video" : undefined,
+      thumbnail_url: nestedString(object, [["thumbnailImage", "uri"], ["preferred_thumbnail", "image", "uri"], ["image", "uri"]]),
+      timestamp: isoTimestamp(creationTime),
+      reactions_count: reactions, reactions_display: formatMetric(reactions), reactions_exact: reactions !== null,
+      comments_count: comments, comments_display: formatMetric(comments), comments_exact: comments !== null,
+      ...(views !== null ? { views_count: views, views_display: formatMetric(views), views_exact: true } : {}),
+      ...(followers !== null ? { follower_count: followers, follower_count_display: formatMetric(followers), follower_count_exact: true } : {}),
+      _source: "current_page_payload",
+    });
+  }
   return results;
+}
+
+export function facebookCandidatesFromScripts(scripts: string[]) {
+  const payloads: unknown[] = [];
+  for (const script of scripts) {
+    if (script.length > 12_000_000) continue;
+    try { payloads.push(JSON.parse(script)); } catch { /* Only public JSON, never execute scripts. */ }
+  }
+  return facebookPayloadCandidates(payloads);
+}
+
+async function extractFacebookPagePayloads(page: Page) {
+  const scripts = await page.locator('script[type="application/json"],script[type="application/ld+json"]').allTextContents();
+  return facebookCandidatesFromScripts(scripts);
 }
 
 function responseCollector() {
@@ -1531,6 +1594,129 @@ function visibleProfileInfo(bodyText: string) {
 
 
 
+async function enrichFacebookAuthors(posts: FacebookPost[], context: BrowserContext, diagnostics: FacebookScrapeDiagnostics) {
+  const cache = new Map<string, Promise<{ followerCount: number | null; followerDisplay: string | null }>>();
+  let cursor = 0;
+  const results = [...posts];
+  await Promise.all(Array.from({ length: Math.min(2, posts.length) }, async () => {
+    const profilePage = await context.newPage();
+    try {
+      while (cursor < posts.length) {
+        const index = cursor++;
+        const post = posts[index];
+        if (post.follower_count !== null || !post.author_url || facebookUrlType(post.author_url) !== "profile") continue;
+        const key = targetProfileKey(post.author_url)!;
+        let pending = cache.get(key);
+        if (!pending) {
+          pending = (async () => {
+            await navigateFacebookPage(profilePage, facebookProfileTabUrl(post.author_url!, "all")!, 20_000);
+            await profilePage.waitForFunction(() => /\bfollowers?\b|people follow this/i.test(document.body?.innerText || ""), undefined, { timeout: 5000 }).catch(() => undefined);
+            const body = await profilePage.locator("body").innerText();
+            const description = await profilePage.locator('meta[property="og:description"]').first().getAttribute("content").catch(() => "");
+            return visibleProfileInfo(body.slice(0, 2500) + "\n" + (description || ""));
+          })().catch(error => {
+            diagnostics.stage_failures ||= {};
+            diagnostics.stage_failures.profile = String(error instanceof Error ? error.message : error).slice(0, 240);
+            return { followerCount: null, followerDisplay: null };
+          });
+          cache.set(key, pending);
+        }
+        const info = await pending;
+        results[index] = { ...post, follower_count: info.followerCount, follower_count_display: info.followerDisplay,
+          follower_count_exact: info.followerCount !== null && !/[KMB]/i.test(info.followerDisplay || "") };
+      }
+    } finally { await profilePage.close().catch(() => undefined); }
+  }));
+  if (cache.size) diagnostics.discovery_path?.push("author_profiles");
+  return results;
+}
+
+export function facebookMatchesKeyword(content: string | null | undefined, query: string) {
+  const normalize = (value: string) => value.normalize("NFKC").toLocaleLowerCase("en-US");
+  const source = normalize(content || "");
+  const keyword = normalize(query.trim());
+  if (keyword.startsWith("#")) {
+    return Array.from(source.matchAll(/#[\p{L}\p{N}_]+/gu), match => match[0]).includes(keyword);
+  }
+  const tokens = keyword.match(/[\p{L}\p{N}_]+/gu) || [];
+  const words = new Set(source.match(/[\p{L}\p{N}_]+/gu) || []);
+  return tokens.length > 0 && (tokens.every(token => words.has(token))
+    || (tokens.length > 1 && Array.from(source.matchAll(/#[\p{L}\p{N}_]+/gu), match => match[0]).includes(`#${tokens.join("")}`)));
+}
+
+export function facebookSearchPostUrls(html: string) {
+  const urls = new Set<string>();
+  const decoded = html.replace(/&amp;/g, "&").replace(/&#(?:x2f|47);/gi, "/");
+  const links = [...decoded.matchAll(/href=["']([^"']+)["']/gi)].map(match => match[1]);
+  links.push(...[...decoded.matchAll(/https?:\/\/[^\s<>"']+/gi)].map(match => match[0]));
+  for (let raw of links) {
+    for (let i = 0; i < 4; i++) {
+      try {
+        const parsed = new URL(raw, "https://duckduckgo.com");
+        const redirect = parsed.searchParams.get("uddg") || parsed.searchParams.get("url")
+          || parsed.pathname.match(/\/RU=([^/]+)/)?.[1];
+        if (redirect) { raw = decodeURIComponent(redirect); continue; }
+        const bing = parsed.searchParams.get("u");
+        if (/^a1/.test(bing || "") && /(^|\.)bing\.com$/i.test(parsed.hostname)) {
+          raw = Buffer.from(bing!.slice(2), "base64url").toString("utf8"); continue;
+        }
+        const canonical = canonicalPostUrl(parsed.toString());
+        if (canonical && postIdFromUrl(canonical)) urls.add(canonical);
+        break;
+      } catch { break; }
+    }
+  }
+  return [...urls];
+}
+
+async function indexedFacebookKeywordResults(input: FacebookScrapeInput, normalized: NormalizedFacebookQuery,
+  factory: FacebookBrowserSessionFactory, previous: FacebookScrapeResult) {
+  const session = await factory.create();
+  const diagnostics = previous.diagnostics;
+  diagnostics.discovery_path ||= [];
+  diagnostics.discovery_path.push("public_search_index");
+  const range = facebookScrapeRange(input);
+  const queries = [`site:facebook.com/reel/ ${normalized.label}`, `site:facebook.com ${normalized.label} inurl:posts`];
+  const searchUrls = queries.flatMap(query => [
+    `https://search.yahoo.com/search?${new URLSearchParams({ p: query, btf: "m" })}`,
+    `https://search.yahoo.com/search?${new URLSearchParams({ p: query })}`,
+    `https://html.duckduckgo.com/html/?${new URLSearchParams({ q: query })}`,
+  ]);
+  try {
+    const urls = new Set<string>();
+    const pages = await Promise.all(searchUrls.map(async url => {
+      try {
+        const response = await fetch(url, { headers: { "Accept-Language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(12_000) });
+        return response.ok ? facebookSearchPostUrls(await response.text()) : [];
+      } catch { return []; }
+    }));
+    for (const pageUrls of pages) for (const url of pageUrls) urls.add(url);
+    diagnostics.indexed_candidates = urls.size;
+    const verified = new Map(previous.results.map(post => [facebookPostIdentity(post), post]));
+    const maxResults = Math.max(1, Math.min(50, Number(input.maxResults) || 10));
+    const deadline = Date.now() + 90_000;
+    for (const url of [...urls].slice(0, 30)) {
+      if (verified.size >= maxResults || Date.now() >= deadline) break;
+      let raw = await loadFacebookDirectPostCandidate(session.page, url).catch(() => null);
+      if (!raw?.content) raw = await loadFacebookEmbedCandidate(session.page, url).catch(() => null);
+      const post = raw && candidateFromRaw(raw, normalized.profileType, new Date().toISOString());
+      if (!post || !facebookMatchesKeyword(post.content, normalized.label)) continue;
+      const time = timestampMs(post);
+      if (time === null || (range.active && (time < range.start || time > range.end))) continue;
+      mergePostIntoMap(verified, post);
+    }
+    const results = await enrichFacebookAuthors([...verified.values()].sort((a, b) => range.direction === "ascending"
+      ? (timestampMs(a) || 0) - (timestampMs(b) || 0) : (timestampMs(b) || 0) - (timestampMs(a) || 0)).slice(0, maxResults), session.context, diagnostics);
+    diagnostics.unique_candidates = Math.max(diagnostics.unique_candidates, verified.size);
+    diagnostics.accepted_results = results.length;
+    if (!results.length) {
+      diagnostics.stage_failures ||= {};
+      diagnostics.stage_failures.search = "No matching posts could be verified from Facebook's anonymous feed or public search indexes.";
+    }
+    return { ...previous, results, discoveryStatus: results.length ? "partial" as const : "temporarily_unavailable" as const, diagnostics };
+  } finally { await session.close(); }
+}
+
 async function navigateFacebookPage(page: Page, targetUrl: string, timeout = 45_000, pressEscape = true) {
   let navigationError: unknown;
   try {
@@ -1586,7 +1772,7 @@ async function scrapeAttempt(
   const collector = responseCollector();
   page.on("response", collector.listener);
   const plan = facebookDiscoveryPlan(input, normalized.mode);
-  const profileUrl = normalized.mode === "profile"
+  let profileUrl = normalized.mode === "profile"
     ? normalized.targetProfileUrl || normalized.startUrl
     : null;
   const initialUrl = plan.initialTab && profileUrl
@@ -1627,11 +1813,19 @@ async function scrapeAttempt(
     diagnostics.page_visibility = await page.evaluate(() => document.visibilityState).catch(() => "unknown");
     diagnostics.final_url = page.url();
     diagnostics.page_title = await page.title().catch(() => "");
-    if (normalized.mode !== "post" && initialAccess === "not_found") {
+    const profileAliases: string[] = [];
+    if (profileUrl) {
+      const canonical = await page.locator('link[rel="canonical"]').first().getAttribute("href").catch(() => null);
+      for (const alias of [page.url(), canonical]) {
+        if (alias && facebookUrlType(alias) === "profile") profileAliases.push(alias);
+      }
+      if (facebookUrlType(page.url()) === "profile") profileUrl = facebookProfileTabUrl(page.url(), "all") || profileUrl;
+    }
+    const initialPayloads = await extractFacebookPagePayloads(page).catch(() => []);
+    if (!initialPayloads.length && normalized.mode !== "post" && initialAccess === "not_found") {
       return { query: normalized.label, results: [], discoveryStatus: initialAccess, diagnostics };
     }
-    if (normalized.mode !== "post" && initialAccess === "login_required"
-      && (normalized.mode !== "profile" || plan.reelsArePrimary)) {
+    if (!initialPayloads.length && normalized.mode === "keyword" && initialAccess === "login_required") {
       return { query: normalized.label, results: [], discoveryStatus: initialAccess, diagnostics };
     }
 
@@ -1647,9 +1841,15 @@ async function scrapeAttempt(
         : profileLimit
       : Math.min(100, Math.max(20, maxResults * 3));
     const candidateMap = new Map<string, FacebookPost>();
+    for (const raw of initialPayloads) {
+      const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
+      if (post) mergePostIntoMap(candidateMap, post);
+    }
+    diagnostics.payload_candidates += initialPayloads.length;
+    const directTarget = normalized.mode === "post" ? canonicalPostUrl(page.url()) || canonicalPostUrl(normalized.startUrl) : null;
     const candidateRangeCoverage = () => facebookRangeCoverage(
       [...candidateMap.values()]
-        .filter(post => normalized.mode !== "profile" || candidateMatchesProfile(post, normalized.targetProfileUrl))
+        .filter(post => normalized.mode !== "profile" || candidateMatchesProfile(post, normalized.targetProfileUrl, profileAliases))
         .map(post => post.timestamp),
       range,
       maxResults,
@@ -1692,7 +1892,7 @@ async function scrapeAttempt(
           mergePostIntoMap(candidateMap, post);
         }
         await collector.settle();
-        const rawPayloads = collector.candidates.splice(0);
+        const rawPayloads = [...collector.candidates.splice(0), ...await extractFacebookPagePayloads(page).catch(() => [])];
         diagnostics.payload_candidates += rawPayloads.length;
         for (const raw of rawPayloads) {
           const post = candidateFromRaw(raw, normalized.profileType, capturedAt);
@@ -1716,12 +1916,20 @@ async function scrapeAttempt(
       await collector.settle();
     }
 
-    if (normalized.mode === "post" && candidateMap.size === 0) {
+    if (normalized.mode === "post") {
       const directUrl = canonicalPostUrl(normalized.startUrl);
       const embedPage = directUrl ? await session.context.newPage().catch(() => null) : null;
-      const embedded = directUrl && embedPage
-        ? await loadFacebookEmbedCandidate(embedPage, directUrl).catch(() => null)
+      let embedded = directUrl && embedPage
+        ? await loadFacebookDirectPostCandidate(embedPage, directUrl).catch(() => null)
         : null;
+      if (directUrl && embedPage && (!embedded || !embedded.author_url)) {
+        const fallback = await loadFacebookEmbedCandidate(embedPage, directUrl).catch(() => null);
+        if (fallback) {
+          const base = embedded && candidateFromRaw(embedded, normalized.profileType, capturedAt);
+          const extra = candidateFromRaw(fallback, normalized.profileType, capturedAt);
+          embedded = base && extra ? mergePosts(base, extra) : fallback;
+        }
+      }
       if (embedPage) await embedPage.close().catch(() => undefined);
       if (embedded) {
         diagnostics.dom_candidates += 1;
@@ -1732,6 +1940,7 @@ async function scrapeAttempt(
 
     const allBodyText = await page.locator("body").innerText().catch(() => "");
     const profile = visibleProfileInfo(allBodyText);
+    if (normalized.mode !== "profile") { profile.followerCount = null; profile.followerDisplay = null; }
     const titleName = diagnostics.page_title.replace(/\s*\|\s*Facebook.*$/i, "").trim();
     if (titleName && !/^Facebook$/i.test(titleName)) profile.profileName = titleName;
     if (normalized.mode === "post") {
@@ -1741,7 +1950,7 @@ async function scrapeAttempt(
 
     if (plan.collectTimelinePlugin && profileUrl) {
       diagnostics.discovery_path!.push("timeline");
-      const targetProfileUrl = normalized.targetProfileUrl || normalized.startUrl;
+      const targetProfileUrl = profileUrl;
       const timelineCandidates = await loadFacebookPageTimelineCandidates(page, targetProfileUrl).catch(error => {
         recordStageFailure("timeline", error);
         return [];
@@ -1770,10 +1979,11 @@ async function scrapeAttempt(
     const reelsMap = new Map<string, FacebookPost>();
     const reelPayloadMap = new Map<string, FacebookPost>();
     const directPost = normalized.mode === "post"
-      ? [...candidateMap.values()].find(post => post.media_type === "reel" || /\/reel\//i.test(post.post_url))
+      ? [...candidateMap.values()].find(post => (post.media_type === "reel" || /\/reel\//i.test(post.post_url))
+        && directTarget && facebookPostIdentity(post) === facebookPostIdentity({ post_id: null, post_url: directTarget }))
       : null;
     const reelsProfileUrl = normalized.mode === "profile"
-      ? normalized.targetProfileUrl || normalized.startUrl
+      ? profileUrl
       : directPost?.author_url || null;
     if (reelsProfileUrl && plan.collectReels) {
       if (!diagnostics.discovery_path!.includes("reels")) diagnostics.discovery_path!.push("reels");
@@ -1804,7 +2014,7 @@ async function scrapeAttempt(
         );
         diagnostics.reels_grid_candidates += rawGrid.length;
         await collector.settle();
-        const rawPayloads = collector.candidates.splice(0);
+        const rawPayloads = [...collector.candidates.splice(0), ...await extractFacebookPagePayloads(page).catch(() => [])];
         diagnostics.payload_candidates += rawPayloads.length;
         for (const raw of rawPayloads) {
           const payloadPost = candidateFromRaw(raw, normalized.profileType, capturedAt);
@@ -1887,16 +2097,16 @@ async function scrapeAttempt(
     diagnostics.unique_candidates = new Set([...candidateMap.keys(), ...reelsMap.keys()]).size;
     if (range.active) diagnostics.range_coverage = candidateRangeCoverage();
     const accepted: FacebookPost[] = [];
-    const directTarget = normalized.mode === "post" ? canonicalPostUrl(page.url()) || canonicalPostUrl(normalized.startUrl) : null;
     for (const post of candidateMap.values()) {
       if (directTarget && post.post_url !== directTarget && (!post.post_id || post.post_id !== postIdFromUrl(directTarget))) {
         diagnostics.rejected.unexpected_post += 1;
         continue;
       }
-      if (normalized.mode === "profile" && !candidateMatchesProfile(post, normalized.targetProfileUrl)) {
+      if (normalized.mode === "profile" && !candidateMatchesProfile(post, normalized.targetProfileUrl, profileAliases)) {
         diagnostics.rejected.owner_mismatch += 1;
         continue;
       }
+      if (normalized.mode === "keyword" && !facebookMatchesKeyword(post.content, normalized.label)) continue;
       const time = timestampMs(post);
       if (normalized.mode !== "post" && time === null) {
         diagnostics.rejected.missing_timestamp += 1;
@@ -1984,12 +2194,15 @@ async function scrapeAttempt(
     const enrichedPost = (post: FacebookPost) => enriched.get(facebookPostIdentity(post)) || post;
     const analysisPosts = analysisBasePosts.map(enrichedPost);
     const analyzedReels = discoveredReels.map(enrichedPost);
-    const results = preliminaryResults.map(enrichedPost).map(post => ({
+    let results = preliminaryResults.map(enrichedPost).map(post => ({
       ...post,
       follower_count: post.follower_count ?? profile.followerCount,
       follower_count_display: post.follower_count_display ?? profile.followerDisplay,
       follower_count_exact: post.follower_count_exact || false,
     }));
+    if (normalized.mode !== "profile") {
+      results = await enrichFacebookAuthors(results, session.context, diagnostics);
+    }
     diagnostics.accepted_results = results.length;
     const finalSnapshot = await accessSnapshot(page).catch(() => null);
     const finalAccess = finalSnapshot ? classifyFacebookAccess(finalSnapshot) : "unknown";
@@ -2038,11 +2251,25 @@ export async function runFacebookScrapeWithSessionFactory(
       last = await scrapeAttempt(input, attemptQuery, sessionFactory, attempt);
     } catch (error) {
       lastError = error;
+      if (normalized.mode === "keyword") continue;
       if (attempt === 1 && normalized.fallbackStartUrl) continue;
       throw error;
     }
-    if (last.results.length || last.analysis?.top_viewed.length) return last;
-    if (last.discoveryStatus === "not_found" && !(attempt === 1 && normalized.fallbackStartUrl)) return last;
+    if (last.results.length || last.analysis?.top_viewed.length) {
+      if (normalized.mode === "keyword" && last.results.length < (input.maxResults || 10)) break;
+      return last;
+    }
+    if (normalized.mode !== "keyword" && last.discoveryStatus === "not_found" && !(attempt === 1 && normalized.fallbackStartUrl)) return last;
+  }
+  if (normalized.mode === "keyword") {
+    last ||= {
+      query: normalized.label, results: [], discoveryStatus: "temporarily_unavailable",
+      diagnostics: { attempts: 2, scroll_rounds: 0, dom_candidates: 0, payload_candidates: 0,
+        reels_grid_candidates: 0, unique_candidates: 0, accepted_results: 0, comments_opened: 0, comments_scraped: 0,
+        rejected: { missing_url: 0, unexpected_post: 0, owner_mismatch: 0, missing_timestamp: 0, out_of_range: 0 },
+        final_url: normalized.startUrl, page_title: "", browser_session: "anonymous", discovery_path: [], stage_failures: {} },
+    };
+    return indexedFacebookKeywordResults(input, normalized, sessionFactory, last);
   }
   if (last) return last;
   throw lastError;

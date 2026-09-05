@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import nodeCron from "node-cron";
+import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
 import {
   initializeDatabaseDocument,
   mutateDatabaseDocument,
@@ -24,7 +25,7 @@ const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.6";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.7";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
@@ -712,6 +713,7 @@ function createUploadInDocument(document, principal, input = {}) {
     postFormat: format, originalName: input.originalName || "Text post",
     fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
     size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
+    platformOptions: requireYouTubeOptions(account.platform, format, input.platformOptions),
     caption, status: "queued", publishActionState: "not_started",
     uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
     createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
@@ -753,7 +755,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
   const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
-    for (const key of ["title", "caption", "scheduledAt", "scheduleId", "accountId"]) {
+    for (const key of ["title", "caption", "platformOptions", "scheduledAt", "scheduleId", "accountId"]) {
       if (input[key] !== undefined) upload[key] = input[key] || null;
     }
     if (input.accountId) {
@@ -766,6 +768,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     if (String(upload.caption).trim().length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This ${account.platform} post is longer than the platform limit.`);
     if (upload.postFormat === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
     if (upload.postFormat === "video" && account.platform === "youtube" && !String(upload.title || "").trim()) throw new Error("YouTube video posts need a title.");
+    upload.platformOptions = requireYouTubeOptions(account.platform, upload.postFormat, upload.platformOptions);
     if (upload.scheduledAt) {
       const timestamp = Date.parse(upload.scheduledAt);
       if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error("Scheduled publishing time must be in the future.");
@@ -989,12 +992,14 @@ export async function createCentralSubmission(principal, input = {}) {
       if (description.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
       if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
       if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
+      requireYouTubeOptions(account.platform, format, input.platformOptions);
     }
     const submission = {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
       originalName: input.originalName || "Text post", fileName: input.fileName || "", mimeType: input.mimeType || "text/plain",
       extension: input.extension || "", size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
       description, selectedAccountIds, status: "awaiting_schedule", createdAt: timestamp,
+      platformOptions: input.platformOptions,
       updatedAt: timestamp, createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
     };
     document.submissions.push(submission);
@@ -1032,6 +1037,7 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
         postFormat: submission.postFormat, originalName: submission.originalName, fileName: submission.fileName,
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
         title: submission.title, caption: destination.description ?? submission.description, status: "queued", publishActionState: "not_started",
+        platformOptions: requireYouTubeOptions(account.platform, submission.postFormat, submission.platformOptions),
         uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId,
         sourceSubmissionId: submission.id, createdByUserId: submission.createdByUserId, createdByName: submission.createdByName,
       };

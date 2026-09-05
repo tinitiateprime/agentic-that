@@ -1048,6 +1048,8 @@ function UnifiedComposer({
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [youtubeAudience, setYoutubeAudience] = useState<'' | 'made_for_kids' | 'not_made_for_kids'>('');
+  const [youtubeVisibility, setYoutubeVisibility] = useState<'' | 'private' | 'unlisted' | 'public'>('');
   const [description, setDescription] = useState('');
   const [platformDescriptions, setPlatformDescriptions] = useState<Partial<Record<Platform, string>>>({});
   const [copyMode, setCopyMode] = useState<ComposerCopyMode>('preview');
@@ -1074,7 +1076,7 @@ function UnifiedComposer({
   useEffect(() => {
     setPendingPreflightWarnings([]);
     setMessage(current => current?.type === 'warning' ? null : current);
-  }, [postFormat, file, title, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
@@ -1184,6 +1186,8 @@ function UnifiedComposer({
     setPostFormat(null);
     setFile(null);
     setTitle('');
+    setYoutubeAudience('');
+    setYoutubeVisibility('');
     setDescription('');
     setPlatformDescriptions({});
     setCopyMode('preview');
@@ -1200,6 +1204,9 @@ function UnifiedComposer({
     if (postFormat !== 'text' && !file) return setMessage({ type: 'error', text: `Choose one ${postFormat} file.` });
     if (postFormat !== 'text' && !rightsConfirmed) return setMessage({ type: 'error', text: 'Confirm that you own this media or have permission to publish it.' });
     if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: handoffOnly ? 'Enter a video title.' : 'Enter a YouTube title.' });
+    if (selectedNeedsTitle && (!youtubeAudience || !youtubeVisibility)) return setMessage({ type: 'error', text: 'Choose the YouTube audience and visibility before publishing.' });
+    const platformOptions = selectedNeedsTitle && youtubeAudience && youtubeVisibility
+      ? { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } } : undefined;
     if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (handoffOnly) {
       if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
@@ -1209,6 +1216,7 @@ function UnifiedComposer({
           postFormat,
           file,
           title: selectedNeedsTitle ? title.trim() : '',
+          platformOptions,
           description: description.trim(),
           rightsConfirmed,
           destinations: selectedAccounts.map(account => ({ accountId: account.id })),
@@ -1265,6 +1273,7 @@ function UnifiedComposer({
         postFormat,
         file,
         title: selectedNeedsTitle ? title.trim() : '',
+        platformOptions,
         description: description.trim(),
         destinations,
         rightsConfirmed,
@@ -1349,6 +1358,10 @@ function UnifiedComposer({
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Enter a title to enable YouTube publishing'} maxLength={100} /></label>}
+            {showYoutubeTitle && <>
+              <label className='composer-field'><span>YouTube audience</span><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required={selectedNeedsTitle}><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
+              <label className='composer-field'><span>YouTube visibility</span><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required={selectedNeedsTitle}><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
+            </>}
             <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
               <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
               <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
@@ -2644,6 +2657,8 @@ function EditPostModal({
   onSuccess: () => void;
 }) {
   const [title, setTitle] = useState(upload.title ?? upload.caption ?? "");
+  const [youtubeAudience, setYoutubeAudience] = useState(upload.platformOptions?.youtube?.audience || '');
+  const [youtubeVisibility, setYoutubeVisibility] = useState(upload.platformOptions?.youtube?.visibility || '');
   const [caption, setCaption] = useState(upload.caption ?? "");
   const [accountId, setAccountId] = useState(upload.accountId);
   const [scheduleMode, setScheduleMode] = useState<'none' | 'exact' | 'template'>(upload.scheduleId ? 'template' : upload.scheduledAt ? 'exact' : 'none');
@@ -2662,6 +2677,7 @@ function EditPostModal({
   const save = async () => {
     if (canEditContent && !caption.trim()) return alert(postFormat === "text" ? "Post text is required" : "Caption is required");
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
+    if (canEditContent && isYouTubeVideo && (!youtubeAudience || !youtubeVisibility)) return alert("Choose the YouTube audience and visibility.");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
     if (canEditSchedule && scheduleMode === 'exact' && !scheduledDate) return alert("Choose a scheduled date and time.");
@@ -2677,6 +2693,7 @@ function EditPostModal({
         payload.title = isYouTubeVideo ? title.trim() : undefined;
         payload.caption = caption.trim();
         payload.accountId = accountId;
+        if (isYouTubeVideo) payload.platformOptions = { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } };
       }
       if (canEditSchedule) {
         payload.scheduledAt = scheduleMode === 'exact' ? scheduledDate?.toISOString() ?? null : null;
@@ -2721,6 +2738,10 @@ if (permissions.canRunAutomation) {
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}
+              {isYouTubeVideo && <>
+                <div className='field'><label>YouTube audience</label><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value)} disabled={!canEditContent}><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></div>
+                <div className='field'><label>YouTube visibility</label><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value)} disabled={!canEditContent}><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></div>
+              </>}
               <div className="field">
                 <label>{postFormat === "text" ? "Post text" : isYouTube ? "Description" : "Caption"}</label>
                 <textarea rows={5} value={caption} onChange={event => setCaption(event.target.value)} disabled={!canEditContent} />

@@ -1,7 +1,7 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Companion",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Secure desktop execution engine for AgenticThat publishing, sessions, and scraping",
   "author": "AgenticThat",
   "repository": "https://github.com/tinitiateprime/agentic-that",

@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
 import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
 import { publishingEngineForPlatform } from "./services/login-surface.js";
+import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import {
   type ActivityLog,
   type AutomationInput,
@@ -51,6 +52,7 @@ type BlobStore = {
 };
 
 type StoredFileInput = {
+  platformOptions?: PlatformUpload["platformOptions"];
   originalName: string;
   fileName: string;
   mimeType: string;
@@ -64,6 +66,7 @@ type StoredFileInput = {
 };
 
 type StoredSubmissionInput = {
+  platformOptions?: PlatformUpload["platformOptions"];
   originalName: string;
   fileName: string;
   mimeType: string;
@@ -1101,6 +1104,7 @@ export async function createContentSubmission(
       size: input.size,
       url: input.url,
       title: input.title?.trim() || undefined,
+      platformOptions: input.platformOptions,
       description: input.description.trim(),
       rightsConfirmed: input.rightsConfirmed,
       status: "awaiting_schedule",
@@ -1903,6 +1907,7 @@ export async function createUpload(
       size: file.size,
       url: file.url,
       title: displayTitle,
+      platformOptions: requireYouTubeOptions(account.platform, file.postFormat, file.platformOptions) as PlatformUpload["platformOptions"],
       caption: file.caption,
       status: "queued",
       attemptCount: 0,
@@ -2115,6 +2120,7 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
       ...existing,
       accountId,
       title: input.title?.trim() || input.caption.trim(),
+      platformOptions: requireYouTubeOptions(existing.platform, existing.postFormat, input.platformOptions ?? existing.platformOptions) as PlatformUpload["platformOptions"],
       caption: input.caption.trim(),
       scheduledAt: nextScheduledAt,
       scheduleId: nextScheduleId,

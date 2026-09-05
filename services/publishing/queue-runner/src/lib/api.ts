@@ -8,6 +8,7 @@ import type {
   Platform,
   PlatformAccount,
   PlatformUpload,
+  PlatformOptions,
   PostFormat,
   PublishingSchedule,
   SocialMediaSchedule,
@@ -308,6 +309,7 @@ export const api = {
     postFormat: PostFormat;
     file: File | null;
     title: string;
+    platformOptions?: PlatformOptions;
     description: string;
     destinations: UnifiedPostDestinationInput[];
     rightsConfirmed: boolean;
@@ -359,6 +361,7 @@ export const api = {
         body: JSON.stringify({
           stagedUploadId: session.id,
           title: payload.title,
+          platformOptions: payload.platformOptions,
           description: payload.description,
           destinations: payload.destinations,
           rightsConfirmed: payload.rightsConfirmed,
@@ -378,6 +381,7 @@ export const api = {
     postFormat: PostFormat;
     file: File | null;
     title: string;
+    platformOptions?: PlatformOptions;
     description: string;
     rightsConfirmed: boolean;
     destinations: UnifiedPostDestinationInput[];
@@ -429,6 +433,7 @@ export const api = {
         body: JSON.stringify({
           stagedUploadId: session.id,
           title: payload.title,
+          platformOptions: payload.platformOptions,
           description: payload.description,
           selectedAccountIds: payload.destinations.map(destination => destination.accountId),
           rightsConfirmed: payload.rightsConfirmed,

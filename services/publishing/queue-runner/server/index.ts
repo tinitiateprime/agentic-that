@@ -7,6 +7,7 @@ import path from "node:path";
 import type { Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
+import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { downloadCentralArtifact, type CentralJobArtifact } from "./central-artifact.js";
@@ -41,6 +42,7 @@ import {
   platforms,
   platformSchema,
   postFormatSchema,
+  platformOptionsSchema,
   scheduleIdSchema,
   updateUploadDetailsSchema,
   updateUploadStatusSchema,
@@ -926,6 +928,7 @@ const stagedUploadCreateSchema = z.object({
 const stagedUploadIdSchema = z.string().regex(/^stage_[A-Za-z0-9_-]{12,}$/, "The staged upload ID is invalid.");
 
 const stagedUnifiedPostSchema = z.object({
+  platformOptions: platformOptionsSchema.optional(),
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
@@ -941,6 +944,7 @@ const textUnifiedPostSchema = z.object({
 });
 
 const stagedSubmissionSchema = z.object({
+  platformOptions: platformOptionsSchema.optional(),
   stagedUploadId: stagedUploadIdSchema,
   title: z.string().trim().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
@@ -1293,7 +1297,7 @@ async function createUnifiedPosts(
   titleInput: string,
   descriptionInput: string,
   destinationsInput: unknown,
-  preflightOptions: { rightsConfirmed: boolean; confirmWarnings: boolean },
+  preflightOptions: { rightsConfirmed: boolean; confirmWarnings: boolean; platformOptions?: PlatformUpload["platformOptions"] },
   request?: RequestWithUser,
 ) {
   const createdUploads: PlatformUpload[] = [];
@@ -1328,6 +1332,7 @@ async function createUnifiedPosts(
 
     const youtubeVideoSelected = postFormat === "video" && destinationAccounts.some(({ account }) => account.platform === "youtube");
     if (youtubeVideoSelected && !title) throw new Error("YouTube requires a title.");
+    if (youtubeVideoSelected) requireYouTubeOptions("youtube", "video", preflightOptions.platformOptions);
 
     for (const { destination, account } of destinationAccounts) {
       const platformDescription = destination.description?.trim() || description;
@@ -1369,6 +1374,7 @@ async function createUnifiedPosts(
         size: file.size,
         url: postFormat === "text" ? "" : `/uploads/${file.filename}`,
         title: account.platform === "youtube" && postFormat === "video" ? title : undefined,
+        platformOptions: preflightOptions.platformOptions,
         caption: destination.description?.trim() || description,
         scheduledAt,
         scheduleId: destination.scheduleId,
@@ -1465,6 +1471,7 @@ async function scheduleContentSubmission(
         size: submission.size,
         url: submission.url,
         title: account.platform === "youtube" && submission.postFormat === "video" ? title : undefined,
+        platformOptions: submission.platformOptions,
         caption: submission.description,
         scheduledAt,
         scheduleId: destination.scheduleId,
@@ -2572,6 +2579,7 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       description: payload.description,
       rightsConfirmed: payload.rightsConfirmed,
       selectedAccountIds,
+      platformOptions: payload.platformOptions,
     }, user.workspaceId, user.id);
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
     res.status(201).json(submission);
@@ -2637,6 +2645,7 @@ app.post("/api/posts/unified/staged", requireRoles("operations_manager"), async 
       mimetype: record.mimeType,
       size: record.size,
     }, user, payload.title, payload.description, payload.destinations, {
+      platformOptions: payload.platformOptions,
       rightsConfirmed: payload.rightsConfirmed,
       confirmWarnings: payload.confirmWarnings,
     }, req);

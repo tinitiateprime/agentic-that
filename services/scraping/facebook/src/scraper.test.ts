@@ -11,6 +11,11 @@ import {
   facebookProfileTabUrl,
   facebookUrlType,
   facebookPayloadCandidates,
+  facebookCandidatesFromScripts,
+  candidateMatchesProfile,
+  targetProfileKey,
+  facebookMatchesKeyword,
+  facebookSearchPostUrls,
   facebookNavigationHeaders,
   facebookPostIdentity,
   facebookPostDetailsFromHtml,
@@ -66,13 +71,13 @@ test("normalizes Facebook Page, public profile, keyword, and post inputs", () =>
   assert.equal(profile.profileType, "public_profile");
 
   const keyword = normalizeFacebookQuery({ query: "launch news", inputMode: "keyword" });
-  assert.equal(keyword.startUrl, "https://www.facebook.com/hashtag/launchnews");
-  assert.equal(keyword.fallbackStartUrl, "https://www.facebook.com/search/posts/?q=launch%20news");
+  assert.equal(keyword.startUrl, "https://www.facebook.com/search/posts/?q=launch%20news");
+  assert.equal(keyword.fallbackStartUrl, undefined);
   assert.equal(keyword.label, "launch news");
 
   const hashtag = normalizeFacebookQuery({ query: "#launch", inputMode: "keyword" });
   assert.equal(hashtag.startUrl, "https://www.facebook.com/hashtag/launch");
-  assert.equal(hashtag.fallbackStartUrl, undefined);
+  assert.equal(hashtag.fallbackStartUrl, "https://www.facebook.com/search/posts/?q=%23launch");
 
   const direct = normalizeFacebookQuery({ query: "https://facebook.com/example/posts/42?__cft__=tracking", inputMode: "post_url" });
   assert.equal(direct.mode, "post");
@@ -114,7 +119,8 @@ test("uses the canonical URL as identity when Facebook emits conflicting interna
 test("builds explicit All and Reels profile tab URLs", () => {
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/reels/", "all"), "https://www.facebook.com/AgenticThat/");
   assert.equal(facebookProfileTabUrl("https://facebook.com/AgenticThat/", "reels"), "https://www.facebook.com/AgenticThat/reels/");
-  assert.equal(facebookProfileTabUrl("https://facebook.com/profile.php?id=123", "reels"), "https://www.facebook.com/profile.php?id=123&sk=reels");
+  assert.equal(facebookProfileTabUrl("https://facebook.com/profile.php?id=123", "reels"), "https://www.facebook.com/profile.php?id=123&sk=reels_tab");
+  assert.equal(facebookProfileTabUrl("https://facebook.com/people/Example/123/", "reels"), "https://www.facebook.com/profile.php?id=123&sk=reels_tab");
 });
 
 test("uses a Reels-only discovery path for Most Viewed profiles", () => {
@@ -297,4 +303,50 @@ test("Facebook health endpoint reports public-browser mode with no API token", a
   assert.equal(data.scraper?.mode, "public-browser");
   assert.equal(data.scraper?.apiTokens, false);
   assert.match(response.headers.get("cache-control") || "", /no-store/);
+});
+
+test("numeric, people, and canonical p URLs identify the same profile without accepting other authors", () => {
+  const target = "https://facebook.com/profile.php?id=61575247137390";
+  for (const author_url of ["https://facebook.com/61575247137390", "https://facebook.com/people/New-York-Beauty/61575247137390/", "https://facebook.com/p/New-York-Beauty-61575247137390/"]) {
+    assert.equal(targetProfileKey(author_url), targetProfileKey(target));
+    assert.equal(candidateMatchesProfile({ author_url }, target), true);
+  }
+  assert.equal(candidateMatchesProfile({ author_url: "https://facebook.com/another" }, target), false);
+  assert.equal(candidateMatchesProfile({ author_url: "https://facebook.com/renamed" }, target, ["https://facebook.com/renamed"]), true);
+});
+
+test("public embedded JSON joins only matching story, owner, feedback, and video fragments", () => {
+  const scripts = [
+    JSON.stringify({ story: { id: "story-1", post_id: "111", creation_time: 1788553682, url: "https://facebook.com/reel/42/", actors: [{ id: "123" }], feedback: { id: "feedback-1" } } }),
+    JSON.stringify({ story: { id: "story-1", message: { text: "A #cricket video" } }, owner: { id: "123", name: "Creator", url: "https://facebook.com/people/Creator/123/", followers: { count: 150001 } } }),
+    JSON.stringify({ feedback: { id: "feedback-1", subscription_target_id: "111", reaction_count: { count: 82 }, total_comment_count: 2 }, video: { __typename: "Video", id: "42", url: "https://facebook.com/reel/42/", publish_time: 1788553682, owner: { id: "123" }, video_view_count: 3210 } }),
+    JSON.stringify({ feedback: { id: "feedback-2", subscription_target_id: "222", reaction_count: { count: 999999 }, total_comment_count: 9999 }, video: { __typename: "Video", id: "99", url: "https://facebook.com/reel/99/", publish_time: 1788553682, owner: { id: "456" }, video_view_count: 87654 } }),
+    "not JSON",
+  ];
+  const posts = facebookCandidatesFromScripts(scripts).filter(post => post.post_url === "https://www.facebook.com/reel/42/");
+  assert.ok(posts.some(post => post.content === "A #cricket video" && post.reactions_count === 82 && post.comments_count === 2));
+  assert.ok(posts.some(post => post.views_count === 3210 && post.views_exact));
+  assert.ok(posts.every(post => post.author_name === "Creator" && post.follower_count === 150001));
+  assert.ok(posts.every(post => post.reactions_count !== 999999 && post.views_count !== 87654));
+});
+
+test("missing and null feedback stays unknown; a measured zero is preserved", () => {
+  const [missing] = facebookPayloadCandidates({ url: "https://facebook.com/test/posts/123", creation_time: 1788553682, reaction_count: null, comment_count: null });
+  assert.equal(missing.reactions_count, null);
+  assert.equal(missing.comments_count, null);
+  const [zero] = facebookPayloadCandidates({ url: "https://facebook.com/test/posts/123", creation_time: 1788553682, reaction_count: { count: 0 }, comment_count: 0 });
+  assert.equal(zero.reactions_count, 0);
+  assert.equal(zero.comments_count, 0);
+});
+
+test("search discovery accepts Facebook permalinks, unwraps redirects, and rejects unrelated hosts", () => {
+  const urls = facebookSearchPostUrls('<a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.facebook.com%2Freel%2F123%2F">Result</a><a href="https://www.facebook.com/test/posts/pfbid123">Post</a><a href="https://evil.test/reel/333/">Bad</a><a href="https://facebook.com/test">Profile</a>');
+  assert.deepEqual(urls, ["https://www.facebook.com/reel/123/", "https://www.facebook.com/test/posts/pfbid123"]);
+  assert.equal(facebookMatchesKeyword("A #cricket highlight", "#cricket"), true);
+  assert.equal(facebookMatchesKeyword("A #cricketnews highlight", "#cricket"), false);
+  assert.equal(facebookMatchesKeyword("Latest news from the launch", "launch news"), true);
+  assert.equal(facebookMatchesKeyword("Latest #CricketNews", "cricket news"), true);
+  assert.equal(facebookMatchesKeyword("Latest launches", "launch"), false);
+  assert.equal(facebookMatchesKeyword(null, "news"), false);
+  assert.deepEqual(facebookSearchPostUrls('<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.facebook.com%2Freel%2F123%2F&amp;rut=tracking">Reel</a>'), ["https://www.facebook.com/reel/123/"]);
 });

@@ -4,9 +4,10 @@ import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type A
 import path from "path";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
+import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
+import type { YouTubeOptions } from "../../../shared/schema.js";
 
-const YES_MADE_FOR_KIDS_TEXT = /Yes.*made for kids/i;
-const PUBLIC_VISIBILITY_TEXT = /Public/i;
 const YOUTUBE_HOME_URL = "https://www.youtube.com/";
 const YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload";
 
@@ -169,74 +170,6 @@ async function scrollUploadDialogToTop(page: Page) {
   await page.waitForTimeout(700);
 }
 
-async function clickPublicVisibilityByMouse(page: Page) {
-  const publicLabel = page.locator("ytcp-uploads-dialog").getByText(/^Public$/i).first();
-
-  try {
-    await publicLabel.scrollIntoViewIfNeeded({ timeout: 5000 });
-    await publicLabel.click({ force: true, timeout: 3000 });
-    await page.waitForTimeout(1000);
-    return true;
-  } catch {
-    // Try a direct click on the radio circle next to the label.
-  }
-
-  const labelBox = await publicLabel.boundingBox();
-  if (!labelBox) return false;
-
-  await page.mouse.click(Math.max(labelBox.x - 22, 1), labelBox.y + labelBox.height / 2);
-  await page.waitForTimeout(1000);
-  return true;
-}
-
-async function publicVisibilityIsSelected(page: Page) {
-  const selectedPublic = page.locator(
-    'ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"][aria-checked="true"], ' +
-      'ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"][checked], ' +
-      'ytcp-uploads-dialog [role="radio"][aria-label*="Public"][aria-checked="true"]',
-  );
-
-  return (await selectedPublic.count()) > 0;
-}
-
-async function waitForPublishButton(page: Page, timeout = 7000) {
-  try {
-    await page.locator("ytcp-uploads-dialog ytcp-button").filter({ hasText: /^Publish$/i }).last().waitFor({
-      state: "visible",
-      timeout,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function selectMadeForKids(page: Page) {
-  console.log("Scrolling to the Made for Kids audience radio...");
-
-  const radioLocators = [
-    page.getByRole("radio", { name: YES_MADE_FOR_KIDS_TEXT }).first(),
-    page.locator("tp-yt-paper-radio-button").filter({ hasText: YES_MADE_FOR_KIDS_TEXT }).first(),
-    page.getByText(YES_MADE_FOR_KIDS_TEXT).first(),
-  ];
-
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    for (const radio of radioLocators) {
-      try {
-        await radio.scrollIntoViewIfNeeded({ timeout: 2500 });
-        await radio.click({ force: true, timeout: 2500 });
-        console.log("Selected 'Yes, it's made for kids'.");
-        return;
-      } catch {
-        // Try the next selector/scroll position.
-      }
-    }
-
-    await scrollUploadDialogDown(page);
-  }
-
-  throw new Error("Could not find or click the 'Yes, it's made for kids' radio button.");
-}
 
 async function waitForVideoPreview(page: Page) {
   console.log("Waiting for uploaded video preview/link...");
@@ -275,7 +208,7 @@ async function clickDialogButtonWhenReady(
   actionName: string,
   onClicked?: () => Promise<void> | void,
 ) {
-  const labelMatcher = new RegExp(labels.map(escapeRegExp).join("|"), "i");
+  const labelMatcher = new RegExp(`^\\s*(?:${labels.map(escapeRegExp).join("|")})\\s*$`, "i");
   const button = page.locator("ytcp-uploads-dialog ytcp-button").filter({ hasText: labelMatcher }).last();
 
   await button.waitFor({ state: "visible", timeout: 60000 });
@@ -313,54 +246,15 @@ async function clickNextWhenReady(page: Page) {
   await clickDialogButtonWhenReady(page, ["Next"], "Next");
 }
 
-async function selectPublicVisibility(page: Page) {
-  await waitForUploadDialogText(page, /Choose when to publish/i, "Visibility");
-  await scrollUploadDialogToTop(page);
-  console.log("Selecting Public visibility...");
-
-  const publicLocators = [
-    page.locator('ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"]').first(),
-    page.locator('tp-yt-paper-radio-button[name="PUBLIC"]').first(),
-    page.locator('ytcp-uploads-dialog tp-yt-paper-radio-button[aria-label*="Public"]').first(),
-    page.locator("ytcp-uploads-dialog").getByRole("radio", { name: PUBLIC_VISIBILITY_TEXT }).first(),
-    page.locator("ytcp-uploads-dialog tp-yt-paper-radio-button").filter({ hasText: /^Public$/i }).first(),
-    page.locator("ytcp-uploads-dialog").getByText(/^Public$/i).first(),
-  ];
-
-  for (const publicRadio of publicLocators) {
-    try {
-      await publicRadio.scrollIntoViewIfNeeded({ timeout: 2500 });
-      await publicRadio.click({ force: true, timeout: 2500 });
-      await page.waitForTimeout(750);
-      if (await waitForPublishButton(page)) {
-        console.log("Selected Public visibility.");
-        return;
-      }
-    } catch {
-      // Try the next selector; YouTube changes this markup regularly.
-    }
-  }
-
-  if (await clickPublicVisibilityByMouse(page)) {
-    if ((await publicVisibilityIsSelected(page)) || (await waitForPublishButton(page))) {
-      console.log("Selected Public visibility with mouse fallback.");
-      return;
-    }
-
-    throw new Error("Clicked Public visibility, but the Publish button did not appear.");
-  }
-
-  throw new Error("Could not find or click the Public visibility radio button.");
-}
 
 async function waitForPublishComplete(page: Page) {
   console.log("Waiting for YouTube publish confirmation...");
 
   const publishSignals = [
-    page.getByText(/Video processing/i).first(),
-    page.getByText(/public on YouTube/i).first(),
+    page.locator('ytcp-video-share-dialog').first(),
     page.getByText(/Video published/i).first(),
     page.getByText(/Your video has been published/i).first(),
+    page.getByText(/^Video saved(?:\s|$)/i).first(),
   ];
 
   try {
@@ -999,6 +893,7 @@ async function attachYouTubeVideoFile(page: Page, videoPath: string) {
 }
 
 async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath: string, accountLogin?: AccountLogin) {
+  const options = requireYouTubeOptions("youtube", "video", upload.platformOptions)!.youtube as YouTubeOptions;
   await loginToYouTube(page, accountLogin);
 
   console.log("Uploading file...");
@@ -1015,7 +910,7 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await fillEditable(page, page.locator("#description-textarea"), upload.caption ?? "");
   await page.waitForTimeout(1000);
 
-  await selectMadeForKids(page);
+  await selectYouTubeOption(page, "audience", options);
   await waitForVideoPreview(page);
 
   console.log("Moving to Video elements...");
@@ -1027,8 +922,10 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await waitForUploadDialogText(page, /check your video for issues/i, "Checks");
   await clickNextWhenReady(page);
 
-  await selectPublicVisibility(page);
-  await clickDialogButtonWhenReady(page, ["Publish"], "Publish", accountLogin?.onFinalActionSubmitted);
+  await waitForUploadDialogText(page, /Choose when to publish|Save or publish|Visibility/i, "Visibility");
+  await selectYouTubeOption(page, "visibility", options);
+  const action = youtubeFinalAction(options.visibility);
+  await clickDialogButtonWhenReady(page, [action], action, accountLogin?.onFinalActionSubmitted);
   await waitForPublishComplete(page);
 
   console.log("Step completed: video published.");
