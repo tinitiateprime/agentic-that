@@ -53,6 +53,7 @@ kanban
     done25[Resumable Idempotent Large Media Finalization]
     done26[Concurrent Multi User Publishing Workspace Stability]
     done27[Companion v2.1.11 Durable Facebook Login and LinkedIn Confirmation]
+    done28[Companion v2.1.12 Complete LinkedIn Video Upload Lifecycle]
 
   future[Future]
     future1[Android Companion]

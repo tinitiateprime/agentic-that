@@ -5,6 +5,7 @@ import { FACEBOOK_COMPOSER_EDITOR_SELECTORS, FACEBOOK_POST_ACCEPTED_TEXT, hasFac
 import {
   LINKEDIN_COMPOSER_EDITOR_SELECTORS,
   LINKEDIN_POST_ACCEPTED_TEXT,
+  LINKEDIN_UPLOAD_ACTIVE_TEXT,
   isLinkedInPublishResponse,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
@@ -41,6 +42,10 @@ test("LinkedIn publishing waits for durable provider acceptance", () => {
   assert.equal(isLinkedInPublishResponse("POST", "https://www.linkedin.com/voyager/api/contentcreation/normShares", 500), false);
   assert.equal(isLinkedInPublishResponse("POST", "https://www.linkedin.com/voyager/api/feed/updates", 200), false);
   assert.match("Post successful", LINKEDIN_POST_ACCEPTED_TEXT);
+  assert.match("Uploading... Keep the page open to finish uploading", LINKEDIN_UPLOAD_ACTIVE_TEXT);
+  assert.match("Uploading... Keep the page open to finish uploading 18%", LINKEDIN_UPLOAD_ACTIVE_TEXT);
+  assert.match("Processing video", LINKEDIN_UPLOAD_ACTIVE_TEXT);
+  assert.match("Posting...", LINKEDIN_UPLOAD_ACTIVE_TEXT);
 });
 
 test("Facebook publishing recognizes delayed Lexical composer editors", () => {
