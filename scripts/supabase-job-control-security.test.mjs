@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const migrationUrl = new URL("../supabase/migrations/202609020001_companion_job_control.sql", import.meta.url);
+const duplicateAccountRecoveryUrl = new URL("../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql", import.meta.url);
 const runnerUrl = new URL("../services/publishing/queue-runner/server/index.ts", import.meta.url);
 const instagramClientUrl = new URL("../services/scraping/instagram/console/src/companionClient.js", import.meta.url);
 const facebookClientUrl = new URL("../services/scraping/facebook/console/src/companionClient.js", import.meta.url);
@@ -33,6 +34,17 @@ test("Companion uses Supabase RPC and never embeds an elevated Supabase key", as
   assert.doesNotMatch(runner, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY/);
   assert.doesNotMatch(runner, /X-AgenticThat-Companion-Token/);
   assert.doesNotMatch(runner, /\/api\/publishing\/companion\/jobs/);
+});
+
+test("duplicate account handles cannot block Companion heartbeat session updates", async () => {
+  const [schema, recovery] = await Promise.all([
+    readFile(migrationUrl, "utf8"),
+    readFile(duplicateAccountRecoveryUrl, "utf8"),
+  ]);
+  assert.doesNotMatch(schema, /create unique index if not exists social_accounts_workspace_platform_handle_nonempty_idx/i);
+  assert.match(schema, /create index if not exists social_accounts_workspace_platform_handle_lookup_idx/i);
+  assert.match(recovery, /drop index if exists public\.social_accounts_workspace_platform_handle_nonempty_idx/i);
+  assert.match(recovery, /create index if not exists social_accounts_workspace_platform_handle_lookup_idx/i);
 });
 
 test("scraping clients no longer require the Chrome extension or loopback transport", async () => {

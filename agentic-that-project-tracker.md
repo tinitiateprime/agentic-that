@@ -44,6 +44,7 @@ kanban
     done16[Companion v2.1.7 Public Facebook Discovery and Explicit YouTube Options]
     done17[Direct Resilient Media Uploads with Live Progress]
     done18[2 GB Publishing Media Uploads]
+    done19[Duplicate-safe Companion Login Status Sync]
 
   future[Future]
     future1[Android Companion]

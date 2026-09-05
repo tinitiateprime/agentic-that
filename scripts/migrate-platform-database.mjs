@@ -21,6 +21,7 @@ try {
     "../supabase/migrations/202609040003_instagram_media_compatibility.sql",
     "../supabase/migrations/202609040004_facebook_session_persistence.sql",
     "../supabase/migrations/202609050001_youtube_options_and_facebook_scraping.sql",
+    "../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
