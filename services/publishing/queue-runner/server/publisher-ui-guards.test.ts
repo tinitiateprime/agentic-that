@@ -114,13 +114,15 @@ test("large-media finalization is split, retried, and never deletes finalized pa
 });
 
 test("central publishing refresh uses one non-overlapping workspace request", async () => {
-  const [appSource, clientSource, routeSource, accessSource, detailSource, documentStoreSource] = await Promise.all([
+  const [appSource, clientSource, routeSource, accessSource, detailSource, documentStoreSource, centralStoreSource, jobControlSource] = await Promise.all([
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
     readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
     readFile(new URL("../../../../src/platform/server/access-control.js", import.meta.url), "utf8"),
     readFile(new URL("../../../../app/apps/[category]/[slug]/page.jsx", import.meta.url), "utf8"),
     readFile(new URL("../../../../lib/database-document-store.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../src/platform/server/publishing-central-store.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../src/platform/server/supabase-job-control.js", import.meta.url), "utf8"),
   ]);
   assert.match(appSource, /refreshInFlight\.current/);
   assert.match(appSource, /api\.workspaceSnapshot\(permissions\.canManageUsers\)/);
@@ -130,4 +132,7 @@ test("central publishing refresh uses one non-overlapping workspace request", as
   assert.match(accessSource, /export async function requirePrincipalCapability/);
   assert.match(detailSource, /requirePrincipalCapability\(user,/);
   assert.match(documentStoreSource, /process\.env\.NETLIFY === "true" \? 1 : 5/);
+  assert.match(centralStoreSource, /supabasePublishingWorkspaceSnapshot\(workspaceId\)/);
+  assert.match(jobControlSource, /export async function supabasePublishingWorkspaceSnapshot/);
+  assert.match(jobControlSource, /jsonb_agg\(to_jsonb\(job_row\)\)/);
 });

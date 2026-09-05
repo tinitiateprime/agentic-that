@@ -17,6 +17,7 @@ import {
   listSupabaseJobs,
   revokeSupabaseCompanions,
   supabaseJobDashboard,
+  supabasePublishingWorkspaceSnapshot,
   synchronizePublishingJobs,
   upsertSupabaseAccount,
 } from "./supabase-job-control.js";
@@ -1354,10 +1355,8 @@ export async function publishingDashboard(workspaceId) {
 }
 
 export async function publishingWorkspaceSnapshot(workspaceId) {
-  const [control, normalizedAccounts] = await Promise.all([
-    supabaseJobDashboard(workspaceId),
-    listSupabaseAccounts(workspaceId),
-  ]);
+  const control = await supabasePublishingWorkspaceSnapshot(workspaceId);
+  const normalizedAccounts = control.accounts;
   const document = await reconcilePublishingControlPlane(workspaceId, control.jobs);
   const normalizedById = new Map(normalizedAccounts.map((item) => [item.id, item]));
   const accounts = document.accounts
@@ -1385,7 +1384,13 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
     schedules: [],
     activityLogs: document.activityLogs
       .filter((item) => item.workspaceId === workspaceId)
-      .slice(0, 100),
+      .slice(0, 100)
+      .map((item) => ({
+        ...item,
+        action: item.action || item.type || "publishing.activity",
+        entityType: item.entityType || "upload",
+        entityId: item.entityId || item.uploadId || null,
+      })),
     companion: control.companion,
     jobs,
   };

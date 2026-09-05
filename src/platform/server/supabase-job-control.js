@@ -860,6 +860,38 @@ export async function supabaseJobDashboard(workspaceId) {
   return { companion, jobs };
 }
 
+export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
+  const sql = await getDatabaseSql();
+  const [row] = await sql`
+    SELECT
+      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.8') AS minimum_version,
+      (SELECT to_jsonb(device_row) FROM (
+        SELECT * FROM public.companion_devices
+         WHERE workspace_id = ${workspaceId} AND revoked_at IS NULL
+         ORDER BY updated_at DESC LIMIT 1
+      ) device_row) AS companion,
+      (SELECT count(*) FILTER (WHERE enabled AND NOT credential_configured)::integer
+         FROM public.social_accounts WHERE workspace_id = ${workspaceId}) AS login_required,
+      coalesce((SELECT jsonb_agg(to_jsonb(account_row)) FROM (
+        SELECT * FROM public.social_accounts
+         WHERE workspace_id = ${workspaceId} ORDER BY created_at
+      ) account_row), '[]'::jsonb) AS accounts,
+      coalesce((SELECT jsonb_agg(to_jsonb(job_row)) FROM (
+        SELECT * FROM public.jobs
+         WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 500
+      ) job_row), '[]'::jsonb) AS jobs
+  `;
+  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.8");
+  const companion = companionValue
+    ? { ...companionValue, accountHealth: { loginRequired: Number(row?.login_required) || 0 } }
+    : null;
+  return {
+    companion,
+    accounts: (Array.isArray(row?.accounts) ? row.accounts : []).map((account) => camelAccount(account, companion)),
+    jobs: (Array.isArray(row?.jobs) ? row.jobs : []).map(camelJob),
+  };
+}
+
 export const supabaseJobControlTestHelpers = {
   absoluteSignedArtifactUrl,
   artifactPartObjectPath,
