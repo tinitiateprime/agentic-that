@@ -3,6 +3,7 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalInputFile } from "./local-file-input.js";
 
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login/";
@@ -422,7 +423,7 @@ async function attachFacebookMedia(page: Page, filePath: string) {
     throw new Error("Could not find Facebook's hidden media input; the native file picker was not opened.");
   }
 
-  await fileInput.setInputFiles(filePath);
+  await setLocalInputFile(page, fileInput, filePath);
 
   await page.waitForTimeout(300);
 }

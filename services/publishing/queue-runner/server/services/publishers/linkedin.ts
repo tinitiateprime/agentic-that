@@ -3,6 +3,7 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
@@ -275,7 +276,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 
   const existingFileInputs = root.locator('input[type="file"]');
   if ((await existingFileInputs.count()) > 0) {
-    await existingFileInputs.last().setInputFiles(filePath);
+    await setLocalInputFile(page, existingFileInputs.last(), filePath);
   } else {
     const mediaButton = await firstVisible([
       root.getByRole("button", { name: /Add media/i }),
@@ -299,7 +300,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
-      await fileChooser.setFiles(filePath);
+      await setLocalFileChooserFile(fileChooser, filePath);
     } else {
       await page.keyboard.press("Escape").catch(() => undefined);
       await page.waitForTimeout(500);
@@ -307,7 +308,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
       if (!await fallbackInputs.count()) {
         throw new Error("LinkedIn media picker opened without exposing a file input.");
       }
-      await fallbackInputs.last().setInputFiles(filePath);
+      await setLocalInputFile(page, fallbackInputs.last(), filePath);
     }
   }
 

@@ -22,6 +22,7 @@ try {
     "../supabase/migrations/202609040004_facebook_session_persistence.sql",
     "../supabase/migrations/202609050001_youtube_options_and_facebook_scraping.sql",
     "../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql",
+    "../supabase/migrations/202609050003_large_media_companion.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
@@ -59,7 +60,7 @@ try {
       (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   if (!status?.platform_users_ready || !status?.memberships_ready || !status?.roles_ready
       || !status?.companion_devices_ready || !status?.jobs_ready || !status?.companion_rpc_ready
-      || status?.minimum_companion_version !== "2.1.7") {
+      || status?.minimum_companion_version !== "2.1.8") {
     throw new Error("The platform database migration did not create every required table.");
   }
   process.stdout.write("Platform and Companion job-control database migrations are ready.\n");

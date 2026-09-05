@@ -55,3 +55,17 @@ test("video composer exposes the YouTube title before destination selection", as
   assert.match(appSource, /const selectedNeedsTitle = Boolean\(postFormat === 'video' && selectedPlatforms\.includes\('youtube'\)\);/);
   assert.match(appSource, /placeholder=.*Enter a title to enable YouTube publishing/);
 });
+
+test("all publishers attach Companion-local media through CDP without Playwright's 50 MB relay", async () => {
+  const publisherDirectory = new URL("./services/publishers/", import.meta.url);
+  const [helper, ...publishers] = await Promise.all([
+    readFile(new URL("local-file-input.ts", publisherDirectory), "utf8"),
+    ...["instagram.ts", "facebook.ts", "x.ts", "linkedin.ts", "youtube.ts"]
+      .map(fileName => readFile(new URL(fileName, publisherDirectory), "utf8")),
+  ]);
+  assert.match(helper, /DOM\.setFileInputFiles/);
+  assert.match(helper, /files: \[resolvedPath\]/);
+  for (const source of publishers) {
+    assert.doesNotMatch(source, /\.(?:setInputFiles|setFiles)\(/);
+  }
+});

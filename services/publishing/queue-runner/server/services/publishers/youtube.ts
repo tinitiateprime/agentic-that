@@ -7,6 +7,7 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
 import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
 import type { YouTubeOptions } from "../../../shared/schema.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 
 const YOUTUBE_HOME_URL = "https://www.youtube.com/";
 const YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload";
@@ -475,12 +476,12 @@ async function setCommunityImageInputFiles(page: Page, composer: Locator, imageP
   console.log(`YouTube Community file inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
-    await composerInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, composerInputs.last(), imagePath);
     return true;
   }
 
   if (pageCount > 0) {
-    await pageInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, pageInputs.last(), imagePath);
     return true;
   }
 
@@ -558,7 +559,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
   const fileChooser = await fileChooserPromise;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
-    await fileChooser.setFiles(imagePath);
+    await setLocalFileChooserFile(fileChooser, imagePath);
   } else {
     if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
       const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
@@ -567,7 +568,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
-        await retryChooser.setFiles(imagePath);
+        await setLocalFileChooserFile(retryChooser, imagePath);
       } else if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
         if (!await dropCommunityImageOnComposer(page, imagePath)) {
           throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
@@ -831,7 +832,7 @@ async function attachYouTubeVideoFile(page: Page, videoPath: string) {
   const useExistingInput = async () => {
     const inputs = page.locator(inputSelector);
     if ((await inputs.count().catch(() => 0)) === 0) return false;
-    await inputs.last().setInputFiles(videoPath);
+    await setLocalInputFile(page, inputs.last(), videoPath);
     return true;
   };
 
@@ -840,7 +841,7 @@ async function attachYouTubeVideoFile(page: Page, videoPath: string) {
     await control.click({ force: true, timeout: 10000 });
     const chooser = await chooserPromise;
     if (chooser) {
-      await chooser.setFiles(videoPath);
+      await setLocalFileChooserFile(chooser, videoPath);
       return true;
     }
     await page.waitForTimeout(700);

@@ -45,6 +45,7 @@ kanban
     done17[Direct Resilient Media Uploads with Live Progress]
     done18[2 GB Publishing Media Uploads]
     done19[Duplicate-safe Companion Login Status Sync]
+    done20[Companion v2.1.8 Large Media Publishing]
 
   future[Future]
     future1[Android Companion]
