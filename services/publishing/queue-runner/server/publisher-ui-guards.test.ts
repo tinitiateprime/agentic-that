@@ -99,3 +99,16 @@ test("direct destination creation does not call the redundant automation start r
   assert.doesNotMatch(submitFlow, /api\.runAutomation/);
   assert.doesNotMatch(submitFlow, /publishing could not start/);
 });
+
+test("large-media finalization is split, retried, and never deletes finalized parts on a gateway timeout", async () => {
+  const [clientSource, routeSource, storeSource] = await Promise.all([
+    readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../../src/platform/server/publishing-central-store.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(clientSource, /staged-uploads\/\$\{session\.id\}\/finalize/);
+  assert.match(clientSource, /stagedUploadId && !finalizationStarted/);
+  assert.match(routeSource, /sourceSubmissionId: body\.stagedUploadId/);
+  assert.match(storeSource, /item\.sourceSubmissionId === sourceSubmissionId/);
+  assert.match(storeSource, /artifact_manifest/);
+});

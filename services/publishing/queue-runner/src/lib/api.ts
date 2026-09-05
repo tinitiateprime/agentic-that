@@ -496,6 +496,7 @@ export const api = {
 
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
+    let finalizationStarted = false;
     try {
       const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
@@ -508,7 +509,13 @@ export const api = {
       stagedUploadId = session.id;
       await uploadStagedFile(payload.file, session, payload.onProgress);
 
-      const uploads = await request<PlatformUpload[]>("/api/posts/unified/staged", {
+      finalizationStarted = true;
+      await retryUploadStep(() => request<{ id: string; finalized: boolean }>(`/api/staged-uploads/${session.id}/finalize`, {
+        method: "POST",
+        body: "{}",
+      }), 3);
+
+      const uploads = await retryUploadStep(() => request<PlatformUpload[]>("/api/posts/unified/staged", {
         method: "POST",
         body: JSON.stringify({
           stagedUploadId: session.id,
@@ -519,11 +526,11 @@ export const api = {
           rightsConfirmed: payload.rightsConfirmed,
           confirmWarnings: payload.confirmWarnings,
         }),
-      });
+      }), 3);
       stagedUploadId = null;
       return uploads;
     } finally {
-      if (stagedUploadId) {
+      if (stagedUploadId && !finalizationStarted) {
         await request<void>(`/api/staged-uploads/${stagedUploadId}`, { method: "DELETE" }).catch(() => undefined);
       }
     }
@@ -553,6 +560,7 @@ export const api = {
 
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
+    let finalizationStarted = false;
     try {
       const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
@@ -565,7 +573,13 @@ export const api = {
       stagedUploadId = session.id;
       await uploadStagedFile(payload.file, session, payload.onProgress);
 
-      const submission = await request<ContentSubmission>("/api/submissions/staged", {
+      finalizationStarted = true;
+      await retryUploadStep(() => request<{ id: string; finalized: boolean }>(`/api/staged-uploads/${session.id}/finalize`, {
+        method: "POST",
+        body: "{}",
+      }), 3);
+
+      const submission = await retryUploadStep(() => request<ContentSubmission>("/api/submissions/staged", {
         method: "POST",
         body: JSON.stringify({
           stagedUploadId: session.id,
@@ -576,11 +590,11 @@ export const api = {
           rightsConfirmed: payload.rightsConfirmed,
           confirmWarnings: payload.confirmWarnings,
         }),
-      });
+      }), 3);
       stagedUploadId = null;
       return submission;
     } finally {
-      if (stagedUploadId) {
+      if (stagedUploadId && !finalizationStarted) {
         await request<void>(`/api/staged-uploads/${stagedUploadId}`, { method: "DELETE" }).catch(() => undefined);
       }
     }

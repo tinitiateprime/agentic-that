@@ -145,6 +145,23 @@ test("central publishing creates a multi-destination release atomically in one d
   assert.deepEqual(document.uploads.map((upload) => upload.caption), platforms.map((platform) => `${platform} caption`));
 });
 
+test("staged publishing finalization is idempotent per account", () => {
+  const document = {
+    accounts: [{ id: "account_1", workspaceId: "workspace_1", platform: "instagram", enabled: true, credentialConfigured: true }],
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+  const input = {
+    accountId: "account_1", postFormat: "image", originalName: "release.jpg", mimeType: "image/jpeg",
+    caption: "Retry-safe release", rightsConfirmed: true, sourceSubmissionId: "stage_1",
+  };
+  const first = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
+  const retried = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
+  assert.equal(retried.id, first.id);
+  assert.equal(document.uploads.length, 1);
+  assert.equal(document.jobs.length, 1);
+});
+
 test("large media parts advance in one contiguous batch", () => {
   const chunkSize = 5 * 1024 * 1024;
   const document = {

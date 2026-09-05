@@ -705,6 +705,12 @@ function createUploadInDocument(document, principal, input = {}) {
   if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
   const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
   if (scheduledAt && input.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
+  const sourceSubmissionId = String(input.sourceSubmissionId || "").trim() || null;
+  if (sourceSubmissionId) {
+    const existing = document.uploads.find((item) => item.workspaceId === principal.workspaceId
+      && item.accountId === account.id && item.sourceSubmissionId === sourceSubmissionId);
+    if (existing) return uploadPublic(document, existing);
+  }
   if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === account.id && item.status === "queued"
     && item.caption === caption && item.originalName === (input.originalName || "Text post") && item.size === Number(input.size || 0)
     && (item.scheduledAt || null) === scheduledAt && Number(item.scheduleId || 0) === Number(input.scheduleId || 0))) {
@@ -720,7 +726,7 @@ function createUploadInDocument(document, principal, input = {}) {
     caption, status: "queued", publishActionState: "not_started",
     uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
     createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
-    sourceSubmissionId: input.sourceSubmissionId || null, automation: { safetyDeferredUntil: null },
+    sourceSubmissionId, automation: { safetyDeferredUntil: null },
   };
   document.uploads.push(upload);
   if (!upload.scheduleId) queueJob(document, upload);
@@ -860,6 +866,8 @@ function stagedUploadFromRow(row) {
     uploadStrategy: row.upload_strategy,
     fileName: row.file_name,
     artifactParts: Array.isArray(row.artifact_parts) ? row.artifact_parts : [],
+    artifactManifest: row.artifact_manifest && typeof row.artifact_manifest === "object" ? row.artifact_manifest : null,
+    finalizedAt: row.finalized_at instanceof Date ? row.finalized_at.toISOString() : row.finalized_at ? String(row.finalized_at) : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
     createdByUserId: row.created_by_user_id,
@@ -886,6 +894,25 @@ export async function getCentralStagedUpload(workspaceId, stagedUploadId) {
   const stage = stagedUploadFromRow(row);
   if (!stage) throw new Error("Upload session was not found.");
   return stage;
+}
+
+export async function finalizeCentralStagedUpload(principal, stagedUploadId, artifactManifest) {
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
+    if (!stage.artifactManifest) {
+      if (!artifactManifest || typeof artifactManifest !== "object") throw new Error("The finalized private media is invalid.");
+      await transaction`
+        UPDATE agentic_that.publishing_staged_uploads
+        SET artifact_manifest = ${transaction.json(artifactManifest)}, finalized_at = now(), updated_at = now()
+        WHERE id = ${stage.id}
+      `;
+      stage.artifactManifest = artifactManifest;
+      stage.finalizedAt = now();
+    }
+    return stage;
+  });
 }
 
 export async function advanceCentralStagedUpload(principal, stagedUploadId, nextOffset, artifactPart = null) {

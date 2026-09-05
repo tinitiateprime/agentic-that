@@ -12,6 +12,7 @@ import {
   deleteCentralAccount,
   deleteCentralStagedUpload,
   deleteCentralUpload,
+  finalizeCentralStagedUpload,
   getCentralCompanion,
   getCentralStagedUpload,
   listCentralAccounts,
@@ -25,7 +26,6 @@ import {
   updateCentralAccount,
   updateCentralUpload,
   updateCentralUploadStatus,
-  consumeCentralStagedUpload,
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
@@ -41,6 +41,7 @@ import {
 } from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 const localStageRoot = path.join(publishingUploadDirectory(), ".central-staged");
@@ -198,8 +199,19 @@ async function removeStageBytes(stage) {
 }
 
 async function finishStagedMedia(principalValue, stagedUploadId) {
-  const stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
+  let stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
+  if (stage.artifactManifest) {
+    return {
+      originalName: stage.originalName,
+      fileName: stage.fileName,
+      mimeType: stage.mimeType,
+      size: stage.size,
+      extension: path.extname(stage.originalName),
+      url: "",
+      artifact: stage.artifactManifest,
+    };
+  }
   if (stage.uploadStrategy === "signed_parts" || stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
     const artifact = await finalizeSupabaseJobArtifact({
       workspaceId: principalValue.workspaceId,
@@ -209,7 +221,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       byteSize: stage.size,
       parts: stage.artifactParts,
     });
-    await consumeCentralStagedUpload(principalValue, stagedUploadId);
+    stage = await finalizeCentralStagedUpload(principalValue, stagedUploadId, artifact);
     return {
       originalName: stage.originalName,
       fileName: stage.fileName,
@@ -217,7 +229,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       size: stage.size,
       extension: path.extname(stage.originalName),
       url: "",
-      artifact,
+      artifact: stage.artifactManifest,
     };
   }
   const bytes = await readStageBytes(stage);
@@ -231,10 +243,8 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       mimeType: stage.mimeType,
     }),
   ]);
-  await Promise.all([
-    consumeCentralStagedUpload(principalValue, stagedUploadId),
-    removeStageBytes(stage),
-  ]);
+  stage = await finalizeCentralStagedUpload(principalValue, stagedUploadId, artifact);
+  await removeStageBytes(stage);
   return {
     originalName: stage.originalName,
     fileName: stage.fileName,
@@ -242,7 +252,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
     size: stage.size,
     extension: path.extname(stage.originalName),
     url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
-    artifact,
+    artifact: stage.artifactManifest,
   };
 }
 
@@ -433,6 +443,11 @@ export async function POST(request, context) {
       })));
       return Response.json(await advanceCentralStagedUploadParts(user, stage.id, verified));
     }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "finalize") {
+      const user = await principal("publishing.content.create");
+      const media = await finishStagedMedia(user, parts[1]);
+      return Response.json({ id: parts[1], finalized: true, size: media.size });
+    }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {
       const user = await principal("publishing.content.create");
@@ -447,7 +462,12 @@ export async function POST(request, context) {
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "staged") {
       const user = await principal("publishing.execute");
       const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createPosts(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
+      return Response.json(await createPosts(user, {
+        ...body,
+        ...media,
+        sourceSubmissionId: body.stagedUploadId,
+        description: body.description || "",
+      }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "text") {
       return schedulingUnavailable();

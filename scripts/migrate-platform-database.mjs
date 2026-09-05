@@ -24,6 +24,7 @@ try {
     "../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql",
     "../supabase/migrations/202609050003_large_media_companion.sql",
     "../supabase/migrations/202609050004_isolated_publishing_staged_uploads.sql",
+    "../supabase/migrations/202609050005_resumable_publishing_finalization.sql",
   ];
   for (const migrationPath of jobControlMigrations) {
     await sql.unsafe(await readFile(new URL(migrationPath, import.meta.url), "utf8"));
