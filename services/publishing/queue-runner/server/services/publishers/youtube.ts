@@ -248,21 +248,33 @@ async function clickNextWhenReady(page: Page) {
 }
 
 
+export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|processing)|Your video has been published|Processing will begin shortly/i;
+
 async function waitForPublishComplete(page: Page) {
   console.log("Waiting for YouTube publish confirmation...");
+  const deadline = Date.now() + 180_000;
+  let confirmed: Locator | null = null;
+  while (Date.now() < deadline) {
+    confirmed = await waitForVisible([
+      page.locator('ytcp-video-share-dialog').first(),
+      page.getByText(YOUTUBE_PUBLISH_CONFIRMATION_TEXT).first(),
+    ], 500);
+    if (confirmed) break;
 
-  const publishSignals = [
-    page.locator('ytcp-video-share-dialog').first(),
-    page.getByText(/Video published/i).first(),
-    page.getByText(/Your video has been published/i).first(),
-    page.getByText(/^Video saved(?:\s|$)/i).first(),
-  ];
+    const rejected = await waitForVisible([
+      page.getByText(/Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i).first(),
+      page.locator('[role="alert"]').filter({ hasText: /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i }).first(),
+    ], 100);
+    if (rejected) throw new Error((await rejected.textContent())?.trim() || "YouTube rejected the video upload.");
 
-  try {
-    await Promise.any(publishSignals.map((signal) => signal.waitFor({ state: "visible", timeout: 120000 })));
-  } catch {
-    throw new Error("YouTube publish confirmation did not appear.");
+    const uploadDialogVisible = await page.locator("ytcp-uploads-dialog").first().isVisible().catch(() => false);
+    if (!uploadDialogVisible) {
+      console.log("YouTube closed the upload dialog after accepting the final action.");
+      return;
+    }
+    await page.waitForTimeout(300);
   }
+  if (!confirmed) throw new Error("YouTube publish confirmation did not appear.");
 
   console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
 

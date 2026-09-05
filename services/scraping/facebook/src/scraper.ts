@@ -1717,6 +1717,67 @@ async function indexedFacebookKeywordResults(input: FacebookScrapeInput, normali
   } finally { await session.close(); }
 }
 
+async function indexedFacebookProfileResults(input: FacebookScrapeInput, normalized: NormalizedFacebookQuery,
+  factory: FacebookBrowserSessionFactory, previous: FacebookScrapeResult) {
+  const session = await factory.create();
+  const diagnostics = previous.diagnostics;
+  diagnostics.discovery_path ||= [];
+  diagnostics.discovery_path.push("public_profile_index");
+  const profileUrl = normalized.targetProfileUrl || normalized.startUrl;
+  const numericId = targetProfileKey(profileUrl)?.match(/^id:(\d+)$/)?.[1] || null;
+  const title = diagnostics.page_title.replace(/\s*\|\s*Facebook.*$/i, "").trim();
+  const terms = [...new Set([numericId, title && !/^Facebook$/i.test(title) ? `"${title}"` : null].filter(Boolean))] as string[];
+  const queries = terms.flatMap(term => [
+    `site:facebook.com ${term} inurl:posts`,
+    `site:facebook.com/reel ${term}`,
+    `site:facebook.com/permalink.php ${term}`,
+  ]);
+  const searchUrls = queries.flatMap(query => [
+    `https://search.yahoo.com/search?${new URLSearchParams({ p: query, btf: "m" })}`,
+    `https://search.yahoo.com/search?${new URLSearchParams({ p: query })}`,
+    `https://html.duckduckgo.com/html/?${new URLSearchParams({ q: query })}`,
+  ]);
+  try {
+    const urls = new Set<string>();
+    const pages = await Promise.all(searchUrls.map(async url => {
+      try {
+        const response = await fetch(url, { headers: { "Accept-Language": "en-US,en;q=0.9" }, signal: AbortSignal.timeout(12_000) });
+        return response.ok ? facebookSearchPostUrls(await response.text()) : [];
+      } catch { return []; }
+    }));
+    for (const pageUrls of pages) for (const url of pageUrls) urls.add(url);
+    diagnostics.indexed_candidates = Math.max(diagnostics.indexed_candidates || 0, urls.size);
+    const verified = new Map<string, FacebookPost>();
+    const maxResults = Math.max(1, Math.min(50, Number(input.maxResults) || 10));
+    const deadline = Date.now() + 90_000;
+    for (const url of [...urls].slice(0, 40)) {
+      if (verified.size >= maxResults || Date.now() >= deadline) break;
+      let raw = await loadFacebookDirectPostCandidate(session.page, url).catch(() => null);
+      if (!raw?.content || !raw.author_url) raw = await loadFacebookEmbedCandidate(session.page, url).catch(() => raw);
+      const post = raw && candidateFromRaw(raw, normalized.profileType, new Date().toISOString());
+      if (!post) continue;
+      const postOwnerId = (() => {
+        try { return new URL(post.post_url).searchParams.get("id"); } catch { return null; }
+      })();
+      const owned = numericId
+        ? targetProfileKey(post.author_url) === `id:${numericId}` || postOwnerId === numericId
+        : Boolean(post.author_url && candidateMatchesProfile(post, profileUrl));
+      if (!owned || timestampMs(post) === null) continue;
+      mergePostIntoMap(verified, { ...post, author_url: post.author_url || profileUrl });
+    }
+    const results = [...verified.values()]
+      .sort((left, right) => (timestampMs(right) || 0) - (timestampMs(left) || 0))
+      .slice(0, maxResults);
+    diagnostics.unique_candidates = Math.max(diagnostics.unique_candidates, verified.size);
+    diagnostics.accepted_results = results.length;
+    if (!results.length) {
+      diagnostics.stage_failures ||= {};
+      diagnostics.stage_failures.search = "No matching posts could be verified from Facebook's public profile indexes.";
+    }
+    return { ...previous, results, discoveryStatus: results.length ? "partial" as const : previous.discoveryStatus, diagnostics };
+  } finally { await session.close(); }
+}
+
 async function navigateFacebookPage(page: Page, targetUrl: string, timeout = 45_000, pressEscape = true) {
   let navigationError: unknown;
   try {
@@ -2271,6 +2332,9 @@ export async function runFacebookScrapeWithSessionFactory(
     };
     return indexedFacebookKeywordResults(input, normalized, sessionFactory, last);
   }
+  if (normalized.mode === "profile" && last && !last.results.length) {
+    return indexedFacebookProfileResults(input, normalized, sessionFactory, last);
+  }
   if (last) return last;
   throw lastError;
 }
@@ -2280,6 +2344,7 @@ export async function runFacebookScrape(
   runtime: { signal?: AbortSignal; onBrowserReady?: () => void } = {},
 ) {
   let lastError: unknown;
+  let lastResult: FacebookScrapeResult | null = null;
   for (let runtimeAttempt = 1; runtimeAttempt <= 2; runtimeAttempt += 1) {
     const browser = await launchBrowser();
     const closeOnAbort = () => { void browser.close().catch(() => undefined); };
@@ -2287,7 +2352,13 @@ export async function runFacebookScrape(
     try {
       if (runtime.signal?.aborted) throw new Error("Facebook scraping was cancelled.");
       runtime.onBrowserReady?.();
-      return await runFacebookScrapeWithSessionFactory(input, browserSessionFactory(browser));
+      const result = await runFacebookScrapeWithSessionFactory(input, browserSessionFactory(browser));
+      const analysisCount = result.analysis
+        ? Math.max(result.analysis.top_viewed.length, result.analysis.top_reacted.length, result.analysis.top_discussed.length)
+        : 0;
+      if (result.results.length || analysisCount || result.discoveryStatus === "ok" || result.discoveryStatus === "not_found") return result;
+      lastResult = result;
+      if (runtimeAttempt < 2) await new Promise(resolve => setTimeout(resolve, 600));
     } catch (error) {
       lastError = error;
       if (runtime.signal?.aborted || runtimeAttempt >= 2 || !recoverableBrowserRuntimeError(error)) throw error;
@@ -2297,6 +2368,7 @@ export async function runFacebookScrape(
       await browser.close().catch(() => undefined);
     }
   }
+  if (lastResult) return lastResult;
   throw lastError;
 }
 

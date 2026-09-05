@@ -48,6 +48,7 @@ kanban
     done20[Companion v2.1.8 Large Media Publishing]
     done21[Batched Resilient Supabase Media Uploads]
     done22[Isolated Timeout Safe Publishing Upload Sessions]
+    done23[Companion v2.1.9 Publishing Confirmation and Facebook Discovery]
 
   future[Future]
     future1[Android Companion]

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { FACEBOOK_COMPOSER_EDITOR_SELECTORS, hasFacebookAuthenticationCookies } from "./services/publishers/facebook.js";
+import { FACEBOOK_COMPOSER_EDITOR_SELECTORS, FACEBOOK_POST_ACCEPTED_TEXT, hasFacebookAuthenticationCookies } from "./services/publishers/facebook.js";
 import {
   LINKEDIN_COMPOSER_EDITOR_SELECTORS,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
+import { YOUTUBE_PUBLISH_CONFIRMATION_TEXT } from "./services/publishers/youtube.js";
 
 test("LinkedIn publishing ignores role-button duplicates outside the current viewport", () => {
   const viewport = { width: 1280, height: 900 };
@@ -34,6 +35,12 @@ test("Facebook recognizes its durable authenticated cookie pair", () => {
   ]), true);
   assert.equal(hasFacebookAuthenticationCookies([{ name: "c_user", value: "123456" }]), false);
   assert.equal(hasFacebookAuthenticationCookies([{ name: "datr", value: "browser-only" }]), false);
+});
+
+test("Facebook and YouTube recognize accepted long-running video publishing", () => {
+  assert.match("Your video is being processed", FACEBOOK_POST_ACCEPTED_TEXT);
+  assert.match("Video processing", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
+  assert.match("Processing will begin shortly", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {
@@ -84,4 +91,11 @@ test("large website media batches gateway authorization and completion requests"
   assert.match(routeSource, /requested\[0\]\.offset < stage\.offset/);
   assert.doesNotMatch(routeSource, /requested\[0\]\.offset !== stage\.offset/);
   assert.match(storeSource, /agentic_that\.publishing_staged_uploads/);
+});
+
+test("direct destination creation does not call the redundant automation start route", async () => {
+  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const submitFlow = appSource.slice(appSource.indexOf("const created = await api.createUnifiedPost"), appSource.indexOf("onCreated();", appSource.indexOf("const created = await api.createUnifiedPost")));
+  assert.doesNotMatch(submitFlow, /api\.runAutomation/);
+  assert.doesNotMatch(submitFlow, /publishing could not start/);
 });

@@ -8,7 +8,7 @@ export const metadata = {
   description: "Install AgenticThat Companion for Windows, macOS, or Linux.",
 };
 
-const releaseTag = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG?.trim() || "v2.1.8-qa.1";
+const releaseTag = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG?.trim() || "v2.1.9-qa.1";
 const releaseBase = `https://github.com/tinitiateprime/agentic-that/releases/download/${encodeURIComponent(releaseTag)}`;
 const releasePage = `https://github.com/tinitiateprime/agentic-that/releases/tag/${encodeURIComponent(releaseTag)}`;
 

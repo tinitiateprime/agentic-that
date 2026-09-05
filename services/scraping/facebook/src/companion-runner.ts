@@ -16,6 +16,12 @@ export class FacebookCompanionCancelledError extends Error {
   }
 }
 
+export function facebookResultNeedsBrowserFallback(result: Awaited<ReturnType<typeof runFacebookScrape>>) {
+  return result.results.length === 0
+    && (!result.analysis || Math.max(result.analysis.top_viewed.length, result.analysis.top_reacted.length, result.analysis.top_discussed.length) === 0)
+    && ["login_required", "temporarily_unavailable", "partial"].includes(result.discoveryStatus);
+}
+
 async function waitForPage(browser: Browser, targetUrl: string) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -96,23 +102,28 @@ export async function runFacebookCompanionScrape(
   onBrowserReady?: () => void,
   ownerKey?: string,
 ) {
+  let primaryResult: Awaited<ReturnType<typeof runFacebookScrape>> | null = null;
+  let primaryError: unknown;
   try {
     // Facebook currently withholds the hydrated feed from Electron's embedded
     // browser, while the same local request completes normally in installed
     // Chrome/Edge. Use that local browser first; it remains headless, isolated,
     // and on this computer. The embedded session remains a fallback for machines
     // where a supported local browser cannot be launched.
-    return await runFacebookScrape(input, { signal, onBrowserReady });
+    primaryResult = await runFacebookScrape(input, { signal, onBrowserReady });
+    if (!facebookResultNeedsBrowserFallback(primaryResult)) return primaryResult;
   } catch (error) {
     if (signal.aborted) throw new FacebookCompanionCancelledError();
-    const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey);
-    try {
-      return await runFacebookScrapeWithSessionFactory(input, factory);
-    } catch (fallbackError) {
-      if (signal.aborted) throw new FacebookCompanionCancelledError();
-      throw fallbackError instanceof Error ? fallbackError : error;
-    } finally {
-      await factory.closeAll();
-    }
+    primaryError = error;
+  }
+  const factory = new CompanionFactory(jobId, signal, onBrowserReady, ownerKey);
+  try {
+    const fallbackResult = await runFacebookScrapeWithSessionFactory(input, factory);
+    return facebookResultNeedsBrowserFallback(fallbackResult) && primaryResult ? primaryResult : fallbackResult;
+  } catch (fallbackError) {
+    if (signal.aborted) throw new FacebookCompanionCancelledError();
+    throw fallbackError instanceof Error ? fallbackError : primaryError;
+  } finally {
+    await factory.closeAll();
   }
 }

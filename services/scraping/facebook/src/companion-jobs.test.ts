@@ -9,6 +9,7 @@ import {
   setFacebookCompanionScrapeExecutorForTests,
   subscribeFacebookCompanionActivity,
 } from "./companion-jobs.ts";
+import { facebookResultNeedsBrowserFallback } from "./companion-runner.ts";
 
 const previousEnvironment = process.env.NODE_ENV;
 
@@ -43,6 +44,13 @@ test("Companion validation preserves the Facebook scraper contract", () => {
     range_from: "2026-02-30",
     range_to: "2026-03-01",
   }), /valid Facebook post range/);
+});
+
+test("an empty anonymous Facebook response retries in the isolated Companion browser", () => {
+  const base: any = { results: [], discoveryStatus: "login_required", diagnostics: {} };
+  assert.equal(facebookResultNeedsBrowserFallback(base), true);
+  assert.equal(facebookResultNeedsBrowserFallback({ ...base, discoveryStatus: "not_found" } as never), false);
+  assert.equal(facebookResultNeedsBrowserFallback({ ...base, discoveryStatus: "ok", results: [{ post_url: "https://facebook.com/reel/1" }] } as never), false);
 });
 
 test("Companion jobs are owner-scoped and return only the current live result", async () => {

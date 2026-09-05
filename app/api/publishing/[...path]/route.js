@@ -477,6 +477,13 @@ export async function POST(request, context) {
     }
     if (parts[0] === "automation" && parts[1] === "run") {
       const user = await principal("publishing.execute");
+      const requestedUploadIds = [...new Set((Array.isArray(body.uploadIds) ? body.uploadIds : []).map(String).filter(Boolean))];
+      // Direct creation already queues and synchronizes these jobs atomically.
+      // Older open tabs still call this route afterward, so acknowledge them
+      // without re-locking and re-synchronizing the complete workspace.
+      if (requestedUploadIds.length) {
+        return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: requestedUploadIds });
+      }
       await centralUploadsForPrincipal(user, body.uploadIds || [], "operate");
       const jobs = await queueCentralUploads(user, body.uploadIds);
       return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: jobs.map((job) => job.uploadId) });

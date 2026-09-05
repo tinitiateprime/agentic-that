@@ -1297,19 +1297,8 @@ function UnifiedComposer({
       const safetyWaitNote = safetyWaitCount
         ? ` ${safetyWaitCount} ${safetyWaitCount === 1 ? 'destination is' : 'destinations are'} waiting automatically for the next safe publishing window.`
         : '';
-      let publishingError = '';
-      if (canPublishNow && immediateUploads.length > 0) {
-        setPreparationProgress({ label: 'Starting Companion publishing…', percent: 100 });
-        try {
-          await api.runAutomation(immediateUploads.map(upload => upload.id));
-        } catch (error) {
-          publishingError = error instanceof Error ? error.message : 'Publisher automation could not start.';
-        }
-      }
       resetComposer();
-      if (publishingError) {
-        setMessage({ type: 'error', text: `${created.length} destination ${created.length === 1 ? 'was' : 'were'} saved, but publishing could not start: ${publishingError}` });
-      } else if (canPublishNow && immediateUploads.length > 0) {
+      if (canPublishNow && immediateUploads.length > 0) {
         const scheduledCount = created.length - immediateUploads.length;
         setMessage({
           type: 'success',
