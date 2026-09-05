@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Database, LogOut, Menu, Settings2, UsersRound, X } from "lucide-react";
+import { Boxes, Database, LogOut, Menu, MonitorDown, Settings2, UsersRound, X } from "lucide-react";
 import { useState } from "react";
+import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
 
 const navigation = [
@@ -10,6 +11,7 @@ const navigation = [
   { href: "/config-manager", label: "Connections", description: "Add and sign in accounts", icon: Settings2, id: "connections", anyCapability: ["publishing.accounts.configure", "messaging.configure"] },
   { href: "/content-manager", label: "Content", description: "Review accounts and activity", icon: Database, id: "content", anyCapability: ["publishing.view", "messaging.view"] },
   { href: "/workspace-team", label: "Team", description: "Members and roles", icon: UsersRound, id: "team", capability: "workspace.team.manage" },
+  { href: "/companion/download", label: "Companion", description: "Download the desktop app", icon: MonitorDown, id: "companion" },
 ];
 
 function billingLabel(user) {
@@ -26,7 +28,7 @@ function billingLabel(user) {
   return "";
 }
 
-export default function ProductShell({ user, active = "apps", children }) {
+export default function ProductShell({ user, active = "apps", companionBridge = true, children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const initial = String(user?.name || user?.email || "A").charAt(0).toUpperCase();
   const capabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
@@ -94,6 +96,8 @@ export default function ProductShell({ user, active = "apps", children }) {
           </nav>
         )}
 
+        <CompanionBridgePill />
+
         <section className={styles.workspacePath} aria-label="Getting started">
           <strong>Getting started</strong>
           <ol>
@@ -118,7 +122,10 @@ export default function ProductShell({ user, active = "apps", children }) {
         </div>
       </aside>
 
-      <div className={styles.productContent}>{children}</div>
+      <div className={styles.productContent}>
+        {companionBridge && <CompanionBridgeBanner />}
+        {children}
+      </div>
     </div>
   );
 }

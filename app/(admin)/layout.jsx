@@ -7,10 +7,10 @@ export default async function AdminLayout({ children }) {
   const user = await requireUser();
   const business = await getBusiness(user.business_id);
 
-  // A workspace that hasn't finished self-serve setup has no WhatsApp account
-  // connected, so every page here would be empty or error — send them to the
-  // wizard instead.
-  if (business && !business.onboarded_at) redirect("/whatsapp/onboarding");
+  // A workspace that hasn't finished setup has no WhatsApp account connected, so
+  // every page here would be empty or error — send them to the Connection
+  // Manager, which is where WhatsApp accounts are linked.
+  if (business && !business.onboarded_at) redirect("/config-manager?service=messaging&platform=whatsapp");
 
   return (
     <div className="min-h-screen">

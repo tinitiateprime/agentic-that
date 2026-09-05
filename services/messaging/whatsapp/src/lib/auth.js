@@ -29,10 +29,20 @@ async function assertWhatsAppAccess(principal, requiredLevel) {
 }
 
 // --- Sessions --------------------------------------------------------------
-export async function createSession(userId) {
+// A session is pinned to the business it was opened for, so the WhatsApp
+// workspace that loads afterwards follows the login rather than being
+// re-derived. Falls back to the user's own business when none is passed.
+export async function createSession(userId, businessId = null) {
   const sql = await getSql();
   const token = crypto.randomBytes(32).toString("hex");
-  await sql`INSERT INTO sessions (token, user_id) VALUES (${token}, ${userId})`;
+  let scopedBusinessId = businessId;
+  if (!scopedBusinessId) {
+    const [owner] = await sql`SELECT business_id FROM users WHERE id = ${userId}`;
+    scopedBusinessId = owner?.business_id ?? null;
+  }
+  await sql`
+    INSERT INTO sessions (token, user_id, business_id)
+    VALUES (${token}, ${userId}, ${scopedBusinessId})`;
   return token;
 }
 
@@ -161,21 +171,58 @@ async function ensurePlatformWorkspaceUser(platformUser, legacyUser = null) {
   }
 }
 
-// AgenticThat owns product identity. A signed-in platform user is mapped to a
-// WhatsApp workspace automatically, while the original WhatsApp session stays
-// as a backwards-compatible route for legacy operators and webhook testing.
+// The WhatsApp login session, resolved through its pinned business. Selecting
+// the business from the session (not from users.business_id) is what makes the
+// workspace follow the login.
+export async function sessionWorkspaceRow(token) {
+  if (!token) return null;
+  const sql = await getSql();
+  const [row] = await sql`
+    SELECT u.id, u.name, u.email, u.role, u.platform_user_id,
+           b.id AS business_id, b.platform_workspace_id
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      JOIN businesses b ON b.id = COALESCE(s.business_id, u.business_id)
+     WHERE s.token = ${token}`;
+  return row || null;
+}
+
+// A session may only open a business this AgenticThat principal is entitled to.
+// Without this check the session cookie would be a way to pin any tenant.
+function sessionBusinessAllowed(row, principal, platformUserId) {
+  if (!row) return false;
+  // The business belongs to the principal's own AgenticThat workspace.
+  if (row.platform_workspace_id && principal?.workspaceId
+      && row.platform_workspace_id === principal.workspaceId) return true;
+  // The signed-in WhatsApp user is this same platform user.
+  if (row.platform_user_id && String(row.platform_user_id) === String(platformUserId)) return true;
+  // An unclaimed WhatsApp-only workspace mid-link (see the sign-in route).
+  return !row.platform_workspace_id && !row.platform_user_id;
+}
+
+// AgenticThat owns product identity: a signed-in platform user always maps to a
+// WhatsApp workspace. When that browser also holds a WhatsApp login session, the
+// business it was opened for wins — that is how signing in switches which
+// business's WhatsApp data loads.
+async function resolveWorkspaceUser(principal, platformUser, token) {
+  const sessionRow = await sessionWorkspaceRow(token);
+  const mapped = await ensurePlatformWorkspaceUser(
+    { ...platformUser, workspaceId: principal.workspaceId },
+    sessionRow ? { id: sessionRow.id } : null
+  );
+  if (
+    sessionRow
+    && Number(sessionRow.business_id) !== Number(mapped.business_id)
+    && sessionBusinessAllowed(sessionRow, principal, platformUser.id)
+  ) {
+    return publicWorkspaceUser(sessionRow);
+  }
+  return mapped;
+}
+
 export async function getCurrentUser(requiredLevel = "view") {
   const store = await cookies();
   const token = store.get(COOKIE_NAME)?.value;
-  let legacyUser = null;
-  if (token) {
-    const sql = await getSql();
-    const [user] = await sql`
-      SELECT u.id, u.name, u.email, u.role, u.business_id
-        FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = ${token}`;
-    legacyUser = publicWorkspaceUser(user);
-  }
 
   const platformUser = await getCurrentPlatformUser();
   if (platformUser) {
@@ -186,9 +233,11 @@ export async function getCurrentUser(requiredLevel = "view") {
       if (error instanceof AccessDeniedError) return null;
       throw error;
     }
-    return ensurePlatformWorkspaceUser({ ...platformUser, workspaceId: principal.workspaceId }, legacyUser);
+    return resolveWorkspaceUser(principal, platformUser, token);
   }
-  return rbacEnforcementMode() === "shadow" ? legacyUser : null;
+
+  if (rbacEnforcementMode() !== "shadow") return null;
+  return publicWorkspaceUser(await sessionWorkspaceRow(token));
 }
 
 // Route handlers use this after getCurrentUser() returns null so an expired or
@@ -223,7 +272,8 @@ export async function requireUser(requiredLevel = "view") {
   }
   const platformUser = await getCurrentPlatformUser();
   if (!platformUser) redirect("/?auth=login&next=/dashboard");
-  return ensurePlatformWorkspaceUser({ ...platformUser, workspaceId: principal.workspaceId });
+  const store = await cookies();
+  return resolveWorkspaceUser(principal, platformUser, store.get(COOKIE_NAME)?.value);
 }
 
 export async function setSessionCookie(token) {

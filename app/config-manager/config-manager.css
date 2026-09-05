@@ -808,6 +808,30 @@
   padding: 19px;
 }
 
+/* Card content that isn't a <form> (the provider picker, the finish-setup
+   prompt) still needs the card's own padding. */
+.config-form-card > .config-form-section {
+  display: grid;
+  gap: 13px;
+  padding: 19px;
+}
+
+.config-form-card > .config-form-section:has(+ form) {
+  padding-bottom: 0;
+}
+
+.config-form-card > .config-form-section + form {
+  padding-top: 16px;
+}
+
+.config-form-card > .config-form-section > .config-form-help {
+  margin: 0;
+}
+
+.config-form-card > .config-form-section > .config-form-actions {
+  margin-top: 0;
+}
+
 .config-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -886,6 +910,76 @@
 .config-engine-picker strong { font-size: 14px; }
 .config-engine-picker small { overflow: hidden; color: var(--cm-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .config-engine-warning { display: flex; align-items: center; gap: 6px; margin: 0; color: #985016; font-size: 12px; font-weight: 700; }
+
+/* Optional-field hint inside a form label. */
+.config-form-grid label > span small {
+  margin-left: 5px;
+  color: var(--cm-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Meta's Embedded Signup button ships with its own (Tailwind) styling, so this
+   only frames it and separates it from the manual credential fields below. */
+.config-embedded-signup {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid #dbe6f7;
+  border-radius: 12px;
+  background: #f4f8fe;
+}
+
+.config-embedded-signup > p {
+  margin: 0;
+  color: #33455e;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.config-embedded-signup > span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cm-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.config-embedded-signup > span::before,
+.config-embedded-signup > span::after {
+  height: 1px;
+  flex: 1;
+  background: #dbe6f7;
+  content: "";
+}
+
+.config-webhook-hint {
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f5f6fa;
+}
+
+.config-webhook-hint > span {
+  color: #384152;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.config-webhook-hint code {
+  overflow-wrap: anywhere;
+  color: #4d49b6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
 
 .config-form-grid input,
 .config-code-field input,
@@ -1320,6 +1414,26 @@
   margin-top: 16px;
   color: #ffe2b5;
   font-size: 12px;
+}
+
+/* The WhatsApp connector keeps its own colour so the login card reads as part
+   of that integration rather than the generic indigo one. */
+.whatsapp-auth-card .config-auth-copy {
+  background:
+    linear-gradient(135deg, rgba(11, 122, 100, 0.97), rgba(6, 78, 63, 0.99)),
+    #0b7a64;
+}
+
+.whatsapp-auth-card .config-auth-copy p {
+  color: #c9ece1;
+}
+
+.whatsapp-auth-card .config-auth-copy > div {
+  color: #dcf3ec;
+}
+
+.whatsapp-auth-card .config-auth-copy small {
+  color: #ffe4b8;
 }
 
 .config-auth-card form {

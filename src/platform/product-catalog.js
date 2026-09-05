@@ -185,7 +185,7 @@ export const productServices = [
     detailHeading: "Customer conversations, outreach, and delivery control in one operational view",
     detailDescription: "Move between the shared inbox, contact records, approved templates, and sender configuration without losing the context of the customer relationship.",
     formatLabel: "Cloud API · WATI · Coexistence",
-    configHref: "/whatsapp/onboarding",
+    configHref: "/config-manager?service=messaging&platform=whatsapp",
     dashboardHref: "/dashboard",
     capabilities: [
       { title: "Shared conversation inbox", description: "See incoming messages, unread conversations, response status, and contact history." },
@@ -194,9 +194,9 @@ export const productServices = [
       { title: "Operational controls", description: "Manage sender numbers, templates, call settings, delivery states, and webhook activity." },
     ],
     steps: [
-      { title: "Connect your business", description: "Choose Meta or WATI and securely link the WhatsApp account you control." },
+      { title: "Connect your business", description: "Open Connections and link the WhatsApp account you control through Meta or WATI." },
       { title: "Bring in your audience", description: "Sync contacts, confirm sender numbers, and organize the groups you work with." },
-      { title: "Run the workflow", description: "Reply from the inbox, send messages, use templates, and monitor delivery." },
+      { title: "Open the workspace", description: "Return to this page and open the WhatsApp workspace to reply, send, and monitor delivery." },
     ],
     useCases: ["Customer support", "Lead follow-up", "Template campaigns", "Event reminders", "Team inbox management"],
     requirements: ["A WhatsApp Business account or WATI workspace", "Permission to manage the connected business", "An approved sender number for outbound messaging"],

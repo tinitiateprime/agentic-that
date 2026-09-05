@@ -58,7 +58,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v2-reactions";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v3-session-business";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -305,11 +305,24 @@ async function migrate(sql) {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_user_id
        ON users(platform_user_id) WHERE platform_user_id IS NOT NULL`,
+    // Every WhatsApp user belongs to exactly one business, and that is the
+    // tenant boundary every query filters on — so make the lookup indexed.
+    `CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id)`,
     `CREATE TABLE IF NOT EXISTS sessions (
       token      TEXT PRIMARY KEY,
       user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+    // The business a login session is working in. It is denormalised from
+    // users.business_id at sign-in so the workspace a session loads is an
+    // explicit, indexed property of the session itself rather than something
+    // re-derived through a join on every request.
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS business_id INTEGER REFERENCES businesses(id) ON DELETE CASCADE`,
+    `UPDATE sessions s
+        SET business_id = u.business_id
+       FROM users u
+      WHERE u.id = s.user_id AND s.business_id IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_business ON sessions(business_id)`,
     // One onboarded WhatsApp Business Account per tenant. waba_id is UNIQUE
     // because it's the webhook routing key: Meta puts the WABA id in
     // entry[].id, which is how we tell whose event just arrived.

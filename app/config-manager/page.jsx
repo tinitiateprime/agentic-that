@@ -43,6 +43,9 @@ export default async function ConfigManagerPage({ searchParams }) {
       effectiveAccess={user.access}
       user={{ name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialStartsAt: user.trialStartsAt, trialEndsAt: user.trialEndsAt, capabilities: user.capabilities }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}
+      whatsappDashboardUrl={serviceEndpoints.whatsapp.dashboardUrl}
+      metaAppId={process.env.META_APP_ID || ""}
+      metaConfigId={process.env.META_CONFIGURATION_ID || ""}
       publishQueueUrl={serviceEndpoints.publishQueue.consoleUrl}
     />
   );
