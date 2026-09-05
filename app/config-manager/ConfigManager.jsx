@@ -17,6 +17,7 @@ import {
   Link2,
   Loader2,
   LockKeyhole,
+  LogOut,
   MessageCircle,
   MonitorCheck,
   Pencil,
@@ -34,6 +35,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientServiceToken } from "@platform/client-service-token";
+import MetaEmbeddedSignupButton from "@whatsapp/components/MetaEmbeddedSignupButton";
 import ProductShell from "@platform/ProductShell";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
 
@@ -70,6 +72,10 @@ const messagingPlatformLogos = {
   telegram: "/telegram-logo.svg",
   whatsapp: "/whatsapp-logo.svg"
 };
+const whatsappProviders = [
+  { id: "meta", label: "Meta Cloud API", copy: "Facebook or Meta business account" },
+  { id: "wati", label: "WATI", copy: "Existing WATI workspace" }
+];
 const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
 const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 
@@ -127,6 +133,26 @@ async function responsePayload(response) {
     throw error;
   }
   return payload;
+}
+
+// The WhatsApp API is same-origin and authorized by the AgenticThat session
+// cookie, so it needs no service identity token of its own.
+async function whatsappRequest(path, init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch("/api/whatsapp" + path, {
+    cache: "no-store",
+    ...init,
+    headers,
+    credentials: "include"
+  });
+  return responsePayload(response);
+}
+
+function createWebhookSecret() {
+  const bytes = new Uint8Array(24);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function telegramRequest(path, identityToken, init = {}) {
@@ -220,6 +246,9 @@ export default function ConfigManager({
   effectiveAccess,
   user,
   telegramDashboardUrl,
+  whatsappDashboardUrl,
+  metaAppId,
+  metaConfigId,
   publishQueueUrl
 }) {
   const [activeService, setActiveService] = useState(initialService);
@@ -228,6 +257,9 @@ export default function ConfigManager({
   const [telegramStatus, setTelegramStatus] = useState("checking");
   const [telegramUser, setTelegramUser] = useState(null);
   const [telegramAccounts, setTelegramAccounts] = useState([]);
+  const [whatsappStatus, setWhatsappStatus] = useState("checking");
+  const [whatsappState, setWhatsappState] = useState(null);
+  const [whatsappSession, setWhatsappSession] = useState(null);
   const [publishingStatus, setPublishingStatus] = useState("checking");
   const [publishingManagerStatus, setPublishingManagerStatus] = useState(null);
   const [publishingSession, setPublishingSession] = useState(null);
@@ -255,6 +287,42 @@ export default function ConfigManager({
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
   }, [telegramIdentityToken]);
+
+  // WhatsApp setup sits behind its own workspace login, so the session is
+  // resolved first: without one there is nothing to show but the login card.
+  const loadWhatsApp = useCallback(async () => {
+    if (!hasAccess(effectiveAccess, "messaging.whatsapp", "configure")) {
+      setWhatsappStatus("unauthorized");
+      return;
+    }
+    const failed = (error) => {
+      setWhatsappState(null);
+      setWhatsappStatus(error.status === 401 || error.status === 403 ? "unauthorized" : "offline");
+    };
+
+    let session;
+    try {
+      session = await whatsappRequest("/auth/session");
+    } catch (error) {
+      setWhatsappSession(null);
+      failed(error);
+      return;
+    }
+
+    setWhatsappSession(session);
+    if (!session.authenticated) {
+      setWhatsappState(null);
+      setWhatsappStatus("needs-login");
+      return;
+    }
+
+    try {
+      setWhatsappState(await whatsappRequest("/onboarding"));
+      setWhatsappStatus("ready");
+    } catch (error) {
+      failed(error);
+    }
+  }, [effectiveAccess]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
     // Publishing is authorized by the current AgenticThat workspace session.
@@ -336,8 +404,8 @@ export default function ConfigManager({
   }, [publishingIdentityToken, publishingSession?.token]);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), connectPublishing(), loadWorkspaceCompanion()]);
-  }, [connectPublishing, loadTelegram, loadWorkspaceCompanion]);
+    void Promise.all([loadTelegram(), loadWhatsApp(), connectPublishing(), loadWorkspaceCompanion()]);
+  }, [connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -347,7 +415,9 @@ export default function ConfigManager({
     return () => window.clearInterval(timer);
   }, [loadWorkspaceCompanion, refreshPublishingAccounts]);
 
-  const connectedCount = telegramAccounts.length + publishingAccounts.length;
+  const whatsappConnected = Boolean(whatsappState?.connected && whatsappState?.account);
+  const whatsappSenderCount = whatsappConnected ? Math.max(1, (whatsappState.numbers || []).length) : 0;
+  const connectedCount = telegramAccounts.length + whatsappSenderCount + publishingAccounts.length;
   const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
@@ -370,7 +440,11 @@ export default function ConfigManager({
     window.history.replaceState({}, "", url);
   };
 
-  const canRefresh = activeService === "publishing" || (activeService === "messaging" && messagingPlatform === "telegram");
+  const canRefresh = activeService === "publishing" || activeService === "messaging";
+  const refreshActiveService = () => {
+    if (activeService !== "messaging") return void connectPublishing();
+    return messagingPlatform === "whatsapp" ? void loadWhatsApp() : void loadTelegram();
+  };
 
   return (
     <ProductShell user={user} active="connections">
@@ -420,7 +494,7 @@ export default function ConfigManager({
               <button
                 type="button"
                 className="config-refresh"
-                onClick={() => activeService === "messaging" ? void loadTelegram() : void connectPublishing()}
+                onClick={refreshActiveService}
               >
                 <RefreshCw size={16} />Refresh
               </button>
@@ -442,6 +516,14 @@ export default function ConfigManager({
               telegramIdentityToken={telegramIdentityToken}
               allowedPlatforms={allowedMessagingPlatforms}
               onReload={loadTelegram}
+              whatsappStatus={whatsappStatus}
+              whatsappState={whatsappState}
+              whatsappSession={whatsappSession}
+              whatsappSenderCount={whatsappSenderCount}
+              whatsappDashboardUrl={whatsappDashboardUrl}
+              metaAppId={metaAppId}
+              metaConfigId={metaConfigId}
+              onWhatsAppReload={loadWhatsApp}
               setNotice={setNotice}
             />
           )}
@@ -493,6 +575,14 @@ function MessagingManager({
   telegramIdentityToken,
   allowedPlatforms,
   onReload,
+  whatsappStatus,
+  whatsappState,
+  whatsappSession,
+  whatsappSenderCount,
+  whatsappDashboardUrl,
+  metaAppId,
+  metaConfigId,
+  onWhatsAppReload,
   setNotice
 }) {
   return (
@@ -509,7 +599,7 @@ function MessagingManager({
           >
             <img src={messagingPlatformLogos[item]} alt="" />
             <span>{messagingPlatformLabels[item]}</span>
-            <i>{item === "telegram" ? accounts.length : "Live"}</i>
+            <i>{item === "telegram" ? accounts.length : whatsappSenderCount}</i>
           </button>
         ))}
       </div>
@@ -527,27 +617,487 @@ function MessagingManager({
           setNotice={setNotice}
         />
       ) : (
-        <WhatsAppManager />
+        <WhatsAppManager
+          status={whatsappStatus}
+          state={whatsappState}
+          session={whatsappSession}
+          dashboardUrl={whatsappDashboardUrl}
+          metaAppId={metaAppId}
+          metaConfigId={metaConfigId}
+          onReload={onWhatsAppReload}
+          setNotice={setNotice}
+        />
       )}
     </>
   );
 }
 
-function WhatsAppManager() {
-  return (
-    <div className="config-placeholder">
-      <span><MessageCircle size={32} /></span>
-      <p>Live connector</p>
-      <h3>WhatsApp configuration is active</h3>
+// WhatsApp connections are set up here, in the Connection Manager, so the Store
+// only ever has to open the workspace. Every step talks to the same
+// /api/whatsapp/onboarding endpoint the standalone wizard uses, and provider
+// credentials are verified by that route before they are encrypted and stored.
+function WhatsAppManager({ status, state, session, dashboardUrl, metaAppId, metaConfigId, onReload, setNotice }) {
+  const [authMode, setAuthMode] = useState("signin");
+  const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "", businessName: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const account = state?.account || null;
+  const connected = Boolean(state?.connected && account);
+  const numbers = state?.numbers || [];
+  const savedProvider = account?.provider === "wati" ? "wati" : "meta";
+  // /dashboard bounces straight back here until setup is marked complete, so
+  // the open buttons stay inert while that is still outstanding.
+  const workspaceReady = Boolean(state?.connected && account && state?.onboarded && dashboardUrl);
+  const [connecting, setConnecting] = useState(false);
+  const [providerId, setProviderId] = useState(savedProvider);
+  const [busy, setBusy] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+  const [origin, setOrigin] = useState("");
+  const [meta, setMeta] = useState({ wabaId: "", accessToken: "", appId: "", appSecret: "", apiVersion: "v21.0" });
+  const [wati, setWati] = useState({ apiUrl: "", accessToken: "", webhookSecret: "" });
+
+  useEffect(() => setOrigin(window.location.origin), []);
+
+  // Prefill the login from the workspace the AgenticThat session already knows,
+  // so registering is mostly a matter of confirming a password.
+  useEffect(() => {
+    const hints = session?.workspace;
+    if (!hints) return;
+    setAuthForm(current => ({
+      ...current,
+      username: current.username || hints.username || "",
+      displayName: current.displayName || hints.displayName || "",
+      businessName: current.businessName || hints.businessName || ""
+    }));
+  }, [session?.workspace?.username, session?.workspace?.displayName, session?.workspace?.businessName]);
+
+  // Re-seed the form whenever the stored account changes, so "Change connection"
+  // opens on the provider and identifiers already in use. Secrets are never
+  // returned by the API and always have to be re-entered.
+  useEffect(() => {
+    setProviderId(account?.provider === "wati" ? "wati" : "meta");
+    setMeta(current => ({
+      ...current,
+      wabaId: account?.provider === "wati" ? "" : account?.waba_id || "",
+      appId: account?.app_id || "",
+      apiVersion: account?.api_version || "v21.0"
+    }));
+    setWati(current => ({ ...current, apiUrl: account?.provider === "wati" ? account?.service_url || "" : "" }));
+  }, [account?.provider, account?.waba_id, account?.app_id, account?.api_version, account?.service_url]);
+
+  const webhookUrl = `${origin || "https://your-domain"}/api/webhooks/wati?token=${
+    wati.webhookSecret ? encodeURIComponent(wati.webhookSecret) : "<your-webhook-secret>"
+  }`;
+
+  const authenticate = async (event) => {
+    event.preventDefault();
+    const registering = authMode === "register";
+    setBusy(true);
+    try {
+      const data = await whatsappRequest(registering ? "/auth/register" : "/auth/session", {
+        method: "POST",
+        body: JSON.stringify(
+          registering
+            ? {
+                username: authForm.username.trim(),
+                password: authForm.password,
+                displayName: authForm.displayName.trim(),
+                businessName: authForm.businessName.trim()
+              }
+            : { username: authForm.username.trim(), password: authForm.password }
+        )
+      });
+      setAuthForm(current => ({ ...current, password: "" }));
+      setShowPassword(false);
+      setNotice({
+        tone: "success",
+        message: registering
+          ? `WhatsApp workspace login created for ${data.user?.email || authForm.username.trim()}. Connect the WhatsApp account next.`
+          : `Signed in to WhatsApp as ${data.user?.name || data.user?.email || authForm.username.trim()}.`
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Leaving the WhatsApp workspace login without leaving AgenticThat, so a
+  // wrong login can be corrected from here.
+  const signOutWorkspace = async () => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/auth/session", { method: "DELETE" });
+      setAuthMode("signin");
+      setNotice({ tone: "success", message: "Signed out of the WhatsApp workspace." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeForm = () => {
+    setConnecting(false);
+    setShowToken(false);
+    setMeta(current => ({ ...current, accessToken: "", appSecret: "" }));
+    setWati(current => ({ ...current, accessToken: "" }));
+  };
+
+  // A stored provider plus a sender number is everything the workspace needs,
+  // so finishing is done here rather than sending the operator to the wizard.
+  // A failure is not fatal: the "Finish setup" card below stays available.
+  const markOnboarded = async () => {
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "complete" }) });
+    } catch {
+      /* handled by the finish-setup card once the reload reports it */
+    }
+  };
+
+  const submitMeta = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await whatsappRequest("/onboarding", {
+        method: "POST",
+        body: JSON.stringify({
+          step: "whatsapp",
+          wabaId: meta.wabaId.trim(),
+          accessToken: meta.accessToken.trim(),
+          appId: meta.appId.trim(),
+          appSecret: meta.appSecret.trim(),
+          apiVersion: meta.apiVersion.trim() || "v21.0"
+        })
+      });
+      await markOnboarded();
+      closeForm();
+      const count = (data.numbers || []).length;
+      setNotice({
+        tone: "success",
+        message: `WhatsApp is connected through Meta with ${count} sender number${count === 1 ? "" : "s"}. Open the dashboard from the Store or the button above.`
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitWati = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", {
+        method: "POST",
+        body: JSON.stringify({
+          step: "wati",
+          apiUrl: wati.apiUrl.trim(),
+          accessToken: wati.accessToken.trim(),
+          webhookSecret: wati.webhookSecret.trim()
+        })
+      });
+      await markOnboarded();
+      closeForm();
+      setNotice({
+        tone: "success",
+        message: "WATI is connected. Add the webhook URL shown in the form to your WATI account so replies reach this workspace."
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chooseDefault = async (phoneNumberId) => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "default-number", phoneNumberId }) });
+      setNotice({ tone: "success", message: "Default sender number updated." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finishSetup = async () => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "complete" }) });
+      setNotice({ tone: "success", message: "WhatsApp setup is complete. The workspace is ready to open." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeEmbeddedSignup = async () => {
+    await markOnboarded();
+    closeForm();
+    setNotice({ tone: "success", message: "WhatsApp is connected through Meta Embedded Signup." });
+    await onReload();
+  };
+
+  if (status === "checking") {
+    return <div className="config-loading"><Loader2 className="spin" size={23} />Checking WhatsApp connection…</div>;
+  }
+
+  if (status === "unauthorized") {
+    return (
+      <EmptyState
+        icon={LockKeyhole}
+        title="WhatsApp connections need configure access"
+        copy="Ask a workspace administrator for the WhatsApp configure permission, then reopen this page."
+      />
+    );
+  }
+
+  if (status === "offline") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="WhatsApp service is unavailable"
+        copy="The WhatsApp workspace did not respond. Check the service connection, then try again."
+        action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
+      />
+    );
+  }
+
+  // The WhatsApp workspace login. It is the first thing an operator sees here,
+  // and "Register" sets the credentials on the workspace this AgenticThat
+  // account already owns rather than starting a second tenant.
+  if (status === "needs-login") {
+    const registering = authMode === "register";
+    return (
+      <div className="config-auth-card whatsapp-auth-card">
+        <div className="config-auth-copy">
+          <span><LockKeyhole size={25} /></span>
+          <p>One login for Connections and WhatsApp</p>
+          <h3>{registering ? "Create your WhatsApp workspace login" : "Sign in to your WhatsApp workspace"}</h3>
+          <div>{registering
+            ? "Choose the username and password your team will use for the WhatsApp workspace. It is created inside the workspace you already own — no second account."
+            : "Enter the username and password for your WhatsApp workspace. Signing in also links an existing Tinitiate WA workspace to this AgenticThat account. Setting one up for the first time? Choose Register."}</div>
+          <small><ShieldCheck size={14} />Passwords are hashed before storage and never shown back to the browser.</small>
+        </div>
+        <form onSubmit={authenticate}>
+          <div className="config-auth-mode" role="tablist" aria-label="WhatsApp workspace access">
+            <button type="button" role="tab" aria-selected={!registering} className={!registering ? "active" : ""} onClick={() => setAuthMode("signin")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={registering} className={registering ? "active" : ""} onClick={() => setAuthMode("register")}>Register</button>
+          </div>
+          {registering && (
+            <>
+              <label><span>Business name</span><input value={authForm.businessName} onChange={event => setAuthForm({ ...authForm, businessName: event.target.value })} placeholder="Your business" autoComplete="organization" /></label>
+              <label><span>Your name</span><input value={authForm.displayName} onChange={event => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="Your name" autoComplete="name" /></label>
+            </>
+          )}
+          <label><span>Username</span><input type="email" value={authForm.username} onChange={event => setAuthForm({ ...authForm, username: event.target.value })} placeholder="you@example.com" autoComplete="username" required /></label>
+          <label>
+            <span>Password</span>
+            <div className="config-secret-input">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={authForm.password}
+                onChange={event => setAuthForm({ ...authForm, password: event.target.value })}
+                autoComplete={registering ? "new-password" : "current-password"}
+                minLength={registering ? 8 : undefined}
+                required
+              />
+              <button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+            </div>
+          </label>
+          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{registering ? "Create login and continue" : "Sign in and continue"}</button>
+        </form>
+      </div>
+    );
+  }
+
+  const connectionForm = (
+    <section className="config-form-card">
+      <header>
+        <span><Plug size={21} /></span>
+        <div><p>{connected ? "Change WhatsApp connection" : "New WhatsApp connection"}</p><h3>Link the WhatsApp account you control</h3></div>
+        <button type="button" onClick={closeForm} aria-label="Close form"><X size={18} /></button>
+      </header>
+
+      <ConnectionSteps
+        activeIndex={1}
+        steps={[
+          { icon: Plug, title: "Choose a provider", copy: "Meta Cloud API or your WATI account." },
+          { icon: KeyRound, title: "Enter credentials", copy: "They are verified before they are stored." },
+          { icon: ShieldCheck, title: "Ready to open", copy: "Sender numbers sync and the workspace unlocks." }
+        ]}
+      />
+
+      <div className="config-form-section">
+        {state?.encryptionReady === false && (
+          <p className="config-engine-warning"><CircleAlert size={14} />CREDENTIAL_ENCRYPTION_KEY is missing on the server, so credentials cannot be stored securely yet.</p>
+        )}
+        <div className="config-engine-picker" role="group" aria-label="Choose a WhatsApp provider">
+          {whatsappProviders.map(item => (
+            <button
+              type="button"
+              key={item.id}
+              className={providerId === item.id ? "active" : ""}
+              aria-pressed={providerId === item.id}
+              onClick={() => setProviderId(item.id)}
+            >
+              <span className="config-account-logo"><img src={item.id === "wati" ? "/wati-logo.svg" : "/whatsapp-logo.svg"} alt="" /></span>
+              <span><strong>{item.label}</strong><small>{item.copy}</small></span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {providerId === "meta" ? (
+        <form onSubmit={submitMeta}>
+          {metaAppId && metaConfigId && (
+            <div className="config-embedded-signup">
+              <p>Connect with Meta in a guided popup — WhatsApp Business app coexistence included. No ids to copy.</p>
+              <MetaEmbeddedSignupButton appId={metaAppId} configId={metaConfigId} onSuccess={() => void completeEmbeddedSignup()} />
+              <span>Or enter Cloud API credentials manually below.</span>
+            </div>
+          )}
+          <div className="config-form-grid">
+            <label><span>WhatsApp Business Account ID</span><input value={meta.wabaId} onChange={event => setMeta({ ...meta, wabaId: event.target.value })} placeholder="1234567890" autoComplete="off" required /></label>
+            <label><span>Graph API version</span><input value={meta.apiVersion} onChange={event => setMeta({ ...meta, apiVersion: event.target.value })} placeholder="v21.0" autoComplete="off" /></label>
+            <label className="wide"><span>Permanent access token</span><div className="config-secret-input"><input type={showToken ? "text" : "password"} value={meta.accessToken} onChange={event => setMeta({ ...meta, accessToken: event.target.value })} autoComplete="off" required /><button type="button" onClick={() => setShowToken(value => !value)} aria-label={showToken ? "Hide token" : "Show token"}>{showToken ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+            <label><span>Meta app ID <small>optional</small></span><input value={meta.appId} onChange={event => setMeta({ ...meta, appId: event.target.value })} autoComplete="off" /></label>
+            <label><span>Meta app secret <small>optional</small></span><input type="password" value={meta.appSecret} onChange={event => setMeta({ ...meta, appSecret: event.target.value })} autoComplete="off" /></label>
+          </div>
+          <p className="config-form-help">The token is checked against Meta before it is saved, so a wrong value is rejected here instead of failing on the first send. Sender numbers sync automatically.</p>
+          <div className="config-form-actions">
+            <button className="config-secondary" type="button" onClick={closeForm}>Cancel</button>
+            <button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify and connect</button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={submitWati}>
+          <div className="config-form-grid">
+            <label className="wide"><span>WATI API endpoint</span><input type="url" value={wati.apiUrl} onChange={event => setWati({ ...wati, apiUrl: event.target.value })} placeholder="https://live-server-000.wati.io" autoComplete="off" required /></label>
+            <label className="wide"><span>WATI access token</span><div className="config-secret-input"><input type={showToken ? "text" : "password"} value={wati.accessToken} onChange={event => setWati({ ...wati, accessToken: event.target.value })} autoComplete="off" required /><button type="button" onClick={() => setShowToken(value => !value)} aria-label={showToken ? "Hide token" : "Show token"}>{showToken ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+            <label className="wide">
+              <span>Webhook secret</span>
+              <div className="config-secret-input">
+                <input value={wati.webhookSecret} onChange={event => setWati({ ...wati, webhookSecret: event.target.value })} minLength={24} placeholder="At least 24 characters" autoComplete="off" required />
+                <button type="button" onClick={() => setWati({ ...wati, webhookSecret: createWebhookSecret() })} aria-label="Generate a webhook secret"><RefreshCw size={16} /></button>
+              </div>
+            </label>
+          </div>
+          <div className="config-webhook-hint">
+            <span>Add this webhook URL in WATI so incoming replies reach this workspace:</span>
+            <code>{webhookUrl}</code>
+          </div>
+          <p className="config-form-help">The endpoint and token are checked against WATI before they are saved. The webhook secret is stored encrypted and never shown again.</p>
+          <div className="config-form-actions">
+            <button className="config-secondary" type="button" onClick={closeForm}>Cancel</button>
+            <button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify and connect</button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+
+  const signedInAs = session?.user?.name || session?.user?.email || "WhatsApp user";
+  const sessionBar = (
+    <div className="config-integration-bar">
       <div>
-        Connect Meta Embedded Signup/coexistence, Cloud API credentials, WATI,
-        sender numbers, calling, and optional read-only monitoring from the
-        dedicated WhatsApp settings workspace.
+        <CheckCircle2 size={18} />
+        <span>
+          <strong>{connected ? "WhatsApp account connected" : "WhatsApp workspace signed in"}</strong>
+          <small>{connected
+            ? (savedProvider === "wati" ? `WATI · ${account.service_url || "endpoint saved"}` : `Meta Cloud API · WABA ${account.waba_id}`)
+            : `Signed in as ${signedInAs}`}</small>
+        </span>
       </div>
-      <div className="config-form-actions">
-        <a className="config-primary" href="/settings">Open WhatsApp settings<ExternalLink size={15} /></a>
-        <a className="config-secondary" href="/dashboard">Open dashboard<ArrowRight size={15} /></a>
+      <div className="config-integration-actions">
+        <button className="config-secondary" type="button" onClick={() => void signOutWorkspace()} disabled={busy}><LogOut size={16} />Sign out</button>
+        {connected && !connecting && <button className="config-secondary" type="button" onClick={() => setConnecting(true)}><Pencil size={16} />Change connection</button>}
+        {connected && (workspaceReady
+          ? <a className="config-primary" href={dashboardUrl}>Open dashboard<ArrowRight size={15} /></a>
+          : <button className="config-primary" type="button" disabled>Open dashboard<ArrowRight size={15} /></button>)}
       </div>
+    </div>
+  );
+
+  if (!connected) {
+    return (
+      <div className="config-manager-body">
+        {sessionBar}
+        {connecting ? connectionForm : (
+          <EmptyState
+            icon={MessageCircle}
+            title="No WhatsApp account connected"
+            copy="Set up the account first: link Meta Cloud API or your WATI workspace here. The WhatsApp workspace in the Store stays locked until a connection is saved."
+            action={<button className="config-primary" type="button" onClick={() => setConnecting(true)}><Plus size={16} />Connect WhatsApp account</button>}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="config-manager-body">
+      {sessionBar}
+
+      {!state?.onboarded && (
+        <section className="config-form-card">
+          <header>
+            <span><MonitorCheck size={21} /></span>
+            <div><p>One step left</p><h3>Finish setup to unlock the workspace</h3></div>
+          </header>
+          <div className="config-form-section">
+            <p className="config-form-help">The account is connected but setup was never completed, so the WhatsApp workspace still redirects back here. Finish it to open the dashboard.</p>
+            <div className="config-form-actions">
+              <button className="config-primary" type="button" onClick={() => void finishSetup()} disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Finish setup</button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {connecting && connectionForm}
+
+      <AccountCollectionHeader
+        count={numbers.length}
+        title="Sender numbers"
+        copy="These numbers appear in the WhatsApp workspace sender selector. The default is used for new outbound messages."
+      />
+      {numbers.length === 0 ? (
+        <EmptyState
+          icon={Smartphone}
+          title={savedProvider === "wati" ? "WATI manages the sender number" : "No sender numbers synced yet"}
+          copy={savedProvider === "wati"
+            ? "Your WATI workspace owns the sender number, so there is nothing to choose here."
+            : "Add a phone number to this WhatsApp Business Account in Meta Business Manager, then reconnect to sync it."}
+          action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Refresh</button>}
+        />
+      ) : (
+        <div className="config-account-list">
+          {numbers.map(number => (
+            <article className="config-account-row" key={number.phone_number_id}>
+              <span className="config-account-logo"><img src="/whatsapp-logo.svg" alt="" /></span>
+              <span className="config-account-main">
+                <strong>{number.display_number || number.phone_number_id}</strong>
+                <small>{number.verified_name || "WhatsApp sender"}</small>
+              </span>
+              <span className="config-account-state"><i />{number.is_default ? "Default sender" : "Available"}</span>
+              <span className="config-account-meta">{number.quality_rating ? `Quality ${number.quality_rating}` : number.status || "Ready to send"}</span>
+              <div className="config-account-actions">
+                {number.is_default
+                  ? <button type="button" disabled><Check size={15} />Default</button>
+                  : <button className="open" type="button" onClick={() => void chooseDefault(number.phone_number_id)} disabled={busy}><Check size={15} />Make default</button>}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

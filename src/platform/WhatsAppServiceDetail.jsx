@@ -9,6 +9,7 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
+  CircleAlert,
   CircleCheck,
   Clock3,
   FileCheck2,
@@ -81,10 +82,19 @@ const connectionModes = [
   },
 ];
 
+// The workspace only exists once a provider is linked, so an unconnected
+// account gets a clear instruction instead of a button that leads nowhere.
+const SETUP_INSTRUCTION = "Set up your WhatsApp account first. Add the connection in Connections — the workspace opens as soon as Meta or WATI is linked.";
+const CONTINUE_INSTRUCTION = "Your WhatsApp connection is not finished yet. Complete it in Connections, then open the workspace from here.";
+
 function actionFor(status, service) {
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (status.state === "connected") return { label: "Open WhatsApp workspace", href: service.dashboardHref };
   return { label: "Open WhatsApp workspace", disabled: true };
+}
+
+function setupInstructionFor(status) {
+  return status.state === "continue" ? CONTINUE_INSTRUCTION : SETUP_INSTRUCTION;
 }
 
 function DemoAvatar({ tone = "green", src, alt = "" }) {
@@ -352,13 +362,13 @@ function AudienceGuide() {
   );
 }
 
-function ConnectionSection() {
+function ConnectionSection({ configHref, ctaLabel }) {
   const [modeId, setModeId] = useState("cloud");
   const mode = connectionModes.find((item) => item.id === modeId) || connectionModes[0];
 
   return (
     <section className={styles.simpleConnection} id="connections">
-      <header className={styles.sectionIntro}><h2>How is your WhatsApp set up?</h2><p>Pick the option your business already uses. The setup page will guide you through everything else.</p></header>
+      <header className={styles.sectionIntro}><h2>How is your WhatsApp set up?</h2><p>Pick the option your business already uses, then add it on the Connections page. The Connection Manager verifies the account and unlocks the workspace.</p></header>
       <div className={styles.connectionChooser}>
         <nav aria-label="Connection options">
           {connectionModes.map((item) => <button className={modeId === item.id ? styles.connectionChoiceActive : ""} type="button" onClick={() => setModeId(item.id)} key={item.id}><span className={styles.connectionBrand}><ConnectionBrand id={item.id} /></span><strong>{item.label}</strong></button>)}
@@ -368,6 +378,9 @@ function ConnectionSection() {
           <div><small>Choose this option if it matches your current setup</small><h3>{mode.title}</h3><p>{mode.description}</p></div>
           <p className={styles.connectionResult}><span>{mode.account}</span><ArrowRight size={18} /><strong>AgenticThat ready</strong></p>
         </article>
+      </div>
+      <div className={styles.connectionCta}>
+        <Link href={configHref}>{ctaLabel}<ArrowRight size={18} /></Link>
       </div>
     </section>
   );
@@ -389,6 +402,8 @@ export default function WhatsAppServiceDetail({ user, service }) {
   const action = actionFor(status, service);
   const connected = status.state === "connected";
   const needsConnection = !connected && status.state !== "checking";
+  const setupInstruction = setupInstructionFor(status);
+  const setupLabel = status.state === "continue" ? "Continue setup" : "Set up WhatsApp account";
 
   return (
     <ProductShell user={user} active="apps">
@@ -403,9 +418,15 @@ export default function WhatsAppServiceDetail({ user, service }) {
             <h1>WhatsApp <em>Messaging</em></h1>
             <p>Answer customers, send updates, organize contacts, and follow up from one simple workspace. No technical knowledge is needed.</p>
             <div className={styles.heroActions}>
-              {action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
-              {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ChevronRight size={18} /></Link> : <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>}
+              {action.disabled ? <button type="button" disabled title={needsConnection ? setupInstruction : undefined}>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+              {needsConnection ? <Link href={service.configHref}>{setupLabel}<ChevronRight size={18} /></Link> : <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>}
             </div>
+            {needsConnection && (
+              <p className={styles.setupNote} role="status">
+                <CircleAlert size={17} strokeWidth={2} aria-hidden="true" />
+                <span>{setupInstruction}</span>
+              </p>
+            )}
             <div className={styles.heroAssurances}><span><BadgeCheck size={18} strokeWidth={1.9} />Simple setup</span><span><ShieldCheck size={18} strokeWidth={1.9} />Works with Meta or WATI</span><span><UsersRound size={18} strokeWidth={1.9} />Easy for your team</span></div>
           </div>
           <HeroProductDemo />
@@ -415,13 +436,19 @@ export default function WhatsAppServiceDetail({ user, service }) {
 
         <AudienceGuide />
 
-        <ConnectionSection />
+        <ConnectionSection
+          configHref={service.configHref}
+          ctaLabel={needsConnection ? setupLabel : "Manage WhatsApp connection"}
+        />
 
         <SecuritySection />
 
         <section className={styles.launchSection}>
-          <div><h2>{connected ? "Continue where your WhatsApp work happens." : "Bring WhatsApp into a workspace your whole team can understand."}</h2></div>
-          {needsConnection ? <Link href={service.configHref}>{status.state === "continue" ? "Continue setup" : "Connect account"}<ArrowRight size={19} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+          <div>
+            <h2>{connected ? "Continue where your WhatsApp work happens." : "Bring WhatsApp into a workspace your whole team can understand."}</h2>
+            {needsConnection && <p>{setupInstruction}</p>}
+          </div>
+          {needsConnection ? <Link href={service.configHref}>{setupLabel}<ArrowRight size={19} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
         </section>
       </main>
     </ProductShell>

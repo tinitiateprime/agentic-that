@@ -161,8 +161,32 @@
 
 .heroActions > button:disabled,
 .launchSection > button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.65;
+}
+
+/* Shown when no WhatsApp provider is linked yet: the workspace button above is
+   inert until Connections holds a Meta or WATI account, so say so plainly. */
+.setupNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  max-width: 560px;
+  margin: 18px 0 0;
+  padding: 12px 15px;
+  border: 1px solid #f0dcae;
+  border-radius: 11px;
+  background: #fdf8ec;
+  color: #7a5a16;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.setupNote svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #b6822a;
 }
 
 .heroAssurances {
@@ -3175,6 +3199,33 @@
   box-shadow: 0 18px 48px rgba(27, 67, 56, 0.07);
 }
 
+.connectionCta {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.connectionCta > a {
+  display: inline-flex;
+  min-height: 50px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 22px;
+  border: 1px solid var(--green);
+  border-radius: 10px;
+  background: var(--green);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.connectionCta > a:hover {
+  border-color: var(--green-dark);
+  background: var(--green-dark);
+  transform: translateY(-1px);
+}
+
 .connectionChooser > nav {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -3400,6 +3451,15 @@
   font-weight: 680;
   letter-spacing: -0.035em;
   line-height: 1.3;
+}
+
+.launchSection > div > p {
+  max-width: 640px;
+  margin: 10px 0 0;
+  color: #5c6b65;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .launchSection > a,
