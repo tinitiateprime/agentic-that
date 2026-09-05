@@ -55,6 +55,11 @@ run(forgeBinary, [
   "--targets", "@electron-forge/maker-zip",
 ]);
 
+// Electron's universal packaging rebuilds native application dependencies and
+// can remove the host-Node binary used only by the DMG maker. Restore that
+// build before loading the maker in its separate process.
+run("npm", ["rebuild", "macos-alias"]);
+
 let lastStatus = 1;
 for (let attempt = 1; attempt <= 3; attempt += 1) {
   detachStaleVolumes();
