@@ -1368,7 +1368,7 @@ function UnifiedComposer({
                 {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
                 <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
                 <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
-              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 2 GB</small></label>}
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Enter a title to enable YouTube publishing'} maxLength={100} /></label>}

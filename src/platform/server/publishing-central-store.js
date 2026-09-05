@@ -28,6 +28,7 @@ const MAX_JOB_ATTEMPTS = 3;
 const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.7";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const CENTRAL_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
@@ -829,7 +830,7 @@ export async function createCentralStagedUpload(principal, input = {}) {
   const mimeType = String(input.mimeType || "").trim();
   const size = Number(input.size || 0);
   if (!originalName || !Number.isFinite(size) || size < 1) throw new Error("Choose a valid media file.");
-  if (size > 500 * 1024 * 1024) throw new Error("Media files must be 500 MB or smaller.");
+  if (size > MAX_MEDIA_UPLOAD_BYTES) throw new Error("Media files must be 2 GB or smaller.");
   await initialize();
   return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
     const document = documentValue(value);
