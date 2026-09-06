@@ -28,7 +28,13 @@ async function getLocalServer() {
     };
   })();
 
-  return localServerPromise;
+  try {
+    return await localServerPromise;
+  } catch (error) {
+    // Let the next invocation recover from a transient cold-start failure.
+    localServerPromise = null;
+    throw error;
+  }
 }
 
 function telegramPath(pathname: string) {
@@ -54,26 +60,34 @@ function responseHeaders(headers: Headers) {
 }
 
 export default async function handler(request: Request, _context: Context) {
-  const local = await getLocalServer();
-  const incomingUrl = new URL(request.url);
-  const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
-  const headers = new Headers(request.headers);
+  try {
+    const local = await getLocalServer();
+    const incomingUrl = new URL(request.url);
+    const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
+    const headers = new Headers(request.headers);
 
-  headers.set("x-forwarded-host", incomingUrl.host);
-  headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
+    headers.set("x-forwarded-host", incomingUrl.host);
+    headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
 
-  const response = await fetch(targetUrl, {
-    body: await requestBody(request),
-    headers,
-    method: request.method,
-    redirect: "manual"
-  });
+    const response = await fetch(targetUrl, {
+      body: await requestBody(request),
+      headers,
+      method: request.method,
+      redirect: "manual"
+    });
 
-  return new Response(response.body, {
-    headers: responseHeaders(response.headers),
-    status: response.status,
-    statusText: response.statusText
-  });
+    return new Response(response.body, {
+      headers: responseHeaders(response.headers),
+      status: response.status,
+      statusText: response.statusText
+    });
+  } catch (error) {
+    console.error("Telegram serverless request failed:", error instanceof Error ? error.message : "Unknown startup error");
+    return Response.json({
+      ok: false,
+      error: "Telegram could not start. Verify the Telegram server environment and try again."
+    }, { status: 503 });
+  }
 }
 
 export const config: Config = {

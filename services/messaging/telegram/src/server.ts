@@ -764,8 +764,28 @@ function normalizePhoneFromBody(body: JsonBody) {
   }
 }
 
-function sharedTelegramApiCredentials(): TelegramApiCredentials {
+function sharedTelegramApiCredentials(): TelegramApiCredentials | null {
+  if (!config.telegramApiId || !config.telegramApiHash) return null;
   return { apiId: config.telegramApiId, apiHash: config.telegramApiHash };
+}
+
+export function resolveTelegramApiCredentials(
+  body: JsonBody,
+  sharedCredentials: TelegramApiCredentials | null,
+): TelegramApiCredentials {
+  if (sharedCredentials) return sharedCredentials;
+
+  const rawApiId = requiredString(body, "telegramApiId", 20);
+  const apiId = Number(rawApiId);
+  if (!Number.isInteger(apiId) || apiId <= 0) {
+    throw new HttpError(400, "Telegram API ID must be a positive number from my.telegram.org.");
+  }
+
+  const apiHash = requiredString(body, "telegramApiHash", 128);
+  if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
+    throw new HttpError(400, "Telegram API hash must be the 32-character hash from my.telegram.org.");
+  }
+  return { apiId, apiHash };
 }
 
 function telegramApiCredentialsFromAccount(account: TelegramAccountWithSession): TelegramApiCredentials {
@@ -934,6 +954,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       service: "telegram-multi-user",
       storage: process.env.DATA_STORE || "json",
       scheduler: shouldRunBackgroundListeners() ? "server" : "disabled",
+      telegramLoginCredentials: sharedTelegramApiCredentials() ? "shared" : "per_connection",
+      sharedCredentialsStatus: config.telegramApiCredentialsStatus,
       configManagerUrl: config.corsOrigin
         ? config.corsOrigin.replace(/\/$/, "") + "/config-manager?service=messaging&platform=telegram"
         : "/config-manager?service=messaging&platform=telegram"
@@ -1045,7 +1067,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (request.method !== "GET" && request.method !== "HEAD") ensureTrustedOrigin(request);
 
   if (request.method === "GET" && url.pathname === "/v1/me") {
-    sendJson(request, response, 200, { ok: true, user });
+    sendJson(request, response, 200, {
+      ok: true,
+      user,
+      requiresTelegramApiCredentials: !sharedTelegramApiCredentials()
+    });
     return;
   }
 
@@ -1053,7 +1079,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     requireUserLevel(user, "configure");
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
-    const credentials = sharedTelegramApiCredentials();
+    const credentials = resolveTelegramApiCredentials(body, sharedTelegramApiCredentials());
     const phone = normalizePhoneFromBody(body);
     let start;
     try {
@@ -1509,7 +1535,14 @@ export async function initializeTelegramApp() {
     await mediaStore.initialize();
     initialized = true;
   })();
-  await initializing;
+  try {
+    await initializing;
+  } catch (error) {
+    // A transient store/configuration failure must not poison every later
+    // request handled by the same warm serverless process.
+    initializing = null;
+    throw error;
+  }
 }
 
 export async function handleRequestWithErrors(request: IncomingMessage, response: ServerResponse) {

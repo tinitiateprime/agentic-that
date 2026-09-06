@@ -160,6 +160,7 @@ async function telegramRequest(path, identityToken, init = {}) {
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
+    cache: "no-store",
     ...init,
     headers,
     credentials: "include"
@@ -257,6 +258,8 @@ export default function ConfigManager({
   const [telegramStatus, setTelegramStatus] = useState("checking");
   const [telegramUser, setTelegramUser] = useState(null);
   const [telegramAccounts, setTelegramAccounts] = useState([]);
+  const [telegramRequiresApiCredentials, setTelegramRequiresApiCredentials] = useState(false);
+  const [telegramError, setTelegramError] = useState("");
   const [whatsappStatus, setWhatsappStatus] = useState("checking");
   const [whatsappState, setWhatsappState] = useState(null);
   const [whatsappSession, setWhatsappSession] = useState(null);
@@ -280,10 +283,13 @@ export default function ConfigManager({
       const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
+      setTelegramRequiresApiCredentials(Boolean(me.requiresTelegramApiCredentials));
+      setTelegramError("");
       setTelegramStatus("ready");
     } catch (error) {
       setTelegramUser(null);
       setTelegramAccounts([]);
+      setTelegramError(error.message || "The Telegram API did not respond.");
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
   }, [telegramIdentityToken]);
@@ -514,6 +520,8 @@ export default function ConfigManager({
               dashboardUrl={telegramDashboardUrl}
               continueTelegramConnect={initialTelegramConnect}
               telegramIdentityToken={telegramIdentityToken}
+              requiresApiCredentials={telegramRequiresApiCredentials}
+              serviceError={telegramError}
               allowedPlatforms={allowedMessagingPlatforms}
               onReload={loadTelegram}
               whatsappStatus={whatsappStatus}
@@ -573,6 +581,8 @@ function MessagingManager({
   dashboardUrl,
   continueTelegramConnect,
   telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
   allowedPlatforms,
   onReload,
   whatsappStatus,
@@ -613,6 +623,8 @@ function MessagingManager({
           dashboardUrl={dashboardUrl}
           continueTelegramConnect={continueTelegramConnect}
           telegramIdentityToken={telegramIdentityToken}
+          requiresApiCredentials={requiresApiCredentials}
+          serviceError={serviceError}
           onReload={onReload}
           setNotice={setNotice}
         />
@@ -1129,10 +1141,13 @@ function TelegramManager({
   const [stage, setStage] = useState("phone");
   const [challengeId, setChallengeId] = useState("");
   const [phone, setPhone] = useState("");
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showApiHash, setShowApiHash] = useState(false);
   const [workspaceAuthMode, setWorkspaceAuthMode] = useState("signin");
   const [workspaceUsername, setWorkspaceUsername] = useState(platformUser?.email || "");
   const [workspacePassword, setWorkspacePassword] = useState("");
@@ -1178,6 +1193,8 @@ function TelegramManager({
     setStage("phone");
     setChallengeId("");
     setPhone("");
+    setApiId("");
+    setApiHash("");
     setCode("");
     setPassword("");
   };
@@ -1188,7 +1205,13 @@ function TelegramManager({
     try {
       const data = await telegramRequest("/telegram/login/start", telegramIdentityToken, {
         method: "POST",
-        body: JSON.stringify({ phone: phone.trim() })
+        body: JSON.stringify({
+          phone: phone.trim(),
+          ...(requiresApiCredentials ? {
+            telegramApiId: apiId.trim(),
+            telegramApiHash: apiHash.trim()
+          } : {})
+        })
       });
       setChallengeId(data.challengeId);
       setStage("code");
@@ -1270,7 +1293,7 @@ function TelegramManager({
       <EmptyState
         icon={CircleAlert}
         title="Telegram service is unavailable"
-        copy="Start the AgenticThat development workspace, then refresh this integration."
+        copy={serviceError || "The Telegram API did not respond. Refresh this integration or verify the deployment configuration."}
         action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
       />
     );
@@ -1331,9 +1354,17 @@ function TelegramManager({
           {stage === "phone" && (
             <form onSubmit={startConnection}>
               <div className="config-form-grid">
+                {requiresApiCredentials && (
+                  <>
+                    <label><span>Telegram API ID</span><input value={apiId} onChange={event => setApiId(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="12345678" required /></label>
+                    <label><span>Telegram API hash</span><div className="config-secret-input"><input type={showApiHash ? "text" : "password"} value={apiHash} onChange={event => setApiHash(event.target.value)} autoComplete="off" placeholder="32-character API hash" required /><button type="button" onClick={() => setShowApiHash(value => !value)} aria-label={showApiHash ? "Hide API hash" : "Show API hash"}>{showApiHash ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+                  </>
+                )}
                 <label className="wide"><span>Phone number with country code</span><input value={phone} onChange={event => setPhone(event.target.value)} type="tel" autoComplete="tel" placeholder="+91 98765 43210" required /></label>
               </div>
-              <p className="config-form-help">AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account.</p>
+              <p className="config-form-help">{requiresApiCredentials
+                ? <>Create an API ID and hash at <a href="https://my.telegram.org" target="_blank" rel="noreferrer">my.telegram.org</a>. They are encrypted with the account session and are never shown again.</>
+                : "AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account."}</p>
               <div className="config-form-actions"><button className="config-secondary" type="button" onClick={resetConnection}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Send verification code</button></div>
             </form>
           )}

@@ -62,8 +62,6 @@ These are unused, redundant, local-only, or provider-specific for the current pr
 
 ```env
 DB_CONNECTOR=
-TELEGRAM_API_ID=
-TELEGRAM_API_HASH=
 TELEGRAM_API_URL=
 NEXT_PUBLIC_PUBLISH_QUEUE_API_URL=
 PUBLISH_QUEUE_API_URL=
@@ -81,8 +79,10 @@ accepted during migration. All Supabase variables and `DATABASE_URL` must point
 to the same project.
 `CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after
 deployment because changing it makes stored workspace credentials unreadable.
-`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per account in Config
-Manager; the environment versions are only used by the standalone CLI login command.
+`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per connection in Config
+Manager when no shared credentials are configured. They may instead be set as
+Functions-scoped variables to keep the connection form phone-only for every
+workspace. Both modes encrypt the credentials alongside the Telegram session.
 
 `META_APP_SECRET` is required for Embedded Signup token exchange and signed webhook validation. `META_CONFIGURATION_ID` is required for the recommended Embedded Signup/coexistence button. If you intentionally use only the advanced manual Cloud API credential form, the configuration id can be omitted, but the app secret should still be set for webhook validation.
 
