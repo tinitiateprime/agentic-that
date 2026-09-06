@@ -448,9 +448,9 @@ function telegramPostInput(body: JsonBody): TelegramPostInput {
 }
 
 async function verifyPostMedia(userId: string, input: TelegramPostInput) {
+  if (!input.mediaUploadId) return;
   const account = await store.getAccountWithSession(userId, input.accountId);
   if (!account) throw new HttpError(404, "Telegram account was not found.");
-  if (!input.mediaUploadId) return;
   try {
     await mediaStore.resolve(userId, account.id, input.mediaUploadId);
   } catch (error) {

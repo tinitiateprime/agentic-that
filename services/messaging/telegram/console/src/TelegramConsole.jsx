@@ -2469,14 +2469,14 @@ export function TelegramConsole({ integrated = false }) {
                           )
                         ),
                         h("small", {"id":"post-status-help"},
-                          "Managed by the Ubuntu server"
+                          "Stored securely in your workspace"
                         )
                       )
                     ),
-                    h("label", {"htmlFor":"post-scheduled-at"},
+                    h("label", {"htmlFor":"post-scheduled-at","hidden":true},
                       "Scheduled date"
                     ),
-                    h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
+                    h("input", {"id":"post-scheduled-at","type":"datetime-local","hidden":true,"disabled":true}),
                     h("section", {"id":"post-media-dropzone","className":"telegram-upload-box","tabIndex":"0","role":"button","aria-label":"Upload Telegram media from this device","aria-describedby":"post-media-status"},
                       h("input", {"id":"post-media-file","className":"telegram-upload-input","type":"file","accept":"*/*"}),
                       h("span", {"className":"telegram-upload-icon","aria-hidden":"true"},
@@ -2498,7 +2498,7 @@ export function TelegramConsole({ integrated = false }) {
                     h("input", {"id":"post-media-mime","type":"hidden"}),
                     h("input", {"id":"post-media-size","type":"hidden"}),
                     h("small", {"id":"post-media-status","className":"muted","role":"status","aria-live":"polite"},
-                      "Choose any supported file. It will be stored privately on the Ubuntu server for sending or scheduling."
+                      "Choose any supported file. It will be stored privately for sending."
                     ),
                     h("label", {"htmlFor":"post-body"},
                       "Text or caption"
@@ -2523,7 +2523,7 @@ export function TelegramConsole({ integrated = false }) {
                       h("button", {"id":"post-send-now","className":"button ghost","type":"button"},
                         "Post now"
                       ),
-                      h("button", {"id":"post-schedule","className":"button ghost","type":"button"},
+                      h("button", {"id":"post-schedule","className":"button ghost","type":"button","hidden":true,"disabled":true},
                         "Schedule"
                       ),
                       h("button", {"id":"post-clear","className":"button text","type":"button"},
