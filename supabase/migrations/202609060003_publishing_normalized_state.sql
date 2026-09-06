@@ -126,7 +126,7 @@ begin
       select item->>'id', item->>'workspaceId', coalesce(nullif(item->>'updatedAt', '')::timestamptz, now()), item
         from jsonb_array_elements(coalesce(legacy->'schedules', '[]'::jsonb)) item
        where nullif(item->>'id', '') is not null and nullif(item->>'workspaceId', '') is not null
-      on conflict (id) do nothing;
+      on conflict (workspace_id, id) do nothing;
 
       insert into agentic_that.publishing_activity_logs(id, workspace_id, created_at, record)
       select item->>'id', item->>'workspaceId', coalesce(nullif(item->>'createdAt', '')::timestamptz, now()), item
