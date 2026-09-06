@@ -314,7 +314,8 @@ export async function requireAccess(resourceKey, requiredLevel = "view", returnT
 }
 
 export async function requireGlobalAdmin() {
-  const principal = await getCurrentPrincipal();
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
   if (!principal) redirect("/?auth=login&next=/admin-center");
   if (principal.status === "pending") redirect("/pending-approval");
   if (principal.status !== "active" || !principal.isGlobalAdmin) redirect("/access-denied?resource=admin-center");
@@ -323,7 +324,8 @@ export async function requireGlobalAdmin() {
 }
 
 export async function authorizeGlobalAdminApi() {
-  const principal = await getCurrentPrincipal();
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
   if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
   if (principal.status !== "active" || !principal.isGlobalAdmin) {
     throw new AccessDeniedError(403, "ADMIN_REQUIRED", "Global administrator access is required.");

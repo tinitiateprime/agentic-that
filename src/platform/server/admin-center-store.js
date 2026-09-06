@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getPlatformSql, refreshExpiredPlatformTrials } from "./auth-store.js";
+import { getPlatformSql } from "./auth-store.js";
 import { validateGrantInput } from "./access-policy.js";
 
 function text(value, name, max = 160) {
@@ -18,36 +18,39 @@ async function audit(tx, actorUserId, targetType, targetId, action, before, afte
 }
 
 export async function adminCenterSnapshot() {
-  await refreshExpiredPlatformTrials();
   const sql = await getPlatformSql();
-  const [users, workspaces, roles, roleGrants, entitlements, auditEvents, identityReviews] = await Promise.all([
-    sql`
+  // Netlify uses a single connection to the Supabase transaction pooler. Running
+  // these reads through Promise.all can leave queued queries waiting behind a
+  // connection the pooler has already recycled, which eventually crashes the
+  // server-rendered Admin Center with a 502. Keep the snapshot deterministic on
+  // that one connection; the result is small and each query is independently
+  // indexed.
+  const users = await sql`
       SELECT u.id, u.name, u.email, u.business_name, u.requested_business_name,
              u.status, u.is_global_admin, u.billing_status, u.trial_starts_at, u.trial_ends_at, u.created_at,
              m.workspace_id, w.name AS workspace_name
         FROM platform_users u
         LEFT JOIN workspace_memberships m ON m.user_id = u.id
         LEFT JOIN platform_workspaces w ON w.id = m.workspace_id
-       ORDER BY CASE u.status WHEN 'pending' THEN 0 ELSE 1 END, u.created_at DESC`,
-    sql`SELECT id, name, status, created_at, updated_at FROM platform_workspaces ORDER BY name`,
-    sql`SELECT id, name, description, is_system, is_self_selectable, created_at, updated_at FROM rbac_roles ORDER BY is_system DESC, name`,
-    sql`SELECT role_id, resource_key, access_level FROM rbac_role_grants ORDER BY resource_key`,
-    sql`
+       ORDER BY CASE u.status WHEN 'pending' THEN 0 ELSE 1 END, u.created_at DESC`;
+  const workspaces = await sql`SELECT id, name, status, created_at, updated_at FROM platform_workspaces ORDER BY name`;
+  const roles = await sql`SELECT id, name, description, is_system, is_self_selectable, created_at, updated_at FROM rbac_roles ORDER BY is_system DESC, name`;
+  const roleGrants = await sql`SELECT role_id, resource_key, access_level FROM rbac_role_grants ORDER BY resource_key`;
+  const entitlements = await sql`
       SELECT user_id, role_id, source, status, starts_at, expires_at
         FROM user_role_entitlements
-       ORDER BY created_at DESC`,
-    sql`
+       ORDER BY created_at DESC`;
+  const auditEvents = await sql`
       SELECT e.id, e.target_type, e.target_id, e.action, e.before_value, e.after_value,
              e.created_at, u.name AS actor_name, u.email AS actor_email
         FROM rbac_audit_events e
         LEFT JOIN platform_users u ON u.id = e.actor_user_id
-       ORDER BY e.created_at DESC LIMIT 200`,
-    sql`
+       ORDER BY e.created_at DESC LIMIT 200`;
+  const identityReviews = await sql`
       SELECT id, product, local_actor_id, local_email, reason, details, status, created_at, resolved_at
         FROM rbac_identity_review_queue
        ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC
-       LIMIT 200`,
-  ]);
+       LIMIT 200`;
 
   return {
     users: users.map((user) => ({
