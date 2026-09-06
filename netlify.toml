@@ -1,5 +1,7 @@
 [build]
-  command = "npm run db:migrate:platform && npm run db:migrate:whatsapp && npm run build"
+  # Production database migrations run in the dedicated, approval-gated
+  # workflow. Ordinary deploy previews and Netlify builds are read-only.
+  command = "npm run build"
   publish = ".next"
   functions = "netlify/functions"
 

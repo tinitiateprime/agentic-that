@@ -57,3 +57,51 @@ test("the server scheduler sends due posts and stores confirmed delivery history
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("Send now completes delivery inside the request-bound worker", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-send-now-"));
+  const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));
+  try {
+    await store.initialize();
+    const user = (await store.createUser("Immediate user")).user;
+    const account = (await store.saveTelegramAccount(user.id, {
+      telegramApiId: 123456,
+      telegramApiHash: "test-api-hash",
+      telegramUserId: "immediate-telegram-user",
+      displayName: "Immediate sender",
+      username: "immediate_sender",
+      sessionString: "encrypted-session",
+    })).account;
+    const post = await store.createPost(user.id, {
+      accountId: account.id,
+      title: "Immediate post",
+      type: "text",
+      category: "",
+      tags: [],
+      scheduledAt: "",
+      body: "Send this now",
+      mediaUrl: "",
+      mediaUploadId: "",
+      mediaName: "",
+      mediaMimeType: "",
+      mediaSize: 0,
+      recipient: "@recipient",
+      contacts: [],
+      groups: [],
+      targets: [{ recipient: "@recipient", source: "Manual", firstName: "Recipient", kind: "manual" }],
+    });
+    await store.queuePost(user.id, post.id, new Date().toISOString());
+
+    const scheduler = new TelegramPostScheduler(store, async (_claimed, delivery) => ({
+      recipient: delivery.recipient,
+      messageId: "telegram-immediate-1",
+      sentAt: new Date().toISOString(),
+    }), 60_000, 1);
+    const finished = await scheduler.runPostNow(user.id, post.id);
+    assert.equal(finished?.status, "Posted");
+    assert.equal(finished?.deliveries[0]?.telegramMessageId, "telegram-immediate-1");
+  } finally {
+    await store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

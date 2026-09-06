@@ -16,13 +16,17 @@
     "bot:start": "tsx src/bot.ts"
   },
   "dependencies": {
-    "@netlify/blobs": "^10.7.9",
+    "@netlify/blobs": "^11.0.3",
     "big-integer": "^1.6.52",
+    "postgres": "^3.4.9",
     "telegram": "^2.26.22",
     "tsx": "^4.20.6"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "ip-address": "^10.7.0"
   }
 }

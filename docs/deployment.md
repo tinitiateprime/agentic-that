@@ -28,6 +28,7 @@ SESSION_ENCRYPTION_KEY=<generated secret>
 USER_PROVISIONING_KEY=<generated secret>
 SESSION_COOKIE_SECURE=true
 DATA_STORE=netlify-blobs
+TELEGRAM_DATA_STORE=postgres
 ```
 
 The complete environment list for Telegram, WhatsApp, Instagram scraping, and publishing is maintained in [netlify-env.md](./netlify-env.md).
@@ -42,7 +43,16 @@ Run it twice and use different values.
 
 ## Storage
 
-On Netlify, backend users, Telegram sessions, login challenges, and message history are stored in Netlify Blobs.
+Supabase PostgreSQL stores normalized, workspace-owned Telegram state and media,
+Publishing state, WhatsApp data, central accounts, roles, and job control. Netlify
+Blobs is retained only as a temporary Telegram cutover source and for the
+workspace-scoped scraper caches.
+
+## Database releases
+
+Netlify builds never run migrations. Apply pending migrations first with the
+approval-gated **Production Database Migrations** GitHub Actions workflow, verify
+its RLS/grant check, and only then deploy the matching application commit.
 
 ## Important Netlify Limitation
 

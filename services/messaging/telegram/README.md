@@ -1,6 +1,6 @@
 # Telegram Workflow Dashboard
 
-This project is a local Node.js/TypeScript application for connecting one or more Telegram user accounts, sending messages from the selected account, saving workflow data in the browser workspace, and storing Telegram sessions/messages securely in an encrypted local JSON datastore.
+This Node.js/TypeScript service connects one or more Telegram user accounts, sends messages from the selected account, and stores workspace-owned Telegram sessions, messages, posts, contacts, and media in normalized Supabase PostgreSQL tables. Sensitive fields remain encrypted before persistence. Local development can still use the encrypted JSON datastore.
 
 The current flow:
 
@@ -12,7 +12,7 @@ Developer runs npm run server
 -> User enters a Telegram phone number
 -> Telegram sends an OTP/login code to that Telegram account
 -> User enters the OTP in this dashboard
--> The app stores the encrypted Telegram session in data/store.json
+-> Production stores the encrypted Telegram session in workspace-owned Supabase rows
 -> Future sends use the selected saved Telegram account/session
 ```
 
@@ -27,7 +27,7 @@ No PostgreSQL, pgAdmin, or separate database server is required. Backend data is
 - Select which connected profile/number should send messages.
 - Send quick messages to `@username` or `+countrycode` phone numbers.
 - Manage local profiles, contacts, inbox threads, groups, channels, posts, search, settings, and backup JSON.
-- Create, preview, save, send, and schedule posts from the browser workspace.
+- Create, preview, save, and immediately send posts from the browser workspace.
 - Record sent-post history in browser JSON and backend message history in the JSON datastore.
 - Run a separate listener worker to save incoming Telegram replies.
 - Run an optional Telegram Bot API auto-reply worker.
@@ -88,7 +88,7 @@ npm run build
 
 No external database setup is required. The backend creates `data/store.json` automatically on first startup.
 
-The JSON datastore contains encrypted Telegram sessions, encrypted message history, app users, browser sessions, and temporary Telegram login challenges. Keep `SESSION_ENCRYPTION_KEY` stable because changing it makes existing encrypted Telegram sessions/messages unreadable.
+Production uses `TELEGRAM_DATA_STORE=postgres` with `DATABASE_URL` or `SUPABASE_DB_URL`. The JSON datastore is for local development only. Keep `SESSION_ENCRYPTION_KEY` stable because changing it makes existing encrypted Telegram sessions/messages unreadable.
 
 ### 3. Create `.env`.
 
@@ -319,7 +319,7 @@ To send:
 5. Add a manual target, select contacts, select groups, or combine them.
 6. Click `Save post`.
 7. Check the preview.
-8. Click `Post now` or schedule a date/time.
+8. Click `Post now`. Scheduling is intentionally unavailable in the Netlify deployment.
 
 The app combines all targets, removes duplicates, and sends from the currently selected profile.
 
@@ -696,7 +696,7 @@ Screenshots are in [docs/screenshots](docs/screenshots). Requirement coverage an
 - Contacts, groups, channels, posts, settings, and post history are browser-local workspace JSON, not shared server records.
 - Contacts and groups are not strictly scoped per selected profile yet.
 - Saved groups are local broadcast lists, not private Telegram group sync by `chatId`/`accessHash`.
-- Scheduled posts send only while the browser workspace is open and signed in. There is no server-side scheduler worker yet.
+- Telegram sends are request-bound and complete before the API responds. Scheduling is intentionally disabled for the Netlify deployment.
 - Channel records are local planning records and do not manage Telegram channel membership.
 - A dedicated QR Code tab is listed in requirements but is not implemented in the UI yet.
 - `npm run listen` loads accounts only at startup. Restart it after adding or deleting numbers.

@@ -952,7 +952,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     sendJson(request, response, 200, {
       ok: true,
       service: "telegram-multi-user",
-      storage: process.env.DATA_STORE || "json",
+      storage: store.storageBackend(),
       scheduler: shouldRunBackgroundListeners() ? "server" : "disabled",
       telegramLoginCredentials: sharedTelegramApiCredentials() ? "shared" : "per_connection",
       sharedCredentialsStatus: config.telegramApiCredentialsStatus,
@@ -1318,6 +1318,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const schedulingPostId = telegramPostIdFromPath(url.pathname, "/schedule");
   if (request.method === "POST" && schedulingPostId) {
     requireUserLevel(user, "operate");
+    if (!shouldRunBackgroundListeners()) {
+      throw new HttpError(409, "Telegram scheduling is not enabled. Use Send now.");
+    }
     const body = await readJsonBody(request);
     const scheduledAt = requiredString(body, "scheduledAt", 80);
     try {
@@ -1337,8 +1340,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     try {
       const post = await store.queuePost(user.id, sendingPostId, new Date().toISOString());
       if (!post) throw new HttpError(404, "Telegram post was not found.");
-      postScheduler?.wake();
-      sendJson(request, response, 202, { ok: true, post });
+      const sender = postScheduler || new TelegramPostScheduler(store, executeScheduledTelegramDelivery, 2_000, 1);
+      const delivered = await sender.runPostNow(user.id, post.id);
+      if (!delivered) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post: delivered });
     } catch (error) {
       throw telegramPostHttpError(error);
     }

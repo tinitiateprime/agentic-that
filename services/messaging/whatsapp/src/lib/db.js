@@ -449,6 +449,15 @@ async function migrate(sql) {
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction TEXT`,
     `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ`,
     `CREATE INDEX IF NOT EXISTS idx_messages_reaction ON messages(business_id, reaction_at)`,
+    `DELETE FROM messages duplicate USING messages retained
+       WHERE duplicate.id > retained.id
+         AND duplicate.business_id = retained.business_id
+         AND COALESCE(duplicate.provider, '') = COALESCE(retained.provider, '')
+         AND duplicate.provider_id = retained.provider_id
+         AND duplicate.provider_id IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS messages_provider_delivery_unique_idx
+       ON messages(business_id, COALESCE(provider, ''), provider_id)
+       WHERE provider_id IS NOT NULL`,
     `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_read_message_id INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_temp BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE groups ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,

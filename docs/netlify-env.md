@@ -21,6 +21,16 @@ SUPABASE_SECRET_KEY=<supabase-secret-key>
 SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
 USER_PROVISIONING_KEY=<different-new-random-32-byte-base64url-secret>
 SESSION_COOKIE_SECURE=true
+TELEGRAM_DATA_STORE=postgres
+
+# Platform authentication, verification, reset, and distributed abuse controls
+PLATFORM_PUBLIC_URL=https://<your-netlify-site>.netlify.app
+PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
+AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
+RESEND_API_KEY=<server-only-resend-api-key>
+AUTH_RATE_LIMIT_PEPPER=<new-random-32-byte-base64url-secret>
+NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false
+RBAC_ENFORCEMENT_MODE=enforce
 
 # WhatsApp using the Meta Cloud API
 WA_PROVIDER=meta
@@ -42,6 +52,10 @@ BUSINESS_NAME=AgenticThat
 WA_FROM=<e164-whatsapp-number>
 CURRENCY=INR
 
+# Exact stable, signed, notarized Companion release. QA tags are rejected by
+# the production configuration check.
+NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG=v2.1.12
+
 # Instagram scraping uses public Playwright pages; no Instagram session variables are required.
 INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES=360
 ```
@@ -55,6 +69,10 @@ If the Netlify plan supports variable scopes:
 - Using all scopes also works and is simplest when importing the block as an `.env` file.
 
 Variables declared only under `[build.environment]` in `netlify.toml` are not exposed to Functions. `DATA_STORE` is therefore included above even though the repository also supplies its build-time value.
+
+Before deploying a release, run `npm run production:check` against the proposed
+Netlify environment. Apply SQL only through the approval-gated database workflow;
+ordinary Netlify builds are intentionally read-only.
 
 ## Values not to add
 
@@ -154,4 +172,10 @@ Subscribe the Meta webhook to both `messages` and `calls`. The `calls` subscript
 
 ## Upgrade behavior
 
-After `CREDENTIAL_ENCRYPTION_KEY` is added and the site is redeployed, the first WhatsApp database request creates the new tenant/account, phone-number, call-log, and temporary-group schema. The existing environment-configured Meta account is imported into the encrypted account tables for the current admin workspace. Keep the existing `META_ACCESS_TOKEN`, `META_WABA_ID`, and `META_PHONE_NUMBER_ID` variables during this first deployment; after `/settings` shows the Meta account as connected, they remain a safe legacy fallback but new workspaces will not inherit them.
+Run the database workflow before deploying. It creates the tenant/account,
+phone-number, call-log, normalized Telegram/Publishing, authentication-security,
+and job-control schema, then verifies every public table has RLS with browser
+grants revoked. On Telegram's first request after migration, encrypted legacy
+Blob rows are imported idempotently into normalized Supabase tables. Keep the
+existing `META_ACCESS_TOKEN`, `META_WABA_ID`, and `META_PHONE_NUMBER_ID` variables
+during the first WhatsApp cutover; new workspaces never inherit them.

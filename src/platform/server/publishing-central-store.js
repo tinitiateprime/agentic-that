@@ -4,10 +4,12 @@ import nodeCron from "node-cron";
 import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
 import {
   getDatabaseSql,
-  initializeDatabaseDocument,
-  mutateDatabaseDocument,
-  readDatabaseDocument,
 } from "../../../lib/database-document-store.js";
+import {
+  initializePublishingDocument as initializeDatabaseDocument,
+  mutatePublishingDocument as mutateDatabaseDocument,
+  readPublishingDocument as readDatabaseDocument,
+} from "./publishing-normalized-store.js";
 import {
   cancelSupabaseJob,
   createSupabasePairing,
@@ -90,6 +92,18 @@ function documentValue(value) {
 
 async function initialize() {
   await initializeDatabaseDocument(DOCUMENT_KEY, blankDocument());
+}
+
+function mutateWorkspaceDocument(workspaceId, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { workspaceId });
+}
+
+function mutateTokenDocument(tokenHash, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { tokenHash });
+}
+
+function mutatePairingDocument(codeHash, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { codeHash });
 }
 
 function platform(value) {
@@ -438,7 +452,7 @@ export function publishingUserFromPrincipal(principal) {
 
 export async function getPublishingSnapshot(workspaceId) {
   await initialize();
-  return documentValue(await readDatabaseDocument(DOCUMENT_KEY));
+  return documentValue(await readDatabaseDocument(DOCUMENT_KEY, blankDocument(), { workspaceId }));
 }
 
 async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
@@ -493,7 +507,7 @@ async function reconcilePublishingControlPlane(workspaceId, knownRemoteJobs) {
     : await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
   const current = await getPublishingSnapshot(workspaceId);
   if (!remoteJobs.length || !applyRemotePublishingJobs(current, workspaceId, remoteJobs)) return current;
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(workspaceId, async (value) => {
     const document = documentValue(value);
     applyRemotePublishingJobs(document, workspaceId, remoteJobs);
     return { document, result: document };
@@ -529,7 +543,7 @@ export async function redeemCompanionPairing(input = {}) {
   const companionInstanceId = String(input.companionInstanceId || "").trim().slice(0, 120);
   if (!companionInstanceId) throw new Error("Companion instance identity is required.");
   const token = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
-  const companion = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const companion = await mutatePairingDocument(codeHash, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const challenge = document.pairingChallenges.find((item) => safeEqual(item.codeHash, codeHash));
@@ -577,8 +591,8 @@ export async function removeCentralCompanion(principal) {
 
 export async function authenticateCentralCompanion(token) {
   await initialize();
-  const document = documentValue(await readDatabaseDocument(DOCUMENT_KEY));
   const secretHash = hashSecret(token || "");
+  const document = documentValue(await readDatabaseDocument(DOCUMENT_KEY, blankDocument(), { tokenHash: secretHash }));
   const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
   if (!companion) throw new Error("This Companion pairing is no longer valid.");
   return publicCompanion(companion);
@@ -587,7 +601,7 @@ export async function authenticateCentralCompanion(token) {
 export async function heartbeatCentralCompanion(token, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -637,7 +651,7 @@ export async function heartbeatCentralCompanion(token, input = {}) {
 export async function createCentralAccount(principal, platformName, input = {}) {
   const selectedPlatform = platform(platformName);
   await initialize();
-  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const handle = String(input.handle || "").trim();
@@ -663,7 +677,7 @@ export async function createCentralAccount(principal, platformName, input = {}) 
 
 export async function updateCentralAccount(principal, accountId, input = {}) {
   await initialize();
-  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     for (const key of ["displayName", "handle", "loginIdentifier", "enabled"]) {
@@ -682,7 +696,7 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
 
 export async function deleteCentralAccount(principal, accountId) {
   await initialize();
-  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === accountId && !["posted", "failed"].includes(item.status))) {
@@ -748,7 +762,7 @@ function createUploadInDocument(document, principal, input = {}) {
 
 export async function createCentralUploads(principal, inputs = []) {
   if (!Array.isArray(inputs) || !inputs.length) throw new Error("Choose at least one workspace account.");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value, transaction) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value, transaction) => {
     const document = documentValue(value);
     const result = inputs.map((input) => createUploadInDocument(document, principal, input));
     const uploadIds = new Set(result.map((upload) => upload.id));
@@ -773,7 +787,7 @@ export async function createCentralUpload(principal, input = {}) {
 
 export async function updateCentralUpload(principal, uploadId, input = {}) {
   await initialize();
-  const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const upload = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     for (const key of ["title", "caption", "platformOptions", "scheduledAt", "scheduleId", "accountId"]) {
@@ -819,7 +833,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
 
 export async function updateCentralUploadStatus(principal, uploadId, status, failureReason) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     upload.status = status;
@@ -832,7 +846,7 @@ export async function updateCentralUploadStatus(principal, uploadId, status, fai
 
 export async function deleteCentralUpload(principal, uploadId) {
   await initialize();
-  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     const removedJobIds = document.jobs.filter((item) => item.uploadId === uploadId).map((item) => item.id);
@@ -1016,7 +1030,7 @@ export async function listCentralSchedules(workspaceId) {
 
 export async function createCentralSchedule(principal, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const sequence = document.schedules.reduce((highest, item) => Math.max(highest, Number(item.id) || 0), 0) + 1;
     const timestamp = now();
@@ -1031,7 +1045,7 @@ export async function createCentralSchedule(principal, input = {}) {
 
 export async function updateCentralSchedule(principal, scheduleId, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const schedule = document.schedules.find((item) => Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId);
     if (!schedule) throw new Error("Schedule was not found.");
@@ -1045,7 +1059,7 @@ export async function updateCentralSchedule(principal, scheduleId, input = {}) {
 
 export async function deleteCentralSchedule(principal, scheduleId) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const found = document.schedules.some((item) => Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId);
     if (!found) throw new Error("Schedule was not found.");
@@ -1092,7 +1106,7 @@ export async function listCentralSubmissions(workspaceId) {
 
 export async function createCentralSubmission(principal, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const selectedAccountIds = Array.isArray(input.selectedAccountIds) ? input.selectedAccountIds : [];
@@ -1129,7 +1143,7 @@ export async function createCentralSubmission(principal, input = {}) {
 
 export async function scheduleCentralSubmission(principal, submissionId, destinations = []) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const submission = findOwned(document, "submissions", principal.workspaceId, submissionId, "Submission");
     if (submission.status !== "awaiting_schedule") throw new Error("This submission has already been scheduled.");
@@ -1175,7 +1189,7 @@ export async function queueCentralUploads(principal, uploadIds) {
   await initialize();
   await reconcilePublishingControlPlane(principal.workspaceId);
   const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
-  const jobs = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const jobs = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     if (ids?.length) ids.forEach((item) => findOwned(document, "uploads", principal.workspaceId, item, "Post"));
     refreshDueJobs(document, principal.workspaceId, ids);
@@ -1244,7 +1258,7 @@ function recoverExpiredCentralJobLeases(document, workspaceId, timestamp) {
 export async function claimCentralJobs(token, limit = 1) {
   await initialize();
   const secretHash = hashSecret(token || "");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -1286,7 +1300,7 @@ export async function updateCentralJob(token, jobId, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
   const states = new Set(["waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "uncertain", "reconnect_required"]);
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -1415,5 +1429,6 @@ export const centralPublishingTestHelpers = {
   recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
   selectClaimableCentralJobs,
+  findOwned,
   versionAtLeast,
 };

@@ -36,10 +36,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   const [form, setForm] = useState(EMPTY_FORM);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [trialDays, setTrialDays] = useState(7);
   const [signupStep, setSignupStep] = useState(1);
   const [completedUser, setCompletedUser] = useState(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
+  const [emailDeliveryFailed, setEmailDeliveryFailed] = useState(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -55,8 +58,11 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     setMode(initialMode === "signup" ? "signup" : "login");
     setSignupStep(1);
     setCompletedUser(null);
+    setVerificationRequired(false);
+    setEmailDeliveryFailed(false);
     completedUserRef.current = null;
     setError("");
+    setErrorCode("");
     setBusy(false);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -112,6 +118,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     setMode(nextMode);
     setSignupStep(1);
     setError("");
+    setErrorCode("");
   };
 
   const goToStep = (step) => {
@@ -130,6 +137,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
   function finishSignup() {
     if (!completedUser) return;
+    if (verificationRequired) {
+      setCompletedUser(null);
+      setForm(EMPTY_FORM);
+      setSignupStep(1);
+      onClose?.();
+      return;
+    }
     const authenticatedUser = completedUser;
     completedUserRef.current = null;
     setCompletedUser(null);
@@ -150,6 +164,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setErrorCode("");
 
     if (!isSignup) {
       setBusy(true);
@@ -160,7 +175,14 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
           body: JSON.stringify({ email: form.email, password: form.password }),
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "Unable to continue. Please try again.");
+        if (!response.ok) {
+          setErrorCode(data.code || "");
+          throw new Error(data.error || "Unable to continue. Please try again.");
+        }
+        if (data.mfaRequired) {
+          window.location.assign(`/admin-mfa?next=${encodeURIComponent("/admin-center")}`);
+          return;
+        }
         setForm(EMPTY_FORM);
         onAuthenticated?.(data.user);
       } catch (submitError) {
@@ -196,13 +218,30 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Unable to continue. Please try again.");
       setCompletedUser(data.user);
-      completedUserRef.current = data.user;
+      setVerificationRequired(data.verificationRequired === true);
+      setEmailDeliveryFailed(data.emailDeliveryFailed === true);
+      completedUserRef.current = data.verificationRequired === true ? null : data.user;
       setSignupStep(3);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to continue. Please try again.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function resendVerification() {
+    setBusy(true); setError("");
+    try {
+      const response = await fetch("/api/platform-auth/resend-verification", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: form.email }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Unable to resend verification.");
+      setError(data.message);
+      setErrorCode("");
+    } catch (resendError) {
+      setError(resendError instanceof Error ? resendError.message : "Unable to resend verification.");
+    } finally { setBusy(false); }
   }
 
   return (
@@ -350,14 +389,24 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                   <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
                 </div>
                 <strong>Welcome, {completedUser?.name || form.name}.</strong>
-                <p>{TESTING_FULL_ACCESS
+                <p>{verificationRequired
+                  ? emailDeliveryFailed
+                    ? "Your account was created, but the verification email could not be delivered. Use resend below."
+                    : "Check your inbox and verify your work email before signing in."
+                  : TESTING_FULL_ACCESS
                   ? "Every service is ready with full testing access and no trial usage quotas."
                   : `Every service is ready. Your ${trialDays}-day trial clock starts when your workspace first uses any service.`}</p>
-                <span>No payment method is required.</span>
+                <span>{verificationRequired ? "The secure link expires in 24 hours." : "No payment method is required."}</span>
+                {verificationRequired && emailDeliveryFailed && (
+                  <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>
+                    Resend verification email
+                  </button>
+                )}
               </div>
             )}
 
             <div className={`auth-error${error ? " visible" : ""}`} role="alert">{error || " "}</div>
+            {errorCode === "EMAIL_NOT_VERIFIED" && <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>Resend verification email</button>}
 
             <div className={`auth-actions${isSignup && signupStep === 2 ? " has-back" : ""}`}>
               {isSignup && signupStep === 2 && (
@@ -376,11 +425,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                       ? "Continue to plans"
                       : signupStep === 2
                         ? (TESTING_FULL_ACCESS ? "Activate full testing access" : `Start ${trialDays}-day Trial plan`)
-                        : "Open my workspace"}</span>
+                        : verificationRequired ? "Done" : "Open my workspace"}</span>
                 {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
               </button>
             </div>
           </form>
+
+          {!isSignup && <p className="auth-legal"><a href="/forgot-password">Forgot your password?</a></p>}
 
           {(!isSignup || signupStep < 3) && <p className="auth-legal">By continuing, you agree to the Terms of Service and Privacy Policy.</p>}
         </div>

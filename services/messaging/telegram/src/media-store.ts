@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { getTelegramDatabaseClient } from "./store.ts";
 
 const UPLOAD_ID = /^telegram_media_[a-f0-9]{32}$/;
 export const TELEGRAM_MEDIA_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -33,6 +34,8 @@ function publicUpload(value: StoredTelegramMedia): TelegramMediaUpload {
 export class TelegramMediaStore {
   private readonly root: string;
   private readonly operations = new Map<string, Promise<unknown>>();
+  private readonly databaseSql = getTelegramDatabaseClient();
+  private usePostgres = Boolean(this.databaseSql);
 
   constructor(dataDir: string, private readonly maxBytes: number) {
     this.root = path.join(path.resolve(dataDir), "media-uploads");
@@ -40,6 +43,15 @@ export class TelegramMediaStore {
 
   async initialize() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
+    if (this.usePostgres && this.databaseSql) {
+      const [state] = await this.databaseSql`
+        SELECT to_regclass('agentic_that.telegram_media_uploads') IS NOT NULL AS ready`;
+      if (state?.ready) return;
+      if (String(process.env.TELEGRAM_DATA_STORE || "").trim().toLowerCase() === "postgres") {
+        throw new Error("Telegram media migration is missing. Run npm run db:migrate first.");
+      }
+      this.usePostgres = false;
+    }
   }
 
   private paths(id: string) {
@@ -100,6 +112,15 @@ export class TelegramMediaStore {
       createdAt: new Date().toISOString(),
       completedAt: null,
     };
+    if (this.usePostgres && this.databaseSql) {
+      await this.databaseSql`
+        INSERT INTO agentic_that.telegram_media_uploads
+          (id, owner_id, account_id, file_name, mime_type, byte_size, upload_offset, content, created_at)
+        VALUES
+          (${value.id}, ${value.ownerId}, ${value.accountId}, ${value.fileName}, ${value.mimeType},
+           ${value.size}, 0, ${Buffer.alloc(0)}, ${value.createdAt})`;
+      return publicUpload(value);
+    }
     await this.save(value);
     const handle = await open(paths.partial, "wx", 0o600);
     await handle.close();
@@ -110,6 +131,39 @@ export class TelegramMediaStore {
     return this.locked(id, async () => {
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Telegram media upload offset is invalid.");
       if (!chunk.length || chunk.length > TELEGRAM_MEDIA_CHUNK_BYTES) throw new Error("Telegram media upload chunks must be 4 MB or smaller.");
+      if (this.usePostgres && this.databaseSql) {
+        return this.databaseSql.begin(async (transaction) => {
+          const [row] = await transaction`
+            SELECT id, owner_id, account_id, file_name, mime_type, byte_size, upload_offset,
+                   created_at, completed_at, octet_length(content)::bigint AS stored_size
+              FROM agentic_that.telegram_media_uploads
+             WHERE id = ${id} AND owner_id = ${ownerId} AND account_id = ${accountId}
+             FOR UPDATE`;
+          if (!row) throw new Error("Telegram media upload was not found.");
+          if (row.completed_at) throw new Error("Telegram media upload is already complete.");
+          const currentOffset = Number(row.upload_offset);
+          const declaredSize = Number(row.byte_size);
+          if (currentOffset !== offset || Number(row.stored_size) !== offset) {
+            throw new Error("Telegram media upload offset does not match the server.");
+          }
+          if (offset + chunk.length > declaredSize) throw new Error("Telegram media upload exceeds its declared size.");
+          const [updated] = await transaction`
+            UPDATE agentic_that.telegram_media_uploads
+               SET content = content || ${chunk}::bytea,
+                   upload_offset = upload_offset + ${chunk.length}
+             WHERE id = ${id}
+             RETURNING id, file_name, mime_type, byte_size, upload_offset, created_at, completed_at`;
+          return {
+            id: updated.id,
+            fileName: updated.file_name,
+            mimeType: updated.mime_type,
+            size: Number(updated.byte_size),
+            offset: Number(updated.upload_offset),
+            createdAt: new Date(updated.created_at).toISOString(),
+            completedAt: updated.completed_at ? new Date(updated.completed_at).toISOString() : null,
+          };
+        });
+      }
       const { value, paths } = await this.readOwned(ownerId, accountId, id);
       if (value.completedAt) throw new Error("Telegram media upload is already complete.");
       if (value.offset !== offset) throw new Error("Telegram media upload offset does not match the server.");
@@ -135,6 +189,34 @@ export class TelegramMediaStore {
 
   async complete(ownerId: string, accountId: string, id: string) {
     return this.locked(id, async () => {
+      if (this.usePostgres && this.databaseSql) {
+        return this.databaseSql.begin(async (transaction) => {
+          const [row] = await transaction`
+            SELECT id, file_name, mime_type, byte_size, upload_offset, created_at, completed_at,
+                   octet_length(content)::bigint AS stored_size
+              FROM agentic_that.telegram_media_uploads
+             WHERE id = ${id} AND owner_id = ${ownerId} AND account_id = ${accountId}
+             FOR UPDATE`;
+          if (!row) throw new Error("Telegram media upload was not found.");
+          if (Number(row.upload_offset) !== Number(row.byte_size) || Number(row.stored_size) !== Number(row.byte_size)) {
+            throw new Error("Telegram media upload has not finished.");
+          }
+          const completedAt = row.completed_at ? new Date(row.completed_at).toISOString() : new Date().toISOString();
+          if (!row.completed_at) {
+            await transaction`
+              UPDATE agentic_that.telegram_media_uploads SET completed_at = ${completedAt} WHERE id = ${id}`;
+          }
+          return {
+            id: row.id,
+            fileName: row.file_name,
+            mimeType: row.mime_type,
+            size: Number(row.byte_size),
+            offset: Number(row.upload_offset),
+            createdAt: new Date(row.created_at).toISOString(),
+            completedAt,
+          };
+        });
+      }
       const { value, paths } = await this.readOwned(ownerId, accountId, id);
       if (value.completedAt) return publicUpload(value);
       const details = await stat(paths.partial).catch(() => null);
@@ -149,6 +231,30 @@ export class TelegramMediaStore {
   }
 
   async resolve(ownerId: string, accountId: string, id: string): Promise<TelegramMediaFile> {
+    if (this.usePostgres && this.databaseSql) {
+      const [row] = await this.databaseSql`
+        SELECT id, file_name, mime_type, byte_size, upload_offset, content, created_at, completed_at
+          FROM agentic_that.telegram_media_uploads
+         WHERE id = ${id} AND owner_id = ${ownerId} AND account_id = ${accountId}`;
+      if (!row) throw new Error("Telegram media upload was not found.");
+      if (!row.completed_at || Number(row.upload_offset) !== Number(row.byte_size)) {
+        throw new Error("Telegram media upload has not finished.");
+      }
+      const paths = this.paths(id);
+      const temporary = `${paths.complete}.${randomUUID()}.tmp`;
+      await writeFile(temporary, row.content, { mode: 0o600, flag: "wx" });
+      await rename(temporary, paths.complete);
+      return {
+        id: row.id,
+        fileName: row.file_name,
+        mimeType: row.mime_type,
+        size: Number(row.byte_size),
+        offset: Number(row.upload_offset),
+        createdAt: new Date(row.created_at).toISOString(),
+        completedAt: new Date(row.completed_at).toISOString(),
+        path: paths.complete,
+      };
+    }
     const { value, paths } = await this.readOwned(ownerId, accountId, id);
     if (!value.completedAt) throw new Error("Telegram media upload has not finished.");
     const details = await stat(paths.complete).catch(() => null);
@@ -158,6 +264,16 @@ export class TelegramMediaStore {
 
   async remove(ownerId: string, accountId: string, id: string) {
     return this.locked(id, async () => {
+      if (this.usePostgres && this.databaseSql) {
+        const rows = await this.databaseSql`
+          DELETE FROM agentic_that.telegram_media_uploads
+           WHERE id = ${id} AND owner_id = ${ownerId} AND account_id = ${accountId}
+          RETURNING id`;
+        if (!rows.length) throw new Error("Telegram media upload was not found.");
+        const paths = this.paths(id);
+        await rm(paths.complete, { force: true });
+        return;
+      }
       const { paths } = await this.readOwned(ownerId, accountId, id);
       await Promise.all([
         rm(paths.metadata, { force: true }),
@@ -168,6 +284,14 @@ export class TelegramMediaStore {
   }
 
   async removeAccountUploads(ownerId: string, accountId: string) {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = await this.databaseSql`
+        DELETE FROM agentic_that.telegram_media_uploads
+         WHERE owner_id = ${ownerId} AND account_id = ${accountId}
+        RETURNING id`;
+      for (const row of rows) await rm(this.paths(row.id).complete, { force: true });
+      return;
+    }
     const entries = await readdir(this.root).catch(() => []);
     for (const entry of entries) {
       const match = /^(telegram_media_[a-f0-9]{32})\.json$/.exec(entry);

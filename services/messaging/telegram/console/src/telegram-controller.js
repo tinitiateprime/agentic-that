@@ -294,6 +294,10 @@ function moveAccountSetupToConfigManager() {
         ? health.configManagerUrl
         : fallbackOrigin + health.configManagerUrl;
     }
+    const scheduleButton = $("post-schedule");
+    const scheduleInput = $("post-scheduled-at");
+    if (scheduleButton) scheduleButton.hidden = health.scheduler !== "server";
+    if (scheduleInput) scheduleInput.disabled = health.scheduler !== "server";
   }).catch(() => undefined);
 }
 

@@ -340,10 +340,22 @@ export async function recordInbound({
     replyToId = parent?.id || null;
   }
 
-  const [row] = await sql`
+  const [inserted] = await sql`
     INSERT INTO messages (business_id, contact_id, direction, body, kind, status, provider_id, reply_to_id, phone_number_id, provider)
     VALUES (${business.id}, ${contact.id}, 'in', ${body}, ${kind}, 'delivered', ${providerId}, ${replyToId}, ${phoneNumberId}, ${provider})
+    ON CONFLICT DO NOTHING
     RETURNING *`;
+  if (!inserted && providerId) {
+    const [existing] = await sql`
+      SELECT * FROM messages
+       WHERE business_id = ${business.id}
+         AND coalesce(provider, '') = coalesce(${provider}, '')
+         AND provider_id = ${providerId}
+       LIMIT 1`;
+    if (existing) return existing;
+  }
+  const row = inserted;
+  if (!row) throw new Error("Inbound WhatsApp message could not be recorded.");
   await sql`UPDATE contacts SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ${contact.id}`;
 
   // Greet first-time contacts. Runs here rather than in each provider's

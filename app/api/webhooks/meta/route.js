@@ -58,9 +58,8 @@ export async function POST(req) {
 
 function validMetaSignature(rawBody, signature) {
   const appSecret = (process.env.META_APP_SECRET || "").trim();
-  // Keep local/sample payloads usable until an app secret is configured. In a
-  // live setup the supplied secret makes the signature mandatory.
-  if (!appSecret) return true;
+  // Local fixtures remain usable, but deployed webhooks always fail closed.
+  if (!appSecret) return process.env.NODE_ENV !== "production" && process.env.NETLIFY !== "true";
   if (!/^sha256=[a-f0-9]{64}$/i.test(signature || "")) return false;
   const expected = `sha256=${crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex")}`;
   const receivedBuffer = Buffer.from(signature, "utf8");
@@ -76,6 +75,7 @@ async function businessForEntry(sql, entry) {
   const tenant = await resolveTenantByWabaId(entry?.id);
   if (tenant) return tenant.business;
 
+  if (process.env.NODE_ENV === "production" || process.env.NETLIFY === "true") return null;
   const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM whatsapp_accounts`;
   if (n > 0) return null; // onboarded SaaS: an unknown WABA is not ours
 

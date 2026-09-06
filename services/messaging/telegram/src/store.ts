@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import postgres from "postgres";
 import { SecretCipher } from "./crypto.ts";
 
 export type AppUser = {
@@ -297,6 +298,35 @@ const shouldUseNetlifyBlobs = () => (
   process.env.NETLIFY === "true" ||
   Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+const telegramDatabaseUrl = () => (
+  process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || ""
+).trim();
+const shouldUsePostgres = () => (
+  Boolean(telegramDatabaseUrl()) && !["json", "local-json", "netlify-blobs"].includes(
+    String(process.env.TELEGRAM_DATA_STORE || "postgres").trim().toLowerCase(),
+  )
+);
+
+const globalForTelegram = globalThis as typeof globalThis & {
+  __agenticThatTelegramSql?: ReturnType<typeof postgres>;
+};
+
+function telegramSql() {
+  const url = telegramDatabaseUrl();
+  if (!url) throw new Error("DATABASE_URL or SUPABASE_DB_URL is required for Telegram database persistence.");
+  globalForTelegram.__agenticThatTelegramSql ??= postgres(url, {
+    prepare: false,
+    max: Number(process.env.PG_POOL_MAX || (process.env.NETLIFY === "true" ? 1 : 5)),
+    idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.NETLIFY === "true" ? 5 : 20)),
+    connect_timeout: 15,
+    onnotice: () => undefined,
+  });
+  return globalForTelegram.__agenticThatTelegramSql;
+}
+
+export function getTelegramDatabaseClient() {
+  return shouldUsePostgres() ? telegramSql() : null;
+}
 
 function hashPassword(password: string) {
   const salt = randomBytes(16).toString("base64url");
@@ -365,6 +395,8 @@ export class MultiUserStore {
   private readonly lockFile: string;
   private readonly cipher: SecretCipher;
   private readonly useNetlifyBlobs: boolean;
+  private usePostgres: boolean;
+  private readonly databaseSql: ReturnType<typeof postgres> | null;
   private blobStorePromise: Promise<BlobStore> | null = null;
   private queue = Promise.resolve();
 
@@ -374,9 +406,34 @@ export class MultiUserStore {
     this.lockFile = path.join(this.dataDir, "store.lock");
     this.cipher = new SecretCipher(sessionEncryptionKey);
     this.useNetlifyBlobs = shouldUseNetlifyBlobs();
+    this.usePostgres = shouldUsePostgres();
+    this.databaseSql = this.usePostgres ? telegramSql() : null;
   }
 
   async initialize() {
+    if (this.usePostgres && this.databaseSql) {
+      const [state] = await this.databaseSql`
+        SELECT to_regclass('agentic_that.telegram_users') IS NOT NULL AS ready`;
+      if (state?.ready) {
+        const [count] = await this.databaseSql`
+          SELECT count(*)::integer AS total FROM agentic_that.telegram_users`;
+        if (!count?.total && this.useNetlifyBlobs) {
+          try {
+            const blobStore = await this.getBlobStore();
+            const legacy = coerceDatabase(await blobStore.get("store", { type: "json", consistency: "strong" }));
+            if (legacy.appUsers.length) await this.writePostgresDatabase(legacy);
+          } catch (error) {
+            console.warn("Telegram legacy Blob import was skipped:", error instanceof Error ? error.name : "unknown error");
+          }
+        }
+        return;
+      }
+      if (String(process.env.TELEGRAM_DATA_STORE || "").trim().toLowerCase() === "postgres") {
+        throw new Error("Telegram database migration is missing. Run npm run db:migrate before enabling TELEGRAM_DATA_STORE=postgres.");
+      }
+      this.usePostgres = false;
+      console.warn("Telegram normalized tables are not installed yet; temporarily using the legacy store.");
+    }
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       const existing = await store.get("store", { type: "json", consistency: "strong" });
@@ -395,6 +452,10 @@ export class MultiUserStore {
 
   async close() {
     await this.queue;
+  }
+
+  storageBackend() {
+    return this.usePostgres ? "supabase-postgres" : this.useNetlifyBlobs ? "netlify-blobs" : "json";
   }
 
   async createUser(displayName: string) {
@@ -1120,6 +1181,24 @@ export class MultiUserStore {
     });
   }
 
+  async claimPostNow(userId: string, postId: string, workerId: string, leaseMs = 120_000): Promise<ClaimedTelegramPost | null> {
+    return this.updateDatabase((database) => {
+      const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
+      if (!row) return null;
+      if (row.status !== "Scheduled") throw new Error("Only a waiting Telegram post can be sent.");
+      const accountBusy = database.telegramPosts.some((post) => (
+        post.id !== row.id && post.accountId === row.accountId
+        && post.status === "Sending" && parseIso(post.leaseExpiresAt) > Date.now()
+      ));
+      if (accountBusy) throw new Error("This Telegram account is already sending another post.");
+      row.status = "Sending";
+      row.leaseOwner = workerId;
+      row.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+      row.updatedAt = nowIso();
+      return { ...this.toTelegramPost(row), ownerId: row.userId, leaseOwner: workerId };
+    });
+  }
+
   async renewPostLease(postId: string, workerId: string, leaseMs = 120_000): Promise<boolean> {
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => (
@@ -1196,6 +1275,22 @@ export class MultiUserStore {
   }
 
   private async updateDatabase<T>(operation: (database: JsonDatabase) => T | Promise<T>): Promise<T> {
+    if (this.usePostgres && this.databaseSql) {
+      const run = async (): Promise<T> => {
+        const value = await this.databaseSql!.begin(async (transaction) => {
+          await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+          const previous = await this.readPostgresDatabase(transaction);
+          const database = structuredClone(previous);
+          const result = await operation(database);
+          await this.writePostgresDatabase(database, transaction, previous);
+          return result;
+        });
+        return value as unknown as T;
+      };
+      const result = this.queue.then(run, run);
+      this.queue = result.then(() => undefined, () => undefined);
+      return await result as T;
+    }
     const run = async () => this.withFileLock(async () => {
       const database = await this.readDatabase();
       const result = await operation(database);
@@ -1208,6 +1303,7 @@ export class MultiUserStore {
   }
 
   private async readDatabase(): Promise<JsonDatabase> {
+    if (this.usePostgres && this.databaseSql) return this.readPostgresDatabase(this.databaseSql);
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       const database = await store.get("store", { type: "json", consistency: "strong" });
@@ -1227,6 +1323,10 @@ export class MultiUserStore {
   }
 
   private async writeDatabase(database: JsonDatabase) {
+    if (this.usePostgres && this.databaseSql) {
+      await this.writePostgresDatabase(database);
+      return;
+    }
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       await store.setJSON("store", database);
@@ -1280,6 +1380,174 @@ export class MultiUserStore {
   private async getBlobStore(): Promise<BlobStore> {
     this.blobStorePromise ??= import("@netlify/blobs").then(({ getStore }) => getStore("agentic-that-telegram") as BlobStore);
     return this.blobStorePromise;
+  }
+
+  // postgres.js has distinct client and transaction interfaces with the same
+  // tagged-query surface; keeping this adapter structural avoids coupling the
+  // store to either concrete generic type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async readPostgresDatabase(executor: any): Promise<JsonDatabase> {
+    const database = emptyDatabase();
+    const collections: Array<[keyof JsonDatabase, string]> = [
+      ["appUsers", "agentic_that.telegram_users"],
+      ["appSessions", "agentic_that.telegram_browser_sessions"],
+      ["telegramAccounts", "agentic_that.telegram_accounts"],
+      ["telegramLoginChallenges", "agentic_that.telegram_login_challenges"],
+      ["telegramMessages", "agentic_that.telegram_messages"],
+      ["telegramPosts", "agentic_that.telegram_posts"],
+      ["telegramContacts", "agentic_that.telegram_contacts"],
+      ["telegramGroups", "agentic_that.telegram_groups"],
+      ["telegramChannels", "agentic_that.telegram_channels"],
+      ["telegramProfiles", "agentic_that.telegram_profiles"],
+    ];
+    for (const [collection, table] of collections) {
+      const rows = await executor.unsafe(`SELECT record FROM ${table}`);
+      (database[collection] as unknown[]) = rows.map((row: { record: unknown }) => {
+        if (row.record && typeof row.record === "object") return row.record;
+        if (typeof row.record !== "string") return null;
+        try {
+          const parsed = JSON.parse(row.record);
+          return parsed && typeof parsed === "object" ? parsed : null;
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+    }
+    return coerceDatabase(database);
+  }
+
+  private async writePostgresDatabase(
+    database: JsonDatabase,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    existingExecutor?: any,
+    previous = emptyDatabase(),
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const execute = async (transaction: any) => {
+      const accountOwners = new Map(database.telegramAccounts.map((account) => [account.id, account.userId]));
+
+      for (const row of database.appUsers) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_users
+             (id, workspace_id, platform_user_id, display_name, token_hash, configured_login, password_hash, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+           ON CONFLICT (id) DO UPDATE SET workspace_id=excluded.workspace_id,
+             platform_user_id=excluded.platform_user_id, display_name=excluded.display_name,
+             token_hash=excluded.token_hash, configured_login=excluded.configured_login,
+             password_hash=excluded.password_hash, record=excluded.record`,
+          [row.id, row.platformWorkspaceId || null, row.platformUserId || null, row.displayName,
+           row.tokenHash, row.configuredLogin, row.passwordHash || null, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramAccounts) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_accounts
+             (id, owner_id, telegram_user_id, display_name, username, created_at, updated_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id,
+             telegram_user_id=excluded.telegram_user_id, display_name=excluded.display_name,
+             username=excluded.username, updated_at=excluded.updated_at, record=excluded.record`,
+          [row.id, row.userId, row.telegramUserId, row.displayName, row.username, row.createdAt, row.updatedAt, row],
+        );
+      }
+      for (const row of database.appSessions) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_browser_sessions
+             (id, owner_id, token_hash, expires_at, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, token_hash=excluded.token_hash,
+             expires_at=excluded.expires_at, record=excluded.record`,
+          [row.id, row.userId, row.tokenHash, row.expiresAt, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramLoginChallenges) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_login_challenges(id, owner_id, expires_at, created_at, record)
+           VALUES ($1,$2,$3,$4,$5::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, expires_at=excluded.expires_at, record=excluded.record`,
+          [row.id, row.userId, row.expiresAt, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramMessages) {
+        const ownerId = accountOwners.get(row.accountId);
+        if (!ownerId) continue;
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_messages(id, owner_id, account_id, direction, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, account_id=excluded.account_id,
+             direction=excluded.direction, created_at=excluded.created_at, record=excluded.record`,
+          [row.id, ownerId, row.accountId, row.direction, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramPosts) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_posts
+             (id, owner_id, account_id, status, scheduled_at, lease_owner, lease_expires_at, created_at, updated_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, account_id=excluded.account_id,
+             status=excluded.status, scheduled_at=excluded.scheduled_at, lease_owner=excluded.lease_owner,
+             lease_expires_at=excluded.lease_expires_at, updated_at=excluded.updated_at, record=excluded.record`,
+          [row.id, row.userId, row.accountId, row.status, row.scheduledAt || null, row.leaseOwner || null,
+           row.leaseExpiresAt || null, row.createdAt, row.updatedAt, row],
+        );
+      }
+      const workspaceCollections: Array<[TelegramWorkspaceRecordRow[], string]> = [
+        [database.telegramContacts, "agentic_that.telegram_contacts"],
+        [database.telegramGroups, "agentic_that.telegram_groups"],
+        [database.telegramChannels, "agentic_that.telegram_channels"],
+      ];
+      for (const [records, table] of workspaceCollections) {
+        for (const row of records) {
+          await transaction.unsafe(
+            `INSERT INTO ${table}(id, owner_id, created_at, updated_at, record)
+             VALUES ($1,$2,$3,$4,$5::jsonb)
+             ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id,
+               updated_at=excluded.updated_at, record=excluded.record`,
+            [row.id, row.userId, row.createdAt, row.updatedAt, row],
+          );
+        }
+      }
+      for (const row of database.telegramProfiles) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_profiles(owner_id, account_id, updated_at, record)
+           VALUES ($1,$2,$3,$4::jsonb)
+           ON CONFLICT (owner_id, account_id) DO UPDATE SET updated_at=excluded.updated_at, record=excluded.record`,
+          [row.userId, row.accountId, row.updatedAt, row],
+        );
+      }
+
+      const removed = <T>(before: T[], after: T[], identity: (row: T) => string) => {
+        const retained = new Set(after.map(identity));
+        return before.filter((row) => !retained.has(identity(row)));
+      };
+      const deleteRows = async (table: string, rows: Array<{ id: string }>) => {
+        for (const row of rows) await transaction.unsafe(`DELETE FROM ${table} WHERE id = $1`, [row.id]);
+      };
+      for (const row of removed(previous.telegramProfiles, database.telegramProfiles, (item) => `${item.userId}:${item.accountId}`)) {
+        await transaction.unsafe(
+          "DELETE FROM agentic_that.telegram_profiles WHERE owner_id = $1 AND account_id = $2",
+          [row.userId, row.accountId],
+        );
+      }
+      await deleteRows("agentic_that.telegram_messages", removed(previous.telegramMessages, database.telegramMessages, (row) => row.id));
+      await deleteRows("agentic_that.telegram_posts", removed(previous.telegramPosts, database.telegramPosts, (row) => row.id));
+      await deleteRows("agentic_that.telegram_login_challenges", removed(previous.telegramLoginChallenges, database.telegramLoginChallenges, (row) => row.id));
+      await deleteRows("agentic_that.telegram_browser_sessions", removed(previous.appSessions, database.appSessions, (row) => row.id));
+      await deleteRows("agentic_that.telegram_contacts", removed(previous.telegramContacts, database.telegramContacts, (row) => row.id));
+      await deleteRows("agentic_that.telegram_groups", removed(previous.telegramGroups, database.telegramGroups, (row) => row.id));
+      await deleteRows("agentic_that.telegram_channels", removed(previous.telegramChannels, database.telegramChannels, (row) => row.id));
+      await deleteRows("agentic_that.telegram_accounts", removed(previous.telegramAccounts, database.telegramAccounts, (row) => row.id));
+    };
+
+    if (existingExecutor) {
+      await execute(existingExecutor);
+      return;
+    }
+    if (!this.databaseSql) throw new Error("Telegram database is unavailable.");
+    await this.databaseSql.begin(async (transaction) => {
+      await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+      await execute(transaction);
+    });
   }
 
   private encryptWorkspacePayload(value: object) {

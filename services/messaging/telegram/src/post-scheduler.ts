@@ -55,7 +55,16 @@ export class TelegramPostScheduler {
   async runOnce() {
     const post = await this.store.claimDuePost(this.workerId);
     if (!post) return null;
+    return this.deliverClaimedPost(post);
+  }
 
+  async runPostNow(ownerId: string, postId: string) {
+    const post = await this.store.claimPostNow(ownerId, postId, this.workerId);
+    if (!post) return null;
+    return this.deliverClaimedPost(post);
+  }
+
+  private async deliverClaimedPost(post: ClaimedTelegramPost) {
     let delivery: TelegramPostDelivery | null;
     while ((delivery = await this.store.claimNextPostDelivery(post.id, this.workerId))) {
       try {
