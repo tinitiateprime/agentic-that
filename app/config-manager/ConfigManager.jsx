@@ -279,8 +279,10 @@ export default function ConfigManager({
   const loadTelegram = useCallback(async () => {
     if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me", telegramIdentityToken);
-      const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
+      const me = await telegramRequest("/me?include=accounts", telegramIdentityToken);
+      const accountData = Array.isArray(me.accounts)
+        ? me
+        : await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
       setTelegramRequiresApiCredentials(Boolean(me.requiresTelegramApiCredentials));
@@ -410,16 +412,24 @@ export default function ConfigManager({
   }, [publishingIdentityToken, publishingSession?.token]);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadWhatsApp(), connectPublishing(), loadWorkspaceCompanion()]);
-  }, [connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion]);
+    if (activeService === "publishing") {
+      void Promise.all([connectPublishing(), loadWorkspaceCompanion()]);
+      return;
+    }
+    if (activeService === "messaging") {
+      if (messagingPlatform === "whatsapp") void loadWhatsApp();
+      else void loadTelegram();
+    }
+  }, [activeService, connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion, messagingPlatform]);
 
   useEffect(() => {
+    if (activeService !== "publishing") return undefined;
     const timer = window.setInterval(() => {
       void loadWorkspaceCompanion();
       void refreshPublishingAccounts();
-    }, 3_000);
+    }, 5_000);
     return () => window.clearInterval(timer);
-  }, [loadWorkspaceCompanion, refreshPublishingAccounts]);
+  }, [activeService, loadWorkspaceCompanion, refreshPublishingAccounts]);
 
   const whatsappConnected = Boolean(whatsappState?.connected && whatsappState?.account);
   const whatsappSenderCount = whatsappConnected ? Math.max(1, (whatsappState.numbers || []).length) : 0;
@@ -1134,6 +1144,8 @@ function TelegramManager({
   dashboardUrl,
   continueTelegramConnect,
   telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
   onReload,
   setNotice
 }) {

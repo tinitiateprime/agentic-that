@@ -1067,10 +1067,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (request.method !== "GET" && request.method !== "HEAD") ensureTrustedOrigin(request);
 
   if (request.method === "GET" && url.pathname === "/v1/me") {
+    const includeAccounts = url.searchParams.get("include")?.split(",").includes("accounts");
     sendJson(request, response, 200, {
       ok: true,
       user,
-      requiresTelegramApiCredentials: !sharedTelegramApiCredentials()
+      requiresTelegramApiCredentials: !sharedTelegramApiCredentials(),
+      ...(includeAccounts ? { accounts: await store.listAccounts(user.id) } : {})
     });
     return;
   }

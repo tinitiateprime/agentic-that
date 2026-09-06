@@ -59,6 +59,38 @@ function responseHeaders(headers: Headers) {
   return output;
 }
 
+function startupFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("SESSION_ENCRYPTION_KEY is required")) {
+    return {
+      code: "telegram_encryption_key_missing",
+      error: "Telegram needs SESSION_ENCRYPTION_KEY in the Netlify Functions environment."
+    };
+  }
+  if (message.includes("SESSION_ENCRYPTION_KEY must be")) {
+    return {
+      code: "telegram_encryption_key_invalid",
+      error: "SESSION_ENCRYPTION_KEY must be a base64url-encoded 32-byte key."
+    };
+  }
+  if (message.includes("USER_PROVISIONING_KEY is required")) {
+    return {
+      code: "telegram_provisioning_key_missing",
+      error: "Telegram needs USER_PROVISIONING_KEY in the Netlify Functions environment."
+    };
+  }
+  if (/blob|data store/i.test(message)) {
+    return {
+      code: "telegram_storage_unavailable",
+      error: "Telegram could not open its Netlify Blobs data store. Please try again."
+    };
+  }
+  return {
+    code: "telegram_startup_failed",
+    error: "Telegram could not start. Check the Netlify Function logs and try again."
+  };
+}
+
 export default async function handler(request: Request, _context: Context) {
   try {
     const local = await getLocalServer();
@@ -83,10 +115,7 @@ export default async function handler(request: Request, _context: Context) {
     });
   } catch (error) {
     console.error("Telegram serverless request failed:", error instanceof Error ? error.message : "Unknown startup error");
-    return Response.json({
-      ok: false,
-      error: "Telegram could not start. Verify the Telegram server environment and try again."
-    }, { status: 503 });
+    return Response.json({ ok: false, ...startupFailure(error) }, { status: 503 });
   }
 }
 
