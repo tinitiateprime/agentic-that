@@ -1,6 +1,8 @@
 import type { Config, Context } from "@netlify/functions";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createTelegramHttpServer } from "../../services/messaging/telegram/src/server.ts";
 
 type LocalServer = {
@@ -13,6 +15,10 @@ let localServerPromise: Promise<LocalServer> | null = null;
 async function getLocalServer() {
   process.env.SERVERLESS = "true";
   process.env.DATA_STORE ||= "netlify-blobs";
+  // The deployed function bundle is read-only. Account/session records use
+  // Netlify Blobs; transient upload parts must live in Lambda's writable temp
+  // directory so media initialization cannot take the whole Telegram API down.
+  process.env.DATA_DIR ||= path.join(tmpdir(), "agenticthat-telegram");
 
   localServerPromise ??= (async () => {
     const server = await createTelegramHttpServer({ startListeners: false });
@@ -83,6 +89,12 @@ function startupFailure(error: unknown) {
     return {
       code: "telegram_storage_unavailable",
       error: "Telegram could not open its Netlify Blobs data store. Please try again."
+    };
+  }
+  if (/EROFS|EACCES|read-only|permission denied/i.test(message)) {
+    return {
+      code: "telegram_temporary_storage_unavailable",
+      error: "Telegram could not open its temporary media storage. Please try again."
     };
   }
   return {
