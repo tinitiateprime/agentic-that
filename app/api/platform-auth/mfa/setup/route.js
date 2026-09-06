@@ -1,5 +1,5 @@
 import { beginAdminMfaEnrollment, confirmAdminMfaEnrollment, PlatformAuthError } from "@platform/server/auth-store";
-import { enforceAuthRateLimit, requestClientAddress } from "@platform/server/auth-abuse";
+import { clearAuthRateLimit, enforceAuthRateLimit, requestClientAddress } from "@platform/server/auth-abuse";
 
 function errorResponse(error) {
   if (error instanceof PlatformAuthError) {
@@ -10,10 +10,18 @@ function errorResponse(error) {
 }
 export async function POST(request) {
   try {
-    await enforceAuthRateLimit("mfa-setup-ip", requestClientAddress(request), 10, 60 * 60, 60 * 60);
     const body = await request.json();
-    if (body.action === "begin") return Response.json({ ok: true, ...await beginAdminMfaEnrollment() });
-    if (body.action === "confirm") return Response.json({ ok: true, ...await confirmAdminMfaEnrollment(body.code) });
+    const clientAddress = requestClientAddress(request);
+    if (body.action === "begin") {
+      await enforceAuthRateLimit("mfa-setup-begin-ip", clientAddress, 30, 5 * 60, 5 * 60);
+      return Response.json({ ok: true, ...await beginAdminMfaEnrollment() });
+    }
+    if (body.action === "confirm") {
+      await enforceAuthRateLimit("mfa-setup-confirm-ip", clientAddress, 10, 15 * 60, 30 * 60);
+      const result = await confirmAdminMfaEnrollment(body.code);
+      await clearAuthRateLimit("mfa-setup-confirm-ip", clientAddress);
+      return Response.json({ ok: true, ...result });
+    }
     return Response.json({ error: "Unsupported MFA setup action." }, { status: 400 });
   } catch (error) {
     return errorResponse(error);
