@@ -261,12 +261,14 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
     throw "A manual-login browser connection failed."
   }
 
-  try {
-    Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$serviceOrigin/api/schedules" -Headers $authorization `
-      -ContentType "application/json" -Body '{"name":"must-not-run","time":"09:00","frequency":"daily","status":"active"}' -TimeoutSec 5 | Out-Null
-    throw "The packaged Companion unexpectedly accepted a publishing schedule."
-  } catch {
-    if ($_.Exception.Response.StatusCode.value__ -ne 410) { throw }
+  $schedule = Invoke-RestMethod -Method Post -Uri "$serviceOrigin/api/schedules" -Headers $authorization `
+    -ContentType "application/json" -Body '{"name":"scheduled-publishing-smoke","time":"09:00","frequency":"daily","status":"active"}' -TimeoutSec 5
+  if (-not $schedule.id -or $schedule.name -ne "scheduled-publishing-smoke") {
+    throw "The packaged Companion did not create a role-authorized publishing schedule."
+  }
+  $schedules = @(Invoke-RestMethod -Method Get -Uri "$serviceOrigin/api/schedules" -Headers $authorization -TimeoutSec 5)
+  if (-not ($schedules | Where-Object { $_.id -eq $schedule.id })) {
+    throw "The packaged Companion did not persist the publishing schedule."
   }
 
   $productionOrigin = "https://agentic-that.netlify.app"
