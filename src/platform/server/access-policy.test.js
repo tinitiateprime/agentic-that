@@ -82,3 +82,22 @@ test("publishing system roles match their job responsibilities exactly", () => {
   assert.equal(publishingRoles.get("role_publishing_uploader")?.name, "Content Uploader");
   assert.equal(publishingRoles.get("role_publishing_scheduler")?.name, "Scheduler");
 });
+
+test("scraping and messaging system roles match their job responsibilities exactly", () => {
+  const roles = new Map(OPERATIONAL_ROLE_CATALOG.map((role) => [role.id, role.capabilities]));
+
+  assert.deepEqual(roles.get("role_scraping_viewer"), ["scraping.view"]);
+  assert.deepEqual(roles.get("role_scraping_operator"), [
+    "scraping.view",
+    "scraping.run",
+    "scraping.analyze",
+  ]);
+  assert.deepEqual(roles.get("role_scraping_manager"), CAPABILITY_CATALOG.scraping);
+
+  assert.deepEqual(roles.get("role_messaging_viewer"), ["messaging.view"]);
+  assert.deepEqual(roles.get("role_messaging_operator"), [
+    "messaging.view",
+    "messaging.operate",
+  ]);
+  assert.deepEqual(roles.get("role_messaging_manager"), CAPABILITY_CATALOG.messaging);
+});

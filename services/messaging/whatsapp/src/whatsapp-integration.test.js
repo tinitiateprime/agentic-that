@@ -15,6 +15,15 @@ test("reaction endpoint retains AgenticThat operate permission enforcement", asy
   assert.match(route, /getMessage\(user\.business_id, messageId\)/);
 });
 
+test("WhatsApp maps viewer, operator, and manager requests to distinct capabilities", async () => {
+  const auth = await source("services/messaging/whatsapp/src/lib/auth.js");
+  assert.match(auth, /if \(requiredLevel === "configure"\) return "messaging\.configure"/);
+  assert.match(auth, /if \(requiredLevel === "operate"\) return "messaging\.operate"/);
+  assert.match(auth, /return "messaging\.view"/);
+  assert.match(auth, /assertPrincipalAccess\(principal, "messaging\.whatsapp", requiredLevel\)/);
+  assert.match(auth, /assertPrincipalCapability\(principal, capabilityForLevel\(requiredLevel\)\)/);
+});
+
 test("all inbound provider webhooks process reaction events", async () => {
   for (const path of [
     "app/api/webhooks/meta/route.js",
