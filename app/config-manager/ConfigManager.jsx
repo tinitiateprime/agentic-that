@@ -424,11 +424,20 @@ export default function ConfigManager({
 
   useEffect(() => {
     if (activeService !== "publishing") return undefined;
-    const timer = window.setInterval(() => {
+    const refreshVisiblePublishing = () => {
+      if (document.visibilityState !== "visible") return;
       void loadWorkspaceCompanion();
       void refreshPublishingAccounts();
-    }, 5_000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(refreshVisiblePublishing, 15_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshVisiblePublishing();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [activeService, loadWorkspaceCompanion, refreshPublishingAccounts]);
 
   const whatsappConnected = Boolean(whatsappState?.connected && whatsappState?.account);

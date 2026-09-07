@@ -150,7 +150,8 @@ test("central publishing refresh uses one non-overlapping workspace request", as
   ]);
   assert.match(appSource, /refreshInFlight\.current/);
   assert.match(appSource, /api\.workspaceSnapshot\(permissions\.canManageUsers\)/);
-  assert.match(appSource, /setInterval\(\(\) => void refresh\(false\), 10000\)/);
+  assert.match(appSource, /setInterval\(refreshVisibleWorkspace, 15000\)/);
+  assert.match(appSource, /document\.visibilityState === 'visible'/);
   assert.match(clientSource, /request<.*>\("\/api\/workspace-snapshot"\)/);
   assert.match(routeSource, /parts\[0\] === "workspace-snapshot"/);
   assert.match(accessSource, /export async function requirePrincipalCapability/);

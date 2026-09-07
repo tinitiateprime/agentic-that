@@ -50,26 +50,25 @@ async function resolveWorkspace(transaction, selector = {}) {
   return "";
 }
 
-async function readRows(transaction, table, workspaceId) {
-  const rows = workspaceId
-    ? await transaction.unsafe(`SELECT record FROM ${table} WHERE workspace_id = $1`, [workspaceId])
-    : await transaction.unsafe(`SELECT record FROM ${table}`);
-  return rows.map((row) => {
-    if (row.record && typeof row.record === "object") return row.record;
-    if (typeof row.record !== "string") return null;
-    try {
-      const parsed = JSON.parse(row.record);
-      return parsed && typeof parsed === "object" ? parsed : null;
-    } catch {
-      return null;
-    }
-  }).filter(Boolean);
-}
-
 async function readNormalizedDocument(transaction, initialValue, workspaceId = "") {
   const document = await emptyDocument(initialValue);
-  for (const [collection, table] of Object.entries(TABLES)) {
-    document[collection] = await readRows(transaction, table, workspaceId);
+  const workspaceFilter = workspaceId ? " WHERE workspace_id = $1" : "";
+  const query = Object.entries(TABLES)
+    .map(([collection, table]) => `SELECT '${collection}' AS collection, record FROM ${table}${workspaceFilter}`)
+    .join(" UNION ALL ");
+  const rows = await transaction.unsafe(query, workspaceId ? [workspaceId] : []);
+  for (const collection of Object.keys(TABLES)) document[collection] = [];
+  for (const row of rows) {
+    if (!Object.hasOwn(TABLES, row.collection)) continue;
+    let record = row.record;
+    if (typeof record === "string") {
+      try {
+        record = JSON.parse(record);
+      } catch {
+        record = null;
+      }
+    }
+    if (record && typeof record === "object") document[row.collection].push(record);
   }
   document.stagedUploads = [];
   return document;
@@ -80,54 +79,157 @@ function recordTimestamp(record, field = "updatedAt") {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : new Date().toISOString();
 }
 
-async function insertRecord(transaction, collection, record) {
-  const id = String(record.id);
-  const workspaceId = String(record.workspaceId);
-  if (collection === "activityLogs") {
-    await transaction.unsafe(
-      `INSERT INTO ${TABLES[collection]}(id, workspace_id, created_at, record)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [id, workspaceId, recordTimestamp(record, "createdAt"), record],
-    );
-    return;
-  }
-  if (collection === "companions") {
-    await transaction.unsafe(
-      `INSERT INTO ${TABLES[collection]}(id, workspace_id, token_hash, updated_at, record)
-       VALUES ($1, $2, $3, $4, $5::jsonb)`,
-      [id, workspaceId, record.tokenHash || null, recordTimestamp(record), record],
-    );
-    return;
-  }
-  if (collection === "pairingChallenges") {
-    await transaction.unsafe(
-      `INSERT INTO ${TABLES[collection]}(id, workspace_id, code_hash, expires_at, record)
-       VALUES ($1, $2, $3, $4, $5::jsonb)`,
-      [id, workspaceId, String(record.codeHash || ""), recordTimestamp(record, "expiresAt"), record],
-    );
-    return;
-  }
-  await transaction.unsafe(
-    `INSERT INTO ${TABLES[collection]}(id, workspace_id, updated_at, record)
-     VALUES ($1, $2, $3, $4::jsonb)`,
-    [id, workspaceId, recordTimestamp(record), record],
-  );
-}
-
 async function replaceNormalizedDocument(transaction, document, workspaceId = "") {
-  for (const [collection, table] of Object.entries(TABLES)) {
-    if (workspaceId) {
-      await transaction.unsafe(`DELETE FROM ${table} WHERE workspace_id = $1`, [workspaceId]);
-    } else {
-      await transaction.unsafe(`DELETE FROM ${table}`);
-    }
-    const records = Array.isArray(document[collection]) ? document[collection] : [];
-    for (const record of records) {
-      if (!record?.id || !record?.workspaceId) continue;
-      if (workspaceId && String(record.workspaceId) !== workspaceId) continue;
-      await insertRecord(transaction, collection, record);
-    }
+  const payload = {};
+  for (const collection of Object.keys(TABLES)) {
+    const timestampField = collection === "activityLogs"
+      ? "createdAt"
+      : collection === "pairingChallenges" ? "expiresAt" : "updatedAt";
+    payload[collection] = (Array.isArray(document[collection]) ? document[collection] : [])
+      .filter((record) => record?.id && record?.workspaceId && (!workspaceId || String(record.workspaceId) === workspaceId))
+      .map((record) => ({
+        ...record,
+        id: String(record.id),
+        workspaceId: String(record.workspaceId),
+        [timestampField]: recordTimestamp(record, timestampField),
+      }));
   }
+
+  // Persist the complete workspace in one database round trip. The previous
+  // row-by-row replacement amplified normal network latency into 30-second
+  // Netlify timeouts once a workspace had publishing history.
+  await transaction.unsafe(`
+    WITH
+    account_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'accounts', '[]'::jsonb))
+    ),
+    upload_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'uploads', '[]'::jsonb))
+    ),
+    submission_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'submissions', '[]'::jsonb))
+    ),
+    schedule_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'schedules', '[]'::jsonb))
+    ),
+    activity_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'activityLogs', '[]'::jsonb))
+    ),
+    job_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'jobs', '[]'::jsonb))
+    ),
+    companion_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'companions', '[]'::jsonb))
+    ),
+    pairing_records AS (
+      SELECT value AS record FROM jsonb_array_elements(coalesce($1::jsonb->'pairingChallenges', '[]'::jsonb))
+    ),
+    upsert_accounts AS (
+      INSERT INTO agentic_that.publishing_accounts(id, workspace_id, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'updatedAt')::timestamptz, record FROM account_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_accounts AS (
+      DELETE FROM agentic_that.publishing_accounts stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM account_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_uploads AS (
+      INSERT INTO agentic_that.publishing_uploads(id, workspace_id, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'updatedAt')::timestamptz, record FROM upload_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_uploads AS (
+      DELETE FROM agentic_that.publishing_uploads stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM upload_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_submissions AS (
+      INSERT INTO agentic_that.publishing_submissions(id, workspace_id, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'updatedAt')::timestamptz, record FROM submission_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_submissions AS (
+      DELETE FROM agentic_that.publishing_submissions stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM submission_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_schedules AS (
+      INSERT INTO agentic_that.publishing_schedules(id, workspace_id, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'updatedAt')::timestamptz, record FROM schedule_records
+      ON CONFLICT (workspace_id, id) DO UPDATE SET updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_schedules AS (
+      DELETE FROM agentic_that.publishing_schedules stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM schedule_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_activity AS (
+      INSERT INTO agentic_that.publishing_activity_logs(id, workspace_id, created_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'createdAt')::timestamptz, record FROM activity_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, created_at = excluded.created_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_activity AS (
+      DELETE FROM agentic_that.publishing_activity_logs stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM activity_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_jobs AS (
+      INSERT INTO agentic_that.publishing_legacy_jobs(id, workspace_id, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', (record->>'updatedAt')::timestamptz, record FROM job_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_jobs AS (
+      DELETE FROM agentic_that.publishing_legacy_jobs stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM job_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_companions AS (
+      INSERT INTO agentic_that.publishing_legacy_companions(id, workspace_id, token_hash, updated_at, record)
+      SELECT record->>'id', record->>'workspaceId', nullif(record->>'tokenHash', ''), (record->>'updatedAt')::timestamptz, record FROM companion_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, token_hash = excluded.token_hash, updated_at = excluded.updated_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_companions AS (
+      DELETE FROM agentic_that.publishing_legacy_companions stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM companion_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    ),
+    upsert_pairings AS (
+      INSERT INTO agentic_that.publishing_pairing_challenges(id, workspace_id, code_hash, expires_at, record)
+      SELECT record->>'id', record->>'workspaceId', record->>'codeHash', (record->>'expiresAt')::timestamptz, record FROM pairing_records
+      ON CONFLICT (id) DO UPDATE SET workspace_id = excluded.workspace_id, code_hash = excluded.code_hash, expires_at = excluded.expires_at, record = excluded.record
+      RETURNING id
+    ),
+    delete_pairings AS (
+      DELETE FROM agentic_that.publishing_pairing_challenges stored
+       WHERE ($2 = '' OR stored.workspace_id = $2)
+         AND NOT EXISTS (SELECT 1 FROM pairing_records incoming WHERE incoming.record->>'id' = stored.id AND incoming.record->>'workspaceId' = stored.workspace_id)
+      RETURNING id
+    )
+    SELECT
+      (SELECT count(*) FROM upsert_accounts) + (SELECT count(*) FROM delete_accounts)
+      + (SELECT count(*) FROM upsert_uploads) + (SELECT count(*) FROM delete_uploads)
+      + (SELECT count(*) FROM upsert_submissions) + (SELECT count(*) FROM delete_submissions)
+      + (SELECT count(*) FROM upsert_schedules) + (SELECT count(*) FROM delete_schedules)
+      + (SELECT count(*) FROM upsert_activity) + (SELECT count(*) FROM delete_activity)
+      + (SELECT count(*) FROM upsert_jobs) + (SELECT count(*) FROM delete_jobs)
+      + (SELECT count(*) FROM upsert_companions) + (SELECT count(*) FROM delete_companions)
+      + (SELECT count(*) FROM upsert_pairings) + (SELECT count(*) FROM delete_pairings) AS affected
+  `, [payload, workspaceId]);
 }
 
 export async function initializePublishingDocument(key, initialValue) {
@@ -162,4 +264,6 @@ export async function mutatePublishingDocument(key, initialValue, operation, sel
 export const publishingNormalizedStoreTestHelpers = {
   TABLES,
   recordTimestamp,
+  readNormalizedDocument,
+  replaceNormalizedDocument,
 };

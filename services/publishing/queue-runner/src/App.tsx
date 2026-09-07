@@ -567,8 +567,18 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
 
   useEffect(() => {
     void refresh();
-    const refreshTimer = window.setInterval(() => void refresh(false), 10000);
-    return () => window.clearInterval(refreshTimer);
+    const refreshVisibleWorkspace = () => {
+      if (document.visibilityState === 'visible') void refresh(false);
+    };
+    const refreshTimer = window.setInterval(refreshVisibleWorkspace, 15000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisibleWorkspace();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [refresh]);
 
   const handleRun = async () => {
