@@ -70,7 +70,8 @@ create table if not exists public.social_accounts (
 );
 
 drop index if exists public.social_accounts_workspace_platform_handle_idx;
-create unique index if not exists social_accounts_workspace_platform_handle_nonempty_idx
+drop index if exists public.social_accounts_workspace_platform_handle_nonempty_idx;
+create index if not exists social_accounts_workspace_platform_handle_lookup_idx
   on public.social_accounts(workspace_id, platform, lower(handle))
   where nullif(trim(handle), '') is not null;
 create index if not exists social_accounts_workspace_idx

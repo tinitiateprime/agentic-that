@@ -108,7 +108,7 @@ const state = {
   postHistory: [],
   legacyPosts: read(keys.posts, []),
   formPost: null,
-  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Server session", proxy: "", storage: "Private Ubuntu server", theme: "Dark mode" }),
+  settings: read(keys.settings, { api: "Server API", telegram: "Default Telegram workflow", session: "Server session", proxy: "", storage: "Private workspace storage", theme: "Dark mode" }),
   activeView: "dashboard",
   inbox: { messages: [], selectedThread: "", loading: false, lastSyncAt: 0, view: localStorage.getItem(keys.inboxView) || "split", drafts: {} },
   postsLoading: false,
@@ -570,7 +570,7 @@ async function savePost() {
     $("post-id").value = saved.id;
     $("post-status").value = saved.status;
     render();
-    status(el.postStatusMessage, "Post saved on the Ubuntu server.", "success");
+    status(el.postStatusMessage, "Post saved securely.", "success");
     return saved;
   } catch (error) {
     onError(error, el.postStatusMessage);
@@ -947,7 +947,7 @@ async function loadInboxMessages(options = {}) {
     renderInbox();
   }
 }
-function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private Ubuntu server"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
+function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private workspace storage"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
 function applyTheme() { document.body.classList.toggle("light-mode", state.settings.theme === "Light mode"); }
 function backupData() { return { version: 2, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
 function render() { renderProfileSelect(); renderDashboard(); renderAccounts(); renderProfileForm(); renderProfileList(); renderApplications(); renderContacts(); renderInbox(); renderGroups(); renderChannels(); renderPostContacts(); renderPostGroups(); renderPostPreview(); renderPosts(); renderPostHistory(); renderSearch(); renderSettings(); }
@@ -1026,10 +1026,7 @@ async function migrateLegacyPosts() {
   for (const legacy of state.legacyPosts) {
     if (!state.accounts.some((account) => account.id === legacy.accountId)) { remaining.push(legacy); continue; }
     try {
-      const created = await api("/v1/posts", { method: "POST", body: postApiPayload({ ...legacy, id: "" }) });
-      if (legacy.status === "Scheduled" && scheduleIso(legacy.scheduledAt)) {
-        await api(`/v1/posts/${encodeURIComponent(created.post.id)}/schedule`, { method: "POST", body: { scheduledAt: scheduleIso(legacy.scheduledAt) } });
-      }
+      await api("/v1/posts", { method: "POST", body: postApiPayload({ ...legacy, id: "" }) });
     } catch {
       remaining.push(legacy);
     }
@@ -1221,7 +1218,7 @@ async function uploadPostMediaFile(file) {
   el.postMediaDropzone.classList.remove("has-file");
   el.postMediaDropzone.classList.add("is-uploading");
   el.postMediaDropzone.setAttribute("aria-busy", "true");
-  status(el.postStatusMessage, "Uploading the file privately to Ubuntu...");
+  status(el.postStatusMessage, "Uploading the file privately...");
   try {
     const upload = await uploadTelegramDeviceFile({
       file,
@@ -1327,17 +1324,6 @@ document.addEventListener("click", async (event) => {
   if (button.id === "group-clear") { el.groupForm.reset(); $("group-id").value = ""; }
   if (button.id === "channel-clear") { el.channelForm.reset(); $("channel-id").value = ""; }
   if (button.id === "post-clear") clearPost();
-  if (button.id === "post-schedule") {
-    const scheduledAt = scheduleIso($("post-scheduled-at").value);
-    if (!scheduledAt) return status(el.postStatusMessage, "Choose a valid scheduled date.", "error");
-    const post = await savePost();
-    if (!post) return;
-    try {
-      await api(`/v1/posts/${encodeURIComponent(post.id)}/schedule`, { method: "POST", body: { scheduledAt } });
-      await loadServerPosts({ migrate: false, quiet: true });
-      status(el.postStatusMessage, "Scheduled on the Ubuntu server. You may close this browser.", "success");
-    } catch (error) { onError(error, el.postStatusMessage); }
-  }
   if (button.id === "post-send-now") {
     if (postSendPending) return;
     postSendPending = true;
@@ -1347,7 +1333,7 @@ document.addEventListener("click", async (event) => {
       if (!post) return;
       await api(`/v1/posts/${encodeURIComponent(post.id)}/send-now`, { method: "POST", body: {} });
       await loadServerPosts({ migrate: false, quiet: true });
-      status(el.postStatusMessage, "Queued on the Ubuntu server for immediate delivery.", "success");
+      status(el.postStatusMessage, "Post sent for immediate delivery.", "success");
     } catch (error) {
       onError(error, el.postStatusMessage);
     } finally {
@@ -1381,7 +1367,7 @@ document.addEventListener("click", async (event) => {
   const editChannel = button.dataset.editChannel; if (editChannel) { const item = state.channels.find((row) => row.id === editChannel); if (item) { $("channel-id").value = item.id; $("channel-name").value = item.name || ""; $("channel-privacy").value = item.privacy || "Private"; $("channel-invites").value = item.invites || ""; $("channel-notes").value = item.notes || ""; } }
   const deleteChannel = button.dataset.deleteChannel; if (deleteChannel) { try { await api(`/v1/channels/${encodeURIComponent(deleteChannel)}`, { method: "DELETE" }); state.channels = state.channels.filter((row) => row.id !== deleteChannel); render(); status(el.channelStatusMessage, "Channel deleted from the server.", "success"); } catch (error) { onError(error, el.channelStatusMessage); } }
   const editPost = button.dataset.editPost; if (editPost) { const item = state.posts.find((row) => row.id === editPost); if (item) fillPost(item); }
-  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { fillPost({ ...item, id: "", title: `${item.title} copy`, status: "Draft", scheduledAt: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); status(el.postStatusMessage, "Copy is ready. Save or schedule it when finished.", "success"); } }
+  const copyPost = button.dataset.copyPost; if (copyPost) { const item = state.posts.find((row) => row.id === copyPost); if (item) { fillPost({ ...item, id: "", title: `${item.title} copy`, status: "Draft", scheduledAt: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); status(el.postStatusMessage, "Copy is ready. Save it or post it now.", "success"); } }
   const cancelPost = button.dataset.cancelPost; if (cancelPost) { try { await api(`/v1/posts/${encodeURIComponent(cancelPost)}/cancel`, { method: "POST", body: {} }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Scheduled post cancelled.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
   const deletePost = button.dataset.deletePost; if (deletePost) { try { await api(`/v1/posts/${encodeURIComponent(deletePost)}`, { method: "DELETE" }); await loadServerPosts({ migrate: false, quiet: true }); status(el.postStatusMessage, "Post deleted from the server.", "success"); } catch (error) { onError(error, el.postStatusMessage); } }
 });

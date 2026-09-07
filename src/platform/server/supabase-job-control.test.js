@@ -37,6 +37,20 @@ test("an existing private media bucket is accepted during cold starts", () => {
   assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Invalid bucket configuration"), false);
 });
 
+test("direct media upload parts use bounded, workspace-scoped object paths", () => {
+  assert.equal(
+    supabaseJobControlTestHelpers.artifactPartObjectPath("workspace_1", "media_demo.mp4", 7),
+    "workspace_1/media_demo.mp4.parts/0007",
+  );
+  assert.doesNotThrow(() => supabaseJobControlTestHelpers.validateArtifactPartInput({
+    index: 0,
+    offset: 0,
+    byteSize: 5 * 1024 * 1024,
+  }));
+  assert.throws(() => supabaseJobControlTestHelpers.validateArtifactPartInput({ index: 0, offset: 0, byteSize: 5 * 1024 * 1024 + 1 }));
+  assert.throws(() => supabaseJobControlTestHelpers.validateArtifactPartInput({ index: -1, offset: 0, byteSize: 1 }));
+});
+
 test("Companion status is derived from heartbeat freshness and minimum version", () => {
   const current = new Date().toISOString();
   const base = {
@@ -87,6 +101,7 @@ test("normalized account readiness never exposes local credentials", () => {
 test("Supabase account metadata preserves provider-safe publishing engines", () => {
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("instagram", "companion"), "companion");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("instagram", "external_browser"), "external_browser");
+  assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("facebook", "companion"), "external_browser");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("x", "companion"), "external_browser");
   assert.equal(supabaseJobControlTestHelpers.publishingEngineForPlatform("youtube", "companion"), "external_browser");
   const account = supabaseJobControlTestHelpers.camelAccount({

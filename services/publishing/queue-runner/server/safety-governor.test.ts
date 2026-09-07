@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlatformUpload } from "../shared/schema.js";
-import { assessPublishingSafety, assessScheduledPublishingSafety, publishingSafetyRule } from "./services/safety-governor.js";
+import { assessPublishingSafety, assessScheduledPublishingSafety, publishingSafetyPacingEnabled, publishingSafetyRule } from "./services/safety-governor.js";
 
 function upload(overrides: Partial<PlatformUpload> = {}): PlatformUpload {
   return {
@@ -59,7 +59,15 @@ test("protected mode lowers pace without blocking an account from publishing", (
     dailyLimit: 5,
     minimumGapMs: 60 * 60 * 1000,
   });
-  assert.equal(assessPublishingSafety(upload({ platform: "facebook" }), [], Date.now(), "protected").allowed, true);
+  assert.equal(assessPublishingSafety(upload({ platform: "facebook" }), [], Date.now(), "protected", true).allowed, true);
+});
+
+test("testing builds disable pacing while keeping it available for later", () => {
+  assert.equal(publishingSafetyPacingEnabled({}), false);
+  assert.equal(publishingSafetyPacingEnabled({ PUBLISHING_SAFETY_PACING_ENABLED: "true" }), true);
+  const now = Date.parse("2026-07-28T12:00:00.000Z");
+  const previous = upload({ id: "posted", status: "posted", postedAt: "2026-07-28T11:59:00.000Z" });
+  assert.equal(assessPublishingSafety(upload(), [previous], now, "standard", false).allowed, true);
 });
 
 test("publishing safety defers bursts until the minimum gap expires", () => {
@@ -69,7 +77,7 @@ test("publishing safety defers bursts until the minimum gap expires", () => {
     status: "posted",
     postedAt: "2026-07-28T11:30:00.000Z",
   });
-  const assessment = assessPublishingSafety(upload(), [previous], now);
+  const assessment = assessPublishingSafety(upload(), [previous], now, "standard", true);
   assert.equal(assessment.allowed, false);
   assert.equal(assessment.retryAt, "2026-07-28T12:30:00.000Z");
 });
@@ -81,7 +89,7 @@ test("publishing safety enforces rolling daily limits", () => {
     status: "posted",
     postedAt: new Date(now - (23 - index * 2) * 60 * 60 * 1000).toISOString(),
   }));
-  const assessment = assessPublishingSafety(upload(), history, now);
+  const assessment = assessPublishingSafety(upload(), history, now, "standard", true);
   assert.equal(assessment.allowed, false);
   assert.equal(assessment.postsLastDay, 6);
   assert.match(assessment.reason ?? "", /daily safety limit/i);
@@ -94,7 +102,7 @@ test("schedule safety rejects a time inside the account gap and returns the earl
     status: "posted",
     postedAt: "2026-07-28T11:30:00.000Z",
   });
-  const assessment = assessScheduledPublishingSafety(upload(), [previous], requestedAt);
+  const assessment = assessScheduledPublishingSafety(upload(), [previous], requestedAt, "standard", true);
   assert.equal(assessment.allowed, false);
   assert.equal(assessment.earliestAt, "2026-07-28T12:30:00.000Z");
   assert.match(assessment.reason ?? "", /minimum spacing/i);
@@ -110,6 +118,8 @@ test("schedule safety reserves future jobs so accepted schedules cannot collide"
     upload(),
     [reserved],
     Date.parse("2026-07-28T12:30:00.000Z"),
+    "standard",
+    true,
   );
   assert.equal(assessment.allowed, false);
   assert.equal(assessment.earliestAt, "2026-07-28T14:00:00.000Z");

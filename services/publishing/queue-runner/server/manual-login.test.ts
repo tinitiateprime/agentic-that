@@ -4,8 +4,8 @@ import type { Page } from "playwright-core";
 import { publishingEngineForPlatform, selectManualLoginSurface } from "./services/login-surface.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification } from "./services/publishers/manual-login.js";
 
-test("normal X and YouTube login opens in external Chrome or Edge", () => {
-  for (const platform of ["x", "youtube"] as const) {
+test("Facebook, X, and YouTube login opens in persistent external Chrome or Edge", () => {
+  for (const platform of ["facebook", "x", "youtube"] as const) {
     assert.equal(selectManualLoginSurface({
       platform,
       requestedSurface: "engine",
@@ -17,8 +17,8 @@ test("normal X and YouTube login opens in external Chrome or Edge", () => {
   }
 });
 
-test("normal Instagram, Facebook, and LinkedIn login remains embedded", () => {
-  for (const platform of ["instagram", "facebook", "linkedin"] as const) {
+test("normal Instagram and LinkedIn login remains embedded", () => {
+  for (const platform of ["instagram", "linkedin"] as const) {
     assert.equal(selectManualLoginSurface({
       platform,
       requestedSurface: "engine",
@@ -41,18 +41,21 @@ test("normal reconnect preserves a provider-bound managed Chrome session", () =>
   }), "external");
 });
 
-test("X and YouTube cannot be forced into an embedded login surface", () => {
-  assert.equal(selectManualLoginSurface({
-    platform: "youtube",
-    requestedSurface: "embedded",
-    activeEngine: "companion",
-    credentialConfigured: false,
-    externalProfilePresent: false,
-    embeddedBrowserAvailable: true,
-  }), "external");
+test("Facebook, X, and YouTube cannot be forced into an embedded login surface", () => {
+  for (const platform of ["facebook", "x", "youtube"] as const) {
+    assert.equal(selectManualLoginSurface({
+      platform,
+      requestedSurface: "embedded",
+      activeEngine: "companion",
+      credentialConfigured: false,
+      externalProfilePresent: false,
+      embeddedBrowserAvailable: true,
+    }), "external");
+  }
 });
 
-test("X and YouTube always use the persistent external publishing engine", () => {
+test("Facebook, X, and YouTube always use the persistent external publishing engine", () => {
+  assert.equal(publishingEngineForPlatform("facebook", "companion"), "external_browser");
   assert.equal(publishingEngineForPlatform("x", "companion"), "external_browser");
   assert.equal(publishingEngineForPlatform("youtube", "companion"), "external_browser");
   assert.equal(publishingEngineForPlatform("instagram", "companion"), "companion");

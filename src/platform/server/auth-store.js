@@ -5,6 +5,16 @@ import { cookies } from "next/headers";
 import { getSql } from "@whatsapp/lib/db";
 import { OPERATIONAL_ROLE_CATALOG, SELF_SERVICE_ROLE_CATALOG } from "../access-catalog.js";
 import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
+import { sendPasswordResetEmail, sendVerificationEmail } from "./auth-email.js";
+import {
+  createRecoveryCodes,
+  decryptMfaSecret,
+  encryptMfaSecret,
+  generateTotpSecret,
+  hashRecoveryCode,
+  totpEnrollmentUri,
+  verifyTotp,
+} from "./totp.js";
 
 export const PLATFORM_SESSION_COOKIE = "agenticthat_session";
 
@@ -64,6 +74,10 @@ function publicUser(user) {
     selectedRoleIds: Array.isArray(user.selectedRoleIds) ? user.selectedRoleIds.map(String) : [],
     assignedRoleIds: Array.isArray(user.assignedRoleIds) ? user.assignedRoleIds.map(String) : [],
     isWorkspaceOwner: user.isWorkspaceOwner !== false,
+    emailVerified: user.emailVerified !== false,
+    mfaEnabled: Boolean(user.mfaEnabled),
+    mfaVerified: Boolean(user.mfaVerified),
+    mfaRequired: Boolean(user.mfaRequired),
   };
 }
 
@@ -95,6 +109,9 @@ function verifyPassword(password, storedHash) {
   const actual = crypto.scryptSync(password, salt, 64);
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
+
+// Equalize the expensive password check for unknown and known emails.
+const DUMMY_PASSWORD_HASH = hashPlatformPassword("not-a-real-platform-password");
 
 async function readStore() {
   if (useNetlifyBlobs) {
@@ -158,6 +175,10 @@ function getBlobStore() {
 function publicDatabaseUser(user) {
   if (!user?.id) throw new Error("Platform user data is missing a valid ID.");
   const testingFullAccess = teamTestingFullAccessEnabled();
+  const isGlobalAdmin = Boolean(user.is_global_admin);
+  const mfaAvailable = Object.prototype.hasOwnProperty.call(user, "mfa_enabled");
+  const mfaEnabled = Boolean(user.mfa_enabled);
+  const mfaVerified = Boolean(user.session_mfa_verified_at);
   return {
     id: String(user.id),
     workspaceId: user.workspace_id ? String(user.workspace_id) : null,
@@ -165,11 +186,21 @@ function publicDatabaseUser(user) {
     businessName: String(user.business_name || user.name || "Workspace"),
     email: String(user.email || ""),
     status: String(user.status || "active"),
-    isGlobalAdmin: Boolean(user.is_global_admin),
+    isGlobalAdmin,
     billingStatus: testingFullAccess ? "exempt" : String(user.billing_status || "active"),
     trialStartsAt: testingFullAccess ? null : user.trial_starts_at || null,
     trialEndsAt: testingFullAccess ? null : user.trial_ends_at || null,
+    emailVerified: Boolean(user.email_verified_at),
+    mfaEnabled,
+    mfaVerified,
+    mfaRequired: Boolean(mfaAvailable && isGlobalAdmin && (!mfaEnabled || !mfaVerified)),
   };
+}
+
+async function authSecurityAvailable(sql) {
+  const [row] = await sql`
+    SELECT to_regclass('public.platform_auth_tokens') IS NOT NULL AS ready`;
+  return Boolean(row?.ready);
 }
 
 function configuredGlobalAdminEmails() {
@@ -705,8 +736,9 @@ export async function registerPlatformUser({ name, businessName, email, password
   if (useDatabaseAuth) {
     const sql = await getPlatformSql();
     const isGlobalAdmin = configuredGlobalAdminEmails().has(normalizedEmail);
+    const securityReady = await authSecurityAvailable(sql);
     try {
-      return await sql.begin(async (tx) => {
+      const created = await sql.begin(async (tx) => {
         const [existing] = await tx`
           SELECT id FROM platform_users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
         if (existing) {
@@ -733,6 +765,10 @@ export async function registerPlatformUser({ name, businessName, email, password
              NULL,
              NULL)
           RETURNING *`;
+        if (securityReady) {
+          user.email_verified_at = null;
+          await tx`UPDATE platform_users SET email_verified_at = NULL WHERE id = ${user.id}`;
+        }
         await tx`
           INSERT INTO platform_workspaces (id, name)
           VALUES (${workspaceId}, ${normalizedBusiness})
@@ -760,10 +796,36 @@ export async function registerPlatformUser({ name, businessName, email, password
               (${crypto.randomUUID()}, ${user.id}, 'billing', ${user.id}, 'trial.ready',
                ${tx.json({ roleIds, startsOn: "first_service_use" })})`;
         }
+        if (securityReady) {
+          const verificationToken = crypto.randomBytes(32).toString("base64url");
+          await tx`
+            INSERT INTO platform_auth_tokens(id, user_id, token_hash, purpose, expires_at)
+            VALUES (${crypto.randomUUID()}, ${user.id}, ${tokenHash(verificationToken)},
+                    'email_verification', now() + interval '24 hours')`;
+          return {
+            token: null,
+            user: publicDatabaseUser(user),
+            verificationRequired: true,
+            verificationToken,
+          };
+        }
         const token = await createDatabaseSession(tx, user.id);
         await pruneDatabaseSessions(tx);
-        return { token, user: publicDatabaseUser(user) };
+        return { token, user: publicDatabaseUser(user), verificationRequired: false };
       });
+      if (created.verificationToken) {
+        try {
+          await sendVerificationEmail(normalizedEmail, created.verificationToken);
+        } catch (error) {
+          created.emailDeliveryFailed = true;
+          console.error(
+            "Platform verification email delivery failed:",
+            error instanceof Error ? error.message : error
+          );
+        }
+        delete created.verificationToken;
+      }
+      return created;
     } catch (error) {
       if (error instanceof PlatformAuthError) throw error;
       if (error?.code === "23505") {
@@ -1040,25 +1102,222 @@ export async function applyPlatformPaymentEvent({
   });
 }
 
+function validatedPassword(value) {
+  const password = String(value || "");
+  if (password.length < 8 || password.length > 128) {
+    throw new PlatformAuthError("INVALID_PASSWORD", "Password must contain 8 to 128 characters.");
+  }
+  return password;
+}
+
+export async function verifyPlatformEmail(rawToken) {
+  const token = String(rawToken || "").trim();
+  if (token.length < 32 || !useDatabaseAuth) {
+    throw new PlatformAuthError("INVALID_TOKEN", "This verification link is invalid or expired.");
+  }
+  const sql = await getPlatformSql();
+  if (!await authSecurityAvailable(sql)) throw new PlatformAuthError("INVALID_TOKEN", "Email verification is unavailable.");
+  return sql.begin(async (tx) => {
+    const [record] = await tx`
+      SELECT auth_token.id, auth_token.user_id
+        FROM platform_auth_tokens auth_token
+       WHERE auth_token.token_hash = ${tokenHash(token)}
+         AND auth_token.purpose = 'email_verification'
+         AND auth_token.consumed_at IS NULL
+         AND auth_token.expires_at > now()
+       FOR UPDATE`;
+    if (!record) throw new PlatformAuthError("INVALID_TOKEN", "This verification link is invalid or expired.");
+    const [user] = await tx`
+      UPDATE platform_users SET email_verified_at = coalesce(email_verified_at, now())
+       WHERE id = ${record.user_id}
+      RETURNING *`;
+    await tx`
+      UPDATE platform_auth_tokens SET consumed_at = now()
+       WHERE user_id = ${record.user_id} AND purpose = 'email_verification' AND consumed_at IS NULL`;
+    const sessionToken = await createDatabaseSession(tx, user.id);
+    return { token: sessionToken, user: publicDatabaseUser(user) };
+  });
+}
+
+export async function resendPlatformVerification(emailInput) {
+  const email = String(emailInput || "").trim().toLowerCase();
+  if (!useDatabaseAuth || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: true };
+  const sql = await getPlatformSql();
+  if (!await authSecurityAvailable(sql)) return { ok: true };
+  const result = await sql.begin(async (tx) => {
+    const [user] = await tx`
+      SELECT id, email_verified_at FROM platform_users WHERE lower(email) = ${email} LIMIT 1 FOR UPDATE`;
+    if (!user || user.email_verified_at) return null;
+    await tx`
+      UPDATE platform_auth_tokens SET consumed_at = now()
+       WHERE user_id = ${user.id} AND purpose = 'email_verification' AND consumed_at IS NULL`;
+    const token = crypto.randomBytes(32).toString("base64url");
+    await tx`
+      INSERT INTO platform_auth_tokens(id, user_id, token_hash, purpose, expires_at)
+      VALUES (${crypto.randomUUID()}, ${user.id}, ${tokenHash(token)}, 'email_verification', now() + interval '24 hours')`;
+    return token;
+  });
+  if (result) await sendVerificationEmail(email, result);
+  return { ok: true };
+}
+
+export async function requestPlatformPasswordReset(emailInput) {
+  const email = String(emailInput || "").trim().toLowerCase();
+  if (!useDatabaseAuth || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: true };
+  const sql = await getPlatformSql();
+  if (!await authSecurityAvailable(sql)) return { ok: true };
+  const result = await sql.begin(async (tx) => {
+    const [user] = await tx`SELECT id FROM platform_users WHERE lower(email) = ${email} LIMIT 1 FOR UPDATE`;
+    if (!user) return null;
+    await tx`
+      UPDATE platform_auth_tokens SET consumed_at = now()
+       WHERE user_id = ${user.id} AND purpose = 'password_reset' AND consumed_at IS NULL`;
+    const token = crypto.randomBytes(32).toString("base64url");
+    await tx`
+      INSERT INTO platform_auth_tokens(id, user_id, token_hash, purpose, expires_at)
+      VALUES (${crypto.randomUUID()}, ${user.id}, ${tokenHash(token)}, 'password_reset', now() + interval '30 minutes')`;
+    return token;
+  });
+  if (result) await sendPasswordResetEmail(email, result);
+  return { ok: true };
+}
+
+export async function resetPlatformPassword(rawToken, passwordInput) {
+  const token = String(rawToken || "").trim();
+  const password = validatedPassword(passwordInput);
+  if (token.length < 32 || !useDatabaseAuth) {
+    throw new PlatformAuthError("INVALID_TOKEN", "This password reset link is invalid or expired.");
+  }
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const [record] = await tx`
+      SELECT id, user_id FROM platform_auth_tokens
+       WHERE token_hash = ${tokenHash(token)} AND purpose = 'password_reset'
+         AND consumed_at IS NULL AND expires_at > now()
+       FOR UPDATE`;
+    if (!record) throw new PlatformAuthError("INVALID_TOKEN", "This password reset link is invalid or expired.");
+    await tx`
+      UPDATE platform_users
+         SET password_hash = ${hashPlatformPassword(password)}, password_changed_at = now()
+       WHERE id = ${record.user_id}`;
+    await tx`UPDATE platform_auth_tokens SET consumed_at = now() WHERE id = ${record.id}`;
+    await tx`DELETE FROM platform_sessions WHERE user_id = ${record.user_id}`;
+    return { ok: true };
+  });
+}
+
+async function currentDatabaseSession(sql) {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(PLATFORM_SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const [session] = await sql`
+    SELECT session.id AS session_id, session.user_id, session.mfa_verified_at,
+           user_account.*
+      FROM platform_sessions session
+      JOIN platform_users user_account ON user_account.id = session.user_id
+     WHERE session.token_hash = ${tokenHash(token)} AND session.expires_at > now()
+     LIMIT 1`;
+  return session || null;
+}
+
+function assertMfaAdmin(session) {
+  if (!session?.is_global_admin || !session?.email_verified_at) {
+    throw new PlatformAuthError("ADMIN_REQUIRED", "A verified platform administrator session is required.");
+  }
+}
+
+export async function beginAdminMfaEnrollment() {
+  if (!useDatabaseAuth) throw new PlatformAuthError("MFA_UNAVAILABLE", "Admin MFA requires database authentication.");
+  const sql = await getPlatformSql();
+  const session = await currentDatabaseSession(sql);
+  assertMfaAdmin(session);
+  if (session.mfa_enabled) return { enabled: true };
+  const secret = session.mfa_secret_ciphertext
+    ? decryptMfaSecret(session.mfa_secret_ciphertext)
+    : generateTotpSecret();
+  if (!session.mfa_secret_ciphertext) {
+    await sql`
+      UPDATE platform_users SET mfa_secret_ciphertext = ${encryptMfaSecret(secret)} WHERE id = ${session.user_id}`;
+  }
+  return { enabled: false, secret, uri: totpEnrollmentUri(session.email, secret) };
+}
+
+export async function confirmAdminMfaEnrollment(codeInput) {
+  if (!useDatabaseAuth) throw new PlatformAuthError("MFA_UNAVAILABLE", "Admin MFA requires database authentication.");
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const session = await currentDatabaseSession(tx);
+    assertMfaAdmin(session);
+    if (!session.mfa_secret_ciphertext) throw new PlatformAuthError("MFA_NOT_READY", "Start MFA setup again.");
+    const secret = decryptMfaSecret(session.mfa_secret_ciphertext);
+    if (!verifyTotp(secret, codeInput)) throw new PlatformAuthError("INVALID_MFA", "The authentication code is invalid.");
+    const recoveryCodes = createRecoveryCodes();
+    await tx`
+      UPDATE platform_users SET mfa_enabled = true,
+        mfa_recovery_codes = ${tx.json(recoveryCodes.map(hashRecoveryCode))}
+       WHERE id = ${session.user_id}`;
+    await tx`UPDATE platform_sessions SET mfa_verified_at = now() WHERE id = ${session.session_id}`;
+    return { ok: true, recoveryCodes };
+  });
+}
+
+export async function verifyAdminMfa(codeInput) {
+  if (!useDatabaseAuth) throw new PlatformAuthError("MFA_UNAVAILABLE", "Admin MFA requires database authentication.");
+  const normalized = String(codeInput || "").replace(/\s|-/g, "").toUpperCase();
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const session = await currentDatabaseSession(tx);
+    assertMfaAdmin(session);
+    if (!session.mfa_enabled || !session.mfa_secret_ciphertext) {
+      throw new PlatformAuthError("MFA_ENROLLMENT_REQUIRED", "Set up admin MFA before continuing.");
+    }
+    const secret = decryptMfaSecret(session.mfa_secret_ciphertext);
+    const hashes = Array.isArray(session.mfa_recovery_codes) ? session.mfa_recovery_codes.map(String) : [];
+    const recoveryHash = hashRecoveryCode(normalized);
+    const recoveryIndex = hashes.indexOf(recoveryHash);
+    if (!verifyTotp(secret, normalized) && recoveryIndex < 0) {
+      throw new PlatformAuthError("INVALID_MFA", "The authentication code is invalid.");
+    }
+    if (recoveryIndex >= 0) {
+      hashes.splice(recoveryIndex, 1);
+      await tx`UPDATE platform_users SET mfa_recovery_codes = ${tx.json(hashes)} WHERE id = ${session.user_id}`;
+    }
+    await tx`UPDATE platform_sessions SET mfa_verified_at = now() WHERE id = ${session.session_id}`;
+    return { ok: true, user: publicDatabaseUser({ ...session, session_mfa_verified_at: new Date().toISOString() }) };
+  });
+}
+
 export async function loginPlatformUser({ email, password }) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const normalizedPassword = String(password || "");
 
   if (useDatabaseAuth) {
     const sql = await getPlatformSql();
+    const securityReady = await authSecurityAvailable(sql);
     const [user] = await sql`
       SELECT * FROM platform_users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1`;
-    if (!user || !verifyPassword(normalizedPassword, user.password_hash)) {
+    const passwordValid = verifyPassword(normalizedPassword, user?.password_hash || DUMMY_PASSWORD_HASH);
+    if (!user || !passwordValid) {
       throw new PlatformAuthError("INVALID_CREDENTIALS", "Invalid email or password.");
+    }
+    if (securityReady && !user.email_verified_at) {
+      throw new PlatformAuthError("EMAIL_NOT_VERIFIED", "Verify your email before signing in.");
     }
     const token = await createDatabaseSession(sql, user.id);
     await pruneDatabaseSessions(sql);
-    return { token, user: publicDatabaseUser(user) };
+    const publicAccount = publicDatabaseUser(user);
+    return {
+      token,
+      user: publicAccount,
+      mfaRequired: publicAccount.mfaRequired,
+      mfaEnrollmentRequired: Boolean(publicAccount.isGlobalAdmin && !publicAccount.mfaEnabled),
+    };
   }
 
   return mutateStore((store) => {
     const user = store.users.find((candidate) => candidate.email === normalizedEmail);
-    if (!user || !verifyPassword(normalizedPassword, user.passwordHash)) {
+    const passwordValid = verifyPassword(normalizedPassword, user?.passwordHash || DUMMY_PASSWORD_HASH);
+    if (!user || !passwordValid) {
       throw new PlatformAuthError("INVALID_CREDENTIALS", "Invalid email or password.");
     }
 
@@ -1084,7 +1343,7 @@ export async function getCurrentPlatformUser() {
     if (useDatabaseAuth) {
       const sql = await getPlatformSql();
       const [user] = await sql`
-        SELECT u.*
+        SELECT u.*, (to_jsonb(s)->>'mfa_verified_at') AS session_mfa_verified_at
           FROM platform_sessions s
           JOIN platform_users u ON u.id = s.user_id
          WHERE s.token_hash = ${tokenHash(token)}

@@ -315,6 +315,12 @@ test("numeric, people, and canonical p URLs identify the same profile without ac
   assert.equal(candidateMatchesProfile({ author_url: "https://facebook.com/renamed" }, target, ["https://facebook.com/renamed"]), true);
 });
 
+test("numeric profile scraping retains the public-index fallback path", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("./scraper.ts", import.meta.url), "utf8"));
+  assert.match(source, /public_profile_index/);
+  assert.match(source, /site:facebook\.com\/permalink\.php/);
+});
+
 test("public embedded JSON joins only matching story, owner, feedback, and video fragments", () => {
   const scripts = [
     JSON.stringify({ story: { id: "story-1", post_id: "111", creation_time: 1788553682, url: "https://facebook.com/reel/42/", actors: [{ id: "123" }], feedback: { id: "feedback-1" } } }),

@@ -26,7 +26,7 @@ function safeText(value, maximum = 500) {
 }
 
 function publishingEngineForPlatform(platform, requestedEngine = "companion") {
-  return platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
+  return platform === "facebook" || platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }
@@ -105,7 +105,7 @@ function versionAtLeast(value, minimum) {
   return true;
 }
 
-function publicDevice(row, minimumVersion = "2.1.7") {
+function publicDevice(row, minimumVersion = "2.1.8") {
   if (!row) return null;
   const seenAt = Date.parse(row.last_seen_at || "");
   const online = !row.revoked_at && Number.isFinite(seenAt) && Date.now() - seenAt < COMPANION_ONLINE_MS;
@@ -140,7 +140,7 @@ function publicDevice(row, minimumVersion = "2.1.7") {
 
 async function minimumVersion(sql) {
   const [row] = await sql`SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'`;
-  return row?.value || "2.1.7";
+  return row?.value || "2.1.8";
 }
 
 export function supabasePublicConfiguration() {
@@ -296,6 +296,94 @@ async function signedArtifactUrls(configuration, objectPaths) {
 function artifactPartObjectPath(workspaceId, fileName, index) {
   if (!Number.isInteger(index) || index < 0 || index > 9999) throw new Error("The private media part number is invalid.");
   return `${storageObjectPath(workspaceId, fileName)}.parts/${String(index).padStart(4, "0")}`;
+}
+
+function validateArtifactPartInput({ index, offset, byteSize }) {
+  if (!Number.isInteger(index) || index < 0 || index > 9999) throw new Error("The private media part number is invalid.");
+  if (!Number.isInteger(offset) || offset < 0) throw new Error("The private media part offset is invalid.");
+  if (!Number.isInteger(byteSize) || byteSize < 1 || byteSize > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+    throw new Error("The private media part size is invalid.");
+  }
+}
+
+export async function authorizeSupabaseJobArtifactPartUpload({ workspaceId, fileName, mimeType, index, offset, byteSize }) {
+  validateArtifactPartInput({ index, offset, byteSize });
+  const configuration = supabaseServiceConfiguration();
+  await ensureArtifactBucket(configuration);
+  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
+  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/upload/sign/${ARTIFACT_BUCKET}/${objectPath}`, {
+    method: "POST",
+    headers: {
+      ...supabaseApiHeaders(configuration.serviceKey),
+      "content-type": "application/json",
+      "x-upsert": "true",
+    },
+    body: "{}",
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.url) {
+    throw new Error(safeText(payload.message || payload.error || `Could not authorize private media upload (${response.status}).`, 1000));
+  }
+  const signedUrl = /^https:\/\//i.test(payload.url)
+    ? payload.url
+    : `${configuration.supabaseUrl}/storage/v1${String(payload.url).startsWith("/") ? "" : "/"}${payload.url}`;
+  const parsed = new URL(signedUrl);
+  if (parsed.origin !== configuration.supabaseUrl || !parsed.pathname.startsWith("/storage/v1/object/upload/sign/")) {
+    throw new Error("The private media upload URL is invalid.");
+  }
+  return {
+    signedUrl: parsed.toString(),
+    index,
+    offset,
+    byteSize,
+    path: decodeURIComponent(objectPath),
+    mimeType: mimeType || "application/octet-stream",
+  };
+}
+
+export async function authorizeSupabaseJobArtifactPartUploads(inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 8) {
+    throw new Error("The private media upload batch is invalid.");
+  }
+  return Promise.all(inputs.map((input) => authorizeSupabaseJobArtifactPartUpload(input)));
+}
+
+export async function verifySupabaseJobArtifactPartUpload({ workspaceId, fileName, index, offset, byteSize }) {
+  validateArtifactPartInput({ index, offset, byteSize });
+  const configuration = supabaseServiceConfiguration();
+  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
+  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/info/${ARTIFACT_BUCKET}/${objectPath}`, {
+    headers: supabaseApiHeaders(configuration.serviceKey),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(safeText(payload.message || payload.error || `Private media upload verification failed (${response.status}).`, 1000));
+  }
+  const storedSize = Number(payload?.metadata?.size ?? payload?.size);
+  if (!Number.isInteger(storedSize) || storedSize !== byteSize) {
+    throw new Error("The uploaded private media part has the wrong size.");
+  }
+  return {
+    index,
+    offset,
+    path: decodeURIComponent(objectPath),
+    byteSize,
+  };
+}
+
+export async function verifySupabaseJobArtifactPartUploads(inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 8) {
+    throw new Error("The completed private media batch is invalid.");
+  }
+  return Promise.all(inputs.map((input) => verifySupabaseJobArtifactPartUpload(input)));
+}
+
+export async function deleteSupabaseStagedArtifactParts({ workspaceId, fileName, partCount }) {
+  const count = Number(partCount);
+  if (!Number.isInteger(count) || count < 0 || count > 1000) throw new Error("The private media part count is invalid.");
+  await deleteSupabaseJobArtifactParts(Array.from({ length: count }, (_, index) => ({
+    path: decodeURIComponent(artifactPartObjectPath(workspaceId, fileName, index)),
+  })));
 }
 
 export async function storeSupabaseJobArtifactPart(bytes, { workspaceId, fileName, mimeType, index, offset }) {
@@ -772,8 +860,41 @@ export async function supabaseJobDashboard(workspaceId) {
   return { companion, jobs };
 }
 
+export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
+  const sql = await getDatabaseSql();
+  const [row] = await sql`
+    SELECT
+      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.8') AS minimum_version,
+      (SELECT to_jsonb(device_row) FROM (
+        SELECT * FROM public.companion_devices
+         WHERE workspace_id = ${workspaceId} AND revoked_at IS NULL
+         ORDER BY updated_at DESC LIMIT 1
+      ) device_row) AS companion,
+      (SELECT count(*) FILTER (WHERE enabled AND NOT credential_configured)::integer
+         FROM public.social_accounts WHERE workspace_id = ${workspaceId}) AS login_required,
+      coalesce((SELECT jsonb_agg(to_jsonb(account_row)) FROM (
+        SELECT * FROM public.social_accounts
+         WHERE workspace_id = ${workspaceId} ORDER BY created_at
+      ) account_row), '[]'::jsonb) AS accounts,
+      coalesce((SELECT jsonb_agg(to_jsonb(job_row)) FROM (
+        SELECT * FROM public.jobs
+         WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 500
+      ) job_row), '[]'::jsonb) AS jobs
+  `;
+  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.8");
+  const companion = companionValue
+    ? { ...companionValue, accountHealth: { loginRequired: Number(row?.login_required) || 0 } }
+    : null;
+  return {
+    companion,
+    accounts: (Array.isArray(row?.accounts) ? row.accounts : []).map((account) => camelAccount(account, companion)),
+    jobs: (Array.isArray(row?.jobs) ? row.jobs : []).map(camelJob),
+  };
+}
+
 export const supabaseJobControlTestHelpers = {
   absoluteSignedArtifactUrl,
+  artifactPartObjectPath,
   camelAccount,
   camelJob,
   publicDevice,
@@ -781,5 +902,6 @@ export const supabaseJobControlTestHelpers = {
   publishingSynchronizationPlan,
   supabaseApiHeaders,
   storageResourceAlreadyExists,
+  validateArtifactPartInput,
   versionAtLeast,
 };

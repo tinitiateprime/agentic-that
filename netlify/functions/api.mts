@@ -1,6 +1,8 @@
 import type { Config, Context } from "@netlify/functions";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createTelegramHttpServer } from "../../services/messaging/telegram/src/server.ts";
 
 type LocalServer = {
@@ -13,6 +15,10 @@ let localServerPromise: Promise<LocalServer> | null = null;
 async function getLocalServer() {
   process.env.SERVERLESS = "true";
   process.env.DATA_STORE ||= "netlify-blobs";
+  // The deployed function bundle is read-only. Account/session records use
+  // Netlify Blobs; transient upload parts must live in Lambda's writable temp
+  // directory so media initialization cannot take the whole Telegram API down.
+  process.env.DATA_DIR ||= path.join(tmpdir(), "agenticthat-telegram");
 
   localServerPromise ??= (async () => {
     const server = await createTelegramHttpServer({ startListeners: false });
@@ -28,7 +34,13 @@ async function getLocalServer() {
     };
   })();
 
-  return localServerPromise;
+  try {
+    return await localServerPromise;
+  } catch (error) {
+    // Let the next invocation recover from a transient cold-start failure.
+    localServerPromise = null;
+    throw error;
+  }
 }
 
 function telegramPath(pathname: string) {
@@ -53,27 +65,70 @@ function responseHeaders(headers: Headers) {
   return output;
 }
 
+function startupFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("SESSION_ENCRYPTION_KEY is required")) {
+    return {
+      code: "telegram_encryption_key_missing",
+      error: "Telegram needs SESSION_ENCRYPTION_KEY in the Netlify Functions environment."
+    };
+  }
+  if (message.includes("SESSION_ENCRYPTION_KEY must be")) {
+    return {
+      code: "telegram_encryption_key_invalid",
+      error: "SESSION_ENCRYPTION_KEY must be a base64url-encoded 32-byte key."
+    };
+  }
+  if (message.includes("USER_PROVISIONING_KEY is required")) {
+    return {
+      code: "telegram_provisioning_key_missing",
+      error: "Telegram needs USER_PROVISIONING_KEY in the Netlify Functions environment."
+    };
+  }
+  if (/blob|data store/i.test(message)) {
+    return {
+      code: "telegram_storage_unavailable",
+      error: "Telegram could not open its Netlify Blobs data store. Please try again."
+    };
+  }
+  if (/EROFS|EACCES|read-only|permission denied/i.test(message)) {
+    return {
+      code: "telegram_temporary_storage_unavailable",
+      error: "Telegram could not open its temporary media storage. Please try again."
+    };
+  }
+  return {
+    code: "telegram_startup_failed",
+    error: "Telegram could not start. Check the Netlify Function logs and try again."
+  };
+}
+
 export default async function handler(request: Request, _context: Context) {
-  const local = await getLocalServer();
-  const incomingUrl = new URL(request.url);
-  const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
-  const headers = new Headers(request.headers);
+  try {
+    const local = await getLocalServer();
+    const incomingUrl = new URL(request.url);
+    const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
+    const headers = new Headers(request.headers);
 
-  headers.set("x-forwarded-host", incomingUrl.host);
-  headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
+    headers.set("x-forwarded-host", incomingUrl.host);
+    headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
 
-  const response = await fetch(targetUrl, {
-    body: await requestBody(request),
-    headers,
-    method: request.method,
-    redirect: "manual"
-  });
+    const response = await fetch(targetUrl, {
+      body: await requestBody(request),
+      headers,
+      method: request.method,
+      redirect: "manual"
+    });
 
-  return new Response(response.body, {
-    headers: responseHeaders(response.headers),
-    status: response.status,
-    statusText: response.statusText
-  });
+    return new Response(response.body, {
+      headers: responseHeaders(response.headers),
+      status: response.status,
+      statusText: response.statusText
+    });
+  } catch (error) {
+    console.error("Telegram serverless request failed:", error instanceof Error ? error.message : "Unknown startup error");
+    return Response.json({ ok: false, ...startupFailure(error) }, { status: 503 });
+  }
 }
 
 export const config: Config = {

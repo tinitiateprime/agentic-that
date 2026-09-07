@@ -15,6 +15,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_USERNAME = "operations.manager";
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = "Testing@2026";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
+  process.env.PUBLISHING_SAFETY_PACING_ENABLED = "true";
 
   const { centralDeliveryFailure, createPublishingHttpServer } = await import("./index.js");
   assert.deepEqual(centralDeliveryFailure(undefined), {
@@ -40,6 +41,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   context.after(async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await fs.rm(temporaryRoot, { recursive: true, force: true });
+    delete process.env.PUBLISHING_SAFETY_PACING_ENABLED;
   });
 
   const address = server.address() as AddressInfo;
@@ -107,7 +109,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   });
   assert.equal(accountResponse.status, 201);
   const account = await accountResponse.json() as { id: string; workspaceId: string; executionEngine?: string; safetyMode?: string; twoFactorEnabled?: boolean };
-  assert.equal(account.executionEngine, "companion");
+  assert.equal(account.executionEngine, "external_browser");
   assert.equal(account.safetyMode, "protected");
   assert.equal(account.twoFactorEnabled, false);
 
@@ -180,7 +182,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   const binding = await bindPublishingAccountsToCompanion("companion_test_rebound");
   assert.ok(binding.rebound > 0);
   const reboundAccount = await getPlatformAccount(account.id);
-  assert.equal(reboundAccount?.executionEngine, "companion");
+  assert.equal(reboundAccount?.executionEngine, "external_browser");
   assert.equal(reboundAccount?.companionId, "companion_test_rebound");
   assert.equal(reboundAccount?.credentialConfigured, true);
   await bindPublishingAccountsToCompanion(health.companionInstanceId!);
@@ -209,7 +211,7 @@ test("publishing API supports login, media and text posts, blocks scheduling, an
   const resumedAccount = await resumeResponse.json() as { enabled: boolean; credentialConfigured: boolean; executionEngine?: string; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
   assert.equal(resumedAccount.enabled, true);
   assert.equal(resumedAccount.executionEngine, "external_browser");
-  assert.equal(resumedAccount.credentialConfigured, false);
+  assert.equal(resumedAccount.credentialConfigured, true);
   assert.equal(resumedAccount.safetyStatus, "healthy");
   assert.equal(resumedAccount.safetyReason, undefined);
   assert.equal(resumedAccount.safetyMode, "standard");

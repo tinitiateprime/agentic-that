@@ -95,8 +95,8 @@ export function useProductStatus() {
       })
       .catch(() => setWhatsapp({ state: "setup" }));
 
-    void loadTelegram("/me")
-      .then(() => loadTelegram("/telegram/accounts"))
+    void loadTelegram("/me?include=accounts")
+      .then((data) => Array.isArray(data.accounts) ? data : loadTelegram("/telegram/accounts"))
       .then((data) => {
         const count = Array.isArray(data.accounts) ? data.accounts.length : 0;
         setTelegram({ state: count ? "connected" : "setup", accounts: count });

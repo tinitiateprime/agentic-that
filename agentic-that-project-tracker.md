@@ -1,22 +1,48 @@
 # Agentic That Core Engine Tracker
 
+## Simple Status - September 7, 2026
+
+### Completed now
+
+- Secured Supabase data and separated every client workspace.
+- Added role-based access, team invitations and protected Admin Center MFA.
+- Moved Telegram and Publishing state into normalized Supabase tables.
+- Made publishing uploads resumable, retry-safe and capable of files up to 2 GB.
+- Fixed publishing database timeouts, Telegram saves and paused-account resume.
+- Added login abuse limits, email verification and password-reset foundations.
+- Built Companion packages for Windows, macOS and Linux.
+- Separated database migrations from normal Netlify deployments.
+
+### Do later
+
+- Connect an email provider so verification and reset emails are delivered.
+- Add Windows/macOS signing credentials and publish signed stable Companions.
+- Upgrade the Netlify plan when real client traffic requires more capacity.
+- Finish live testing for every service, OS and multiple clients before full launch.
+- Finish WhatsApp live validation and re-enable Publishing scheduling only after validation.
+
+### Intentionally skipped
+
+- Telegram scheduling is not required.
+- Old Telegram accounts will not be migrated; clients connect new accounts.
+
 ## Project Tracker
 
 ```mermaid
 kanban
   devTodo[Dev - To Do]
-    dev1[Finalize DB and User Settings]
-    dev2[Resume Scheduling After Validation]
+    dev1[Connect Production Email Provider]
+    dev2[Resume Publishing Scheduling After Validation]
 
   deploymentTodo[Deployment - To Do]
-    dep1[Configure Supabase and Netlify]
-    dep2[Run Database Migration]
-    dep3[Re Pair Companion v2]
-    dep4[Production Sign Off]
+    dep1[Add Windows and macOS Signing Credentials]
+    dep2[Publish Signed Stable Companion Release]
+    dep3[Upgrade Netlify When Traffic Requires]
+    dep4[Multi Client Production Sign Off]
 
   inProgress[In Progress]
     prog1[Production Readiness]
-    prog2[Companion v2.1 Signing and Live OS Validation]
+    prog2[Companion Live OS Validation]
     prog3[WhatsApp Final Validation]
 
   testing[Testing]
@@ -42,6 +68,26 @@ kanban
     done14[Companion v2.1.5 Instagram Publishing and Scraping Compatibility]
     done15[Companion v2.1.6 Durable Facebook Session Recovery]
     done16[Companion v2.1.7 Public Facebook Discovery and Explicit YouTube Options]
+    done17[Direct Resilient Media Uploads with Live Progress]
+    done18[2 GB Publishing Media Uploads]
+    done19[Duplicate-safe Companion Login Status Sync]
+    done20[Companion v2.1.8 Large Media Publishing]
+    done21[Batched Resilient Supabase Media Uploads]
+    done22[Isolated Timeout Safe Publishing Upload Sessions]
+    done23[Companion v2.1.9 Publishing Confirmation and Facebook Discovery]
+    done24[Companion v2.1.10 Testing Pace Without Posting Delays]
+    done25[Resumable Idempotent Large Media Finalization]
+    done26[Concurrent Multi User Publishing Workspace Stability]
+    done27[Companion v2.1.11 Durable Facebook Login and LinkedIn Confirmation]
+    done28[Companion v2.1.12 Complete LinkedIn Video Upload Lifecycle]
+    done29[Supabase RLS and Public Schema Lockdown]
+    done30[Cross Workspace Security Tests]
+    done31[Normalized Telegram State in Supabase]
+    done32[Normalized Publishing State in Supabase]
+    done33[Login Abuse Protection Reset Verification and Admin MFA]
+    done34[Dedicated Database Migration Workflow]
+    done35[Publishing Database Timeout Fix]
+    done36[Telegram Save and Account Resume Reliability]
 
   future[Future]
     future1[Android Companion]

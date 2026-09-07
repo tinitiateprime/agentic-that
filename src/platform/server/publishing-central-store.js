@@ -3,10 +3,13 @@ import path from "node:path";
 import nodeCron from "node-cron";
 import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
 import {
-  initializeDatabaseDocument,
-  mutateDatabaseDocument,
-  readDatabaseDocument,
+  getDatabaseSql,
 } from "../../../lib/database-document-store.js";
+import {
+  initializePublishingDocument as initializeDatabaseDocument,
+  mutatePublishingDocument as mutateDatabaseDocument,
+  readPublishingDocument as readDatabaseDocument,
+} from "./publishing-normalized-store.js";
 import {
   cancelSupabaseJob,
   createSupabasePairing,
@@ -16,6 +19,7 @@ import {
   listSupabaseJobs,
   revokeSupabaseCompanions,
   supabaseJobDashboard,
+  supabasePublishingWorkspaceSnapshot,
   synchronizePublishingJobs,
   upsertSupabaseAccount,
 } from "./supabase-job-control.js";
@@ -25,14 +29,16 @@ const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.7";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.8";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
+const CENTRAL_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
 
 function companionPublishingEngine(platformName, requestedEngine = "companion") {
-  return platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
+  return platformName === "facebook" || platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }
@@ -86,6 +92,18 @@ function documentValue(value) {
 
 async function initialize() {
   await initializeDatabaseDocument(DOCUMENT_KEY, blankDocument());
+}
+
+function mutateWorkspaceDocument(workspaceId, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { workspaceId });
+}
+
+function mutateTokenDocument(tokenHash, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { tokenHash });
+}
+
+function mutatePairingDocument(codeHash, operation) {
+  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { codeHash });
 }
 
 function platform(value) {
@@ -434,7 +452,7 @@ export function publishingUserFromPrincipal(principal) {
 
 export async function getPublishingSnapshot(workspaceId) {
   await initialize();
-  return documentValue(await readDatabaseDocument(DOCUMENT_KEY));
+  return documentValue(await readDatabaseDocument(DOCUMENT_KEY, blankDocument(), { workspaceId }));
 }
 
 async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
@@ -447,24 +465,22 @@ async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
   return document;
 }
 
-async function reconcilePublishingControlPlane(workspaceId) {
-  const remoteJobs = await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
-  if (!remoteJobs.length) return;
+function applyRemotePublishingJobs(document, workspaceId, remoteJobs) {
   const jobsById = new Map(remoteJobs.map((item) => [item.id, item]));
-  await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    for (const job of document.jobs) {
-      if (job.workspaceId !== workspaceId) continue;
-      const remote = jobsById.get(job.id);
-      if (!remote) continue;
-      const upload = document.uploads.find((item) => item.id === job.uploadId && item.workspaceId === workspaceId);
-      job.state = remote.status === "success" ? "published" : remote.status;
-      job.message = remote.message;
-      job.attemptCount = remote.attemptCount;
-      job.leaseOwner = remote.assignedDeviceId;
-      job.leaseExpiresAt = remote.leaseExpiresAt;
-      job.updatedAt = remote.updatedAt;
-      if (!upload) continue;
+  let changed = false;
+  for (const job of document.jobs) {
+    if (job.workspaceId !== workspaceId) continue;
+    const remote = jobsById.get(job.id);
+    if (!remote) continue;
+    const upload = document.uploads.find((item) => item.id === job.uploadId && item.workspaceId === workspaceId);
+    const before = JSON.stringify([job, upload]);
+    job.state = remote.status === "success" ? "published" : remote.status;
+    job.message = remote.message;
+    job.attemptCount = remote.attemptCount;
+    job.leaseOwner = remote.assignedDeviceId;
+    job.leaseExpiresAt = remote.leaseExpiresAt;
+    job.updatedAt = remote.updatedAt;
+    if (upload) {
       if (remote.status === "success") {
         upload.status = "posted";
         upload.postedAt = remote.completedAt;
@@ -480,7 +496,21 @@ async function reconcilePublishingControlPlane(workspaceId) {
       }
       upload.updatedAt = remote.updatedAt;
     }
-    return { document, result: null };
+    if (before !== JSON.stringify([job, upload])) changed = true;
+  }
+  return changed;
+}
+
+async function reconcilePublishingControlPlane(workspaceId, knownRemoteJobs) {
+  const remoteJobs = Array.isArray(knownRemoteJobs)
+    ? knownRemoteJobs.filter((item) => item.type === "publish")
+    : await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
+  const current = await getPublishingSnapshot(workspaceId);
+  if (!remoteJobs.length || !applyRemotePublishingJobs(current, workspaceId, remoteJobs)) return current;
+  return mutateWorkspaceDocument(workspaceId, async (value) => {
+    const document = documentValue(value);
+    applyRemotePublishingJobs(document, workspaceId, remoteJobs);
+    return { document, result: document };
   });
 }
 
@@ -513,7 +543,7 @@ export async function redeemCompanionPairing(input = {}) {
   const companionInstanceId = String(input.companionInstanceId || "").trim().slice(0, 120);
   if (!companionInstanceId) throw new Error("Companion instance identity is required.");
   const token = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
-  const companion = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const companion = await mutatePairingDocument(codeHash, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const challenge = document.pairingChallenges.find((item) => safeEqual(item.codeHash, codeHash));
@@ -561,8 +591,8 @@ export async function removeCentralCompanion(principal) {
 
 export async function authenticateCentralCompanion(token) {
   await initialize();
-  const document = documentValue(await readDatabaseDocument(DOCUMENT_KEY));
   const secretHash = hashSecret(token || "");
+  const document = documentValue(await readDatabaseDocument(DOCUMENT_KEY, blankDocument(), { tokenHash: secretHash }));
   const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
   if (!companion) throw new Error("This Companion pairing is no longer valid.");
   return publicCompanion(companion);
@@ -571,7 +601,7 @@ export async function authenticateCentralCompanion(token) {
 export async function heartbeatCentralCompanion(token, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -621,7 +651,7 @@ export async function heartbeatCentralCompanion(token, input = {}) {
 export async function createCentralAccount(principal, platformName, input = {}) {
   const selectedPlatform = platform(platformName);
   await initialize();
-  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const handle = String(input.handle || "").trim();
@@ -647,7 +677,7 @@ export async function createCentralAccount(principal, platformName, input = {}) 
 
 export async function updateCentralAccount(principal, accountId, input = {}) {
   await initialize();
-  const account = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const account = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     for (const key of ["displayName", "handle", "loginIdentifier", "enabled"]) {
@@ -666,7 +696,7 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
 
 export async function deleteCentralAccount(principal, accountId) {
   await initialize();
-  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
     if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === accountId && !["posted", "failed"].includes(item.status))) {
@@ -680,8 +710,7 @@ export async function deleteCentralAccount(principal, accountId) {
 }
 
 export async function listCentralUploads(workspaceId) {
-  await reconcilePublishingControlPlane(workspaceId);
-  const document = await getPublishingSnapshot(workspaceId);
+  const document = await reconcilePublishingControlPlane(workspaceId);
   return document.uploads.filter((item) => item.workspaceId === workspaceId).map((item) => uploadPublic(document, item));
 }
 
@@ -702,6 +731,12 @@ function createUploadInDocument(document, principal, input = {}) {
   if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
   const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
   if (scheduledAt && input.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
+  const sourceSubmissionId = String(input.sourceSubmissionId || "").trim() || null;
+  if (sourceSubmissionId) {
+    const existing = document.uploads.find((item) => item.workspaceId === principal.workspaceId
+      && item.accountId === account.id && item.sourceSubmissionId === sourceSubmissionId);
+    if (existing) return uploadPublic(document, existing);
+  }
   if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === account.id && item.status === "queued"
     && item.caption === caption && item.originalName === (input.originalName || "Text post") && item.size === Number(input.size || 0)
     && (item.scheduledAt || null) === scheduledAt && Number(item.scheduleId || 0) === Number(input.scheduleId || 0))) {
@@ -717,7 +752,7 @@ function createUploadInDocument(document, principal, input = {}) {
     caption, status: "queued", publishActionState: "not_started",
     uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
     createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
-    sourceSubmissionId: input.sourceSubmissionId || null, automation: { safetyDeferredUntil: null },
+    sourceSubmissionId, automation: { safetyDeferredUntil: null },
   };
   document.uploads.push(upload);
   if (!upload.scheduleId) queueJob(document, upload);
@@ -727,7 +762,7 @@ function createUploadInDocument(document, principal, input = {}) {
 
 export async function createCentralUploads(principal, inputs = []) {
   if (!Array.isArray(inputs) || !inputs.length) throw new Error("Choose at least one workspace account.");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value, transaction) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value, transaction) => {
     const document = documentValue(value);
     const result = inputs.map((input) => createUploadInDocument(document, principal, input));
     const uploadIds = new Set(result.map((upload) => upload.id));
@@ -752,7 +787,7 @@ export async function createCentralUpload(principal, input = {}) {
 
 export async function updateCentralUpload(principal, uploadId, input = {}) {
   await initialize();
-  const upload = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const upload = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     for (const key of ["title", "caption", "platformOptions", "scheduledAt", "scheduleId", "accountId"]) {
@@ -798,7 +833,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
 
 export async function updateCentralUploadStatus(principal, uploadId, status, failureReason) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const upload = findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     upload.status = status;
@@ -811,7 +846,7 @@ export async function updateCentralUploadStatus(principal, uploadId, status, fai
 
 export async function deleteCentralUpload(principal, uploadId) {
   await initialize();
-  const result = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const result = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     findOwned(document, "uploads", principal.workspaceId, uploadId, "Post");
     const removedJobIds = document.jobs.filter((item) => item.uploadId === uploadId).map((item) => item.id);
@@ -828,32 +863,88 @@ export async function createCentralStagedUpload(principal, input = {}) {
   const mimeType = String(input.mimeType || "").trim();
   const size = Number(input.size || 0);
   if (!originalName || !Number.isFinite(size) || size < 1) throw new Error("Choose a valid media file.");
-  if (size > 500 * 1024 * 1024) throw new Error("Media files must be 500 MB or smaller.");
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = {
-      id: id("stage"), workspaceId: principal.workspaceId, originalName, mimeType,
-      size, offset: 0, chunkSize: 2 * 1024 * 1024, fileName: cleanFileName(originalName),
-      artifactParts: [],
-      createdAt: now(), updatedAt: now(), createdByUserId: principal.userId,
-    };
-    document.stagedUploads.push(stage);
-    document.stagedUploads = document.stagedUploads.filter((item) => Date.now() - Date.parse(item.updatedAt || 0) < 24 * 60 * 60 * 1000);
-    return { document, result: { id: stage.id, offset: 0, chunkSize: stage.chunkSize, fileName: stage.fileName } };
-  });
+  if (size > MAX_MEDIA_UPLOAD_BYTES) throw new Error("Media files must be 2 GB or smaller.");
+  const sql = await getDatabaseSql();
+  const stageId = id("stage");
+  const fileName = cleanFileName(originalName);
+  await sql`DELETE FROM agentic_that.publishing_staged_uploads WHERE updated_at < now() - interval '24 hours'`;
+  await sql`
+    INSERT INTO agentic_that.publishing_staged_uploads
+      (id, workspace_id, created_by_user_id, original_name, mime_type, byte_size, upload_offset,
+       chunk_size, upload_strategy, file_name, artifact_parts)
+    VALUES
+      (${stageId}, ${principal.workspaceId}, ${principal.userId}, ${originalName}, ${mimeType}, ${size}, 0,
+       ${CENTRAL_UPLOAD_CHUNK_BYTES}, 'signed_parts', ${fileName}, ${sql.json([])})
+  `;
+  return { id: stageId, offset: 0, chunkSize: CENTRAL_UPLOAD_CHUNK_BYTES, uploadStrategy: "signed_parts", fileName };
+}
+
+function stagedUploadFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    originalName: row.original_name,
+    mimeType: row.mime_type || "",
+    size: Number(row.byte_size),
+    offset: Number(row.upload_offset),
+    chunkSize: Number(row.chunk_size),
+    uploadStrategy: row.upload_strategy,
+    fileName: row.file_name,
+    artifactParts: Array.isArray(row.artifact_parts) ? row.artifact_parts : [],
+    artifactManifest: row.artifact_manifest && typeof row.artifact_manifest === "object" ? row.artifact_manifest : null,
+    finalizedAt: row.finalized_at instanceof Date ? row.finalized_at.toISOString() : row.finalized_at ? String(row.finalized_at) : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    createdByUserId: row.created_by_user_id,
+  };
+}
+
+async function lockedStagedUpload(transaction, workspaceId, stagedUploadId) {
+  const [row] = await transaction`
+    SELECT * FROM agentic_that.publishing_staged_uploads
+    WHERE id = ${stagedUploadId} AND workspace_id = ${workspaceId}
+    FOR UPDATE
+  `;
+  const stage = stagedUploadFromRow(row);
+  if (!stage) throw new Error("Upload session was not found.");
+  return stage;
 }
 
 export async function getCentralStagedUpload(workspaceId, stagedUploadId) {
-  const document = await getPublishingSnapshot(workspaceId);
-  return findOwned(document, "stagedUploads", workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  const [row] = await sql`
+    SELECT * FROM agentic_that.publishing_staged_uploads
+    WHERE id = ${stagedUploadId} AND workspace_id = ${workspaceId}
+  `;
+  const stage = stagedUploadFromRow(row);
+  if (!stage) throw new Error("Upload session was not found.");
+  return stage;
+}
+
+export async function finalizeCentralStagedUpload(principal, stagedUploadId, artifactManifest) {
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
+    if (!stage.artifactManifest) {
+      if (!artifactManifest || typeof artifactManifest !== "object") throw new Error("The finalized private media is invalid.");
+      await transaction`
+        UPDATE agentic_that.publishing_staged_uploads
+        SET artifact_manifest = ${transaction.json(artifactManifest)}, finalized_at = now(), updated_at = now()
+        WHERE id = ${stage.id}
+      `;
+      stage.artifactManifest = artifactManifest;
+      stage.finalizedAt = now();
+    }
+    return stage;
+  });
 }
 
 export async function advanceCentralStagedUpload(principal, stagedUploadId, nextOffset, artifactPart = null) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
     if (!Number.isInteger(nextOffset) || nextOffset < stage.offset || nextOffset > stage.size) throw new Error("The media upload offset is invalid.");
     if (artifactPart) {
       if (artifactPart.offset !== stage.offset || artifactPart.byteSize !== nextOffset - stage.offset || artifactPart.index !== Math.floor(stage.offset / stage.chunkSize)) {
@@ -864,28 +955,71 @@ export async function advanceCentralStagedUpload(principal, stagedUploadId, next
     }
     stage.offset = nextOffset;
     stage.updatedAt = now();
-    return { document, result: { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize } };
+    await transaction`
+      UPDATE agentic_that.publishing_staged_uploads
+      SET upload_offset = ${stage.offset}, artifact_parts = ${transaction.json(stage.artifactParts)}, updated_at = now()
+      WHERE id = ${stage.id}
+    `;
+    return { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize };
+  });
+}
+
+function advanceStagedUploadPartsInDocument(document, workspaceId, stagedUploadId, artifactParts) {
+  if (!Array.isArray(artifactParts) || artifactParts.length < 1 || artifactParts.length > 8) {
+    throw new Error("The completed private media batch is invalid.");
+  }
+  const stage = findOwned(document, "stagedUploads", workspaceId, stagedUploadId, "Upload session");
+  const ordered = [...artifactParts].sort((left, right) => left.offset - right.offset);
+  let nextOffset = stage.offset;
+  for (const part of ordered) {
+    if (!Number.isInteger(part.offset) || !Number.isInteger(part.byteSize) || part.byteSize < 1
+      || part.offset !== nextOffset || part.index !== Math.floor(part.offset / stage.chunkSize)
+      || nextOffset + part.byteSize > stage.size) {
+      throw new Error("The private media upload batch does not match this upload session.");
+    }
+    nextOffset += part.byteSize;
+  }
+  const completedIndexes = new Set(ordered.map((part) => part.index));
+  stage.artifactParts = (Array.isArray(stage.artifactParts) ? stage.artifactParts : [])
+    .filter((part) => !completedIndexes.has(part.index))
+    .concat(ordered)
+    .sort((left, right) => left.index - right.index);
+  stage.offset = nextOffset;
+  stage.updatedAt = now();
+  return { id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize };
+}
+
+export async function advanceCentralStagedUploadParts(principal, stagedUploadId, artifactParts) {
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    const document = { stagedUploads: [stage] };
+    const result = advanceStagedUploadPartsInDocument(document, principal.workspaceId, stagedUploadId, artifactParts);
+    await transaction`
+      UPDATE agentic_that.publishing_staged_uploads
+      SET upload_offset = ${stage.offset}, artifact_parts = ${transaction.json(stage.artifactParts)}, updated_at = now()
+      WHERE id = ${stage.id}
+    `;
+    return result;
   });
 }
 
 export async function consumeCentralStagedUpload(principal, stagedUploadId) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    const stage = findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
     if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
-    document.stagedUploads = document.stagedUploads.filter((item) => item.id !== stage.id);
-    return { document, result: stage };
+    await transaction`DELETE FROM agentic_that.publishing_staged_uploads WHERE id = ${stage.id}`;
+    return stage;
   });
 }
 
 export async function deleteCentralStagedUpload(principal, stagedUploadId) {
-  await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
-    const document = documentValue(value);
-    findOwned(document, "stagedUploads", principal.workspaceId, stagedUploadId, "Upload session");
-    document.stagedUploads = document.stagedUploads.filter((item) => item.id !== stagedUploadId);
-    return { document, result: { ok: true } };
+  const sql = await getDatabaseSql();
+  return sql.begin(async (transaction) => {
+    const stage = await lockedStagedUpload(transaction, principal.workspaceId, stagedUploadId);
+    await transaction`DELETE FROM agentic_that.publishing_staged_uploads WHERE id = ${stage.id}`;
+    return { ok: true };
   });
 }
 
@@ -896,7 +1030,7 @@ export async function listCentralSchedules(workspaceId) {
 
 export async function createCentralSchedule(principal, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const sequence = document.schedules.reduce((highest, item) => Math.max(highest, Number(item.id) || 0), 0) + 1;
     const timestamp = now();
@@ -911,7 +1045,7 @@ export async function createCentralSchedule(principal, input = {}) {
 
 export async function updateCentralSchedule(principal, scheduleId, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const schedule = document.schedules.find((item) => Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId);
     if (!schedule) throw new Error("Schedule was not found.");
@@ -925,7 +1059,7 @@ export async function updateCentralSchedule(principal, scheduleId, input = {}) {
 
 export async function deleteCentralSchedule(principal, scheduleId) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const found = document.schedules.some((item) => Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId);
     if (!found) throw new Error("Schedule was not found.");
@@ -972,7 +1106,7 @@ export async function listCentralSubmissions(workspaceId) {
 
 export async function createCentralSubmission(principal, input = {}) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
     const selectedAccountIds = Array.isArray(input.selectedAccountIds) ? input.selectedAccountIds : [];
@@ -1009,7 +1143,7 @@ export async function createCentralSubmission(principal, input = {}) {
 
 export async function scheduleCentralSubmission(principal, submissionId, destinations = []) {
   await initialize();
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const submission = findOwned(document, "submissions", principal.workspaceId, submissionId, "Submission");
     if (submission.status !== "awaiting_schedule") throw new Error("This submission has already been scheduled.");
@@ -1055,7 +1189,7 @@ export async function queueCentralUploads(principal, uploadIds) {
   await initialize();
   await reconcilePublishingControlPlane(principal.workspaceId);
   const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
-  const jobs = await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  const jobs = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     if (ids?.length) ids.forEach((item) => findOwned(document, "uploads", principal.workspaceId, item, "Post"));
     refreshDueJobs(document, principal.workspaceId, ids);
@@ -1124,7 +1258,7 @@ function recoverExpiredCentralJobLeases(document, workspaceId, timestamp) {
 export async function claimCentralJobs(token, limit = 1) {
   await initialize();
   const secretHash = hashSecret(token || "");
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -1166,7 +1300,7 @@ export async function updateCentralJob(token, jobId, input = {}) {
   await initialize();
   const secretHash = hashSecret(token || "");
   const states = new Set(["waiting_for_companion", "opening_platform", "uploading", "publishing", "published", "failed", "uncertain", "reconnect_required"]);
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), async (value) => {
+  return mutateTokenDocument(secretHash, async (value) => {
     const document = documentValue(value);
     const companion = document.companions.find((item) => safeEqual(item.tokenHash, secretHash));
     if (!companion) throw new Error("This Companion pairing is no longer valid.");
@@ -1212,8 +1346,7 @@ export async function updateCentralJob(token, jobId, input = {}) {
 }
 
 export async function publishingDashboard(workspaceId) {
-  await reconcilePublishingControlPlane(workspaceId);
-  const document = await getPublishingSnapshot(workspaceId);
+  const document = await reconcilePublishingControlPlane(workspaceId);
   const uploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
   const control = await supabaseJobDashboard(workspaceId);
   const jobs = control.jobs.filter((item) => item.type === "publish").map((item) => {
@@ -1235,6 +1368,48 @@ export async function publishingDashboard(workspaceId) {
   };
 }
 
+export async function publishingWorkspaceSnapshot(workspaceId) {
+  const control = await supabasePublishingWorkspaceSnapshot(workspaceId);
+  const normalizedAccounts = control.accounts;
+  const document = await reconcilePublishingControlPlane(workspaceId, control.jobs);
+  const normalizedById = new Map(normalizedAccounts.map((item) => [item.id, item]));
+  const accounts = document.accounts
+    .filter((item) => item.workspaceId === workspaceId)
+    .map((item) => {
+      const account = publicAccount(document, item);
+      return { ...account, ...(normalizedById.get(account.id) || {}) };
+    });
+  const uploads = document.uploads
+    .filter((item) => item.workspaceId === workspaceId)
+    .map((item) => uploadPublic(document, item));
+  const jobs = control.jobs
+    .filter((item) => item.type === "publish")
+    .map((item) => {
+      const safeJob = { ...item };
+      delete safeJob.payload;
+      return { ...safeJob, state: item.status === "success" ? "published" : item.status };
+    });
+  return {
+    accounts,
+    uploads,
+    submissions: document.submissions
+      .filter((item) => item.workspaceId === workspaceId)
+      .map(normalizeCentralSubmission),
+    schedules: [],
+    activityLogs: document.activityLogs
+      .filter((item) => item.workspaceId === workspaceId)
+      .slice(0, 100)
+      .map((item) => ({
+        ...item,
+        action: item.action || item.type || "publishing.activity",
+        entityType: item.entityType || "upload",
+        entityId: item.entityId || item.uploadId || null,
+      })),
+    companion: control.companion,
+    jobs,
+  };
+}
+
 export function centralMediaFileName(originalName) {
   return cleanFileName(originalName);
 }
@@ -1243,6 +1418,8 @@ export function centralMediaFileName(originalName) {
 // without connecting a test run to a production document store.
 export const centralPublishingTestHelpers = {
   accountReadiness,
+  advanceStagedUploadPartsInDocument,
+  applyRemotePublishingJobs,
   centralJobUpdateIsAllowed,
   companionCompatibility,
   companionPublishingEngine,
@@ -1252,5 +1429,6 @@ export const centralPublishingTestHelpers = {
   recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
   selectClaimableCentralJobs,
+  findOwned,
   versionAtLeast,
 };

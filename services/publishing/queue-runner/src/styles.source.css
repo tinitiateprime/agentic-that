@@ -1178,6 +1178,9 @@ textarea, input[type="datetime-local"], .field input[type="text"] {
 .composer-message.success { background: #E8F7F0; color: #167150; }
 .composer-message.warning { background: #FFF6DD; color: #805E0C; }
 .composer-message.error { background: #FFF0EF; color: #AD4038; }
+.composer-upload-progress { width: min(430px, 52vw); display: grid; gap: 7px; color: #31584C; font-size: 11px; font-weight: 800; }
+.composer-upload-progress > i { height: 7px; overflow: hidden; border-radius: 999px; background: #DDEBE6; }
+.composer-upload-progress > i > b { display: block; height: 100%; min-width: 2px; border-radius: inherit; background: #16856F; transition: width .18s ease; }
 .composer-rights-confirmation { display: flex; align-items: center; gap: 9px; padding: 11px 12px; border: 1px solid #DCE6E1; border-radius: 8px; background: #F8FBF9; color: #315247; cursor: pointer; }
 .composer-rights-confirmation input { accent-color: #0B7A66; }
 .composer-rights-confirmation > span { display: grid; gap: 2px; }

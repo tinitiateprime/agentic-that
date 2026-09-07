@@ -49,3 +49,13 @@ test("desktop scrapers use isolated public compositor-visible workers", async ()
   assert.match(mainSource, /workerWindow\.showInactive\(\)/);
   assert.match(mainSource, /opacity:\s*0/);
 });
+
+test("macOS release rebuilds the host DMG helper and verifies retry output", async () => {
+  const source = await readFile(new URL("./scripts/make-macos-artifacts.mjs", import.meta.url), "utf8");
+  const packageStep = source.indexOf('["package", "--platform=darwin", "--arch=universal"]');
+  const rebuildStep = source.indexOf('["rebuild", "macos-alias"]');
+  const dmgStep = source.indexOf('"@electron-forge/maker-dmg"');
+  assert.ok(packageStep >= 0 && rebuildStep > packageStep && dmgStep > rebuildStep);
+  assert.match(source, /attempt <= 3/);
+  assert.match(source, /hdiutil", \["verify"/);
+});

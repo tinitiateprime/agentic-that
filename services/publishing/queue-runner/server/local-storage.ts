@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
 import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
 import { publishingEngineForPlatform } from "./services/login-surface.js";
+import { publishingSafetyPacingEnabled } from "./services/safety-governor.js";
 import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import {
   type ActivityLog,
@@ -1338,10 +1339,12 @@ export async function bindPublishingAccountsToCompanion(companionId: string) {
     store.accounts = store.accounts.map(account => {
       const executionEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
       if (account.executionEngine === executionEngine && account.companionId === normalizedCompanionId) return account;
+      const engineChanged = account.executionEngine !== executionEngine;
       rebound += 1;
       return {
         ...account,
         executionEngine,
+        credentialConfigured: engineChanged ? false : account.credentialConfigured,
         companionId: normalizedCompanionId,
         updatedAt,
       };
@@ -1415,6 +1418,7 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
       return created;
     }
     const existing = store.accounts[index];
+    const engineChanged = executionEngine !== existing.executionEngine;
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName || existing.displayName,
@@ -1425,7 +1429,9 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
       companionId: input.companionId || existing.companionId,
       // A central heartbeat can safely turn a disconnected session off, but it
       // must never erase a session that this Companion has just saved locally.
-      credentialConfigured: Boolean(input.credentialConfigured) || existing.credentialConfigured,
+      credentialConfigured: engineChanged
+        ? false
+        : Boolean(input.credentialConfigured) || existing.credentialConfigured,
       safetyStatus: input.enabled === false ? "paused" : existing.safetyStatus === "paused" ? "healthy" : existing.safetyStatus,
       updatedAt: timestamp,
     };
@@ -1769,7 +1775,7 @@ function isStoreUploadReadyForAutomation(
   const account = store.accounts.find(item => item.id === upload.accountId);
   if (!account?.enabled) return false;
   if (upload.scheduledAt || upload.scheduleId) return false;
-  if (upload.safetyDeferredUntil) {
+  if (publishingSafetyPacingEnabled() && upload.safetyDeferredUntil) {
     const deferredUntil = Date.parse(upload.safetyDeferredUntil);
     if (Number.isFinite(deferredUntil)) {
       return upload.status === "queued" && deferredUntil <= now;

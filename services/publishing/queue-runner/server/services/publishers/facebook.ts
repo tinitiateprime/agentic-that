@@ -3,9 +3,11 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalInputFile } from "./local-file-input.js";
 
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login/";
+export const FACEBOOK_POST_ACCEPTED_TEXT = /Your post (?:is being processed|was shared|is now published)|Post published|Your (?:video|reel) is being processed/i;
 
 export const FACEBOOK_COMPOSER_EDITOR_SELECTORS = [
   '[role="dialog"] [contenteditable="true"][role="textbox"]',
@@ -422,7 +424,7 @@ async function attachFacebookMedia(page: Page, filePath: string) {
     throw new Error("Could not find Facebook's hidden media input; the native file picker was not opened.");
   }
 
-  await fileInput.setInputFiles(filePath);
+  await setLocalInputFile(page, fileInput, filePath);
 
   await page.waitForTimeout(300);
 }
@@ -543,11 +545,24 @@ async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promis
 }
 
 async function waitForFacebookPostComplete(page: Page) {
-  console.log("Post clicked. Waiting 15 seconds before closing Facebook window...");
-  const deadline = Date.now() + 15000;
+  console.log("Post clicked. Waiting for Facebook to accept and close the composer...");
+  const configuredTimeout = Number(process.env.FACEBOOK_POST_CONFIRMATION_TIMEOUT_MS);
+  const timeout = Number.isFinite(configuredTimeout)
+    ? Math.max(30_000, Math.min(300_000, configuredTimeout))
+    : 180_000;
+  const deadline = Date.now() + timeout;
   let sawPostingProgress = false;
 
   while (Date.now() < deadline) {
+    const accepted = await firstVisible([
+      page.getByText(FACEBOOK_POST_ACCEPTED_TEXT),
+      page.locator('[role="status"], [role="alert"]').filter({ hasText: FACEBOOK_POST_ACCEPTED_TEXT }),
+    ]);
+    if (accepted) {
+      console.log("Facebook confirmed that the post was accepted.");
+      return;
+    }
+
     if (!sawPostingProgress) {
       const postingProgress = await firstVisible([
         page.getByText(/^Posting$/i),
@@ -560,17 +575,16 @@ async function waitForFacebookPostComplete(page: Page) {
       }
     }
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) await page.waitForTimeout(Math.min(250, remainingMs));
+    if (!await createPostComposerIsVisible(page)) {
+      console.log("Facebook closed the Create post dialog after accepting the post.");
+      return;
+    }
+    await page.waitForTimeout(300);
   }
 
-  if (await createPostComposerIsVisible(page)) {
-    throw new Error(
-      "Facebook Create post dialog is still open 15 seconds after clicking Post; the final publish result is uncertain.",
-    );
-  }
-
-  console.log("Facebook post wait complete.");
+  throw new Error(
+    `Facebook Create post dialog remained open for ${Math.round(timeout / 1000)} seconds after clicking Post; the final publish result is uncertain.`,
+  );
 }
 
 async function getLoginError(page: Page) {

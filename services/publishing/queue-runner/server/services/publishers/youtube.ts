@@ -7,6 +7,7 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
 import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
 import type { YouTubeOptions } from "../../../shared/schema.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 
 const YOUTUBE_HOME_URL = "https://www.youtube.com/";
 const YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload";
@@ -247,21 +248,33 @@ async function clickNextWhenReady(page: Page) {
 }
 
 
+export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|processing)|Your video has been published|Processing will begin shortly/i;
+
 async function waitForPublishComplete(page: Page) {
   console.log("Waiting for YouTube publish confirmation...");
+  const deadline = Date.now() + 180_000;
+  let confirmed: Locator | null = null;
+  while (Date.now() < deadline) {
+    confirmed = await waitForVisible([
+      page.locator('ytcp-video-share-dialog').first(),
+      page.getByText(YOUTUBE_PUBLISH_CONFIRMATION_TEXT).first(),
+    ], 500);
+    if (confirmed) break;
 
-  const publishSignals = [
-    page.locator('ytcp-video-share-dialog').first(),
-    page.getByText(/Video published/i).first(),
-    page.getByText(/Your video has been published/i).first(),
-    page.getByText(/^Video saved(?:\s|$)/i).first(),
-  ];
+    const rejected = await waitForVisible([
+      page.getByText(/Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i).first(),
+      page.locator('[role="alert"]').filter({ hasText: /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i }).first(),
+    ], 100);
+    if (rejected) throw new Error((await rejected.textContent())?.trim() || "YouTube rejected the video upload.");
 
-  try {
-    await Promise.any(publishSignals.map((signal) => signal.waitFor({ state: "visible", timeout: 120000 })));
-  } catch {
-    throw new Error("YouTube publish confirmation did not appear.");
+    const uploadDialogVisible = await page.locator("ytcp-uploads-dialog").first().isVisible().catch(() => false);
+    if (!uploadDialogVisible) {
+      console.log("YouTube closed the upload dialog after accepting the final action.");
+      return;
+    }
+    await page.waitForTimeout(300);
   }
+  if (!confirmed) throw new Error("YouTube publish confirmation did not appear.");
 
   console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
 
@@ -475,12 +488,12 @@ async function setCommunityImageInputFiles(page: Page, composer: Locator, imageP
   console.log(`YouTube Community file inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
-    await composerInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, composerInputs.last(), imagePath);
     return true;
   }
 
   if (pageCount > 0) {
-    await pageInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, pageInputs.last(), imagePath);
     return true;
   }
 
@@ -558,7 +571,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
   const fileChooser = await fileChooserPromise;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
-    await fileChooser.setFiles(imagePath);
+    await setLocalFileChooserFile(fileChooser, imagePath);
   } else {
     if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
       const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
@@ -567,7 +580,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string) {
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
-        await retryChooser.setFiles(imagePath);
+        await setLocalFileChooserFile(retryChooser, imagePath);
       } else if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
         if (!await dropCommunityImageOnComposer(page, imagePath)) {
           throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
@@ -831,7 +844,7 @@ async function attachYouTubeVideoFile(page: Page, videoPath: string) {
   const useExistingInput = async () => {
     const inputs = page.locator(inputSelector);
     if ((await inputs.count().catch(() => 0)) === 0) return false;
-    await inputs.last().setInputFiles(videoPath);
+    await setLocalInputFile(page, inputs.last(), videoPath);
     return true;
   };
 
@@ -840,7 +853,7 @@ async function attachYouTubeVideoFile(page: Page, videoPath: string) {
     await control.click({ force: true, timeout: 10000 });
     const chooser = await chooserPromise;
     if (chooser) {
-      await chooser.setFiles(videoPath);
+      await setLocalFileChooserFile(chooser, videoPath);
       return true;
     }
     await page.waitForTimeout(700);

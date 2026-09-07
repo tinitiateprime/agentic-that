@@ -3,9 +3,12 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
+export const LINKEDIN_POST_ACCEPTED_TEXT = /Post successful|Your post (?:has been shared|was published)|Post published|View post/i;
+export const LINKEDIN_UPLOAD_ACTIVE_TEXT = /^(?:Uploading(?:\.{3}|…)?(?:\s+Keep the page open to finish uploading)?|Keep the page open to finish uploading|Processing(?:\.{3}|…)?(?:\s+(?:video|post))?|Posting(?:\.{3}|…)?|Your (?:video|post) is (?:being processed|processing)|Processing will begin shortly)(?:\s*\d{1,3}%)?$/i;
 
 export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
   '[role="dialog"] [contenteditable="true"]',
@@ -22,7 +25,29 @@ function getLoginHoldMs() {
 }
 
 function getPostHoldMs() {
-  return Number(process.env.LINKEDIN_POST_HOLD_MS ?? 1000);
+  return Number(process.env.LINKEDIN_POST_HOLD_MS ?? 5000);
+}
+
+function getPostConfirmationTimeoutMs() {
+  const configured = Number(process.env.LINKEDIN_POST_CONFIRMATION_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(30_000, Math.min(300_000, configured))
+    : 180_000;
+}
+
+function getUploadCompletionTimeoutMs() {
+  const configured = Number(process.env.LINKEDIN_UPLOAD_COMPLETION_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(300_000, Math.min(14_400_000, configured))
+    : 7_200_000;
+}
+
+export function isLinkedInPublishResponse(method: string, url: string, status: number) {
+  return method.toUpperCase() === "POST"
+    && status >= 200
+    && status < 300
+    && /linkedin\.com\/voyager\/api\//i.test(url)
+    && /contentcreation|dashshares|ugcposts|(?:^|[/?])shares(?:[/?#&=]|$)|(?:^|[/?])posts(?:[/?#&=]|$)/i.test(url);
 }
 
 async function clickIfVisible(locator: Locator, timeout = 1500) {
@@ -247,9 +272,12 @@ async function typeLinkedInPostText(page: Page, text: string) {
 
     // Set the requested caption exactly so a retained LinkedIn draft cannot
     // duplicate text during a safe retry.
-    await page.keyboard.press("Control+A");
-    await page.keyboard.press("Backspace");
-    await page.keyboard.insertText(text);
+    await editor.fill(text, { timeout: 10000 }).catch(async () => {
+      await editor.focus();
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.insertText(text);
+    });
     await page.waitForTimeout(750);
 
     const enteredText = await editor.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
@@ -275,7 +303,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 
   const existingFileInputs = root.locator('input[type="file"]');
   if ((await existingFileInputs.count()) > 0) {
-    await existingFileInputs.last().setInputFiles(filePath);
+    await setLocalInputFile(page, existingFileInputs.last(), filePath);
   } else {
     const mediaButton = await firstVisible([
       root.getByRole("button", { name: /Add media/i }),
@@ -299,7 +327,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
-      await fileChooser.setFiles(filePath);
+      await setLocalFileChooserFile(fileChooser, filePath);
     } else {
       await page.keyboard.press("Escape").catch(() => undefined);
       await page.waitForTimeout(500);
@@ -307,7 +335,7 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
       if (!await fallbackInputs.count()) {
         throw new Error("LinkedIn media picker opened without exposing a file input.");
       }
-      await fallbackInputs.last().setInputFiles(filePath);
+      await setLocalInputFile(page, fallbackInputs.last(), filePath);
     }
   }
 
@@ -328,7 +356,11 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
   console.log("LinkedIn media attached.");
 }
 
-async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
+type LinkedInSubmissionEvidence = {
+  acceptedResponse: Promise<boolean>;
+};
+
+async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void): Promise<LinkedInSubmissionEvidence> {
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     const postButton = await firstVisible([
@@ -337,6 +369,11 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
       page.getByRole("button", { name: /^Post$/i }),
     ]);
     if (postButton && await postButton.isEnabled().catch(() => false)) {
+      const acceptedResponse = page.waitForResponse(response => isLinkedInPublishResponse(
+        response.request().method(),
+        response.url(),
+        response.status(),
+      ), { timeout: getPostConfirmationTimeoutMs() }).then(() => true).catch(() => false);
       console.log("Clicking LinkedIn Post button...");
       await postButton.evaluate((element: HTMLElement) => {
         element.scrollIntoView({ block: "center", inline: "center" });
@@ -344,7 +381,7 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
         element.click();
       }).catch(() => postButton.click({ force: true, timeout: 10000 }));
       await onSubmitted?.();
-      return;
+      return { acceptedResponse };
     }
 
     await page.waitForTimeout(1000);
@@ -353,27 +390,88 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
   throw new Error("LinkedIn Post button did not become enabled.");
 }
 
-async function waitForPostComplete(page: Page) {
-  console.log("Waiting for LinkedIn post to finish...");
+async function linkedInPublishError(page: Page) {
+  const error = await firstVisible([
+    page.locator('[role="alert"]').filter({ hasText: /couldn(?:'|\u2019)t post|post failed|something went wrong|try again/i }),
+    page.getByText(/We couldn(?:'|\u2019)t publish|We couldn(?:'|\u2019)t post|Your post failed|Post failed/i),
+  ]);
+  return (await error?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || null;
+}
 
-  const dialog = page.locator('[role="dialog"]').filter({ hasText: /What do you want to talk about|Post/i }).first();
+async function linkedInBackgroundWork(page: Page) {
+  return firstVisible([
+    page.getByText(LINKEDIN_UPLOAD_ACTIVE_TEXT),
+    page.locator('[role="status"], [role="alert"]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+    page.locator('[aria-live="polite"], [aria-live="assertive"]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+    page.locator('.artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+  ]);
+}
 
-  try {
-    await dialog.waitFor({ state: "hidden", timeout: 90000 });
-  } catch {
-    const successToast = await firstVisible([
-      page.getByText(/Post successful/i),
-      page.getByText(/Your post has been shared/i),
-      page.getByText(/View post/i),
-    ]);
+async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000) {
+  const deadline = Date.now() + getUploadCompletionTimeoutMs();
+  let quietSince: number | null = Date.now();
+  let backgroundWorkSeen = false;
+  while (Date.now() < deadline) {
+    const error = await linkedInPublishError(page);
+    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
 
-    if (!successToast) {
-      throw new Error("LinkedIn post did not finish within 90 seconds.");
+    const backgroundWork = await linkedInBackgroundWork(page);
+    if (backgroundWork) {
+      if (!backgroundWorkSeen) {
+        console.log("LinkedIn is still uploading or processing the post. Keeping the browser open until it finishes...");
+      }
+      backgroundWorkSeen = true;
+      quietSince = null;
+    } else {
+      quietSince ??= Date.now();
+      const requiredQuietMs = backgroundWorkSeen ? Math.max(15_000, initialQuietMs) : initialQuietMs;
+      if (Date.now() - quietSince >= requiredQuietMs) return;
     }
+
+    await page.waitForTimeout(500);
   }
 
-  await page.waitForTimeout(2000);
-  console.log("LinkedIn post published.");
+  throw new Error(`LinkedIn upload or processing did not finish within ${Math.round(getUploadCompletionTimeoutMs() / 60_000)} minutes.`);
+}
+
+async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvidence, longUploadExpected = false) {
+  console.log("Waiting for LinkedIn post to finish...");
+  const deadline = Date.now() + getPostConfirmationTimeoutMs();
+  let networkAccepted = false;
+  let composerHiddenSince: number | null = null;
+  void evidence.acceptedResponse.then(accepted => { networkAccepted = accepted; });
+
+  while (Date.now() < deadline) {
+    const error = await linkedInPublishError(page);
+    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
+
+    const success = await firstVisible([
+      page.locator('[role="status"], [role="alert"]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+      page.locator('[aria-live="polite"], [aria-live="assertive"]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+      page.locator('.artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+    ]);
+    if (success || networkAccepted) {
+      await waitForLinkedInSettle(page, longUploadExpected ? 30_000 : 5000);
+      console.log("LinkedIn confirmed the post was accepted.");
+      return;
+    }
+
+    const composerVisible = Boolean(await firstVisible(linkedInComposerEditorLocators(page)));
+    if (composerVisible) {
+      composerHiddenSince = null;
+    } else {
+      composerHiddenSince ??= Date.now();
+      if (Date.now() - composerHiddenSince >= 12_000) {
+        await waitForLinkedInSettle(page, longUploadExpected ? 30_000 : 5000);
+        console.log("LinkedIn finished uploading and kept the composer closed after accepting the post.");
+        return;
+      }
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(`LinkedIn did not confirm the post within ${Math.round(getPostConfirmationTimeoutMs() / 1000)} seconds.`);
 }
 
 async function loginFormIsVisible(page: Page) {
@@ -461,6 +559,7 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
 
 export async function postToLinkedIn(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
   const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const isVideo = upload.postFormat === "video" || upload.mimeType.startsWith("video/");
   const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
   if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
 
@@ -472,8 +571,8 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   await clickStartPost(page);
   if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
-  await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
-  await waitForPostComplete(page);
+  const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
+  await waitForPostComplete(page, submissionEvidence, isVideo);
 
   const holdTime = getPostHoldMs();
   if (holdTime > 0) {

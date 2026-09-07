@@ -3,6 +3,7 @@ import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalInputFile } from "./local-file-input.js";
 
 const X_HOME_URL = "https://x.com/home";
 const X_LOGIN_URL = "https://x.com/i/flow/login";
@@ -233,7 +234,7 @@ async function attachXMedia(page: Page, filePath: string) {
     fileInput = pageInputs.last();
   }
 
-  await fileInput.setInputFiles(filePath);
+  await setLocalInputFile(page, fileInput, filePath);
   const fileSelectionCompleted = true;
   console.log("X media selected; waiting for it to become ready...");
 

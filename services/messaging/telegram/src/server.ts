@@ -448,9 +448,9 @@ function telegramPostInput(body: JsonBody): TelegramPostInput {
 }
 
 async function verifyPostMedia(userId: string, input: TelegramPostInput) {
+  if (!input.mediaUploadId) return;
   const account = await store.getAccountWithSession(userId, input.accountId);
   if (!account) throw new HttpError(404, "Telegram account was not found.");
-  if (!input.mediaUploadId) return;
   try {
     await mediaStore.resolve(userId, account.id, input.mediaUploadId);
   } catch (error) {
@@ -764,8 +764,28 @@ function normalizePhoneFromBody(body: JsonBody) {
   }
 }
 
-function sharedTelegramApiCredentials(): TelegramApiCredentials {
+function sharedTelegramApiCredentials(): TelegramApiCredentials | null {
+  if (!config.telegramApiId || !config.telegramApiHash) return null;
   return { apiId: config.telegramApiId, apiHash: config.telegramApiHash };
+}
+
+export function resolveTelegramApiCredentials(
+  body: JsonBody,
+  sharedCredentials: TelegramApiCredentials | null,
+): TelegramApiCredentials {
+  if (sharedCredentials) return sharedCredentials;
+
+  const rawApiId = requiredString(body, "telegramApiId", 20);
+  const apiId = Number(rawApiId);
+  if (!Number.isInteger(apiId) || apiId <= 0) {
+    throw new HttpError(400, "Telegram API ID must be a positive number from my.telegram.org.");
+  }
+
+  const apiHash = requiredString(body, "telegramApiHash", 128);
+  if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
+    throw new HttpError(400, "Telegram API hash must be the 32-character hash from my.telegram.org.");
+  }
+  return { apiId, apiHash };
 }
 
 function telegramApiCredentialsFromAccount(account: TelegramAccountWithSession): TelegramApiCredentials {
@@ -932,8 +952,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     sendJson(request, response, 200, {
       ok: true,
       service: "telegram-multi-user",
-      storage: process.env.DATA_STORE || "json",
+      storage: store.storageBackend(),
       scheduler: shouldRunBackgroundListeners() ? "server" : "disabled",
+      telegramLoginCredentials: sharedTelegramApiCredentials() ? "shared" : "per_connection",
+      sharedCredentialsStatus: config.telegramApiCredentialsStatus,
       configManagerUrl: config.corsOrigin
         ? config.corsOrigin.replace(/\/$/, "") + "/config-manager?service=messaging&platform=telegram"
         : "/config-manager?service=messaging&platform=telegram"
@@ -1045,7 +1067,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (request.method !== "GET" && request.method !== "HEAD") ensureTrustedOrigin(request);
 
   if (request.method === "GET" && url.pathname === "/v1/me") {
-    sendJson(request, response, 200, { ok: true, user });
+    const includeAccounts = url.searchParams.get("include")?.split(",").includes("accounts");
+    sendJson(request, response, 200, {
+      ok: true,
+      user,
+      requiresTelegramApiCredentials: !sharedTelegramApiCredentials(),
+      ...(includeAccounts ? { accounts: await store.listAccounts(user.id) } : {})
+    });
     return;
   }
 
@@ -1053,7 +1081,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     requireUserLevel(user, "configure");
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
-    const credentials = sharedTelegramApiCredentials();
+    const credentials = resolveTelegramApiCredentials(body, sharedTelegramApiCredentials());
     const phone = normalizePhoneFromBody(body);
     let start;
     try {
@@ -1290,6 +1318,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const schedulingPostId = telegramPostIdFromPath(url.pathname, "/schedule");
   if (request.method === "POST" && schedulingPostId) {
     requireUserLevel(user, "operate");
+    if (!shouldRunBackgroundListeners()) {
+      throw new HttpError(409, "Telegram scheduling is not enabled. Use Send now.");
+    }
     const body = await readJsonBody(request);
     const scheduledAt = requiredString(body, "scheduledAt", 80);
     try {
@@ -1309,8 +1340,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     try {
       const post = await store.queuePost(user.id, sendingPostId, new Date().toISOString());
       if (!post) throw new HttpError(404, "Telegram post was not found.");
-      postScheduler?.wake();
-      sendJson(request, response, 202, { ok: true, post });
+      const sender = postScheduler || new TelegramPostScheduler(store, executeScheduledTelegramDelivery, 2_000, 1);
+      const delivered = await sender.runPostNow(user.id, post.id);
+      if (!delivered) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post: delivered });
     } catch (error) {
       throw telegramPostHttpError(error);
     }
@@ -1509,7 +1542,14 @@ export async function initializeTelegramApp() {
     await mediaStore.initialize();
     initialized = true;
   })();
-  await initializing;
+  try {
+    await initializing;
+  } catch (error) {
+    // A transient store/configuration failure must not poison every later
+    // request handled by the same warm serverless process.
+    initializing = null;
+    throw error;
+  }
 }
 
 export async function handleRequestWithErrors(request: IncomingMessage, response: ServerResponse) {

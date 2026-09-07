@@ -1,5 +1,5 @@
 import { createPublishingIdentityToken, createServiceIdentityToken } from "@platform/server/auth-store";
-import { principalHasAccess, principalHasCapability, requireAccess, requireCapability } from "@platform/server/access-control";
+import { principalHasAccess, principalHasCapability, requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
 import { serviceEndpoints } from "@platform/service-catalog";
 import ContentManager from "./ContentManager";
 
@@ -26,7 +26,7 @@ export default async function ContentManagerPage({ searchParams }) {
     ? `publishing.${requestedPublishingPlatform}`
     : `messaging.${requestedMessagingPlatform}`;
   let user = await requireAccess(requestedResource, "view", "/content-manager");
-  user = await requireCapability(requestedService === "publishing" ? "publishing.view" : "messaging.view", "/content-manager");
+  user = await requirePrincipalCapability(user, requestedService === "publishing" ? "publishing.view" : "messaging.view", "/content-manager");
   const canUsePublishing = ["instagram", "facebook", "x", "youtube", "linkedin"]
     .some((platform) => principalHasAccess(user, `publishing.${platform}`, "view"))
     && principalHasCapability(user, "publishing.view");

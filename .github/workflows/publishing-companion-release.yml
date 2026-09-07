@@ -39,6 +39,7 @@ jobs:
           npm run test:facebook
           npm run test:whatsapp
           npm run test:rbac
+          npm run test:security
           npm --prefix services/messaging/telegram test
           npm run build
 

@@ -62,7 +62,7 @@ const publishingEngineLabels = {
   companion: "Companion",
   external_browser: "External browser"
 };
-const externalBrowserRequiredPlatforms = new Set(["x", "youtube"]);
+const externalBrowserRequiredPlatforms = new Set(["facebook", "x", "youtube"]);
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
   telegram: "Telegram",
@@ -160,6 +160,7 @@ async function telegramRequest(path, identityToken, init = {}) {
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
+    cache: "no-store",
     ...init,
     headers,
     credentials: "include"
@@ -257,6 +258,8 @@ export default function ConfigManager({
   const [telegramStatus, setTelegramStatus] = useState("checking");
   const [telegramUser, setTelegramUser] = useState(null);
   const [telegramAccounts, setTelegramAccounts] = useState([]);
+  const [telegramRequiresApiCredentials, setTelegramRequiresApiCredentials] = useState(false);
+  const [telegramError, setTelegramError] = useState("");
   const [whatsappStatus, setWhatsappStatus] = useState("checking");
   const [whatsappState, setWhatsappState] = useState(null);
   const [whatsappSession, setWhatsappSession] = useState(null);
@@ -275,14 +278,19 @@ export default function ConfigManager({
   const loadTelegram = useCallback(async () => {
     if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me", telegramIdentityToken);
-      const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
+      const me = await telegramRequest("/me?include=accounts", telegramIdentityToken);
+      const accountData = Array.isArray(me.accounts)
+        ? me
+        : await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
+      setTelegramRequiresApiCredentials(Boolean(me.requiresTelegramApiCredentials));
+      setTelegramError("");
       setTelegramStatus("ready");
     } catch (error) {
       setTelegramUser(null);
       setTelegramAccounts([]);
+      setTelegramError(error.message || "The Telegram API did not respond.");
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
   }, [telegramIdentityToken]);
@@ -401,16 +409,33 @@ export default function ConfigManager({
   }, [publishingIdentityToken, publishingSession?.token]);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadWhatsApp(), connectPublishing(), loadWorkspaceCompanion()]);
-  }, [connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion]);
+    if (activeService === "publishing") {
+      void Promise.all([connectPublishing(), loadWorkspaceCompanion()]);
+      return;
+    }
+    if (activeService === "messaging") {
+      if (messagingPlatform === "whatsapp") void loadWhatsApp();
+      else void loadTelegram();
+    }
+  }, [activeService, connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion, messagingPlatform]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    if (activeService !== "publishing") return undefined;
+    const refreshVisiblePublishing = () => {
+      if (document.visibilityState !== "visible") return;
       void loadWorkspaceCompanion();
       void refreshPublishingAccounts();
-    }, 3_000);
-    return () => window.clearInterval(timer);
-  }, [loadWorkspaceCompanion, refreshPublishingAccounts]);
+    };
+    const timer = window.setInterval(refreshVisiblePublishing, 15_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshVisiblePublishing();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeService, loadWorkspaceCompanion, refreshPublishingAccounts]);
 
   const whatsappConnected = Boolean(whatsappState?.connected && whatsappState?.account);
   const whatsappSenderCount = whatsappConnected ? Math.max(1, (whatsappState.numbers || []).length) : 0;
@@ -511,6 +536,8 @@ export default function ConfigManager({
               dashboardUrl={telegramDashboardUrl}
               continueTelegramConnect={initialTelegramConnect}
               telegramIdentityToken={telegramIdentityToken}
+              requiresApiCredentials={telegramRequiresApiCredentials}
+              serviceError={telegramError}
               allowedPlatforms={allowedMessagingPlatforms}
               onReload={loadTelegram}
               whatsappStatus={whatsappStatus}
@@ -565,6 +592,8 @@ function MessagingManager({
   dashboardUrl,
   continueTelegramConnect,
   telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
   allowedPlatforms,
   onReload,
   whatsappStatus,
@@ -605,6 +634,8 @@ function MessagingManager({
           dashboardUrl={dashboardUrl}
           continueTelegramConnect={continueTelegramConnect}
           telegramIdentityToken={telegramIdentityToken}
+          requiresApiCredentials={requiresApiCredentials}
+          serviceError={serviceError}
           onReload={onReload}
           setNotice={setNotice}
         />
@@ -1114,6 +1145,8 @@ function TelegramManager({
   dashboardUrl,
   continueTelegramConnect,
   telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
   onReload,
   setNotice
 }) {
@@ -1121,10 +1154,13 @@ function TelegramManager({
   const [stage, setStage] = useState("phone");
   const [challengeId, setChallengeId] = useState("");
   const [phone, setPhone] = useState("");
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showApiHash, setShowApiHash] = useState(false);
   const [workspaceAuthMode, setWorkspaceAuthMode] = useState("signin");
   const [workspaceUsername, setWorkspaceUsername] = useState(platformUser?.email || "");
   const [workspacePassword, setWorkspacePassword] = useState("");
@@ -1170,6 +1206,8 @@ function TelegramManager({
     setStage("phone");
     setChallengeId("");
     setPhone("");
+    setApiId("");
+    setApiHash("");
     setCode("");
     setPassword("");
   };
@@ -1180,7 +1218,13 @@ function TelegramManager({
     try {
       const data = await telegramRequest("/telegram/login/start", telegramIdentityToken, {
         method: "POST",
-        body: JSON.stringify({ phone: phone.trim() })
+        body: JSON.stringify({
+          phone: phone.trim(),
+          ...(requiresApiCredentials ? {
+            telegramApiId: apiId.trim(),
+            telegramApiHash: apiHash.trim()
+          } : {})
+        })
       });
       setChallengeId(data.challengeId);
       setStage("code");
@@ -1262,7 +1306,7 @@ function TelegramManager({
       <EmptyState
         icon={CircleAlert}
         title="Telegram service is unavailable"
-        copy="Start the AgenticThat development workspace, then refresh this integration."
+        copy={serviceError || "The Telegram API did not respond. Refresh this integration or verify the deployment configuration."}
         action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
       />
     );
@@ -1323,9 +1367,17 @@ function TelegramManager({
           {stage === "phone" && (
             <form onSubmit={startConnection}>
               <div className="config-form-grid">
+                {requiresApiCredentials && (
+                  <>
+                    <label><span>Telegram API ID</span><input value={apiId} onChange={event => setApiId(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="12345678" required /></label>
+                    <label><span>Telegram API hash</span><div className="config-secret-input"><input type={showApiHash ? "text" : "password"} value={apiHash} onChange={event => setApiHash(event.target.value)} autoComplete="off" placeholder="32-character API hash" required /><button type="button" onClick={() => setShowApiHash(value => !value)} aria-label={showApiHash ? "Hide API hash" : "Show API hash"}>{showApiHash ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+                  </>
+                )}
                 <label className="wide"><span>Phone number with country code</span><input value={phone} onChange={event => setPhone(event.target.value)} type="tel" autoComplete="tel" placeholder="+91 98765 43210" required /></label>
               </div>
-              <p className="config-form-help">AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account.</p>
+              <p className="config-form-help">{requiresApiCredentials
+                ? <>Create an API ID and hash at <a href="https://my.telegram.org" target="_blank" rel="noreferrer">my.telegram.org</a>. They are encrypted with the account session and are never shown again.</>
+                : "AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account."}</p>
               <div className="config-form-actions"><button className="config-secondary" type="button" onClick={resetConnection}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Send verification code</button></div>
             </form>
           )}
@@ -1426,11 +1478,31 @@ function PublishingManager({
         enabled: form.enabled,
         executionEngine: form.executionEngine
       });
+      const existingAccount = form.id ? accounts.find(account => account.id === form.id) : null;
+      const isResumingSafetyPause = Boolean(existingAccount && !existingAccount.enabled && form.enabled);
+      if (isResumingSafetyPause) {
+        try {
+          // Safety pauses originate inside Companion. Clear that local state
+          // before updating the cloud record so the next heartbeat cannot
+          // immediately pause the account again.
+          await localCompanionRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, {
+            method: "PATCH",
+            body
+          });
+        } catch (error) {
+          throw new Error("Could not resume this account in Workspace Companion. Keep Companion open on this computer and try again. " + error.message);
+        }
+      }
       const account = form.id
         ? await publishingRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, { method: "PATCH", body })
         : await publishingRequest("/api/platforms/" + selectedPlatform + "/accounts", session.token, { method: "POST", body });
       setEditing(null);
-      setNotice({ tone: "success", message: account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "." });
+      setNotice({
+        tone: "success",
+        message: isResumingSafetyPause
+          ? account.displayName + " is resumed and ready for publishing."
+          : account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "."
+      });
       await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -1765,7 +1837,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
               <button type="button" disabled={externalBrowserRequired} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>{externalBrowserRequired ? "Embedded login is blocked by this provider" : "Runs in the background and opens only when attention is needed"}</small></span></button>
               <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome, Edge, or Chromium profile</small></span></button>
             </div>
-            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />X and YouTube require a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
+            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />Facebook, X, and YouTube use a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
             {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
           </fieldset>
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>

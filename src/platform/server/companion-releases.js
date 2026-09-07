@@ -3,7 +3,11 @@ const releaseApiBase = `https://api.github.com/repos/${releaseRepository}/releas
 const releasePageUrl = `https://github.com/${releaseRepository}/releases/latest`;
 const releaseCacheSeconds = Number(process.env.COMPANION_RELEASE_CACHE_SECONDS || 900);
 // Pin a specific tag (for example v2.1.12-qa.1) to stop tracking the newest published build.
-const pinnedReleaseTag = process.env.COMPANION_RELEASE_TAG?.trim() || "";
+// NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG is honoured too: the download page used to
+// hard-code its tag from that variable before releases were resolved from the GitHub feed.
+const pinnedReleaseTag = process.env.COMPANION_RELEASE_TAG?.trim()
+  || process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG?.trim()
+  || "";
 
 const platformCatalog = [
   {

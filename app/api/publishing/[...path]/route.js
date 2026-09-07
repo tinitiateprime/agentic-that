@@ -3,6 +3,7 @@ import path from "node:path";
 import { accessErrorResponse, authorizeApiCapability, principalHasAccess } from "@platform/server/access-control";
 import {
   advanceCentralStagedUpload,
+  advanceCentralStagedUploadParts,
   centralMediaFileName,
   createCentralAccount,
   createCentralStagedUpload,
@@ -11,6 +12,7 @@ import {
   deleteCentralAccount,
   deleteCentralStagedUpload,
   deleteCentralUpload,
+  finalizeCentralStagedUpload,
   getCentralCompanion,
   getCentralStagedUpload,
   listCentralAccounts,
@@ -18,25 +20,29 @@ import {
   listCentralUploads,
   minimumCompanionVersion,
   publishingDashboard,
+  publishingWorkspaceSnapshot,
   publishingUserFromPrincipal,
   queueCentralUploads,
   removeCentralCompanion,
   updateCentralAccount,
   updateCentralUpload,
   updateCentralUploadStatus,
-  consumeCentralStagedUpload,
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
 import {
+  authorizeSupabaseJobArtifactPartUploads,
   deleteSupabaseJobArtifactParts,
+  deleteSupabaseStagedArtifactParts,
   finalizeSupabaseJobArtifact,
   storeSupabaseJobArtifact,
   storeSupabaseJobArtifactPart,
   SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
+  verifySupabaseJobArtifactPartUploads,
 } from "@platform/server/supabase-job-control";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
 const localStageRoot = path.join(publishingUploadDirectory(), ".central-staged");
@@ -61,6 +67,30 @@ async function segments(context) {
 function parseBoolean(value, fallback = false) {
   if (value === undefined) return fallback;
   return value === true || value === "true";
+}
+
+function requestedArtifactParts(stage, input) {
+  const values = Array.isArray(input?.parts) ? input.parts : [input];
+  if (values.length < 1 || values.length > 8) throw new Error("The private media upload batch is invalid.");
+  const parts = values.map((value) => ({
+    index: Number(value?.index),
+    offset: Number(value?.offset),
+    byteSize: Number(value?.byteSize),
+  })).sort((left, right) => left.offset - right.offset);
+  let expectedOffset = parts[0]?.offset;
+  const indexes = new Set();
+  for (const part of parts) {
+    const expectedByteSize = Number.isInteger(part.offset) ? Math.min(stage.chunkSize, stage.size - part.offset) : 0;
+    if (!Number.isInteger(part.offset) || part.offset < 0 || part.offset % stage.chunkSize !== 0
+      || expectedByteSize < 1 || !Number.isInteger(part.index) || part.index !== Math.floor(part.offset / stage.chunkSize)
+      || indexes.has(part.index) || !Number.isInteger(part.byteSize) || part.byteSize !== expectedByteSize
+      || part.offset + part.byteSize > stage.size || part.offset !== expectedOffset) {
+      throw new Error("The private media parts do not match the upload session.");
+    }
+    indexes.add(part.index);
+    expectedOffset += part.byteSize;
+  }
+  return parts;
 }
 
 async function principal(capability) {
@@ -170,9 +200,20 @@ async function removeStageBytes(stage) {
 }
 
 async function finishStagedMedia(principalValue, stagedUploadId) {
-  const stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
+  let stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
-  if (stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  if (stage.artifactManifest) {
+    return {
+      originalName: stage.originalName,
+      fileName: stage.fileName,
+      mimeType: stage.mimeType,
+      size: stage.size,
+      extension: path.extname(stage.originalName),
+      url: "",
+      artifact: stage.artifactManifest,
+    };
+  }
+  if (stage.uploadStrategy === "signed_parts" || stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
     const artifact = await finalizeSupabaseJobArtifact({
       workspaceId: principalValue.workspaceId,
       fileName: stage.fileName,
@@ -181,7 +222,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       byteSize: stage.size,
       parts: stage.artifactParts,
     });
-    await consumeCentralStagedUpload(principalValue, stagedUploadId);
+    stage = await finalizeCentralStagedUpload(principalValue, stagedUploadId, artifact);
     return {
       originalName: stage.originalName,
       fileName: stage.fileName,
@@ -189,7 +230,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       size: stage.size,
       extension: path.extname(stage.originalName),
       url: "",
-      artifact,
+      artifact: stage.artifactManifest,
     };
   }
   const bytes = await readStageBytes(stage);
@@ -203,10 +244,8 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       mimeType: stage.mimeType,
     }),
   ]);
-  await Promise.all([
-    consumeCentralStagedUpload(principalValue, stagedUploadId),
-    removeStageBytes(stage),
-  ]);
+  stage = await finalizeCentralStagedUpload(principalValue, stagedUploadId, artifact);
+  await removeStageBytes(stage);
   return {
     originalName: stage.originalName,
     fileName: stage.fileName,
@@ -214,7 +253,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
     size: stage.size,
     extension: path.extname(stage.originalName),
     url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
-    artifact,
+    artifact: stage.artifactManifest,
   };
 }
 
@@ -262,6 +301,30 @@ export async function GET(request, context) {
     }
     const user = await principal("publishing.view");
     const query = new URL(request.url).searchParams;
+    if (parts[0] === "workspace-snapshot") {
+      const snapshot = await publishingWorkspaceSnapshot(user.workspaceId);
+      const accounts = visibleForPrincipal(user, snapshot.accounts);
+      const accountIds = new Set(accounts.map((account) => account.id));
+      const uploads = snapshot.uploads.filter((upload) => accountIds.has(upload.accountId));
+      const uploadIds = new Set(uploads.map((upload) => upload.id));
+      const jobs = snapshot.jobs.filter((job) => accountIds.has(job.accountId));
+      return Response.json({
+        health: {
+          ok: true,
+          automationReady: true,
+          automationRunning: jobs.some((job) => ["opening_platform", "uploading", "publishing"].includes(job.state)),
+          companion: snapshot.companion,
+          minimumCompanionVersion: minimumCompanionVersion(),
+          transport: "central",
+        },
+        uploads,
+        submissions: snapshot.submissions.filter((submission) => submission.selectedAccountIds.some((accountId) => accountIds.has(accountId))),
+        accounts,
+        schedules: snapshot.schedules,
+        users: [],
+        activityLogs: snapshot.activityLogs.filter((entry) => entry.uploadId && uploadIds.has(entry.uploadId)),
+      });
+    }
     if (parts[0] === "health") {
       const dashboard = await publishingDashboard(user.workspaceId);
       const companionValue = dashboard.companion;
@@ -356,6 +419,60 @@ export async function POST(request, context) {
       }
       return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + bytes.length, artifactPart));
     }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "authorize") {
+      const user = await principal("publishing.content.create");
+      const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
+      if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
+      const input = await requestJson(request);
+      const requested = requestedArtifactParts(stage, input);
+      // Companion UI builds released before batched authorization request the
+      // next few parts concurrently. Keep that safe look-ahead compatible while
+      // the committed upload offset remains strictly contiguous.
+      if (requested[0].offset < stage.offset
+        || requested.at(-1).offset >= stage.offset + (8 * stage.chunkSize)) {
+        throw new Error("The direct media batch does not match the upload session.");
+      }
+      const authorized = await authorizeSupabaseJobArtifactPartUploads(requested.map((part) => ({
+        workspaceId: user.workspaceId,
+        fileName: stage.fileName,
+        mimeType: stage.mimeType,
+        ...part,
+      })));
+      return Response.json(Array.isArray(input.parts) ? authorized : authorized[0]);
+    }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "complete") {
+      const user = await principal("publishing.content.create");
+      const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
+      if (stage.uploadStrategy !== "signed_parts") throw new Error("This upload session does not support direct media parts.");
+      const input = await requestJson(request);
+      const requested = requestedArtifactParts(stage, input);
+      const recordedParts = new Map((Array.isArray(stage.artifactParts) ? stage.artifactParts : []).map((part) => [part.index, part]));
+      const pending = [];
+      for (const part of requested) {
+        if (part.offset + part.byteSize <= stage.offset) {
+          const recorded = recordedParts.get(part.index);
+          if (!recorded || recorded.offset !== part.offset || recorded.byteSize !== part.byteSize) {
+            throw new Error("The completed media batch conflicts with the upload session.");
+          }
+        } else {
+          if (part.offset < stage.offset) throw new Error("The completed media batch overlaps the upload session.");
+          pending.push(part);
+        }
+      }
+      if (!pending.length) return Response.json({ id: stage.id, offset: stage.offset, chunkSize: stage.chunkSize });
+      if (pending[0].offset !== stage.offset) throw new Error("The completed media batch does not match the upload session.");
+      const verified = await verifySupabaseJobArtifactPartUploads(pending.map((part) => ({
+        workspaceId: user.workspaceId,
+        fileName: stage.fileName,
+        ...part,
+      })));
+      return Response.json(await advanceCentralStagedUploadParts(user, stage.id, verified));
+    }
+    if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "finalize") {
+      const user = await principal("publishing.content.create");
+      const media = await finishStagedMedia(user, parts[1]);
+      return Response.json({ id: parts[1], finalized: true, size: media.size });
+    }
     const body = await requestJson(request);
     if (parts[0] === "staged-uploads") {
       const user = await principal("publishing.content.create");
@@ -370,7 +487,12 @@ export async function POST(request, context) {
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "staged") {
       const user = await principal("publishing.execute");
       const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createPosts(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
+      return Response.json(await createPosts(user, {
+        ...body,
+        ...media,
+        sourceSubmissionId: body.stagedUploadId,
+        description: body.description || "",
+      }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "text") {
       return schedulingUnavailable();
@@ -400,6 +522,13 @@ export async function POST(request, context) {
     }
     if (parts[0] === "automation" && parts[1] === "run") {
       const user = await principal("publishing.execute");
+      const requestedUploadIds = [...new Set((Array.isArray(body.uploadIds) ? body.uploadIds : []).map(String).filter(Boolean))];
+      // Direct creation already queues and synchronizes these jobs atomically.
+      // Older open tabs still call this route afterward, so acknowledge them
+      // without re-locking and re-synchronizing the complete workspace.
+      if (requestedUploadIds.length) {
+        return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: requestedUploadIds });
+      }
       await centralUploadsForPrincipal(user, body.uploadIds || [], "operate");
       const jobs = await queueCentralUploads(user, body.uploadIds);
       return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: jobs.map((job) => job.uploadId) });
@@ -462,7 +591,9 @@ export async function DELETE(request, context) {
       await deleteCentralStagedUpload(user, parts[1]);
       await Promise.all([
         removeStageBytes(stage),
-        deleteSupabaseJobArtifactParts(stage.artifactParts).catch(() => undefined),
+        (stage.uploadStrategy === "signed_parts"
+          ? deleteSupabaseStagedArtifactParts({ workspaceId: stage.workspaceId, fileName: stage.fileName, partCount: Math.ceil(stage.size / stage.chunkSize) })
+          : deleteSupabaseJobArtifactParts(stage.artifactParts)).catch(() => undefined),
       ]);
       return new Response(null, { status: 204 });
     }

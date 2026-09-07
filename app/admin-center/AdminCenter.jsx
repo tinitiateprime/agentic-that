@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ACCESS_LEVELS, LIVE_ACCESS_CATALOG } from "@platform/access-catalog";
 
 async function request(path, init) {
@@ -97,7 +97,9 @@ function UserEditor({ user, roles, workspaces, onSaved }) {
 }
 
 export default function AdminCenter({ initialData, principal }) {
-  const [data, setData] = useState(initialData);
+  const [data, setData] = useState(initialData || { users: [], workspaces: [], roles: [], auditEvents: [], identityReviews: [] });
+  const [loading, setLoading] = useState(!initialData);
+  const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState("users");
   const [roleDraft, setRoleDraft] = useState({ name: "", description: "", isSelfSelectable: false, grants: [] });
   const [roleError, setRoleError] = useState("");
@@ -105,13 +107,28 @@ export default function AdminCenter({ initialData, principal }) {
   const [workspaceError, setWorkspaceError] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = useMemo(() => data.users.filter((user) => user.status === "pending").length, [data.users]);
-  const refresh = async () => setData(await request("/api/admin-center"));
+  useEffect(() => {
+    if (initialData) return undefined;
+    let active = true;
+    request("/api/admin-center")
+      .then((snapshot) => { if (active) setData(snapshot); })
+      .catch((error) => { if (active) setLoadError(error.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [initialData]);
+  const refresh = async () => {
+    setLoadError("");
+    try { setData(await request("/api/admin-center")); }
+    catch (error) { setLoadError(error.message); throw error; }
+  };
   const createRole = async () => { setBusy(true); setRoleError(""); try { await request("/api/admin-center/roles", { method: "POST", body: JSON.stringify(roleDraft) }); setRoleDraft({ name: "", description: "", isSelfSelectable: false, grants: [] }); await refresh(); } catch (error) { setRoleError(error.message); } finally { setBusy(false); } };
   const createWorkspace = async () => { setBusy(true); setWorkspaceError(""); try { await request("/api/admin-center/workspaces", { method: "POST", body: JSON.stringify({ name: workspaceName }) }); setWorkspaceName(""); await refresh(); } catch (error) { setWorkspaceError(error.message); } finally { setBusy(false); } };
   const updateReview = async (id, status) => { await request(`/api/admin-center/identity-reviews/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) }); await refresh(); };
   const reviewCount = (data.identityReviews || []).filter((item) => item.status === "pending").length;
   return <main className="admin-center-shell"><aside className="admin-sidebar"><a href="/apps" className="admin-brand"><span>AT</span>AgenticThat</a><p>Global Admin Center</p>{[["users", `Users${pending ? ` (${pending})` : ""}`], ["roles", "Roles & permissions"], ["workspaces", "Workspaces"], ["reviews", `Identity reviews${reviewCount ? ` (${reviewCount})` : ""}`], ["audit", "Audit history"]].map(([id, label]) => <button className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}<div className="admin-identity"><strong>{principal.name}</strong><small>{principal.email}</small></div></aside>
     <section className="admin-main"><header><p>Centralized access control</p><h1>{tab === "roles" ? "Roles and permissions" : tab.charAt(0).toUpperCase() + tab.slice(1)}</h1></header>
+      {loading && <p>Loading Admin Center…</p>}
+      {loadError && <p className="admin-error">{loadError} Please try refreshing this page.</p>}
       {tab === "users" && <div className="admin-list">{data.users.map((user) => <UserEditor user={user} roles={data.roles} workspaces={data.workspaces} onSaved={refresh} key={user.id} />)}</div>}
       {tab === "roles" && <div className="admin-role-layout"><section className="admin-panel"><h2>Create internal role</h2><label>Role name<input value={roleDraft.name} onChange={(event) => setRoleDraft({ ...roleDraft, name: event.target.value })} /></label><label>Description<textarea value={roleDraft.description} onChange={(event) => setRoleDraft({ ...roleDraft, description: event.target.value })} /></label><GrantMatrix value={roleDraft.grants} onChange={(grants) => setRoleDraft({ ...roleDraft, grants })} />{roleError && <p className="admin-error">{roleError}</p>}<button disabled={busy} onClick={createRole}>Create role</button></section><section className="admin-panel"><h2>Available roles</h2>{data.roles.map((role) => <RoleEditor role={role} onSaved={refresh} key={role.id} />)}</section></div>}
       {tab === "workspaces" && <><section className="admin-panel"><h2>Create workspace</h2><label>Workspace name<input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} /></label>{workspaceError && <p className="admin-error">{workspaceError}</p>}<button disabled={busy || !workspaceName.trim()} onClick={createWorkspace}>Create workspace</button></section><div className="workspace-grid">{data.workspaces.map((workspace) => <article className="admin-panel" key={workspace.id}><h2>{workspace.name}</h2><p>{workspace.id}</p><span className="status-pill">{workspace.status}</span></article>)}</div></>}

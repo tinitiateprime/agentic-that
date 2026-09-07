@@ -9,7 +9,7 @@ import {
   Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
@@ -540,44 +540,45 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [editingUpload, setEditingUpload] = useState<PlatformUpload | null>(null);
   const [schedulingSubmission, setSchedulingSubmission] = useState<ContentSubmission | null>(null);
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async (showLoading = true) => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setError(null);
     if (showLoading) setLoading(true);
     try {
-      const baseRequests = [
-        api.health(),
-        api.uploads(),
-        api.submissions(),
-        api.accounts(),
-        Promise.resolve([] as PublishingSchedule[]),
-      ] as const;
-      const [health, latestUploads, latestSubmissions, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
-      setConnectionMode(health.transport);
-      setIsRunning(health.automationRunning);
-      setUploads(latestUploads);
-      setSubmissions(latestSubmissions);
-      setAccounts(latestAccounts);
-      setSchedules(latestSchedules);
-      if (permissions.canManageUsers) {
-        const [latestUsers, latestActivity] = await Promise.all([
-          api.users(),
-          api.activityLogs(100),
-        ]);
-        setUsers(latestUsers);
-        setActivityLogs(latestActivity);
-      }
+      const snapshot = await api.workspaceSnapshot(permissions.canManageUsers);
+      setConnectionMode(snapshot.health.transport);
+      setIsRunning(snapshot.health.automationRunning);
+      setUploads(snapshot.uploads);
+      setSubmissions(snapshot.submissions);
+      setAccounts(snapshot.accounts);
+      setSchedules(snapshot.schedules);
+      setUsers(snapshot.users);
+      setActivityLogs(snapshot.activityLogs);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed.');
     } finally {
+      refreshInFlight.current = false;
       if (showLoading) setLoading(false);
     }
   }, [permissions.canManageUsers]);
 
   useEffect(() => {
     void refresh();
-    const refreshTimer = window.setInterval(() => void refresh(false), 5000);
-    return () => window.clearInterval(refreshTimer);
+    const refreshVisibleWorkspace = () => {
+      if (document.visibilityState === 'visible') void refresh(false);
+    };
+    const refreshTimer = window.setInterval(refreshVisibleWorkspace, 15000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisibleWorkspace();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [refresh]);
 
   const handleRun = async () => {
@@ -1059,6 +1060,7 @@ function UnifiedComposer({
   const [scheduleOverrides, setScheduleOverrides] = useState<Record<string, ComposerScheduleDraft>>({});
   const [dragActive, setDragActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [preparationProgress, setPreparationProgress] = useState<{ label: string; percent?: number } | null>(null);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
@@ -1211,6 +1213,7 @@ function UnifiedComposer({
     if (handoffOnly) {
       if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
       setSubmitting(true);
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Preparing posts…' });
       try {
         await api.createSubmission({
           postFormat,
@@ -1221,6 +1224,9 @@ function UnifiedComposer({
           rightsConfirmed,
           destinations: selectedAccounts.map(account => ({ accountId: account.id })),
           confirmWarnings,
+          onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+            ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+            : { label: 'Creating destination posts…', percent: 100 }),
         });
         resetComposer();
         setMessage({ type: 'success', text: 'Saved and sent to the scheduler. This submission remains available after you sign out.' });
@@ -1236,6 +1242,7 @@ function UnifiedComposer({
         }
       } finally {
         setSubmitting(false);
+        setPreparationProgress(null);
       }
       return;
     }
@@ -1266,9 +1273,12 @@ function UnifiedComposer({
     }));
 
     setSubmitting(true);
+    setPreparationProgress({ label: 'Checking destinations…' });
     try {
       const safety = await api.assessPublishingSafety(postFormat, destinations);
+      setPreparationProgress({ label: 'Authorizing publishing…' });
       await api.authorizePublishing();
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Creating destination posts…' });
       const created = await api.createUnifiedPost({
         postFormat,
         file,
@@ -1278,6 +1288,9 @@ function UnifiedComposer({
         destinations,
         rightsConfirmed,
         confirmWarnings,
+        onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+          ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+          : { label: 'Creating destination posts…', percent: 100 }),
       });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
       const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId && !upload.safetyDeferredUntil);
@@ -1285,18 +1298,8 @@ function UnifiedComposer({
       const safetyWaitNote = safetyWaitCount
         ? ` ${safetyWaitCount} ${safetyWaitCount === 1 ? 'destination is' : 'destinations are'} waiting automatically for the next safe publishing window.`
         : '';
-      let publishingError = '';
-      if (canPublishNow && immediateUploads.length > 0) {
-        try {
-          await api.runAutomation(immediateUploads.map(upload => upload.id));
-        } catch (error) {
-          publishingError = error instanceof Error ? error.message : 'Publisher automation could not start.';
-        }
-      }
       resetComposer();
-      if (publishingError) {
-        setMessage({ type: 'error', text: `${created.length} destination ${created.length === 1 ? 'was' : 'were'} saved, but publishing could not start: ${publishingError}` });
-      } else if (canPublishNow && immediateUploads.length > 0) {
+      if (canPublishNow && immediateUploads.length > 0) {
         const scheduledCount = created.length - immediateUploads.length;
         setMessage({
           type: 'success',
@@ -1320,6 +1323,7 @@ function UnifiedComposer({
       }
     } finally {
       setSubmitting(false);
+      setPreparationProgress(null);
     }
   };
 
@@ -1354,7 +1358,7 @@ function UnifiedComposer({
                 {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
                 <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
                 <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
-              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 2 GB</small></label>}
             </div>}
 
             {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Enter a title to enable YouTube publishing'} maxLength={100} /></label>}
@@ -1426,8 +1430,10 @@ function UnifiedComposer({
       </div>
 
       <footer className='composer-footer'>
-        <div>{message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <div>{submitting && preparationProgress?.percent !== undefined
+          ? <div className='composer-upload-progress' role='progressbar' aria-valuemin={0} aria-valuemax={100} aria-valuenow={preparationProgress.percent}><span>{preparationProgress.label}</span><i><b style={{ width: `${preparationProgress.percent}%` }} /></i></div>
+          : message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );

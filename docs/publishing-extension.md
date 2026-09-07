@@ -19,8 +19,8 @@ verification codes.
 2. Install and open **AgenticThat Companion**.
 3. Use the AgenticThat website and pair this computer from
    **Connections → Publishing**.
-4. Add a social account and choose **Login**. X and YouTube open in a dedicated
-   Companion-managed Chrome, Edge, or Chromium profile; other providers open in
+4. Add a social account and choose **Login**. Facebook, X, and YouTube open in a dedicated
+   Companion-managed Chrome, Edge, or Chromium profile; Instagram and LinkedIn open in
    the embedded browser and can fall back to a system browser if necessary.
 5. Complete credentials and verification only on the provider page. Companion
    verifies and protects the resulting local session before using it.

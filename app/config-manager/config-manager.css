@@ -1031,6 +1031,12 @@
   line-height: 1.55;
 }
 
+.config-form-help a {
+  color: var(--cm-accent-dark);
+  font-weight: 750;
+  text-underline-offset: 2px;
+}
+
 .config-form-actions {
   display: flex;
   justify-content: flex-end;

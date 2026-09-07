@@ -94,6 +94,9 @@ export async function getPrincipalForUser(inputUser) {
       businessName: inputUser.businessName || inputUser.name || "Workspace",
       status,
       isGlobalAdmin,
+      mfaEnabled: Boolean(inputUser.mfaEnabled),
+      mfaVerified: Boolean(inputUser.mfaVerified),
+      mfaRequired: Boolean(inputUser.mfaRequired),
       billingStatus,
       trialStartsAt: testingAccessActive ? null : inputUser.trialStartsAt || null,
       trialEndsAt: testingAccessActive ? null : inputUser.trialEndsAt || null,
@@ -106,6 +109,7 @@ export async function getPrincipalForUser(inputUser) {
   const sql = await getPlatformSql();
   let [user] = await sql`
     SELECT u.id, u.name, u.email, u.business_name, u.status, u.is_global_admin,
+           coalesce((to_jsonb(u)->>'mfa_enabled')::boolean, false) AS mfa_enabled,
            u.billing_status, u.trial_starts_at, u.trial_ends_at,
            m.workspace_id AS workspace_id
       FROM platform_users u
@@ -199,6 +203,9 @@ export async function getPrincipalForUser(inputUser) {
     businessName: String(user.business_name || user.name || "Workspace"),
     status,
     isGlobalAdmin,
+    mfaEnabled: Boolean(user.mfa_enabled),
+    mfaVerified: Boolean(inputUser.mfaVerified),
+    mfaRequired: Boolean(inputUser.mfaRequired),
     billingStatus: testingAccessActive ? "exempt" : String(billingUser.billing_status || "active"),
     trialStartsAt: testingAccessActive ? null : billingUser.trial_starts_at || null,
     trialEndsAt: testingAccessActive ? null : billingUser.trial_ends_at || null,
@@ -254,6 +261,9 @@ export async function assertPrincipalAccess(principal, resourceKey, requiredLeve
   if (principal.status !== "active") {
     throw new AccessDeniedError(403, "ACCOUNT_DISABLED", "This account is not active.");
   }
+  if (principal.isGlobalAdmin && principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
+  }
   if (!principal.workspaceId) {
     throw new AccessDeniedError(403, "WORKSPACE_REQUIRED", "This account is not assigned to a workspace.");
   }
@@ -271,6 +281,9 @@ export async function assertPrincipalCapability(principal, capability) {
   if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
   if (principal.status !== "active") {
     throw new AccessDeniedError(403, "ACCOUNT_DISABLED", "This account is not active.");
+  }
+  if (principal.isGlobalAdmin && principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
   }
   if (!principal.workspaceId) {
     throw new AccessDeniedError(403, "WORKSPACE_REQUIRED", "This account is not assigned to a workspace.");
@@ -293,6 +306,7 @@ export async function requireAccess(resourceKey, requiredLevel = "view", returnT
     return await assertPrincipalAccess(principal, resourceKey, requiredLevel);
   } catch (error) {
     if (error instanceof AccessDeniedError) {
+      if (error.code === "MFA_REQUIRED") redirect(`/admin-mfa?next=${encodeURIComponent(returnTo)}`);
       redirect(`/access-denied?resource=${encodeURIComponent(resourceKey)}&level=${encodeURIComponent(requiredLevel)}`);
     }
     throw error;
@@ -300,18 +314,24 @@ export async function requireAccess(resourceKey, requiredLevel = "view", returnT
 }
 
 export async function requireGlobalAdmin() {
-  const principal = await getCurrentPrincipal();
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
   if (!principal) redirect("/?auth=login&next=/admin-center");
   if (principal.status === "pending") redirect("/pending-approval");
   if (principal.status !== "active" || !principal.isGlobalAdmin) redirect("/access-denied?resource=admin-center");
+  if (principal.mfaRequired) redirect("/admin-mfa?next=/admin-center");
   return principal;
 }
 
 export async function authorizeGlobalAdminApi() {
-  const principal = await getCurrentPrincipal();
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
   if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
   if (principal.status !== "active" || !principal.isGlobalAdmin) {
     throw new AccessDeniedError(403, "ADMIN_REQUIRED", "Global administrator access is required.");
+  }
+  if (principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
   }
   return principal;
 }
@@ -332,6 +352,10 @@ export async function requireCapability(capability, returnTo = "/apps") {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect(`/?auth=login&next=${encodeURIComponent(returnTo)}`);
   if (principal.status === "pending") redirect("/pending-approval");
+  return requirePrincipalCapability(principal, capability, returnTo);
+}
+
+export async function requirePrincipalCapability(principal, capability, returnTo = "/apps") {
   try {
     return await assertPrincipalCapability(principal, capability);
   } catch (error) {

@@ -4,6 +4,7 @@ import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type A
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { prepareInstagramMedia } from "./instagram-media.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 const INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/";
@@ -287,7 +288,7 @@ async function uploadInstagramMedia(page: Page, filePath: string) {
     ? dialogFileInput
     : page.locator('input[type="file"]').last();
   if ((await fileInput.count()) > 0) {
-    await fileInput.setInputFiles(filePath);
+    await setLocalInputFile(page, fileInput, filePath);
   } else {
     const selectButton = await firstVisible([
       page.getByRole("button", { name: /Select from computer/i }),
@@ -303,10 +304,10 @@ async function uploadInstagramMedia(page: Page, filePath: string) {
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
-      await fileChooser.setFiles(filePath);
+      await setLocalFileChooserFile(fileChooser, filePath);
     } else {
       await dismissNativeFileDialogFallback(page);
-      await page.locator('input[type="file"]').last().setInputFiles(filePath);
+      await setLocalInputFile(page, page.locator('input[type="file"]').last(), filePath);
     }
   }
 

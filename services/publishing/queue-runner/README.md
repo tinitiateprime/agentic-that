@@ -3,9 +3,9 @@
 Publish Queue Runner is the local execution service behind AgenticThat's Netlify
 publishing dashboard. It supports Facebook, Instagram, X, LinkedIn, and YouTube
 through isolated account sessions and fully manual social-account login.
-Instagram, Facebook, and LinkedIn use the Companion browser. X and YouTube use
-a dedicated normal Chrome, Edge, or Chromium profile because those providers reject
-embedded sign-in; the Companion retains and verifies that profile locally.
+Instagram and LinkedIn use the Companion browser. Facebook, X, and YouTube use
+a dedicated normal Chrome, Edge, or Chromium profile because those providers can
+reject embedded sign-in; the Companion retains and verifies that profile locally.
 
 Customers use the packaged Windows, macOS, or Linux Companion; they do not run this service or
 edit JSON files. The Companion stores queue metadata, media, and account browser
@@ -20,7 +20,7 @@ and is not required by this flow.
 3. Add social accounts in Config Manager and choose **Login** for each one.
 4. Enter credentials manually in the provider page. Companion detects success,
    protects the session locally, and closes embedded sign-in panes automatically.
-   X and YouTube open their saved external Chrome, Edge, or Chromium profile by design.
+   Facebook, X, and YouTube open their saved external Chrome, Edge, or Chromium profile by design.
 5. Create a post, choose a normal image or video file, select accounts, and
    publish it now.
 

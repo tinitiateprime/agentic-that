@@ -14,10 +14,14 @@ export async function POST(req) {
   const token = new URL(req.url).searchParams.get("token");
   const envSecret = (process.env.WATI_WEBHOOK_SECRET || "").trim();
   const tenant = token ? await resolveTenantByWatiWebhookSecret(token) : null;
+  const production = process.env.NODE_ENV === "production" || process.env.NETLIFY === "true";
 
   // A tenant-specific secret routes directly to that workspace. Keep the old
   // env-secret/first-business fallback for the original single-tenant install.
   if (token && !tenant && token !== envSecret) {
+    return Response.json({ error: "forbidden" }, { status: 403 });
+  }
+  if (production && (!token || !tenant)) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
 
@@ -35,6 +39,7 @@ export async function POST(req) {
   const sql = await getSql();
   let business = tenant?.business || null;
   if (!business) {
+    if (production) return Response.json({ error: "forbidden" }, { status: 403 });
     const [{ secured }] = await sql`
       SELECT COUNT(*)::int AS secured FROM whatsapp_accounts
        WHERE provider = 'wati' AND webhook_verify_token IS NOT NULL`;

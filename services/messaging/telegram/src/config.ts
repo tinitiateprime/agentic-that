@@ -60,12 +60,6 @@ function positiveInteger(name: string, fallback: number) {
   return value;
 }
 
-function requiredPositiveInteger(name: string) {
-  const value = Number(requiredEnv(name));
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
-  return value;
-}
-
 function booleanEnv(name: string, fallback: boolean) {
   const value = optionalEnv(name, String(fallback)).toLowerCase();
   if (value === "true") return true;
@@ -87,8 +81,9 @@ export type AppConfig = {
   rateLimitMaxRequests: number;
   loginStartRateLimitMax: number;
   messageRateLimitMax: number;
-  telegramApiId: number;
-  telegramApiHash: string;
+  telegramApiId: number | null;
+  telegramApiHash: string | null;
+  telegramApiCredentialsStatus: "configured" | "user_required" | "invalid";
 };
 
 export type BotConfig = {
@@ -106,10 +101,21 @@ export function readConfig(): AppConfig {
     ? positiveInteger("SERVICE_PORT", 8787)
     : positiveInteger("PORT", 8787);
 
-  const telegramApiHash = requiredEnv("TELEGRAM_API_HASH");
-  if (!/^[a-f0-9]{32}$/i.test(telegramApiHash)) {
-    throw new Error("TELEGRAM_API_HASH must be the 32-character hash from my.telegram.org.");
-  }
+  // Shared Telegram application credentials are optional. Deployments without
+  // them remain healthy and ask the operator for their own my.telegram.org
+  // credentials when a number is connected. This is also important on
+  // Netlify: health checks and existing-account access must not fail merely
+  // because the optional shared application identity is absent.
+  const rawTelegramApiId = optionalEnv("TELEGRAM_API_ID");
+  const rawTelegramApiHash = optionalEnv("TELEGRAM_API_HASH");
+  const parsedTelegramApiId = Number(rawTelegramApiId);
+  const validTelegramApiId = Boolean(rawTelegramApiId) && Number.isInteger(parsedTelegramApiId) && parsedTelegramApiId > 0;
+  const validTelegramApiHash = /^[a-f0-9]{32}$/i.test(rawTelegramApiHash);
+  const telegramApiCredentialsStatus = validTelegramApiId && validTelegramApiHash
+    ? "configured"
+    : rawTelegramApiId || rawTelegramApiHash
+      ? "invalid"
+      : "user_required";
 
   return {
     dataDir: optionalEnv("DATA_DIR", "data"),
@@ -125,8 +131,9 @@ export function readConfig(): AppConfig {
     rateLimitMaxRequests: positiveInteger("RATE_LIMIT_MAX_REQUESTS", 120),
     loginStartRateLimitMax: positiveInteger("LOGIN_START_RATE_LIMIT_MAX", 5),
     messageRateLimitMax: positiveInteger("MESSAGE_RATE_LIMIT_MAX", 20),
-    telegramApiId: requiredPositiveInteger("TELEGRAM_API_ID"),
-    telegramApiHash
+    telegramApiId: telegramApiCredentialsStatus === "configured" ? parsedTelegramApiId : null,
+    telegramApiHash: telegramApiCredentialsStatus === "configured" ? rawTelegramApiHash : null,
+    telegramApiCredentialsStatus
   };
 }
 

@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import postgres from "postgres";
 import { SecretCipher } from "./crypto.ts";
 
 export type AppUser = {
@@ -297,6 +298,35 @@ const shouldUseNetlifyBlobs = () => (
   process.env.NETLIFY === "true" ||
   Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
 );
+const telegramDatabaseUrl = () => (
+  process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || ""
+).trim();
+const shouldUsePostgres = () => (
+  Boolean(telegramDatabaseUrl()) && !["json", "local-json", "netlify-blobs"].includes(
+    String(process.env.TELEGRAM_DATA_STORE || "postgres").trim().toLowerCase(),
+  )
+);
+
+const globalForTelegram = globalThis as typeof globalThis & {
+  __agenticThatTelegramSql?: ReturnType<typeof postgres>;
+};
+
+function telegramSql() {
+  const url = telegramDatabaseUrl();
+  if (!url) throw new Error("DATABASE_URL or SUPABASE_DB_URL is required for Telegram database persistence.");
+  globalForTelegram.__agenticThatTelegramSql ??= postgres(url, {
+    prepare: false,
+    max: Number(process.env.PG_POOL_MAX || (process.env.NETLIFY === "true" ? 1 : 5)),
+    idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.NETLIFY === "true" ? 5 : 20)),
+    connect_timeout: 15,
+    onnotice: () => undefined,
+  });
+  return globalForTelegram.__agenticThatTelegramSql;
+}
+
+export function getTelegramDatabaseClient() {
+  return shouldUsePostgres() ? telegramSql() : null;
+}
 
 function hashPassword(password: string) {
   const salt = randomBytes(16).toString("base64url");
@@ -365,6 +395,8 @@ export class MultiUserStore {
   private readonly lockFile: string;
   private readonly cipher: SecretCipher;
   private readonly useNetlifyBlobs: boolean;
+  private usePostgres: boolean;
+  private readonly databaseSql: ReturnType<typeof postgres> | null;
   private blobStorePromise: Promise<BlobStore> | null = null;
   private queue = Promise.resolve();
 
@@ -374,9 +406,34 @@ export class MultiUserStore {
     this.lockFile = path.join(this.dataDir, "store.lock");
     this.cipher = new SecretCipher(sessionEncryptionKey);
     this.useNetlifyBlobs = shouldUseNetlifyBlobs();
+    this.usePostgres = shouldUsePostgres();
+    this.databaseSql = this.usePostgres ? telegramSql() : null;
   }
 
   async initialize() {
+    if (this.usePostgres && this.databaseSql) {
+      const [state] = await this.databaseSql`
+        SELECT to_regclass('agentic_that.telegram_users') IS NOT NULL AS ready`;
+      if (state?.ready) {
+        const [count] = await this.databaseSql`
+          SELECT count(*)::integer AS total FROM agentic_that.telegram_users`;
+        if (!count?.total && this.useNetlifyBlobs) {
+          try {
+            const blobStore = await this.getBlobStore();
+            const legacy = coerceDatabase(await blobStore.get("store", { type: "json", consistency: "strong" }));
+            if (legacy.appUsers.length) await this.writePostgresDatabase(legacy);
+          } catch (error) {
+            console.warn("Telegram legacy Blob import was skipped:", error instanceof Error ? error.name : "unknown error");
+          }
+        }
+        return;
+      }
+      if (String(process.env.TELEGRAM_DATA_STORE || "").trim().toLowerCase() === "postgres") {
+        throw new Error("Telegram database migration is missing. Run npm run db:migrate before enabling TELEGRAM_DATA_STORE=postgres.");
+      }
+      this.usePostgres = false;
+      console.warn("Telegram normalized tables are not installed yet; temporarily using the legacy store.");
+    }
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       const existing = await store.get("store", { type: "json", consistency: "strong" });
@@ -395,6 +452,10 @@ export class MultiUserStore {
 
   async close() {
     await this.queue;
+  }
+
+  storageBackend() {
+    return this.usePostgres ? "supabase-postgres" : this.useNetlifyBlobs ? "netlify-blobs" : "json";
   }
 
   async createUser(displayName: string) {
@@ -472,6 +533,44 @@ export class MultiUserStore {
     displayName: string,
     accessLevel: "view" | "operate" | "configure"
   ): Promise<AppUser> {
+    if (this.usePostgres && this.databaseSql) {
+      const existingRows = await this.databaseSql`
+        SELECT record FROM agentic_that.telegram_users
+         WHERE workspace_id = ${workspaceId}
+         LIMIT 1`;
+      let row = this.postgresRecord<AppUserRow>(existingRows[0]?.record);
+      if (!row) {
+        const candidate: AppUserRow = {
+          id: randomUUID(),
+          displayName: displayName || "AgenticThat workspace",
+          tokenHash: hashToken(`platform-workspace:${randomBytes(32).toString("base64url")}`),
+          configuredLogin: "",
+          platformWorkspaceId: workspaceId,
+          platformUserId,
+          createdAt: nowIso()
+        };
+        await this.databaseSql`
+          INSERT INTO agentic_that.telegram_users
+            (id, workspace_id, platform_user_id, display_name, token_hash, configured_login, password_hash, created_at, record)
+          VALUES
+            (${candidate.id}, ${workspaceId}, ${platformUserId}, ${candidate.displayName}, ${candidate.tokenHash}, '', null,
+             ${candidate.createdAt}, ${this.databaseSql.json(candidate)})
+          ON CONFLICT DO NOTHING`;
+        const createdRows = await this.databaseSql`
+          SELECT record FROM agentic_that.telegram_users
+           WHERE workspace_id = ${workspaceId}
+           LIMIT 1`;
+        row = this.postgresRecord<AppUserRow>(createdRows[0]?.record);
+      }
+      if (!row) throw new Error("Telegram workspace identity could not be created.");
+      return {
+        id: row.id,
+        displayName: displayName || row.displayName,
+        platformUserId,
+        workspaceId,
+        accessLevel
+      };
+    }
     // Service-token authentication happens on every API request. Once a
     // workspace has been linked, resolving that identity must be read-only;
     // rewriting the shared Netlify Blob for every /me and /accounts request
@@ -689,6 +788,16 @@ export class MultiUserStore {
   }
 
   async listAccounts(userId: string): Promise<TelegramAccount[]> {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = await this.databaseSql`
+        SELECT record FROM agentic_that.telegram_accounts
+         WHERE owner_id = ${userId}
+         ORDER BY created_at ASC`;
+      return rows
+        .map((row) => this.postgresRecord<TelegramAccountRow>(row.record))
+        .filter((row): row is TelegramAccountRow => Boolean(row))
+        .map((account) => this.toAccount(account));
+    }
     const database = await this.readDatabase();
     return database.telegramAccounts
       .filter((account) => account.userId === userId)
@@ -697,6 +806,14 @@ export class MultiUserStore {
   }
 
   async getAccountWithSession(userId: string, accountId: string): Promise<TelegramAccountWithSession | null> {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = await this.databaseSql`
+        SELECT record FROM agentic_that.telegram_accounts
+         WHERE id = ${accountId} AND owner_id = ${userId}
+         LIMIT 1`;
+      const account = this.postgresRecord<TelegramAccountRow>(rows[0]?.record);
+      return account ? this.toAccountWithSession(account) : null;
+    }
     const database = await this.readDatabase();
     const account = database.telegramAccounts.find((row) => row.id === accountId && row.userId === userId);
     return account ? this.toAccountWithSession(account) : null;
@@ -725,6 +842,41 @@ export class MultiUserStore {
   }
 
   async recordMessage(input: MessageRecordInput): Promise<MessageRecord> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const accounts = await transaction`
+          SELECT owner_id FROM agentic_that.telegram_accounts
+           WHERE id = ${input.accountId}
+           LIMIT 1`;
+        const ownerId = String(accounts[0]?.owner_id || "");
+        if (!ownerId) throw new Error("Telegram account was not found.");
+        const matches = await transaction`
+          SELECT record FROM agentic_that.telegram_messages
+           WHERE account_id = ${input.accountId} AND direction = ${input.direction}
+             AND record->>'telegramMessageId' = ${input.telegramMessageId}
+           ORDER BY created_at ASC`;
+        const duplicate = matches
+          .map((row) => this.postgresRecord<MessageRow>(row.record))
+          .filter((row): row is MessageRow => Boolean(row))
+          .find((row) => this.cipher.decrypt(row.recipientCiphertext) === input.recipient);
+        if (duplicate) return this.toMessageRecord(duplicate);
+        const row: MessageRow = {
+          id: randomUUID(),
+          accountId: input.accountId,
+          direction: input.direction,
+          recipientCiphertext: this.cipher.encrypt(input.recipient),
+          textCiphertext: this.cipher.encrypt(input.text),
+          telegramMessageId: input.telegramMessageId,
+          createdAt: normalizeCreatedAt(input.createdAt)
+        };
+        await transaction`
+          INSERT INTO agentic_that.telegram_messages
+            (id, owner_id, account_id, direction, created_at, record)
+          VALUES
+            (${row.id}, ${ownerId}, ${row.accountId}, ${row.direction}, ${row.createdAt}, ${transaction.json(row)})`;
+        return this.toMessageRecord(row);
+      }) as unknown as Promise<MessageRecord>;
+    }
     return this.updateDatabase((database) => {
       const duplicate = database.telegramMessages
         .filter((row) => (
@@ -751,6 +903,18 @@ export class MultiUserStore {
   }
 
   async listMessages(userId: string, accountId: string, limit = 50): Promise<MessageRecord[]> {
+    if (this.usePostgres && this.databaseSql) {
+      const cappedLimit = Math.min(Math.max(limit, 1), 500);
+      const rows = await this.databaseSql`
+        SELECT record FROM agentic_that.telegram_messages
+         WHERE owner_id = ${userId} AND account_id = ${accountId}
+         ORDER BY created_at DESC
+         LIMIT ${cappedLimit}`;
+      return rows
+        .map((row) => this.postgresRecord<MessageRow>(row.record))
+        .filter((row): row is MessageRow => Boolean(row))
+        .map((message) => this.toMessageRecord(message));
+    }
     const database = await this.readDatabase();
     const account = database.telegramAccounts.find((row) => row.id === accountId && row.userId === userId);
     if (!account) return [];
@@ -763,6 +927,40 @@ export class MultiUserStore {
   }
 
   async listWorkspaceData(userId: string): Promise<TelegramWorkspaceData> {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = await this.databaseSql`
+        SELECT 'contact' AS kind, record, created_at AS sort_at
+          FROM agentic_that.telegram_contacts WHERE owner_id = ${userId}
+        UNION ALL
+        SELECT 'group' AS kind, record, created_at AS sort_at
+          FROM agentic_that.telegram_groups WHERE owner_id = ${userId}
+        UNION ALL
+        SELECT 'channel' AS kind, record, created_at AS sort_at
+          FROM agentic_that.telegram_channels WHERE owner_id = ${userId}
+        UNION ALL
+        SELECT 'profile' AS kind, record, updated_at AS sort_at
+          FROM agentic_that.telegram_profiles WHERE owner_id = ${userId}
+        ORDER BY kind, sort_at DESC`;
+      const records = (kind: string) => rows.filter((row) => row.kind === kind);
+      return {
+        contacts: records("contact")
+          .map((row) => this.postgresRecord<TelegramWorkspaceRecordRow>(row.record))
+          .filter((row): row is TelegramWorkspaceRecordRow => Boolean(row))
+          .map((row) => this.toWorkspaceContact(row)),
+        groups: records("group")
+          .map((row) => this.postgresRecord<TelegramWorkspaceRecordRow>(row.record))
+          .filter((row): row is TelegramWorkspaceRecordRow => Boolean(row))
+          .map((row) => this.toWorkspaceGroup(row)),
+        channels: records("channel")
+          .map((row) => this.postgresRecord<TelegramWorkspaceRecordRow>(row.record))
+          .filter((row): row is TelegramWorkspaceRecordRow => Boolean(row))
+          .map((row) => this.toWorkspaceChannel(row)),
+        profiles: records("profile")
+          .map((row) => this.postgresRecord<TelegramWorkspaceProfileRow>(row.record))
+          .filter((row): row is TelegramWorkspaceProfileRow => Boolean(row))
+          .map((row) => this.toWorkspaceProfile(row)),
+      };
+    }
     const database = await this.readDatabase();
     return {
       contacts: database.telegramContacts
@@ -938,81 +1136,66 @@ export class MultiUserStore {
   }
 
   async createPost(userId: string, input: TelegramPostInput): Promise<TelegramPost> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        if (!await this.postgresAccountExists(transaction, userId, input.accountId)) {
+          throw new Error("Telegram account was not found.");
+        }
+        const row = this.newPostRow(userId, input);
+        await this.insertPostgresPost(transaction, row);
+        return this.toTelegramPost(row);
+      }) as unknown as Promise<TelegramPost>;
+    }
     return this.updateDatabase((database) => {
       const account = database.telegramAccounts.find((row) => row.id === input.accountId && row.userId === userId);
       if (!account) throw new Error("Telegram account was not found.");
-      const now = nowIso();
-      const row: TelegramPostRow = {
-        id: `telegram_post_${randomUUID().replaceAll("-", "")}`,
-        userId,
-        accountId: input.accountId,
-        title: input.title,
-        type: input.type,
-        category: input.category,
-        tags: [...input.tags],
-        status: "Draft",
-        scheduledAt: input.scheduledAt,
-        bodyCiphertext: this.encryptPostText(input.body),
-        mediaUrlCiphertext: this.encryptPostText(input.mediaUrl),
-        mediaUploadId: input.mediaUploadId,
-        mediaName: input.mediaName,
-        mediaMimeType: input.mediaMimeType,
-        mediaSize: input.mediaSize,
-        recipientCiphertext: this.encryptPostText(input.recipient),
-        contactIds: [...input.contacts],
-        groupIds: [...input.groups],
-        deliveriesCiphertext: this.encryptPostDeliveries(input.targets),
-        leaseOwner: "",
-        leaseExpiresAt: "",
-        createdAt: now,
-        updatedAt: now,
-        sentAt: "",
-        lastErrorCiphertext: this.encryptPostText("")
-      };
+      const row = this.newPostRow(userId, input);
       database.telegramPosts.push(row);
       return this.toTelegramPost(row);
     });
   }
 
   async updatePost(userId: string, postId: string, input: TelegramPostInput): Promise<TelegramPost | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPost(transaction, userId, postId, true);
+        if (!row) return null;
+        this.assertPostEditable(row);
+        if (!await this.postgresAccountExists(transaction, userId, input.accountId)) {
+          throw new Error("Telegram account was not found.");
+        }
+        this.applyPostInput(row, input);
+        await this.updatePostgresPost(transaction, row);
+        return this.toTelegramPost(row);
+      }) as unknown as Promise<TelegramPost | null>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
       if (!row) return null;
-      if (row.status === "Scheduled" || row.status === "Sending") {
-        throw new Error("Cancel this scheduled post before editing it.");
-      }
-      if (row.status === "Posted") {
-        throw new Error("Copy a delivered post before editing or sending it again.");
-      }
+      this.assertPostEditable(row);
       const account = database.telegramAccounts.find((account) => account.id === input.accountId && account.userId === userId);
       if (!account) throw new Error("Telegram account was not found.");
-      row.accountId = input.accountId;
-      row.title = input.title;
-      row.type = input.type;
-      row.category = input.category;
-      row.tags = [...input.tags];
-      row.status = "Draft";
-      row.scheduledAt = input.scheduledAt;
-      row.bodyCiphertext = this.encryptPostText(input.body);
-      row.mediaUrlCiphertext = this.encryptPostText(input.mediaUrl);
-      row.mediaUploadId = input.mediaUploadId;
-      row.mediaName = input.mediaName;
-      row.mediaMimeType = input.mediaMimeType;
-      row.mediaSize = input.mediaSize;
-      row.recipientCiphertext = this.encryptPostText(input.recipient);
-      row.contactIds = [...input.contacts];
-      row.groupIds = [...input.groups];
-      row.deliveriesCiphertext = this.encryptPostDeliveries(input.targets);
-      row.leaseOwner = "";
-      row.leaseExpiresAt = "";
-      row.sentAt = "";
-      row.lastErrorCiphertext = this.encryptPostText("");
-      row.updatedAt = nowIso();
+      this.applyPostInput(row, input);
       return this.toTelegramPost(row);
     });
   }
 
   async listPosts(userId: string, accountId = ""): Promise<TelegramPost[]> {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = accountId
+        ? await this.databaseSql`
+            SELECT record FROM agentic_that.telegram_posts
+             WHERE owner_id = ${userId} AND account_id = ${accountId}
+             ORDER BY created_at DESC`
+        : await this.databaseSql`
+            SELECT record FROM agentic_that.telegram_posts
+             WHERE owner_id = ${userId}
+             ORDER BY created_at DESC`;
+      return rows
+        .map((row) => this.postgresRecord<TelegramPostRow>(row.record))
+        .filter((row): row is TelegramPostRow => Boolean(row))
+        .map((row) => this.toTelegramPost(row));
+    }
     const database = await this.readDatabase();
     return database.telegramPosts
       .filter((post) => post.userId === userId && (!accountId || post.accountId === accountId))
@@ -1021,37 +1204,37 @@ export class MultiUserStore {
   }
 
   async queuePost(userId: string, postId: string, scheduledAt: string): Promise<TelegramPost | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPost(transaction, userId, postId, true);
+        if (!row) return null;
+        this.preparePostForQueue(row, scheduledAt);
+        await this.updatePostgresPost(transaction, row);
+        return this.toTelegramPost(row);
+      }) as unknown as Promise<TelegramPost | null>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
       if (!row) return null;
-      if (row.status === "Sending") throw new Error("This Telegram post is already sending.");
-      if (row.status === "Posted") throw new Error("Copy a delivered post before sending it again.");
-      const scheduledTime = parseIso(scheduledAt);
-      if (!scheduledTime) throw new Error("A valid scheduled date and time is required.");
-      const deliveries = this.decryptPostDeliveries(row);
-      if (!deliveries.length) throw new Error("Choose at least one Telegram recipient.");
-      if (!this.decryptPostText(row.bodyCiphertext).trim() && !this.decryptPostText(row.mediaUrlCiphertext).trim() && !row.mediaUploadId) {
-        throw new Error("Add text or media before scheduling this post.");
-      }
-      row.status = "Scheduled";
-      row.scheduledAt = new Date(scheduledTime).toISOString();
-      row.deliveriesCiphertext = this.cipher.encrypt(JSON.stringify(deliveries.map((delivery) => ({
-        ...delivery,
-        status: "Pending",
-        sentAt: "",
-        telegramMessageId: "",
-        error: ""
-      }))));
-      row.leaseOwner = "";
-      row.leaseExpiresAt = "";
-      row.sentAt = "";
-      row.lastErrorCiphertext = this.encryptPostText("");
-      row.updatedAt = nowIso();
+      this.preparePostForQueue(row, scheduledAt);
       return this.toTelegramPost(row);
     });
   }
 
   async cancelPost(userId: string, postId: string): Promise<TelegramPost | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPost(transaction, userId, postId, true);
+        if (!row) return null;
+        if (row.status !== "Scheduled") throw new Error("Only a waiting scheduled post can be cancelled.");
+        row.status = "Cancelled";
+        row.leaseOwner = "";
+        row.leaseExpiresAt = "";
+        row.updatedAt = nowIso();
+        await this.updatePostgresPost(transaction, row);
+        return this.toTelegramPost(row);
+      }) as unknown as Promise<TelegramPost | null>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
       if (!row) return null;
@@ -1065,6 +1248,19 @@ export class MultiUserStore {
   }
 
   async deletePost(userId: string, postId: string): Promise<boolean> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPost(transaction, userId, postId, true);
+        if (!row) return false;
+        if (row.status === "Scheduled" || row.status === "Sending") {
+          throw new Error("Cancel this scheduled post before deleting it.");
+        }
+        await transaction`
+          DELETE FROM agentic_that.telegram_posts
+           WHERE id = ${postId} AND owner_id = ${userId}`;
+        return true;
+      }) as unknown as Promise<boolean>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
       if (!row) return false;
@@ -1120,7 +1316,55 @@ export class MultiUserStore {
     });
   }
 
+  async claimPostNow(userId: string, postId: string, workerId: string, leaseMs = 120_000): Promise<ClaimedTelegramPost | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPost(transaction, userId, postId, true);
+        if (!row) return null;
+        if (row.status !== "Scheduled") throw new Error("Only a waiting Telegram post can be sent.");
+        const [busy] = await transaction`
+          SELECT EXISTS(
+            SELECT 1 FROM agentic_that.telegram_posts
+             WHERE id <> ${row.id} AND owner_id = ${row.userId} AND account_id = ${row.accountId}
+               AND status = 'Sending' AND lease_expires_at > now()
+          ) AS found`;
+        if (busy?.found) throw new Error("This Telegram account is already sending another post.");
+        row.status = "Sending";
+        row.leaseOwner = workerId;
+        row.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+        row.updatedAt = nowIso();
+        await this.updatePostgresPost(transaction, row);
+        return { ...this.toTelegramPost(row), ownerId: row.userId, leaseOwner: workerId };
+      }) as unknown as Promise<ClaimedTelegramPost | null>;
+    }
+    return this.updateDatabase((database) => {
+      const row = database.telegramPosts.find((post) => post.id === postId && post.userId === userId);
+      if (!row) return null;
+      if (row.status !== "Scheduled") throw new Error("Only a waiting Telegram post can be sent.");
+      const accountBusy = database.telegramPosts.some((post) => (
+        post.id !== row.id && post.accountId === row.accountId
+        && post.status === "Sending" && parseIso(post.leaseExpiresAt) > Date.now()
+      ));
+      if (accountBusy) throw new Error("This Telegram account is already sending another post.");
+      row.status = "Sending";
+      row.leaseOwner = workerId;
+      row.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+      row.updatedAt = nowIso();
+      return { ...this.toTelegramPost(row), ownerId: row.userId, leaseOwner: workerId };
+    });
+  }
+
   async renewPostLease(postId: string, workerId: string, leaseMs = 120_000): Promise<boolean> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPostByLease(transaction, postId, workerId);
+        if (!row) return false;
+        row.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+        row.updatedAt = nowIso();
+        await this.updatePostgresPost(transaction, row);
+        return true;
+      }) as unknown as Promise<boolean>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => (
         post.id === postId && post.status === "Sending" && post.leaseOwner === workerId
@@ -1133,6 +1377,20 @@ export class MultiUserStore {
   }
 
   async claimNextPostDelivery(postId: string, workerId: string): Promise<TelegramPostDelivery | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPostByLease(transaction, postId, workerId);
+        if (!row || parseIso(row.leaseExpiresAt) <= Date.now()) return null;
+        const deliveries = this.decryptPostDeliveries(row);
+        const delivery = deliveries.find((item) => item.status === "Pending");
+        if (!delivery) return null;
+        delivery.status = "Sending";
+        row.deliveriesCiphertext = this.cipher.encrypt(JSON.stringify(deliveries));
+        row.updatedAt = nowIso();
+        await this.updatePostgresPost(transaction, row);
+        return { ...delivery };
+      }) as unknown as Promise<TelegramPostDelivery | null>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.status === "Sending" && post.leaseOwner === workerId);
       if (!row || parseIso(row.leaseExpiresAt) <= Date.now()) return null;
@@ -1152,6 +1410,24 @@ export class MultiUserStore {
     deliveryId: string,
     result: { status: "Sent" | "Failed"; sentAt?: string; telegramMessageId?: string; error?: string }
   ): Promise<boolean> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPostByLease(transaction, postId, workerId);
+        if (!row) return false;
+        const deliveries = this.decryptPostDeliveries(row);
+        const delivery = deliveries.find((item) => item.id === deliveryId && item.status === "Sending");
+        if (!delivery) return false;
+        delivery.status = result.status;
+        delivery.sentAt = result.sentAt || (result.status === "Sent" ? nowIso() : "");
+        delivery.telegramMessageId = result.telegramMessageId || "";
+        delivery.error = (result.error || "").slice(0, 1000);
+        row.deliveriesCiphertext = this.cipher.encrypt(JSON.stringify(deliveries));
+        row.leaseExpiresAt = new Date(Date.now() + 120_000).toISOString();
+        row.updatedAt = nowIso();
+        await this.updatePostgresPost(transaction, row);
+        return true;
+      }) as unknown as Promise<boolean>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.status === "Sending" && post.leaseOwner === workerId);
       if (!row) return false;
@@ -1170,6 +1446,19 @@ export class MultiUserStore {
   }
 
   async finishClaimedPost(postId: string, workerId: string): Promise<TelegramPost | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        const row = await this.readPostgresPostByLease(transaction, postId, workerId);
+        if (!row) return null;
+        const deliveries = this.decryptPostDeliveries(row);
+        if (deliveries.some((delivery) => delivery.status === "Pending" || delivery.status === "Sending")) {
+          throw new Error("Telegram post still has unfinished recipients.");
+        }
+        this.finalizePostRow(row, deliveries);
+        await this.updatePostgresPost(transaction, row);
+        return this.toTelegramPost(row);
+      }) as unknown as Promise<TelegramPost | null>;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramPosts.find((post) => post.id === postId && post.status === "Sending" && post.leaseOwner === workerId);
       if (!row) return null;
@@ -1196,6 +1485,22 @@ export class MultiUserStore {
   }
 
   private async updateDatabase<T>(operation: (database: JsonDatabase) => T | Promise<T>): Promise<T> {
+    if (this.usePostgres && this.databaseSql) {
+      const run = async (): Promise<T> => {
+        const value = await this.databaseSql!.begin(async (transaction) => {
+          await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+          const previous = await this.readPostgresDatabase(transaction);
+          const database = structuredClone(previous);
+          const result = await operation(database);
+          await this.writePostgresDatabase(database, transaction, previous);
+          return result;
+        });
+        return value as unknown as T;
+      };
+      const result = this.queue.then(run, run);
+      this.queue = result.then(() => undefined, () => undefined);
+      return await result as T;
+    }
     const run = async () => this.withFileLock(async () => {
       const database = await this.readDatabase();
       const result = await operation(database);
@@ -1208,6 +1513,7 @@ export class MultiUserStore {
   }
 
   private async readDatabase(): Promise<JsonDatabase> {
+    if (this.usePostgres && this.databaseSql) return this.readPostgresDatabase(this.databaseSql);
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       const database = await store.get("store", { type: "json", consistency: "strong" });
@@ -1227,6 +1533,10 @@ export class MultiUserStore {
   }
 
   private async writeDatabase(database: JsonDatabase) {
+    if (this.usePostgres && this.databaseSql) {
+      await this.writePostgresDatabase(database);
+      return;
+    }
     if (this.useNetlifyBlobs) {
       const store = await this.getBlobStore();
       await store.setJSON("store", database);
@@ -1282,6 +1592,174 @@ export class MultiUserStore {
     return this.blobStorePromise;
   }
 
+  // postgres.js has distinct client and transaction interfaces with the same
+  // tagged-query surface; keeping this adapter structural avoids coupling the
+  // store to either concrete generic type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async readPostgresDatabase(executor: any): Promise<JsonDatabase> {
+    const database = emptyDatabase();
+    const collections: Array<[keyof JsonDatabase, string]> = [
+      ["appUsers", "agentic_that.telegram_users"],
+      ["appSessions", "agentic_that.telegram_browser_sessions"],
+      ["telegramAccounts", "agentic_that.telegram_accounts"],
+      ["telegramLoginChallenges", "agentic_that.telegram_login_challenges"],
+      ["telegramMessages", "agentic_that.telegram_messages"],
+      ["telegramPosts", "agentic_that.telegram_posts"],
+      ["telegramContacts", "agentic_that.telegram_contacts"],
+      ["telegramGroups", "agentic_that.telegram_groups"],
+      ["telegramChannels", "agentic_that.telegram_channels"],
+      ["telegramProfiles", "agentic_that.telegram_profiles"],
+    ];
+    for (const [collection, table] of collections) {
+      const rows = await executor.unsafe(`SELECT record FROM ${table}`);
+      (database[collection] as unknown[]) = rows.map((row: { record: unknown }) => {
+        if (row.record && typeof row.record === "object") return row.record;
+        if (typeof row.record !== "string") return null;
+        try {
+          const parsed = JSON.parse(row.record);
+          return parsed && typeof parsed === "object" ? parsed : null;
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+    }
+    return coerceDatabase(database);
+  }
+
+  private async writePostgresDatabase(
+    database: JsonDatabase,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    existingExecutor?: any,
+    previous = emptyDatabase(),
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const execute = async (transaction: any) => {
+      const accountOwners = new Map(database.telegramAccounts.map((account) => [account.id, account.userId]));
+
+      for (const row of database.appUsers) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_users
+             (id, workspace_id, platform_user_id, display_name, token_hash, configured_login, password_hash, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+           ON CONFLICT (id) DO UPDATE SET workspace_id=excluded.workspace_id,
+             platform_user_id=excluded.platform_user_id, display_name=excluded.display_name,
+             token_hash=excluded.token_hash, configured_login=excluded.configured_login,
+             password_hash=excluded.password_hash, record=excluded.record`,
+          [row.id, row.platformWorkspaceId || null, row.platformUserId || null, row.displayName,
+           row.tokenHash, row.configuredLogin, row.passwordHash || null, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramAccounts) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_accounts
+             (id, owner_id, telegram_user_id, display_name, username, created_at, updated_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id,
+             telegram_user_id=excluded.telegram_user_id, display_name=excluded.display_name,
+             username=excluded.username, updated_at=excluded.updated_at, record=excluded.record`,
+          [row.id, row.userId, row.telegramUserId, row.displayName, row.username, row.createdAt, row.updatedAt, row],
+        );
+      }
+      for (const row of database.appSessions) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_browser_sessions
+             (id, owner_id, token_hash, expires_at, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, token_hash=excluded.token_hash,
+             expires_at=excluded.expires_at, record=excluded.record`,
+          [row.id, row.userId, row.tokenHash, row.expiresAt, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramLoginChallenges) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_login_challenges(id, owner_id, expires_at, created_at, record)
+           VALUES ($1,$2,$3,$4,$5::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, expires_at=excluded.expires_at, record=excluded.record`,
+          [row.id, row.userId, row.expiresAt, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramMessages) {
+        const ownerId = accountOwners.get(row.accountId);
+        if (!ownerId) continue;
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_messages(id, owner_id, account_id, direction, created_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, account_id=excluded.account_id,
+             direction=excluded.direction, created_at=excluded.created_at, record=excluded.record`,
+          [row.id, ownerId, row.accountId, row.direction, row.createdAt, row],
+        );
+      }
+      for (const row of database.telegramPosts) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_posts
+             (id, owner_id, account_id, status, scheduled_at, lease_owner, lease_expires_at, created_at, updated_at, record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+           ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, account_id=excluded.account_id,
+             status=excluded.status, scheduled_at=excluded.scheduled_at, lease_owner=excluded.lease_owner,
+             lease_expires_at=excluded.lease_expires_at, updated_at=excluded.updated_at, record=excluded.record`,
+          [row.id, row.userId, row.accountId, row.status, row.scheduledAt || null, row.leaseOwner || null,
+           row.leaseExpiresAt || null, row.createdAt, row.updatedAt, row],
+        );
+      }
+      const workspaceCollections: Array<[TelegramWorkspaceRecordRow[], string]> = [
+        [database.telegramContacts, "agentic_that.telegram_contacts"],
+        [database.telegramGroups, "agentic_that.telegram_groups"],
+        [database.telegramChannels, "agentic_that.telegram_channels"],
+      ];
+      for (const [records, table] of workspaceCollections) {
+        for (const row of records) {
+          await transaction.unsafe(
+            `INSERT INTO ${table}(id, owner_id, created_at, updated_at, record)
+             VALUES ($1,$2,$3,$4,$5::jsonb)
+             ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id,
+               updated_at=excluded.updated_at, record=excluded.record`,
+            [row.id, row.userId, row.createdAt, row.updatedAt, row],
+          );
+        }
+      }
+      for (const row of database.telegramProfiles) {
+        await transaction.unsafe(
+          `INSERT INTO agentic_that.telegram_profiles(owner_id, account_id, updated_at, record)
+           VALUES ($1,$2,$3,$4::jsonb)
+           ON CONFLICT (owner_id, account_id) DO UPDATE SET updated_at=excluded.updated_at, record=excluded.record`,
+          [row.userId, row.accountId, row.updatedAt, row],
+        );
+      }
+
+      const removed = <T>(before: T[], after: T[], identity: (row: T) => string) => {
+        const retained = new Set(after.map(identity));
+        return before.filter((row) => !retained.has(identity(row)));
+      };
+      const deleteRows = async (table: string, rows: Array<{ id: string }>) => {
+        for (const row of rows) await transaction.unsafe(`DELETE FROM ${table} WHERE id = $1`, [row.id]);
+      };
+      for (const row of removed(previous.telegramProfiles, database.telegramProfiles, (item) => `${item.userId}:${item.accountId}`)) {
+        await transaction.unsafe(
+          "DELETE FROM agentic_that.telegram_profiles WHERE owner_id = $1 AND account_id = $2",
+          [row.userId, row.accountId],
+        );
+      }
+      await deleteRows("agentic_that.telegram_messages", removed(previous.telegramMessages, database.telegramMessages, (row) => row.id));
+      await deleteRows("agentic_that.telegram_posts", removed(previous.telegramPosts, database.telegramPosts, (row) => row.id));
+      await deleteRows("agentic_that.telegram_login_challenges", removed(previous.telegramLoginChallenges, database.telegramLoginChallenges, (row) => row.id));
+      await deleteRows("agentic_that.telegram_browser_sessions", removed(previous.appSessions, database.appSessions, (row) => row.id));
+      await deleteRows("agentic_that.telegram_contacts", removed(previous.telegramContacts, database.telegramContacts, (row) => row.id));
+      await deleteRows("agentic_that.telegram_groups", removed(previous.telegramGroups, database.telegramGroups, (row) => row.id));
+      await deleteRows("agentic_that.telegram_channels", removed(previous.telegramChannels, database.telegramChannels, (row) => row.id));
+      await deleteRows("agentic_that.telegram_accounts", removed(previous.telegramAccounts, database.telegramAccounts, (row) => row.id));
+    };
+
+    if (existingExecutor) {
+      await execute(existingExecutor);
+      return;
+    }
+    if (!this.databaseSql) throw new Error("Telegram database is unavailable.");
+    await this.databaseSql.begin(async (transaction) => {
+      await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+      await execute(transaction);
+    });
+  }
+
   private encryptWorkspacePayload(value: object) {
     return this.cipher.encrypt(JSON.stringify(value));
   }
@@ -1323,6 +1801,158 @@ export class MultiUserStore {
       accountId: row.accountId,
       updatedAt: row.updatedAt,
     };
+  }
+
+  private newPostRow(userId: string, input: TelegramPostInput): TelegramPostRow {
+    const now = nowIso();
+    return {
+      id: `telegram_post_${randomUUID().replaceAll("-", "")}`,
+      userId,
+      accountId: input.accountId,
+      title: input.title,
+      type: input.type,
+      category: input.category,
+      tags: [...input.tags],
+      status: "Draft",
+      scheduledAt: input.scheduledAt,
+      bodyCiphertext: this.encryptPostText(input.body),
+      mediaUrlCiphertext: this.encryptPostText(input.mediaUrl),
+      mediaUploadId: input.mediaUploadId,
+      mediaName: input.mediaName,
+      mediaMimeType: input.mediaMimeType,
+      mediaSize: input.mediaSize,
+      recipientCiphertext: this.encryptPostText(input.recipient),
+      contactIds: [...input.contacts],
+      groupIds: [...input.groups],
+      deliveriesCiphertext: this.encryptPostDeliveries(input.targets),
+      leaseOwner: "",
+      leaseExpiresAt: "",
+      createdAt: now,
+      updatedAt: now,
+      sentAt: "",
+      lastErrorCiphertext: this.encryptPostText("")
+    };
+  }
+
+  private assertPostEditable(row: TelegramPostRow) {
+    if (row.status === "Scheduled" || row.status === "Sending") {
+      throw new Error("Cancel this scheduled post before editing it.");
+    }
+    if (row.status === "Posted") {
+      throw new Error("Copy a delivered post before editing or sending it again.");
+    }
+  }
+
+  private applyPostInput(row: TelegramPostRow, input: TelegramPostInput) {
+    row.accountId = input.accountId;
+    row.title = input.title;
+    row.type = input.type;
+    row.category = input.category;
+    row.tags = [...input.tags];
+    row.status = "Draft";
+    row.scheduledAt = input.scheduledAt;
+    row.bodyCiphertext = this.encryptPostText(input.body);
+    row.mediaUrlCiphertext = this.encryptPostText(input.mediaUrl);
+    row.mediaUploadId = input.mediaUploadId;
+    row.mediaName = input.mediaName;
+    row.mediaMimeType = input.mediaMimeType;
+    row.mediaSize = input.mediaSize;
+    row.recipientCiphertext = this.encryptPostText(input.recipient);
+    row.contactIds = [...input.contacts];
+    row.groupIds = [...input.groups];
+    row.deliveriesCiphertext = this.encryptPostDeliveries(input.targets);
+    row.leaseOwner = "";
+    row.leaseExpiresAt = "";
+    row.sentAt = "";
+    row.lastErrorCiphertext = this.encryptPostText("");
+    row.updatedAt = nowIso();
+  }
+
+  private preparePostForQueue(row: TelegramPostRow, scheduledAt: string) {
+    if (row.status === "Sending") throw new Error("This Telegram post is already sending.");
+    if (row.status === "Posted") throw new Error("Copy a delivered post before sending it again.");
+    const scheduledTime = parseIso(scheduledAt);
+    if (!scheduledTime) throw new Error("A valid scheduled date and time is required.");
+    const deliveries = this.decryptPostDeliveries(row);
+    if (!deliveries.length) throw new Error("Choose at least one Telegram recipient.");
+    if (!this.decryptPostText(row.bodyCiphertext).trim() && !this.decryptPostText(row.mediaUrlCiphertext).trim() && !row.mediaUploadId) {
+      throw new Error("Add text or media before sending this post.");
+    }
+    row.status = "Scheduled";
+    row.scheduledAt = new Date(scheduledTime).toISOString();
+    row.deliveriesCiphertext = this.cipher.encrypt(JSON.stringify(deliveries.map((delivery) => ({
+      ...delivery,
+      status: "Pending",
+      sentAt: "",
+      telegramMessageId: "",
+      error: ""
+    }))));
+    row.leaseOwner = "";
+    row.leaseExpiresAt = "";
+    row.sentAt = "";
+    row.lastErrorCiphertext = this.encryptPostText("");
+    row.updatedAt = nowIso();
+  }
+
+  private postgresRecord<T>(value: unknown): T | null {
+    if (value && typeof value === "object") return value as T;
+    if (typeof value !== "string") return null;
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" ? parsed as T : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async postgresAccountExists(executor: any, userId: string, accountId: string) {
+    const [result] = await executor.unsafe(
+      "SELECT EXISTS(SELECT 1 FROM agentic_that.telegram_accounts WHERE id = $1 AND owner_id = $2) AS found",
+      [accountId, userId],
+    );
+    return Boolean(result?.found);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async readPostgresPost(executor: any, userId: string, postId: string, forUpdate = false) {
+    const rows = await executor.unsafe(
+      `SELECT record FROM agentic_that.telegram_posts WHERE id = $1 AND owner_id = $2${forUpdate ? " FOR UPDATE" : ""}`,
+      [postId, userId],
+    );
+    return this.postgresRecord<TelegramPostRow>(rows[0]?.record);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async readPostgresPostByLease(executor: any, postId: string, workerId: string) {
+    const rows = await executor.unsafe(
+      "SELECT record FROM agentic_that.telegram_posts WHERE id = $1 AND status = 'Sending' AND lease_owner = $2 FOR UPDATE",
+      [postId, workerId],
+    );
+    return this.postgresRecord<TelegramPostRow>(rows[0]?.record);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async insertPostgresPost(executor: any, row: TelegramPostRow) {
+    await executor.unsafe(
+      `INSERT INTO agentic_that.telegram_posts
+         (id, owner_id, account_id, status, scheduled_at, lease_owner, lease_expires_at, created_at, updated_at, record)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+      [row.id, row.userId, row.accountId, row.status, row.scheduledAt || null, row.leaseOwner || null,
+       row.leaseExpiresAt || null, row.createdAt, row.updatedAt, row],
+    );
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async updatePostgresPost(executor: any, row: TelegramPostRow) {
+    await executor.unsafe(
+      `UPDATE agentic_that.telegram_posts
+          SET account_id = $3, status = $4, scheduled_at = $5, lease_owner = $6,
+              lease_expires_at = $7, updated_at = $8, record = $9::jsonb
+        WHERE id = $1 AND owner_id = $2`,
+      [row.id, row.userId, row.accountId, row.status, row.scheduledAt || null, row.leaseOwner || null,
+       row.leaseExpiresAt || null, row.updatedAt, row],
+    );
   }
 
   private encryptPostDeliveries(targets: TelegramPostTarget[]) {

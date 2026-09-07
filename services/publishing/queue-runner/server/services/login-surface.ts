@@ -12,7 +12,7 @@ type ManualLoginSurfaceInput = {
   embeddedBrowserAvailable: boolean;
 };
 
-const externalBrowserRequiredPlatforms = new Set<Platform>(["x", "youtube"]);
+const externalBrowserRequiredPlatforms = new Set<Platform>(["facebook", "x", "youtube"]);
 
 export function platformRequiresExternalBrowser(platform: Platform) {
   return externalBrowserRequiredPlatforms.has(platform);
@@ -35,7 +35,7 @@ export function selectManualLoginSurface({
   externalProfilePresent,
   embeddedBrowserAvailable,
 }: ManualLoginSurfaceInput): ManualLoginSurface {
-  // X and Google deliberately block or distrust embedded sign-in surfaces.
+  // Facebook, X, and Google can block, loop, or distrust embedded sign-in surfaces.
   // Never offer an embedded override: the dedicated browser profile is the
   // durable account session used for both login and publishing.
   if (platformRequiresExternalBrowser(platform)) return "external";
