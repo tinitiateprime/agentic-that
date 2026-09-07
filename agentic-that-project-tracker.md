@@ -12,6 +12,8 @@
 - Added login abuse limits, email verification and password-reset foundations.
 - Built Companion packages for Windows, macOS and Linux.
 - Separated database migrations from normal Netlify deployments.
+- Restored role-scoped Publishing handoffs and scheduling for Content Uploaders,
+  Schedulers, Publishing Viewers and Publishing Managers.
 
 ### Do later
 
@@ -19,7 +21,7 @@
 - Add Windows/macOS signing credentials and publish signed stable Companions.
 - Upgrade the Netlify plan when real client traffic requires more capacity.
 - Finish live testing for every service, OS and multiple clients before full launch.
-- Finish WhatsApp live validation and re-enable Publishing scheduling only after validation.
+- Finish WhatsApp live validation.
 
 ### Intentionally skipped
 
@@ -32,7 +34,6 @@
 kanban
   devTodo[Dev - To Do]
     dev1[Connect Production Email Provider]
-    dev2[Resume Publishing Scheduling After Validation]
 
   deploymentTodo[Deployment - To Do]
     dep1[Add Windows and macOS Signing Credentials]
@@ -78,6 +79,7 @@ kanban
     done24[Companion v2.1.10 Testing Pace Without Posting Delays]
     done25[Resumable Idempotent Large Media Finalization]
     done26[Concurrent Multi User Publishing Workspace Stability]
+    done27[Role Scoped Publishing Handoffs and Scheduling]
     done27[Companion v2.1.11 Durable Facebook Login and LinkedIn Confirmation]
     done28[Companion v2.1.12 Complete LinkedIn Video Upload Lifecycle]
     done29[Supabase RLS and Public Schema Lockdown]

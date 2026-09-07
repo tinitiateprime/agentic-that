@@ -31,9 +31,10 @@ origin; it does not ask for unrestricted browsing access.
 
 ## Publishing behavior
 
-Release 1.8.0 supports publish-now queue execution for Facebook, Instagram, X,
-LinkedIn, and YouTube. Scheduling is paused: schedule controls are absent, timed
-API mutations return HTTP 410, and existing timed records are not executed.
+Publishing supports publish-now and scheduled queue execution for Facebook,
+Instagram, X, LinkedIn, and YouTube. Publishing Managers can publish immediately
+or schedule posts, Content Uploaders hand finished content and destinations to a
+Scheduler, and Schedulers assign exact times or reusable schedule templates.
 Interrupted or uncertain final publish actions are held for inspection so the
 system does not silently create duplicates.
 

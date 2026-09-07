@@ -513,8 +513,10 @@ async function migratePlatformDatabase(sql) {
     const [seededRole] = await sql`
       INSERT INTO rbac_roles (id, name, description, is_system, is_self_selectable)
       VALUES (${role.id}, ${role.name}, ${role.description}, true, true)
-      ON CONFLICT (name) DO UPDATE SET
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
         description = EXCLUDED.description,
+        is_system = true,
         is_self_selectable = true,
         updated_at = now()
       RETURNING id`;
@@ -530,7 +532,8 @@ async function migratePlatformDatabase(sql) {
     const [seededRole] = await sql`
       INSERT INTO rbac_roles (id, name, description, is_system, is_self_selectable)
       VALUES (${role.id}, ${role.name}, ${role.description}, true, false)
-      ON CONFLICT (name) DO UPDATE SET
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
         description = EXCLUDED.description,
         is_system = true,
         is_self_selectable = false,

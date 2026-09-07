@@ -22,11 +22,11 @@ and is not required by this flow.
    protects the session locally, and closes embedded sign-in panes automatically.
    Facebook, X, and YouTube open their saved external Chrome, Edge, or Chromium profile by design.
 5. Create a post, choose a normal image or video file, select accounts, and
-   publish it now.
+   publish it now or assign an exact time or reusable schedule template.
 
 No structured folders are required. Media is transferred to the Companion in
-safe, size-checked chunks. Scheduling is paused in release 1.8.0; existing
-historical scheduling records are retained but never executed.
+safe, size-checked chunks. Content Uploaders can hand finished content and fixed
+destinations to Schedulers, who assign timing without changing the content.
 
 ## Reliability behavior
 

@@ -393,6 +393,10 @@ function scheduleDue(upload, document, timestamp = Date.now()) {
 function queueJob(document, upload) {
   const active = document.jobs.find((job) => job.uploadId === upload.id && !TERMINAL_JOB_STATES.has(job.state));
   if (active) return active;
+  const schedule = upload.scheduleId
+    ? document.schedules.find((item) => item.id === upload.scheduleId && item.workspaceId === upload.workspaceId)
+    : null;
+  const scheduleNextRun = schedule?.nextRunAt || null;
   const job = {
     id: id("publishjob"),
     workspaceId: upload.workspaceId,
@@ -400,7 +404,7 @@ function queueJob(document, upload) {
     accountId: upload.accountId,
     platform: upload.platform,
     state: isAvailable(latestWorkspaceCompanion(document, upload.workspaceId)) ? "queued" : "waiting_for_companion",
-    notBefore: upload.scheduledAt || null,
+    notBefore: upload.scheduledAt || scheduleNextRun || null,
     attemptCount: 0,
     leaseOwner: null,
     leaseExpiresAt: null,
@@ -414,9 +418,23 @@ function queueJob(document, upload) {
 function refreshDueJobs(document, workspaceId, uploadIds) {
   const allowed = uploadIds?.length ? new Set(uploadIds) : null;
   const timestamp = Date.now();
+  for (const schedule of document.schedules) {
+    if (schedule.workspaceId !== workspaceId || schedule.status !== "active") continue;
+    const dueAt = Date.parse(schedule.nextRunAt || "");
+    if (!Number.isFinite(dueAt) || dueAt > timestamp) continue;
+    for (const upload of document.uploads) {
+      if (upload.workspaceId === workspaceId && upload.scheduleId === schedule.id && upload.status === "queued" && (!allowed || allowed.has(upload.id))) {
+        queueJob(document, upload);
+      }
+    }
+    schedule.lastRunAt = new Date(dueAt).toISOString();
+    schedule.nextRunAt = nextScheduleOccurrence(schedule, new Date(timestamp + 1_000))?.toISOString() || null;
+    if (!schedule.nextRunAt) schedule.status = "inactive";
+    schedule.updatedAt = now();
+  }
   for (const upload of document.uploads) {
     if (upload.workspaceId !== workspaceId || (allowed && !allowed.has(upload.id))) continue;
-    if (!upload.scheduleId && !upload.scheduledAt && scheduleDue(upload, document, timestamp)) queueJob(document, upload);
+    if (!upload.scheduleId && scheduleDue(upload, document, timestamp)) queueJob(document, upload);
   }
 }
 
@@ -724,8 +742,14 @@ function createUploadInDocument(document, principal, input = {}) {
   if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
   if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
   if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
-  if (input.scheduleId && !document.schedules.some((item) => item.id === Number(input.scheduleId) && item.workspaceId === principal.workspaceId && item.status === "active")) {
-    throw new Error("The selected schedule is unavailable.");
+  if (input.scheduleId) {
+    const schedule = document.schedules.find((item) => item.id === Number(input.scheduleId) && item.workspaceId === principal.workspaceId && item.status === "active");
+    if (!schedule) throw new Error("The selected schedule is unavailable.");
+    if (!schedule.nextRunAt || Date.parse(schedule.nextRunAt) <= Date.now()) {
+      schedule.nextRunAt = nextScheduleOccurrence(schedule)?.toISOString() || null;
+      if (!schedule.nextRunAt) throw new Error("The selected schedule has no future occurrence.");
+      schedule.updatedAt = now();
+    }
   }
   const scheduledTimestamp = input.scheduledAt ? Date.parse(input.scheduledAt) : null;
   if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
@@ -755,7 +779,7 @@ function createUploadInDocument(document, principal, input = {}) {
     sourceSubmissionId, automation: { safetyDeferredUntil: null },
   };
   document.uploads.push(upload);
-  if (!upload.scheduleId) queueJob(document, upload);
+  queueJob(document, upload);
   activity(document, principal.workspaceId, { type: "post.queued", summary: `A ${account.platform} post was queued.`, uploadId: upload.id });
   return uploadPublic(document, upload);
 }
@@ -812,17 +836,24 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     if (upload.scheduledAt && upload.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
     if (upload.scheduleId) {
       upload.scheduleId = Number(upload.scheduleId);
-      if (!document.schedules.some((item) => item.id === upload.scheduleId && item.workspaceId === principal.workspaceId && item.status === "active")) {
-        throw new Error("The selected schedule is unavailable.");
+      const schedule = document.schedules.find((item) => item.id === upload.scheduleId && item.workspaceId === principal.workspaceId && item.status === "active");
+      if (!schedule) throw new Error("The selected schedule is unavailable.");
+      if (!schedule.nextRunAt || Date.parse(schedule.nextRunAt) <= Date.now()) {
+        schedule.nextRunAt = nextScheduleOccurrence(schedule)?.toISOString() || null;
+        if (!schedule.nextRunAt) throw new Error("The selected schedule has no future occurrence.");
+        schedule.updatedAt = now();
       }
     }
     upload.updatedAt = now();
     const queuedJob = document.jobs.find((job) => job.uploadId === upload.id && ["queued", "waiting_for_companion"].includes(job.state));
     if (queuedJob) {
-      queuedJob.notBefore = upload.scheduledAt || null;
+      const schedule = upload.scheduleId
+        ? document.schedules.find((item) => item.id === upload.scheduleId && item.workspaceId === principal.workspaceId)
+        : null;
+      queuedJob.notBefore = upload.scheduledAt || schedule?.nextRunAt || null;
       queuedJob.state = isAvailable(latestWorkspaceCompanion(document, principal.workspaceId)) ? "queued" : "waiting_for_companion";
       queuedJob.updatedAt = upload.updatedAt;
-    } else if (!upload.scheduleId) {
+    } else {
       queueJob(document, upload);
     }
     return { document, result: uploadPublic(document, upload) };
@@ -1063,6 +1094,9 @@ export async function deleteCentralSchedule(principal, scheduleId) {
     const document = documentValue(value);
     const found = document.schedules.some((item) => Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId);
     if (!found) throw new Error("Schedule was not found.");
+    if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && Number(item.scheduleId) === Number(scheduleId) && item.status === "queued")) {
+      throw new Error("Remove this schedule from queued posts before deleting it.");
+    }
     document.schedules = document.schedules.filter((item) => !(Number(item.id) === Number(scheduleId) && item.workspaceId === principal.workspaceId));
     return { document, result: { ok: true } };
   });
@@ -1132,8 +1166,8 @@ export async function createCentralSubmission(principal, input = {}) {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
       originalName: input.originalName || "Text post", fileName: input.fileName || "", mimeType: input.mimeType || "text/plain",
       extension: input.extension || "", size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
-      description, selectedAccountIds, status: "awaiting_schedule", createdAt: timestamp,
-      platformOptions: input.platformOptions,
+      artifact: input.artifact || null, description, selectedAccountIds, destinationUploadIds: [], status: "awaiting_schedule", createdAt: timestamp,
+      platformOptions: input.platformOptions, rightsConfirmed: format === "text" ? true : Boolean(input.rightsConfirmed),
       updatedAt: timestamp, createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
     };
     document.submissions.push(submission);
@@ -1143,7 +1177,7 @@ export async function createCentralSubmission(principal, input = {}) {
 
 export async function scheduleCentralSubmission(principal, submissionId, destinations = []) {
   await initialize();
-  return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
+  return mutateWorkspaceDocument(principal.workspaceId, async (value, transaction) => {
     const document = documentValue(value);
     const submission = findOwned(document, "submissions", principal.workspaceId, submissionId, "Submission");
     if (submission.status !== "awaiting_schedule") throw new Error("This submission has already been scheduled.");
@@ -1163,24 +1197,43 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
       if (scheduledAt && destination.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
       const scheduleId = destination.scheduleId ? Number(destination.scheduleId) : null;
       if (!scheduledAt && !scheduleId) throw new Error("Every selected account needs a publish time.");
-      if (scheduleId && !document.schedules.some((item) => item.id === scheduleId && item.workspaceId === principal.workspaceId && item.status === "active")) {
-        throw new Error("The selected schedule is unavailable.");
+      if (scheduleId) {
+        const schedule = document.schedules.find((item) => item.id === scheduleId && item.workspaceId === principal.workspaceId && item.status === "active");
+        if (!schedule) throw new Error("The selected schedule is unavailable.");
+        if (!schedule.nextRunAt || Date.parse(schedule.nextRunAt) <= Date.now()) {
+          schedule.nextRunAt = nextScheduleOccurrence(schedule)?.toISOString() || null;
+          if (!schedule.nextRunAt) throw new Error("The selected schedule has no future occurrence.");
+          schedule.updatedAt = now();
+        }
       }
       const upload = {
         id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
         postFormat: submission.postFormat, originalName: submission.originalName, fileName: submission.fileName,
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
-        title: submission.title, caption: destination.description ?? submission.description, status: "queued", publishActionState: "not_started",
+        artifact: submission.artifact || null,
+        title: submission.title, caption: submission.description, status: "queued", publishActionState: "not_started",
         platformOptions: requireYouTubeOptions(account.platform, submission.postFormat, submission.platformOptions),
         uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId,
         sourceSubmissionId: submission.id, createdByUserId: submission.createdByUserId, createdByName: submission.createdByName,
+        scheduledByUserId: principal.userId, scheduledByName: principal.name || principal.email || principal.userId,
       };
       document.uploads.push(upload);
-      if (!upload.scheduleId) queueJob(document, upload);
+      queueJob(document, upload);
       uploads.push(uploadPublic(document, upload));
     }
     submission.status = "scheduled";
+    submission.destinationUploadIds = uploads.map((upload) => upload.id);
+    submission.scheduledByUserId = principal.userId;
+    submission.scheduledByName = principal.name || principal.email || principal.userId;
     submission.updatedAt = timestamp;
+    const uploadIds = new Set(uploads.map((upload) => upload.id));
+    await synchronizePublishingJobs(
+      principal.workspaceId,
+      document.jobs.filter((item) => item.workspaceId === principal.workspaceId && uploadIds.has(item.uploadId)),
+      document.uploads.filter((item) => item.workspaceId === principal.workspaceId && uploadIds.has(item.id)),
+      document.accounts.filter((item) => item.workspaceId === principal.workspaceId),
+      transaction,
+    );
     return { document, result: { submission, uploads } };
   });
 }
@@ -1204,10 +1257,6 @@ function selectClaimableCentralJobs(document, workspaceId, timestamp, limit) {
   const selected = [];
   const candidates = document.jobs
     .filter((job) => job.workspaceId === workspaceId && ["queued", "waiting_for_companion"].includes(job.state))
-    .filter((job) => {
-      const upload = document.uploads.find((item) => item.id === job.uploadId);
-      return Boolean(upload && !upload.scheduledAt && !upload.scheduleId);
-    })
     .filter((job) => (!job.notBefore || Date.parse(job.notBefore) <= timestamp) && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= timestamp))
     .filter((job) => job.attemptCount < MAX_JOB_ATTEMPTS);
 
@@ -1395,7 +1444,7 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
     submissions: document.submissions
       .filter((item) => item.workspaceId === workspaceId)
       .map(normalizeCentralSubmission),
-    schedules: [],
+    schedules: document.schedules.filter((item) => item.workspaceId === workspaceId),
     activityLogs: document.activityLogs
       .filter((item) => item.workspaceId === workspaceId)
       .slice(0, 100)

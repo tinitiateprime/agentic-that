@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CAPABILITY_CATALOG, OPERATIONAL_ROLE_CATALOG } from "../access-catalog.js";
 import { evaluateAccess, evaluateCapabilities } from "./access-policy.js";
 
 test("category grants flow to apps and an app grant overrides its role category", () => {
@@ -54,4 +55,30 @@ test("operational capabilities combine across roles and disappear for inactive m
     "publishing.view",
   ]);
   assert.deepEqual(evaluateCapabilities({ roleGrants, active: false }), []);
+});
+
+test("publishing system roles match their job responsibilities exactly", () => {
+  const publishingRoles = new Map(
+    OPERATIONAL_ROLE_CATALOG
+      .filter((role) => role.id.startsWith("role_publishing_"))
+      .map((role) => [role.id, role]),
+  );
+
+  assert.deepEqual(publishingRoles.get("role_publishing_viewer")?.capabilities, [
+    "publishing.view",
+  ]);
+  assert.deepEqual(publishingRoles.get("role_publishing_uploader")?.capabilities, [
+    "publishing.view",
+    "publishing.content.create",
+    "publishing.content.edit",
+    "publishing.destinations.select",
+    "publishing.submissions.create",
+  ]);
+  assert.deepEqual(publishingRoles.get("role_publishing_scheduler")?.capabilities, [
+    "publishing.view",
+    "publishing.schedule.manage",
+  ]);
+  assert.deepEqual(publishingRoles.get("role_publishing_manager")?.capabilities, CAPABILITY_CATALOG.publishing);
+  assert.equal(publishingRoles.get("role_publishing_uploader")?.name, "Content Uploader");
+  assert.equal(publishingRoles.get("role_publishing_scheduler")?.name, "Scheduler");
 });

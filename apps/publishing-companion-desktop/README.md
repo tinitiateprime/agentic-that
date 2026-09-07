@@ -23,10 +23,10 @@ reported as partial when the scraper cannot prove that it scanned through the
 range boundary; an incomplete scan is never represented as a trustworthy empty
 result.
 
-Publishing and Telegram scheduling are paused in release 2.1.0. Existing stored
-records are retained for compatibility, but the UI does not expose scheduling
-and the publishing API rejects new timed work. Publish-now jobs and Telegram's
-manual **Post now** action remain available.
+Publishing supports immediate jobs, exact publish times, and reusable schedule
+templates. Content Uploaders can hand fixed content and destinations to
+Schedulers for timing. Telegram scheduling remains intentionally unavailable;
+its manual **Post now** action remains available.
 
 ## Development
 

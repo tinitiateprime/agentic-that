@@ -900,7 +900,7 @@ const facebookScrapingTokenPayloadSchema = z.object({
 const scheduleOnlyUpdateSchema = z.object({
   scheduledAt: z.string().nullable().optional(),
   scheduleId: scheduleIdSchema.nullable().optional()
-});
+}).strict();
 
 const automationRunRequestSchema = z.object({
   uploadIds: z.array(z.string().trim().min(1)).max(100).optional()
@@ -1139,7 +1139,7 @@ function requiredPublishingCapability(req: express.Request) {
   if (requestPath.startsWith("/api/users")) return "workspace.team.manage";
   if (requestPath === "/api/automation/consent") return "publishing.accounts.configure";
   if (requestPath.startsWith("/api/automation")) return "publishing.execute";
-  if (requestPath === "/api/publishing-safety/assess") return "publishing.execute";
+  if (requestPath === "/api/publishing-safety/assess") return "publishing.schedule.manage";
   if (req.method === "GET" || req.method === "HEAD") return "publishing.view";
   if (/^\/api\/(?:platforms\/[^/]+\/accounts|accounts(?:\/|$))/.test(requestPath)) return "publishing.accounts.configure";
   if (requestPath.startsWith("/api/schedules") || /^\/api\/submissions\/[^/]+\/schedule$/.test(requestPath)) return "publishing.schedule.manage";
@@ -1308,9 +1308,6 @@ async function createUnifiedPosts(
 
   try {
     const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
-    if (destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
-      throw new Error("Scheduling is temporarily unavailable. Publish or queue the post now instead.");
-    }
     const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
     if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
     if (user.role === "post_uploader" && destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
@@ -2063,7 +2060,7 @@ app.get("/api/auth/me", (req: RequestWithUser, res) => {
   res.json(currentUser(req));
 });
 
-app.post("/api/publishing-safety/assess", requireRoles("operations_manager"), async (req: RequestWithUser, res, next) => {
+app.post("/api/publishing-safety/assess", requireRoles("operations_manager", "scheduler"), async (req: RequestWithUser, res, next) => {
   try {
     const user = currentUser(req);
     const payload = publishingSafetyRequestSchema.parse(req.body);
@@ -2325,23 +2322,7 @@ app.post("/api/accounts/:id/manual-login", requireRoles("operations_manager"), a
   }
 });
 
-// Scheduling is intentionally paused in this Companion release. Keep historical
-// records intact, but reject every route that could create or change timed work.
-const schedulingUnavailable = (_req: express.Request, res: express.Response) => {
-  res.status(410).json({ message: "Scheduling is temporarily unavailable. Publish or queue the post now instead." });
-};
-app.all(["/api/schedules", "/api/schedules/:id", "/api/social-media-schedules", "/api/submissions/:id/schedule"], schedulingUnavailable);
-app.post(["/api/submissions/text", "/api/submissions/staged"], schedulingUnavailable);
-app.patch("/api/uploads/:id", (req, res, next) => {
-  const payload = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
-  if (Object.hasOwn(payload, "scheduledAt") || Object.hasOwn(payload, "scheduleId")) {
-    schedulingUnavailable(req, res);
-    return;
-  }
-  next();
-});
-
-// --- LEGACY REUSABLE SCHEDULES (kept for data compatibility) ---
+// --- REUSABLE SCHEDULES ---
 app.get("/api/schedules", async (req: RequestWithUser, res, next) => {
   try {
     res.json(await listPublishingSchedules(currentUser(req).workspaceId));

@@ -124,6 +124,19 @@ test("direct destination creation does not call the redundant automation start r
   assert.doesNotMatch(submitFlow, /publishing could not start/);
 });
 
+test("publishing UI maps uploader, scheduler, manager, and viewer capabilities to distinct actions", async () => {
+  const [appSource, routeSource] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/api/publishing/[...path]/route.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /const PUBLISHING_SCHEDULING_ENABLED = true;/);
+  assert.match(appSource, /canEditContent: capabilities\.includes\('publishing\.content\.create'\) \|\| capabilities\.includes\('publishing\.content\.edit'\)/);
+  assert.match(appSource, /canSchedulePosts: capabilities\.includes\('publishing\.schedule\.manage'\)/);
+  assert.match(appSource, /canRunAutomation: capabilities\.includes\('publishing\.execute'\)/);
+  assert.match(appSource, /handoffOnly=\{!permissions\.canRunAutomation\}/);
+  assert.match(routeSource, /principal\(scheduleOnly \? "publishing\.schedule\.manage" : "publishing\.execute"\)/);
+});
+
 test("large-media finalization is split, retried, and never deletes finalized parts on a gateway timeout", async () => {
   const [clientSource, routeSource, storeSource] = await Promise.all([
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),

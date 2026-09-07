@@ -62,10 +62,10 @@ export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
 };
 
 export const userRoleLabels: Record<UserRole, string> = {
-  operations_manager: "Operations Manager",
-  post_uploader: "Legacy Uploader (read-only)",
-  scheduler: "Legacy Scheduler (read-only)",
-  viewer: "Viewer"
+  operations_manager: "Publishing Manager",
+  post_uploader: "Content Uploader",
+  scheduler: "Scheduler",
+  viewer: "Publishing Viewer"
 };
 
 

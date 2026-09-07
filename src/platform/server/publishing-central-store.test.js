@@ -170,6 +170,40 @@ test("central publishing creates a multi-destination release atomically in one d
   assert.deepEqual(document.uploads.map((upload) => upload.caption), platforms.map((platform) => `${platform} caption`));
 });
 
+test("central publishing holds exact-time and template jobs until their scheduled occurrence", () => {
+  const timestamp = Date.now();
+  const exactTime = new Date(timestamp + 60_000).toISOString();
+  const templateTime = new Date(timestamp + 120_000).toISOString();
+  const document = {
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", platform: "facebook",
+      enabled: true, credentialConfigured: true,
+    }],
+    uploads: [], jobs: [], activityLogs: [], companions: [],
+    schedules: [{
+      id: 1, workspaceId: "workspace_1", name: "Daily", frequency: "daily",
+      time: "09:30", status: "active", nextRunAt: templateTime,
+    }],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+
+  const exact = centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: "account_1", postFormat: "text", caption: "Exact-time post", scheduledAt: exactTime,
+  });
+  const templated = centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: "account_1", postFormat: "text", caption: "Template post", scheduleId: 1,
+  });
+
+  assert.equal(document.jobs.find((job) => job.uploadId === exact.id)?.notBefore, exactTime);
+  assert.equal(document.jobs.find((job) => job.uploadId === templated.id)?.notBefore, templateTime);
+  assert.equal(centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp, 5).length, 0);
+  assert.deepEqual(
+    centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp + 180_000, 5)
+      .map((item) => item.upload.id),
+    [exact.id, templated.id],
+  );
+});
+
 test("staged publishing finalization is idempotent per account", () => {
   const document = {
     accounts: [{ id: "account_1", workspaceId: "workspace_1", platform: "instagram", enabled: true, credentialConfigured: true }],

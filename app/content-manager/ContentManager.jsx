@@ -5,6 +5,7 @@ import {
   ArrowRight,
   CheckCircle2,
   CircleAlert,
+  Clock3,
   Database,
   ExternalLink,
   FileText,
@@ -56,10 +57,10 @@ const messagingLogos = {
 const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
 const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 const roleLabels = {
-  operations_manager: "Operations Manager",
-  post_uploader: "Legacy Uploader (read-only)",
-  scheduler: "Legacy Scheduler (read-only)",
-  viewer: "Viewer"
+  operations_manager: "Publishing Manager",
+  post_uploader: "Content Uploader",
+  scheduler: "Scheduler",
+  viewer: "Publishing Viewer"
 };
 const statusLabels = {
   queued: "Queued",
@@ -248,6 +249,7 @@ export default function ContentManager({
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
   const [publishingUploads, setPublishingUploads] = useState([]);
+  const [publishingSchedules, setPublishingSchedules] = useState([]);
   const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "view"));
   const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "view"));
   const visibleServices = services.filter((service) => (
@@ -278,15 +280,17 @@ export default function ContentManager({
       setPublishingAccounts([]);
       rememberPublishingAccounts([]);
       setPublishingUploads([]);
+      setPublishingSchedules([]);
       setPublishingStatus("needs-login");
       return;
     }
 
     try {
       const me = await publishingRequest("/api/auth/me", session.token);
-      const [accountsResult, uploadsResult] = await Promise.allSettled([
+      const [accountsResult, uploadsResult, schedulesResult] = await Promise.allSettled([
         publishingRequest("/api/accounts", session.token),
-        publishingRequest("/api/uploads", session.token)
+        publishingRequest("/api/uploads", session.token),
+        publishingRequest("/api/schedules", session.token)
       ]);
 
       const nextSession = { token: session.token, user: me };
@@ -295,6 +299,7 @@ export default function ContentManager({
       setPublishingAccounts(accountList);
       rememberPublishingAccounts(accountList);
       setPublishingUploads(uploadsResult.status === "fulfilled" && Array.isArray(uploadsResult.value) ? uploadsResult.value : []);
+      setPublishingSchedules(schedulesResult.status === "fulfilled" && Array.isArray(schedulesResult.value) ? schedulesResult.value : []);
       setPublishingStatus("ready");
     } catch (error) {
       if (error.status === 401) {
@@ -303,6 +308,7 @@ export default function ContentManager({
         setPublishingAccounts([]);
         rememberPublishingAccounts([]);
         setPublishingUploads([]);
+        setPublishingSchedules([]);
         setPublishingStatus("needs-login");
       } else {
         setPublishingStatus("offline");
@@ -322,6 +328,7 @@ export default function ContentManager({
       setPublishingSession(null);
       setPublishingAccounts([]);
       setPublishingUploads([]);
+      setPublishingSchedules([]);
       setPublishingStatus(
         error.status === 401
           ? "needs-upgrade"
@@ -452,6 +459,7 @@ export default function ContentManager({
               session={publishingSession}
               accounts={publishingAccounts}
               uploads={publishingUploads}
+              schedules={publishingSchedules}
               platform={publishingPlatform}
               publishQueueUrl={publishQueueUrl}
               onPlatformChange={selectPublishingPlatform}
@@ -625,6 +633,7 @@ function PublishingContent({
   session,
   accounts,
   uploads,
+  schedules,
   platform,
   publishQueueUrl,
   onPlatformChange,
@@ -688,6 +697,7 @@ function PublishingContent({
 
   const queuedCount = uploads.filter((upload) => upload.status === "queued").length;
   const postedCount = uploads.filter((upload) => upload.status === "posted").length;
+  const scheduledCount = uploads.filter((upload) => upload.scheduledAt || upload.scheduleId).length;
 
   return (
     <div className="content-section-body">
@@ -703,7 +713,9 @@ function PublishingContent({
       <div className="content-status-grid">
         <Metric icon={UsersRound} label="publishing accounts" value={accounts.length} />
         <Metric icon={FileText} label="total posts" value={uploads.length} />
+        <Metric icon={Clock3} label="scheduled posts" value={scheduledCount} />
         <Metric icon={CheckCircle2} label="posted" value={postedCount} />
+        <Metric icon={Database} label="schedule templates" value={schedules.length} />
       </div>
 
       <div className="content-app-tabs" role="tablist" aria-label="Publishing apps">
