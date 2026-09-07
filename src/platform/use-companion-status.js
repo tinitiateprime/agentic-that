@@ -50,10 +50,13 @@ async function requestHealth() {
     });
     if (!response.ok) return { state: "missing" };
     const health = await response.json();
+    // Companion reports its build as `companionVersion`; `version` is the older field name.
+    const version = health?.companionVersion || health?.version;
     return {
       state: "connected",
-      version: typeof health?.version === "string" ? health.version : "",
+      version: typeof version === "string" ? version : "",
       automationReady: Boolean(health?.automationReady),
+      paired: Boolean(health?.paired),
     };
   } catch {
     return { state: "missing" };

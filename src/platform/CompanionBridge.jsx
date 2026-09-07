@@ -59,6 +59,18 @@ export function CompanionBridgePill() {
   const { status } = useCompanionStatus();
   if (status.state === "checking") return null;
 
+  if (status.state === "connected" && !status.paired) {
+    return (
+      <Link className={styles.pill} href="/config-manager?service=publishing">
+        <MonitorDown size={15} />
+        <span className={styles.pillCopy}>
+          <strong>Pair Companion</strong>
+          <small>Installed but not paired yet</small>
+        </span>
+      </Link>
+    );
+  }
+
   if (status.state === "connected") {
     return (
       <span className={`${styles.pill} ${styles.pillReady}`}>

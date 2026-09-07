@@ -144,10 +144,12 @@ export default function CompanionDownload({ release, initialDevice, signedIn = f
           <span>
             <strong>Companion is already running on this device{companionStatus.version ? ` (version ${companionStatus.version})` : ""}.</strong>
             {" "}
-            {signedIn
-              ? <Link href="/config-manager?service=publishing">Pair it with this workspace</Link>
-              : "Sign in and pair it from Connections › Publishing"}
-            {" "}or download a build below for another computer.
+            {companionStatus.paired
+              ? "It is paired with this workspace."
+              : signedIn
+                ? <Link href="/config-manager?service=publishing">Pair it with this workspace</Link>
+                : "Sign in and pair it from Connections › Publishing"}
+            {" "}{companionStatus.paired ? "Download a build below for another computer." : "or download a build below for another computer."}
           </span>
         </section>
       )}
