@@ -1515,11 +1515,31 @@ function PublishingManager({
         enabled: form.enabled,
         executionEngine: form.executionEngine
       });
+      const existingAccount = form.id ? accounts.find(account => account.id === form.id) : null;
+      const isResumingSafetyPause = Boolean(existingAccount && !existingAccount.enabled && form.enabled);
+      if (isResumingSafetyPause) {
+        try {
+          // Safety pauses originate inside Companion. Clear that local state
+          // before updating the cloud record so the next heartbeat cannot
+          // immediately pause the account again.
+          await localCompanionRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, {
+            method: "PATCH",
+            body
+          });
+        } catch (error) {
+          throw new Error("Could not resume this account in Workspace Companion. Keep Companion open on this computer and try again. " + error.message);
+        }
+      }
       const account = form.id
         ? await publishingRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, { method: "PATCH", body })
         : await publishingRequest("/api/platforms/" + selectedPlatform + "/accounts", session.token, { method: "POST", body });
       setEditing(null);
-      setNotice({ tone: "success", message: account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "." });
+      setNotice({
+        tone: "success",
+        message: isResumingSafetyPause
+          ? account.displayName + " is resumed and ready for publishing."
+          : account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "."
+      });
       await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
