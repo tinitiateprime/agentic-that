@@ -62,8 +62,11 @@ const runtimeSource = await readFile(path.join(applicationRoot, "runtime", "serv
 for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session", "flushAccountBrowserData"]) {
   if (!mainSource.includes(requiredText)) throw new Error(`Packaged main process is missing ${requiredText}.`);
 }
-for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles"]) {
+for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles", "if (upload.scheduleId) return isDueByPostSchedule", 'if (mode === "scheduledOnly") return isDueScheduledUpload']) {
   if (!runtimeSource.includes(requiredText)) throw new Error(`Packaged runtime is missing ${requiredText}.`);
+}
+if (runtimeSource.includes("if (upload.scheduledAt || upload.scheduleId) return false")) {
+  throw new Error("Packaged runtime still rejects all scheduled publishing jobs.");
 }
 
 console.log(`Packaged Companion ${manifest.version} verified for ${platform}/${architecture}.`);

@@ -682,7 +682,7 @@ test("publishing API supports login, role-scoped handoffs, scheduling, and failu
   const uploadsBeforeHandoff = await (await api("/api/uploads")).json() as unknown[];
   const handoffResponse = await roleApi(uploaderLogin.token, "/api/submissions/text", {
     method: "POST",
-    body: JSON.stringify({ description: "Persistent uploader to scheduler handoff", selectedAccountIds: [account.id] }),
+    body: JSON.stringify({ description: "Persistent uploader to scheduler handoff", selectedAccountIds: [account.id, youtubeAccount.id] }),
   });
   assert.equal(handoffResponse.status, 201);
   const handoff = await handoffResponse.json() as { id: string; status: string; description: string; createdByUserId: string };
@@ -712,28 +712,36 @@ test("publishing API supports login, role-scoped handoffs, scheduling, and failu
   })).status, 403);
 
   const handoffScheduledAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const youtubeHandoffScheduledAt = new Date(Date.now() + 25 * 60_000).toISOString();
   const scheduleHandoffResponse = await roleApi(schedulerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
     method: "POST",
-    body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
+    body: JSON.stringify({ destinations: [
+      { accountId: account.id, scheduledAt: handoffScheduledAt },
+      { accountId: youtubeAccount.id, scheduledAt: youtubeHandoffScheduledAt },
+    ] }),
   });
   assert.equal(scheduleHandoffResponse.status, 201);
   const scheduledHandoff = await scheduleHandoffResponse.json() as {
     submission: { status: string; destinationUploadIds: string[] };
-    uploads: Array<{ id: string; caption: string; scheduledAt?: string; createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string }>;
+    uploads: Array<{ id: string; accountId: string; caption: string; scheduledAt?: string; createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string }>;
   };
+  const scheduledFacebookHandoff = scheduledHandoff.uploads.find(upload => upload.accountId === account.id)!;
+  const scheduledYoutubeHandoff = scheduledHandoff.uploads.find(upload => upload.accountId === youtubeAccount.id)!;
   assert.equal(scheduledHandoff.submission.status, "scheduled");
-  assert.equal(scheduledHandoff.submission.destinationUploadIds.length, 1);
-  assert.equal(scheduledHandoff.uploads[0].caption, handoff.description);
-  assert.equal(scheduledHandoff.uploads[0].scheduledAt, handoffScheduledAt);
-  assert.equal(scheduledHandoff.uploads[0].createdByUserId, handoff.createdByUserId);
-  assert.ok(scheduledHandoff.uploads[0].scheduledByUserId);
-  assert.notEqual(scheduledHandoff.uploads[0].scheduledByUserId, handoff.createdByUserId);
-  assert.equal(scheduledHandoff.uploads[0].sourceSubmissionId, handoff.id);
-  assert.equal((await roleApi(schedulerLogin.token, `/api/uploads/${scheduledHandoff.uploads[0].id}`, {
+  assert.equal(scheduledHandoff.submission.destinationUploadIds.length, 2);
+  assert.equal(scheduledFacebookHandoff.caption, handoff.description);
+  assert.equal(scheduledYoutubeHandoff.caption, handoff.description);
+  assert.equal(scheduledFacebookHandoff.scheduledAt, handoffScheduledAt);
+  assert.equal(scheduledYoutubeHandoff.scheduledAt, youtubeHandoffScheduledAt);
+  assert.equal(scheduledFacebookHandoff.createdByUserId, handoff.createdByUserId);
+  assert.ok(scheduledFacebookHandoff.scheduledByUserId);
+  assert.notEqual(scheduledFacebookHandoff.scheduledByUserId, handoff.createdByUserId);
+  assert.equal(scheduledFacebookHandoff.sourceSubmissionId, handoff.id);
+  assert.equal((await roleApi(schedulerLogin.token, `/api/uploads/${scheduledFacebookHandoff.id}`, {
     method: "PATCH",
     body: JSON.stringify({ caption: "Scheduler content edit attempt" }),
   })).status, 400);
-  assert.equal((await roleApi(uploaderLogin.token, `/api/uploads/${scheduledHandoff.uploads[0].id}`, {
+  assert.equal((await roleApi(uploaderLogin.token, `/api/uploads/${scheduledFacebookHandoff.id}`, {
     method: "PATCH",
     body: JSON.stringify({ caption: "Uploader post-handoff edit attempt" }),
   })).status, 403);

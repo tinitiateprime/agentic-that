@@ -1201,7 +1201,7 @@
 .publish-queue-runner .handoff-empty strong { color: #294C40; font-size: 11px; }
 .publish-queue-runner .handoff-empty small { font-size: 9px; }
 
-.publish-queue-runner .submission-schedule-modal { width: min(760px, calc(100vw - 24px)); }
+.publish-queue-runner .submission-schedule-modal { width: min(940px, calc(100vw - 24px)); }
 .publish-queue-runner .submission-schedule-modal .modal-body { display: grid; gap: 18px; }
 .publish-queue-runner .submission-schedule-summary { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 11px; background: #F3F8F6; }
 .publish-queue-runner .submission-schedule-summary > span:last-child { display: grid; min-width: 0; gap: 4px; }
@@ -1215,6 +1215,19 @@
 .publish-queue-runner .submission-account-grid > label > span { display: grid; min-width: 0; gap: 2px; }
 .publish-queue-runner .submission-account-grid strong { overflow: hidden; color: #21483A; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .publish-queue-runner .submission-account-grid small { color: #70837A; font-size: 9px; }
+.publish-queue-runner .submission-timing-grid { display: grid; gap: 9px; }
+.publish-queue-runner .submission-destination-timing { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(170px, .65fr) minmax(250px, 1fr); align-items: end; gap: 12px; padding: 12px; border: 1px solid #DCE7E2; border-radius: 10px; background: #F9FBFA; }
+.publish-queue-runner .submission-timing-account { min-width: 0; min-height: 42px; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 9px; }
+.publish-queue-runner .submission-timing-account > span { min-width: 0; display: grid; gap: 2px; }
+.publish-queue-runner .submission-timing-account strong,
+.publish-queue-runner .submission-timing-account small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publish-queue-runner .submission-timing-account strong { color: #21483A; font-size: 11px; }
+.publish-queue-runner .submission-timing-account small { color: #70837A; font-size: 9px; }
+.publish-queue-runner .submission-timing-field { min-width: 0; display: grid; gap: 6px; color: #475D54; font-size: 9px; font-weight: 800; }
+.publish-queue-runner .submission-timing-field input,
+.publish-queue-runner .submission-timing-field select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #CBD9D3; border-radius: 8px; background: #FFFFFF; color: #203B31; font: inherit; font-size: 11px; outline: none; }
+.publish-queue-runner .submission-timing-field input:focus,
+.publish-queue-runner .submission-timing-field select:focus { border-color: #25815E; box-shadow: 0 0 0 3px rgba(37, 129, 94, .1); }
 
 @media (max-width: 720px) {
   .publish-queue-runner .handoff-row { grid-template-columns: auto minmax(0, 1fr); }
@@ -1222,6 +1235,7 @@
 .publish-queue-runner .handoff-row .btn-primary,
 .publish-queue-runner .handoff-readonly { grid-column: 2; justify-self: start; }
   .publish-queue-runner .submission-account-grid { grid-template-columns: 1fr; }
+  .publish-queue-runner .submission-destination-timing { grid-template-columns: 1fr; align-items: stretch; }
 }
 .publish-queue-runner .composer-footer { min-height: 76px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 12px 25px; border-top: 1px solid #DCE6E1; background: #FFFFFF; }
 .publish-queue-runner .composer-message { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 9px 11px; border-radius: 7px; font-size: 10px; font-weight: 700; }

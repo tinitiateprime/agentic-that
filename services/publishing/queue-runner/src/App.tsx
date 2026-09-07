@@ -833,6 +833,11 @@ type PlatformEligibility = {
 };
 
 const emptyComposerSchedule = (): ComposerScheduleDraft => ({ mode: 'now', exactAt: '', scheduleId: '' });
+const defaultSchedulerTiming = (): ComposerScheduleDraft => ({
+  mode: 'exact',
+  exactAt: toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60_000)),
+  scheduleId: '',
+});
 const composerFormatOptions: Array<{ id: PostFormat; label: string; detail: string; icon: ReactNode }> = [
   { id: 'image', label: 'Image', detail: 'Single visual post', icon: <ImageIcon size={22} /> },
   { id: 'video', label: 'Video', detail: 'Short or long-form video', icon: <Video size={22} /> },
@@ -1950,20 +1955,38 @@ function ScheduleSubmissionModal({
   const [selectedAccountIds] = useState<string[]>(() => destinationsLocked
     ? submission.selectedAccountIds
     : compatibleAccounts.map(account => account.id));
-  const [timingMode, setTimingMode] = useState<'exact' | 'template'>('exact');
-  const [exactAt, setExactAt] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60_000)));
-  const [scheduleId, setScheduleId] = useState('');
+  const [destinationTimings, setDestinationTimings] = useState<Record<string, ComposerScheduleDraft>>(() => Object.fromEntries(
+    selectedAccountIds.map(accountId => [accountId, defaultSchedulerTiming()]),
+  ));
+  const [minimumSchedule] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60_000)));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
+  const schedulingAccounts = useMemo(() => selectedAccountIds
+    .map(accountId => compatibleAccounts.find(account => account.id === accountId))
+    .filter((account): account is PlatformAccount => Boolean(account)), [compatibleAccounts, selectedAccountIds]);
+
+  const updateDestinationTiming = (accountId: string, patch: Partial<ComposerScheduleDraft>) => {
+    setDestinationTimings(current => ({
+      ...current,
+      [accountId]: { ...(current[accountId] ?? defaultSchedulerTiming()), ...patch },
+    }));
+    setPendingPreflightWarnings([]);
+  };
 
   const submit = async (confirmWarnings = false) => {
     setError('');
     if (!selectedAccountIds.length) return setError('Choose at least one compatible publishing account.');
-    const scheduleDraft: ComposerScheduleDraft = { mode: timingMode, exactAt, scheduleId };
-    const timingError = scheduleDraftError(scheduleDraft, schedules);
-    if (timingError) return setError(timingError);
-    const destinations = selectedAccountIds.map(accountId => ({ accountId, ...destinationSchedule(scheduleDraft) }));
+    if (schedulingAccounts.length !== selectedAccountIds.length) {
+      return setError('One or more locked destinations are no longer available. Ask a Publishing Manager to reconnect or enable them.');
+    }
+    const destinations: UnifiedPostDestinationInput[] = [];
+    for (const account of schedulingAccounts) {
+      const scheduleDraft = destinationTimings[account.id];
+      const timingError = scheduleDraft ? scheduleDraftError(scheduleDraft, schedules) : 'Choose a publish time.';
+      if (timingError) return setError(`${platformLabels[account.platform]} · ${account.displayName}: ${timingError}`);
+      destinations.push({ accountId: account.id, ...destinationSchedule(scheduleDraft) });
+    }
     setLoading(true);
     try {
       await api.assessPublishingSafety(submission.postFormat, destinations);
@@ -2012,16 +2035,22 @@ function ScheduleSubmissionModal({
             </div>
           </section>
           <section className='submission-timing-section'>
-            <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Required publish time</h2></div><CalendarClock size={20} /></div>
-            <div className='account-form-grid'>
-              <div className='field'><label>Timing type</label><select value={timingMode} onChange={event => { setTimingMode(event.target.value as 'exact' | 'template'); setPendingPreflightWarnings([]); }}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></div>
-              {timingMode === 'exact'
-                ? <div className='field'><label>Date and time</label><input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={exactAt} onChange={event => { setExactAt(event.target.value); setPendingPreflightWarnings([]); }} /></div>
-                : <div className='field'><label>Schedule template</label><select value={scheduleId} onChange={event => { setScheduleId(event.target.value); setPendingPreflightWarnings([]); }}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></div>}
+            <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Set each destination separately</h2></div><span>{schedulingAccounts.length} individual {schedulingAccounts.length === 1 ? 'time' : 'times'}</span></div>
+            <div className='submission-timing-grid'>
+              {schedulingAccounts.map(account => {
+                const timing = destinationTimings[account.id] ?? defaultSchedulerTiming();
+                return <article className='submission-destination-timing' key={account.id}>
+                  <div className='submission-timing-account'><CustomIcon platform={account.platform} size={22} /><span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span></div>
+                  <label className='submission-timing-field'><span>Timing type</span><select aria-label={`${account.displayName} timing type`} value={timing.mode} onChange={event => updateDestinationTiming(account.id, { mode: event.target.value as 'exact' | 'template' })}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
+                  {timing.mode === 'exact'
+                    ? <label className='submission-timing-field'><span>Date and time</span><input aria-label={`${account.displayName} date and time`} type='datetime-local' min={minimumSchedule} value={timing.exactAt} onChange={event => updateDestinationTiming(account.id, { exactAt: event.target.value })} /></label>
+                    : <label className='submission-timing-field'><span>Schedule template</span><select aria-label={`${account.displayName} schedule template`} value={timing.scheduleId} onChange={event => updateDestinationTiming(account.id, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
+                </article>;
+              })}
             </div>
           </section>
           {error && <div className='workspace-error' role='alert'><CircleAlert size={17} /><span><strong>Cannot schedule this content</strong><small>{error}</small></span></div>}
-          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || !compatibleAccounts.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedAccountIds.length || ''} ${selectedAccountIds.length === 1 ? 'destination' : 'destinations'}`}</button></div>
+          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || schedulingAccounts.length !== selectedAccountIds.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedAccountIds.length || ''} ${selectedAccountIds.length === 1 ? 'destination' : 'destinations'}`}</button></div>
         </div>
       </div>
     </div>

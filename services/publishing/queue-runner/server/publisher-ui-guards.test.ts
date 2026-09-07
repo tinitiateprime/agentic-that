@@ -137,6 +137,20 @@ test("publishing UI maps uploader, scheduler, manager, and viewer capabilities t
   assert.match(routeSource, /principal\(scheduleOnly \? "publishing\.schedule\.manage" : "publishing\.execute"\)/);
 });
 
+test("scheduler handoffs expose and submit independent timing for every destination", async () => {
+  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const modalSource = appSource.slice(
+    appSource.indexOf("function ScheduleSubmissionModal"),
+    appSource.indexOf("function PlatformScheduleModal"),
+  );
+  assert.match(modalSource, /const \[destinationTimings, setDestinationTimings\]/);
+  assert.match(modalSource, /schedulingAccounts\.map\(account =>/);
+  assert.match(modalSource, /destinationTimings\[account\.id\]/);
+  assert.match(modalSource, /destinations\.push\(\{ accountId: account\.id, \.\.\.destinationSchedule\(scheduleDraft\) \}\)/);
+  assert.match(modalSource, /Set each destination separately/);
+  assert.doesNotMatch(modalSource, /const \[timingMode, setTimingMode\]/);
+});
+
 test("large-media finalization is split, retried, and never deletes finalized parts on a gateway timeout", async () => {
   const [clientSource, routeSource, storeSource] = await Promise.all([
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
