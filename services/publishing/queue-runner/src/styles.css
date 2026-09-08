@@ -5030,3 +5030,312 @@
   border: 0;
   background: #eef1f5;
 }
+
+/* Final composer flow: one clear sequence that fits every viewport. */
+.publish-queue-runner .workboard-app,
+.publish-queue-runner .workboard-app .workboard-shell,
+.publish-queue-runner .unified-composer,
+.publish-queue-runner .composer-content-grid,
+.publish-queue-runner .composer-input-column,
+.publish-queue-runner .composer-destination-column {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.publish-queue-runner .workboard-app {
+  overflow-x: clip;
+}
+
+.publish-queue-runner .workboard-nav {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+
+.publish-queue-runner .workboard-nav button {
+  flex: 1 1 auto;
+}
+
+.publish-queue-runner .composer-content-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.publish-queue-runner .composer-input-column {
+  border-right: 0;
+  border-bottom: 1px solid #E1E9E5;
+}
+
+.publish-queue-runner .composer-input-column > * {
+  width: min(100%, 980px);
+  margin-inline: auto;
+}
+
+.publish-queue-runner .composer-format-heading {
+  align-items: flex-start;
+}
+
+.publish-queue-runner .composer-format-heading em {
+  margin-top: 2px;
+  color: #73827B;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.publish-queue-runner .composer-platform-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.publish-queue-runner .composer-platform-card.platform-youtube.selected {
+  grid-column: 1 / -1;
+}
+
+.publish-queue-runner .composer-youtube-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 2px 12px 12px;
+  padding: 14px;
+  border: 1px solid #F2C6C6;
+  border-radius: 9px;
+  background: #FFF8F8;
+}
+
+.publish-queue-runner .composer-youtube-options legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 7px;
+}
+
+.publish-queue-runner .composer-youtube-options legend > span:first-child {
+  width: 29px;
+  height: 29px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #F0DADA;
+  border-radius: 7px;
+  background: #FFFFFF;
+}
+
+.publish-queue-runner .composer-youtube-options legend > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.publish-queue-runner .composer-youtube-options legend strong {
+  color: #452525;
+  font-size: 11px;
+}
+
+.publish-queue-runner .composer-youtube-options legend small {
+  color: #856A6A;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.publish-queue-runner .composer-limit-guide {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #D7E3DE;
+  border-radius: 9px;
+  background: #F8FBF9;
+}
+
+.publish-queue-runner .composer-limit-guide > header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.publish-queue-runner .composer-limit-guide > header > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #E4F2EC;
+  color: #0B7A66;
+}
+
+.publish-queue-runner .composer-limit-guide > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.publish-queue-runner .composer-limit-guide > header strong {
+  color: #263F36;
+  font-size: 11px;
+}
+
+.publish-queue-runner .composer-limit-guide > header small {
+  color: #6C7E76;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.publish-queue-runner .composer-limit-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.publish-queue-runner .composer-limit-marker {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #DDE6E2;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #16805F;
+}
+
+.publish-queue-runner .composer-limit-marker > i {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #E3E9E6;
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-style: normal;
+}
+
+.publish-queue-runner .composer-limit-marker > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.publish-queue-runner .composer-limit-marker strong {
+  color: #2A4037;
+  font-size: 9px;
+}
+
+.publish-queue-runner .composer-limit-marker small {
+  color: #73827C;
+  font-size: 7.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.publish-queue-runner .composer-limit-marker.at-limit {
+  border-color: #E1B953;
+  background: #FFF9E9;
+  color: #A56B08;
+  box-shadow: 0 0 0 2px rgba(225, 185, 83, .11);
+}
+
+.publish-queue-runner .composer-limit-marker.over-limit {
+  border-color: #E6A5A0;
+  background: #FFF4F3;
+  color: #BD4038;
+}
+
+.publish-queue-runner .composer-limit-marker.over-limit small {
+  color: #A6443E;
+}
+
+.publish-queue-runner .composer-section-title .section-kicker {
+  color: #0B7A66;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 1100px) {
+  .publish-queue-runner .composer-platform-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .publish-queue-runner .composer-limit-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .publish-queue-runner .workboard-app .workboard-topbar {
+    grid-template-rows: auto auto;
+    padding-block: 8px;
+  }
+
+  .publish-queue-runner .workboard-nav {
+    min-height: 0;
+  }
+
+  .publish-queue-runner .composer-youtube-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .publish-queue-runner .workboard-app .workboard-shell {
+    padding-inline: 10px;
+  }
+
+  .publish-queue-runner .workboard-app .workboard-topbar {
+    margin-inline: -10px;
+    padding-inline: 10px;
+  }
+
+  .publish-queue-runner .workboard-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .publish-queue-runner .workboard-nav button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .publish-queue-runner .composer-progress {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .publish-queue-runner .composer-progress > span {
+    min-width: 0;
+  }
+
+  .publish-queue-runner .composer-format-heading,
+.publish-queue-runner .composer-section-title {
+    align-items: flex-start;
+  }
+
+  .publish-queue-runner .composer-format-heading {
+    flex-direction: column;
+  }
+
+  .publish-queue-runner .composer-platform-grid,
+.publish-queue-runner .composer-limit-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .publish-queue-runner .composer-input-column,
+.publish-queue-runner .composer-destination-column,
+.publish-queue-runner .composer-timing,
+.publish-queue-runner .composer-footer {
+    padding: 14px;
+  }
+
+  .publish-queue-runner .composer-youtube-options {
+    margin-inline: 9px;
+    padding: 12px;
+  }
+
+  .publish-queue-runner .composer-limit-marker small,
+.publish-queue-runner .composer-limit-guide > header small {
+    font-size: 8.5px;
+  }
+}

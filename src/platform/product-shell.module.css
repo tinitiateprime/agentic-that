@@ -21,6 +21,9 @@
   --ai-glow-indigo: 0 8px 24px rgba(154, 112, 11, 0.12);
   --ai-focus-ring: 0 0 0 3px rgba(180, 126, 5, 0.16);
   min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
   background:
     radial-gradient(ellipse 70% 42% at 78% -8%, rgba(245, 158, 11, 0.035), transparent 60%),
     radial-gradient(ellipse 62% 40% at 18% -6%, rgba(15, 118, 110, 0.035), transparent 60%),
@@ -116,7 +119,7 @@
   min-height: 52px;
   align-items: center;
   gap: 11px;
-  padding: 0 12px;
+  padding: 9px 12px;
   border: 1px solid transparent;
   border-radius: 11px;
   color: var(--ai-text-muted);
@@ -138,13 +141,12 @@
 }
 
 .navCopy small {
-  overflow: hidden;
   color: var(--ai-text-faint);
   font-size: 10.5px;
   font-weight: 540;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .sidebarNav a:hover {
@@ -261,9 +263,8 @@
 
 .accountCopy strong,
 .accountCopy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .accountCopy strong {
@@ -301,6 +302,9 @@
 }
 
 .productContent {
+  width: auto;
+  min-width: 0;
+  max-width: calc(100% - 228px);
   min-height: 100vh;
   margin-left: 228px;
 }
@@ -375,7 +379,20 @@
   }
 
   .productContent {
+    width: 100%;
+    max-width: 100%;
     margin-left: 0;
+  }
+}
+
+@media (max-width: 380px) {
+  .mobileHeader {
+    padding-inline: 12px;
+  }
+
+  .sidebar {
+    width: calc(100vw - 28px);
+    padding-inline: 12px;
   }
 }
 

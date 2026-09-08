@@ -80,11 +80,12 @@ test("X publishing retains initial file acceptance after X clears the input", ()
   assert.equal(hasReadyXMedia(initialFileSelectionCompleted, true), true);
 });
 
-test("video composer exposes the YouTube title before destination selection", async () => {
+test("video composer reveals YouTube-only details inside the selected destination", async () => {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /const showYoutubeTitle = postFormat === 'video';/);
   assert.match(appSource, /const selectedNeedsTitle = Boolean\(postFormat === 'video' && selectedPlatforms\.includes\('youtube'\)\);/);
-  assert.match(appSource, /placeholder=.*Enter a title to enable YouTube publishing/);
+  assert.match(appSource, /platform === 'youtube' && postFormat === 'video' && selectedCount > 0/);
+  assert.match(appSource, /YouTube video details/);
+  assert.match(appSource, /App character limits/);
 });
 
 test("all publishers attach Companion-local media through CDP without Playwright's 50 MB relay", async () => {

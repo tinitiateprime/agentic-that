@@ -873,7 +873,6 @@ function getPlatformEligibility(platform: Platform, postFormat: PostFormat | nul
     if (fileFormat !== postFormat) return { allowed: false, mediaCompatible: false, reason: `Choose a valid ${postFormat}` };
   }
   const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(postFormat);
-  if (titleRequired && !title.trim()) return { allowed: false, mediaCompatible: true, reason: 'Add YouTube title' };
   if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: postFormat === 'text' ? 'Write your post text' : 'Add a description' };
   if (rules.titleLimit && title.length > rules.titleLimit) {
     return { allowed: false, mediaCompatible: true, reason: `Title limit: ${rules.titleLimit} characters` };
@@ -881,6 +880,7 @@ function getPlatformEligibility(platform: Platform, postFormat: PostFormat | nul
   if (description.length > rules.descriptionLimit) {
     return { allowed: true, mediaCompatible: true, reason: `Edit text for ${rules.descriptionLimit.toLocaleString()} limit` };
   }
+  if (titleRequired && !title.trim()) return { allowed: true, mediaCompatible: true, reason: 'Select to add YouTube details' };
   return { allowed: true, mediaCompatible: true, reason: 'Ready for this post' };
 }
 
@@ -893,6 +893,38 @@ function platformDescriptionError(platform: Platform, text: string) {
   const limit = platformPostRules[platform].descriptionLimit;
   if (text.length > limit) return `${platformLabels[platform]} limit is ${limit.toLocaleString()} characters.`;
   return '';
+}
+
+function DescriptionLimitGuide({ characterCount, postFormat }: { characterCount: number; postFormat: PostFormat }) {
+  const limits = [...platforms]
+    .filter(platform => platformPostRules[platform].formats.includes(postFormat))
+    .sort((first, second) => (
+      platformPostRules[first].descriptionLimit - platformPostRules[second].descriptionLimit
+    ));
+
+  return <section className='composer-limit-guide' aria-label='Description character limits'>
+    <header>
+      <span><SlidersHorizontal size={14} /></span>
+      <div><strong>App character limits</strong><small>These markers show exactly how far this shared description fits.</small></div>
+    </header>
+    <div className='composer-limit-list'>
+      {limits.map(platform => {
+        const limit = platformPostRules[platform].descriptionLimit;
+        const remaining = limit - characterCount;
+        const state = remaining < 0 ? 'over-limit' : remaining === 0 ? 'at-limit' : 'within-limit';
+        const detail = remaining < 0
+          ? `Shorten by ${Math.abs(remaining).toLocaleString()}`
+          : remaining === 0
+            ? `Supports up to here · ${limit.toLocaleString()}`
+            : `${limit.toLocaleString()} max · ${remaining.toLocaleString()} left`;
+        return <span className={`composer-limit-marker ${state}`} key={platform}>
+          <i><CustomIcon platform={platform} size={14} /></i>
+          <span><strong>{platformLabels[platform]}</strong><small>{detail}</small></span>
+          {remaining >= 0 ? <CircleCheckBig size={13} /> : <CircleAlert size={13} />}
+        </span>;
+      })}
+    </div>
+  </section>;
 }
 
 function scheduleDraftError(draft: ComposerScheduleDraft, schedules: PublishingSchedule[]) {
@@ -1109,14 +1141,15 @@ function UnifiedComposer({
     .map(accountId => accounts.find(account => account.id === accountId))
     .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = postFormat === 'video';
   const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
+  const youtubeDetailsReady = !selectedNeedsTitle || Boolean(title.trim() && youtubeAudience && youtubeVisibility);
+  const destinationsReady = Boolean(selectedAccounts.length && youtubeDetailsReady);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
   useEffect(() => {
-    if (!showYoutubeTitle && title) setTitle('');
-  }, [showYoutubeTitle, title]);
+    if (postFormat !== 'video' && title) setTitle('');
+  }, [postFormat, title]);
 
   useEffect(() => {
     setPlatformDescriptions(current => Object.fromEntries(Object.entries(current).filter(([platform]) => selectedPlatforms.includes(platform as Platform))) as Partial<Record<Platform, string>>);
@@ -1341,13 +1374,13 @@ function UnifiedComposer({
     <section className='unified-composer' aria-labelledby='unified-composer-heading'>
       <header className='unified-composer-heading'>
         <div><p className='section-kicker'>{handoffOnly ? 'Content handoff' : 'Universal post'}</p><h1 id='unified-composer-heading'>{handoffOnly ? 'Prepare content for scheduling.' : 'Create once. Publish everywhere it fits.'}</h1><span>{handoffOnly ? 'Upload the finished content and choose its destination accounts. The scheduler only assigns the publishing time.' : 'Choose a format, tailor the content, and send it to every compatible account from one controlled workflow.'}</span></div>
-        <div className='composer-progress' aria-label='Post creation steps'><span className={contentReady ? 'done' : 'active'}>1<i>Content</i></span><span className={handoffOnly ? contentReady ? 'active' : '' : contentReady && selectedAccounts.length ? 'done' : contentReady ? 'active' : ''}>2<i>{handoffOnly ? 'Handoff' : 'Destinations'}</i></span>{!handoffOnly && <span className={selectedAccounts.length ? 'active' : ''}>3<i>Timing</i></span>}</div>
+        <div className='composer-progress' aria-label='Post creation steps'><span className={contentReady ? 'done' : 'active'}>1<i>Content</i></span><span className={destinationsReady ? 'done' : contentReady ? 'active' : ''}>2<i>{handoffOnly ? 'Handoff' : 'Destinations'}</i></span>{!handoffOnly && <span className={destinationsReady ? 'active' : ''}>3<i>Timing</i></span>}</div>
       </header>
 
       <div className='composer-content-grid'>
         <div className='composer-input-column'>
           <div className='composer-format-picker'>
-            <div className='composer-format-heading'><span><small className='section-kicker'>Post format</small><strong>What are you publishing?</strong></span>{postFormat && <small>Selected: {postFormat}</small>}</div>
+            <div className='composer-format-heading'><span><small className='section-kicker'>Step 1 · Content</small><strong>What are you publishing?</strong><em>Choose a format, add the media, then write one clear description.</em></span>{postFormat && <small>Selected: {postFormat}</small>}</div>
             <div className='composer-format-options' role='group' aria-label='Choose post format'>
               {composerFormatOptions.map(option => <button type='button' key={option.id} className={postFormat === option.id ? 'selected' : ''} aria-pressed={postFormat === option.id} onClick={() => chooseFormat(option.id)}>
                 <span>{option.icon}</span><strong>{option.label}</strong><small>{option.detail}</small>{postFormat === option.id && <i><Check size={13} /></i>}
@@ -1371,16 +1404,12 @@ function UnifiedComposer({
               </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 2 GB</small></label>}
             </div>}
 
-            {showYoutubeTitle && <label className='composer-field'><span>{handoffOnly ? 'Video title' : 'YouTube title'} <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder={handoffOnly ? 'Required so every supported app remains available' : 'Enter a title to enable YouTube publishing'} maxLength={100} /></label>}
-            {showYoutubeTitle && <>
-              <label className='composer-field'><span>YouTube audience</span><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required={selectedNeedsTitle}><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
-              <label className='composer-field'><span>YouTube visibility</span><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required={selectedNeedsTitle}><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
-            </>}
             <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
               <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
               <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
               {postFormat === 'text' && <small className='composer-text-support'><CircleCheckBig size={13} />Available for X, Facebook, LinkedIn, and YouTube Community. Instagram is excluded.</small>}
             </label>
+            <DescriptionLimitGuide characterCount={description.length} postFormat={postFormat} />
             {postFormat !== 'text' && <label className='composer-rights-confirmation'><input type='checkbox' checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)} /><ShieldCheck size={16} /><span><strong>Media rights confirmed</strong><small>I own this media or have permission to publish it.</small></span></label>}
           </div>}
 
@@ -1388,7 +1417,7 @@ function UnifiedComposer({
         </div>
 
         <div className='composer-destination-column'>
-          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Channel control</small><strong>Publishing channels</strong><small>Choose accounts, edit app text, and preview before creating destinations.</small></span><span className='composer-selected-count'>{selectedAccounts.length} selected</span></div>
+          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Step 2 · Destinations</small><strong>Where should this be published?</strong><small>Select each app and account. App-specific controls appear directly inside the selected app.</small></span><span className='composer-selected-count'>{selectedAccounts.length} selected</span></div>
           <div className='composer-platform-grid'>
             {platforms.map(platform => {
               const state = eligibility[platform];
@@ -1407,6 +1436,12 @@ function UnifiedComposer({
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
                   {platformAccounts.map(account => <label key={account.id} className={accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
                 </div>}
+                {platform === 'youtube' && postFormat === 'video' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
+                  <legend><span><CustomIcon platform='youtube' size={16} /></span><span><strong>YouTube video details</strong><small>Required only for the selected YouTube destination.</small></span></legend>
+                  <label className='composer-field'><span>YouTube title <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder='Enter the video title' maxLength={100} required /></label>
+                  <label className='composer-field'><span>YouTube audience</span><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
+                  <label className='composer-field'><span>YouTube visibility</span><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
+                </fieldset>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
                 <div className='composer-platform-tools'>{!handoffOnly && <button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button>}<button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
                 {activePanel && <div className={`composer-platform-panel ${copyMode}`}>
@@ -1419,7 +1454,7 @@ function UnifiedComposer({
       </div>
 
       <div className='composer-timing'>
-        <div className='composer-section-title'><span><strong>Publishing time</strong><small>Use one setting for every destination, then override only where needed.</small></span><Clock3 size={20} /></div>
+        <div className='composer-section-title'><span><small className='section-kicker'>Step 3 · Timing</small><strong>When should it publish?</strong><small>Use one setting for every destination, then override only where needed.</small></span><Clock3 size={20} /></div>
         {canSchedule ? <>
           <div className='composer-shared-schedule'>
             <label><span>Shared timing</span><select value={sharedSchedule.mode} onChange={event => updateSharedSchedule({ mode: event.target.value as ComposerScheduleMode })}><option value='now'>Add to queue now</option><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
@@ -1443,7 +1478,7 @@ function UnifiedComposer({
         <div>{submitting && preparationProgress?.percent !== undefined
           ? <div className='composer-upload-progress' role='progressbar' aria-valuemin={0} aria-valuemax={100} aria-valuenow={preparationProgress.percent}><span>{preparationProgress.label}</span><i><b style={{ width: `${preparationProgress.percent}%` }} /></i></div>
           : message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !selectedAccounts.length} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !destinationsReady} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );

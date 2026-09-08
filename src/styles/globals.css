@@ -13,16 +13,32 @@
 }
 
 html {
-  min-width: 320px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: clip;
   background: #f7faf8;
 }
 
 body {
-  min-width: 320px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
+  overflow-x: clip;
   background: #f7faf8;
   font-family: "Inter", sans-serif;
+}
+
+/* Let interface copy wrap in place instead of hiding it behind an ellipsis. */
+body :where(h1, h2, h3, h4, h5, h6, p, strong, small, em) {
+  max-width: 100%;
+  overflow: visible !important;
+  overflow-wrap: anywhere;
+  text-overflow: clip !important;
+  white-space: normal !important;
+  -webkit-line-clamp: unset !important;
 }
 
 button,

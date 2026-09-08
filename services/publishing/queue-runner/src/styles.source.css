@@ -4821,3 +4821,312 @@ button, input, textarea, select { font-family: inherit; }
   border: 0;
   background: #eef1f5;
 }
+
+/* Final composer flow: one clear sequence that fits every viewport. */
+.workboard-app,
+.workboard-app .workboard-shell,
+.unified-composer,
+.composer-content-grid,
+.composer-input-column,
+.composer-destination-column {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workboard-app {
+  overflow-x: clip;
+}
+
+.workboard-nav {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+
+.workboard-nav button {
+  flex: 1 1 auto;
+}
+
+.composer-content-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.composer-input-column {
+  border-right: 0;
+  border-bottom: 1px solid #E1E9E5;
+}
+
+.composer-input-column > * {
+  width: min(100%, 980px);
+  margin-inline: auto;
+}
+
+.composer-format-heading {
+  align-items: flex-start;
+}
+
+.composer-format-heading em {
+  margin-top: 2px;
+  color: #73827B;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.composer-platform-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.composer-platform-card.platform-youtube.selected {
+  grid-column: 1 / -1;
+}
+
+.composer-youtube-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 2px 12px 12px;
+  padding: 14px;
+  border: 1px solid #F2C6C6;
+  border-radius: 9px;
+  background: #FFF8F8;
+}
+
+.composer-youtube-options legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 7px;
+}
+
+.composer-youtube-options legend > span:first-child {
+  width: 29px;
+  height: 29px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #F0DADA;
+  border-radius: 7px;
+  background: #FFFFFF;
+}
+
+.composer-youtube-options legend > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-youtube-options legend strong {
+  color: #452525;
+  font-size: 11px;
+}
+
+.composer-youtube-options legend small {
+  color: #856A6A;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.composer-limit-guide {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #D7E3DE;
+  border-radius: 9px;
+  background: #F8FBF9;
+}
+
+.composer-limit-guide > header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-limit-guide > header > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #E4F2EC;
+  color: #0B7A66;
+}
+
+.composer-limit-guide > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-limit-guide > header strong {
+  color: #263F36;
+  font-size: 11px;
+}
+
+.composer-limit-guide > header small {
+  color: #6C7E76;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.composer-limit-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.composer-limit-marker {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #DDE6E2;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #16805F;
+}
+
+.composer-limit-marker > i {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #E3E9E6;
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-style: normal;
+}
+
+.composer-limit-marker > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-limit-marker strong {
+  color: #2A4037;
+  font-size: 9px;
+}
+
+.composer-limit-marker small {
+  color: #73827C;
+  font-size: 7.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.composer-limit-marker.at-limit {
+  border-color: #E1B953;
+  background: #FFF9E9;
+  color: #A56B08;
+  box-shadow: 0 0 0 2px rgba(225, 185, 83, .11);
+}
+
+.composer-limit-marker.over-limit {
+  border-color: #E6A5A0;
+  background: #FFF4F3;
+  color: #BD4038;
+}
+
+.composer-limit-marker.over-limit small {
+  color: #A6443E;
+}
+
+.composer-section-title .section-kicker {
+  color: #0B7A66;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 1100px) {
+  .composer-platform-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .composer-limit-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workboard-app .workboard-topbar {
+    grid-template-rows: auto auto;
+    padding-block: 8px;
+  }
+
+  .workboard-nav {
+    min-height: 0;
+  }
+
+  .composer-youtube-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .workboard-app .workboard-shell {
+    padding-inline: 10px;
+  }
+
+  .workboard-app .workboard-topbar {
+    margin-inline: -10px;
+    padding-inline: 10px;
+  }
+
+  .workboard-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workboard-nav button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .composer-progress {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .composer-progress > span {
+    min-width: 0;
+  }
+
+  .composer-format-heading,
+  .composer-section-title {
+    align-items: flex-start;
+  }
+
+  .composer-format-heading {
+    flex-direction: column;
+  }
+
+  .composer-platform-grid,
+  .composer-limit-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-input-column,
+  .composer-destination-column,
+  .composer-timing,
+  .composer-footer {
+    padding: 14px;
+  }
+
+  .composer-youtube-options {
+    margin-inline: 9px;
+    padding: 12px;
+  }
+
+  .composer-limit-marker small,
+  .composer-limit-guide > header small {
+    font-size: 8.5px;
+  }
+}
