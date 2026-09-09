@@ -685,6 +685,11 @@
 .config-companion-guide header p { color: var(--cm-accent); font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .config-companion-guide h3 { color: var(--cm-ink); font-size: 20px; letter-spacing: -.02em; }
 .config-companion-guide header small { color: var(--cm-muted); font-size: 13px; line-height: 1.5; }
+.config-companion-guide.setup-complete { border-color: #BBDCCE; box-shadow: 0 14px 36px rgba(20, 137, 94, .09); }
+.config-companion-guide.setup-complete > header { border-bottom-color: #D5EADF; background: linear-gradient(115deg, #EAF8F1 0%, #F8FCFA 62%, #FFFDF5 100%); }
+.config-companion-guide.setup-complete > header > span { border-color: #B9DECE; color: #14895E; background: #F5FCF8; }
+.config-companion-guide.setup-complete header p { color: #14895E; }
+.config-companion-guide.setup-complete .publishing-onboarding-steps { display: none; }
 
 .config-connection-steps {
   display: grid;
@@ -715,6 +720,9 @@
 }
 .config-connection-steps li:nth-child(2) { --step-accent: #2563eb; --step-soft: #eff6ff; }
 .config-connection-steps li:nth-child(3) { --step-accent: #a66b12; --step-soft: #fff7e6; }
+.config-connection-steps.publishing-onboarding-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.publishing-onboarding-steps li:nth-child(4) { --step-accent: #C04C78; --step-soft: #FFF0F5; }
+.publishing-onboarding-steps li:nth-child(5) { --step-accent: #14895E; --step-soft: #EAF8F1; }
 
 .config-connection-steps li > .config-step-icon {
   width: 42px;
@@ -738,6 +746,7 @@
 .config-form-card > .config-connection-steps + form { padding-top: 18px; }
 
 .config-companion-guide-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 17px 20px 0; }
+.config-companion-guide-actions:empty { display: none; }
 .config-companion-guide > p { margin: 11px 20px 18px; color: var(--cm-muted); font-size: 12px; line-height: 1.5; text-align: right; }
 .config-companion-guide > p strong { color: #303b52; }
 
@@ -1603,6 +1612,10 @@
     min-width: 210px;
     margin: 0;
   }
+
+  .config-connection-steps.publishing-onboarding-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1050px) {
@@ -1717,7 +1730,8 @@
 
   .config-engine-picker { grid-template-columns: 1fr; }
 
-  .config-connection-steps { grid-template-columns: 1fr; }
+  .config-connection-steps,
+  .config-connection-steps.publishing-onboarding-steps { grid-template-columns: 1fr; }
 
   .config-companion-guide-actions { align-items: stretch; flex-direction: column; }
 

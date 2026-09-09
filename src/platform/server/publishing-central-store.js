@@ -1478,6 +1478,7 @@ export const centralPublishingTestHelpers = {
   recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
   selectClaimableCentralJobs,
+  uploadPublic,
   findOwned,
   versionAtLeast,
 };

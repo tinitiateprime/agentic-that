@@ -88,6 +88,55 @@ test("video composer reveals YouTube-only details inside the selected destinatio
   assert.match(appSource, /App character limits/);
 });
 
+test("normal CI and Companion releases share the complete verification suite", async () => {
+  const [ciWorkflow, releaseWorkflow] = await Promise.all([
+    readFile(new URL("../../../../.github/workflows/ci.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../../../.github/workflows/publishing-companion-release.yml", import.meta.url), "utf8"),
+  ]);
+  assert.match(ciWorkflow, /push:\s*\n\s*branches:/);
+  assert.match(ciWorkflow, /pull_request:/);
+  assert.match(ciWorkflow, /workflow_call:/);
+  for (const command of [
+    "npm run test:publishing",
+    "npm run test:instagram",
+    "npm run test:facebook",
+    "npm run test:whatsapp",
+    "npm run test:rbac",
+    "npm run test:security",
+    "npm --prefix services/messaging/telegram test",
+    "npm run build",
+  ]) assert.match(ciWorkflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(releaseWorkflow, /verify:\s*\n\s*uses: \.\/\.github\/workflows\/ci\.yml/);
+  assert.match(releaseWorkflow, /release-checks:/);
+  assert.match(releaseWorkflow, /Audit production dependencies/);
+});
+
+test("publishing makes overdue Companion waits explicit", async () => {
+  const [appSource, styles] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles.source.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function WaitingForCompanionTimeline/);
+  assert.match(appSource, /Scheduled \$\{formatEventTime\(earliestWaitingUpload\.scheduledAt\)\} → \$\{waitingCompanionLabel\} → Waiting for Companion/);
+  assert.match(appSource, /The post is safely queued and will continue automatically/);
+  assert.match(styles, /\.companion-waiting-alert/);
+  assert.match(styles, /\.delivery-wait-timeline/);
+});
+
+test("first-time publishing setup follows real saved progress through a confirmed post", async () => {
+  const [managerSource, styles] = await Promise.all([
+    readFile(new URL("../../../../app/config-manager/ConfigManager.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../../../../app/config-manager/config-manager.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(managerSource, /useCompanionStatus\(\)/);
+  assert.match(managerSource, /uploads\.some\(upload => upload\.status === "posted"\)/);
+  for (const step of ["Install Companion", "Pair", "Connect Account", "Test Post", "Success"]) {
+    assert.match(managerSource, new RegExp(`title: "${step}"`));
+  }
+  assert.match(managerSource, /The test is a real social post and is published only after you review and confirm it/);
+  assert.match(styles, /\.config-connection-steps\.publishing-onboarding-steps/);
+});
+
 test("all publishers attach Companion-local media through CDP without Playwright's 50 MB relay", async () => {
   const publisherDirectory = new URL("./services/publishers/", import.meta.url);
   const [helper, ...publishers] = await Promise.all([

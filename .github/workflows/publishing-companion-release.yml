@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   verify:
+    uses: ./.github/workflows/ci.yml
+
+  release-checks:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -24,24 +28,6 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             apps/publishing-companion-desktop/package-lock.json
-            services/messaging/telegram/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm ci --prefix apps/publishing-companion-desktop
-          npm ci --prefix services/messaging/telegram
-
-      - name: Verify application and Companion contracts
-        run: |
-          npm run test:publishing
-          npm run test:instagram
-          npm run test:facebook
-          npm run test:whatsapp
-          npm run test:rbac
-          npm run test:security
-          npm --prefix services/messaging/telegram test
-          npm run build
 
       - name: Audit production dependencies
         env:
@@ -104,7 +90,7 @@ jobs:
           fi
 
   windows:
-    needs: verify
+    needs: release-checks
     runs-on: windows-latest
     outputs:
       signed: ${{ steps.windows_signing.outputs.signed }}
@@ -182,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: verify
+    needs: release-checks
     runs-on: macos-15-intel
     outputs:
       signed: ${{ steps.macos_signing.outputs.signed }}
@@ -311,7 +297,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: verify
+    needs: release-checks
     strategy:
       fail-fast: false
       matrix:

@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientServiceToken } from "@platform/client-service-token";
 import MetaEmbeddedSignupButton from "@whatsapp/components/MetaEmbeddedSignupButton";
 import ProductShell from "@platform/ProductShell";
+import { useCompanionStatus } from "@platform/use-companion-status";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
@@ -220,9 +221,9 @@ function EmptyState({ icon: Icon, title, copy, action }) {
   );
 }
 
-function ConnectionSteps({ steps, activeIndex = 0 }) {
+function ConnectionSteps({ steps, activeIndex = 0, className = "" }) {
   return (
-    <ol className="config-connection-steps" aria-label="Connection steps">
+    <ol className={`config-connection-steps ${className}`.trim()} aria-label="Connection steps">
       {steps.map((step, index) => {
         const StepIcon = step.icon;
         return (
@@ -266,6 +267,7 @@ export default function ConfigManager({
   const [publishingStatus, setPublishingStatus] = useState("checking");
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const [publishingHasSuccessfulPost, setPublishingHasSuccessfulPost] = useState(false);
   const [workspaceCompanion, setWorkspaceCompanion] = useState(null);
   const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
   const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
@@ -340,17 +342,22 @@ export default function ConfigManager({
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
+      setPublishingHasSuccessfulPost(false);
       rememberPublishingAccounts([]);
       setPublishingStatus("needs-login");
       return;
     }
     try {
-      const me = await publishingRequest("/api/auth/me", session.token);
-      const accounts = await publishingRequest("/api/accounts", session.token);
+      const [me, accounts, uploads] = await Promise.all([
+        publishingRequest("/api/auth/me", session.token),
+        publishingRequest("/api/accounts", session.token),
+        publishingRequest("/api/uploads", session.token).catch(() => null)
+      ]);
       const current = { token: session.token, user: me };
       setPublishingSession(current);
       const accountList = Array.isArray(accounts) ? accounts : [];
       setPublishingAccounts(accountList);
+      if (Array.isArray(uploads)) setPublishingHasSuccessfulPost(uploads.some(upload => upload.status === "posted"));
       rememberPublishingAccounts(accountList);
       setPublishingStatus(me.role === "operations_manager" ? "ready" : "needs-manager");
     } catch (error) {
@@ -358,6 +365,7 @@ export default function ConfigManager({
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
         setPublishingAccounts([]);
+        setPublishingHasSuccessfulPost(false);
         rememberPublishingAccounts([]);
         setPublishingStatus("needs-login");
       } else {
@@ -399,9 +407,13 @@ export default function ConfigManager({
     const token = publishingIdentityToken || publishingSession?.token;
     if (!token) return;
     try {
-      const accounts = await publishingRequest("/api/accounts", token);
+      const [accounts, uploads] = await Promise.all([
+        publishingRequest("/api/accounts", token),
+        publishingRequest("/api/uploads", token).catch(() => null)
+      ]);
       const accountList = Array.isArray(accounts) ? accounts : [];
       setPublishingAccounts(accountList);
+      if (Array.isArray(uploads)) setPublishingHasSuccessfulPost(uploads.some(upload => upload.status === "posted"));
       rememberPublishingAccounts(accountList);
     } catch (error) {
       if (error.status === 401) setPublishingStatus("needs-login");
@@ -556,6 +568,7 @@ export default function ConfigManager({
               status={publishingStatus}
               session={publishingSession}
               accounts={publishingAccounts}
+              hasSuccessfulPost={publishingHasSuccessfulPost}
               initialPlatform={initialPublishingPlatform}
               publishQueueUrl={publishQueueUrl}
               publishingIdentityToken={publishingIdentityToken}
@@ -1445,6 +1458,7 @@ function PublishingManager({
   status,
   session,
   accounts,
+  hasSuccessfulPost,
   initialPlatform,
   publishQueueUrl,
   publishingIdentityToken,
@@ -1461,11 +1475,25 @@ function PublishingManager({
   const [busy, setBusy] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState("");
   const [companionBusy, setCompanionBusy] = useState(false);
+  const { status: localCompanionStatus, refresh: refreshLocalCompanion } = useCompanionStatus();
 
   const platformAccounts = useMemo(
     () => accounts.filter(account => account.platform === selectedPlatform),
     [accounts, selectedPlatform]
   );
+  const companionInstalled = localCompanionStatus.state === "connected" || Boolean(workspaceCompanion);
+  const companionPaired = Boolean(workspaceCompanion);
+  const connectedAccount = accounts.find(account => account.enabled && account.credentialConfigured);
+  const setupComplete = companionInstalled && companionPaired && Boolean(connectedAccount) && hasSuccessfulPost;
+  const setupActiveIndex = !companionInstalled ? 0 : !companionPaired ? 1 : !connectedAccount ? 2 : !hasSuccessfulPost ? 3 : 5;
+
+  const beginFirstAccountConnection = () => {
+    const targetPlatform = allowedPlatforms.includes(selectedPlatform) ? selectedPlatform : allowedPlatforms[0];
+    if (!targetPlatform) return;
+    setSelectedPlatform(targetPlatform);
+    setEditing({ platform: targetPlatform, enabled: true });
+    window.setTimeout(() => document.getElementById("publishing-account-connections")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
 
 
   const saveAccount = async (form) => {
@@ -1541,6 +1569,7 @@ function PublishingManager({
         body: JSON.stringify({ surface })
       });
       setNotice({ tone: "success", message: result.message || "Complete the sign-in in the Companion browser. The workspace will update automatically." });
+      await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
@@ -1581,6 +1610,7 @@ function PublishingManager({
       });
       onCompanionSaved(localPairing.companion || null);
       setNotice({ tone: "success", message: "This device is paired. It will publish for authorized workspace members automatically." });
+      await refreshLocalCompanion({ force: true });
     } catch (error) {
       setNotice({ tone: "error", message: error instanceof Error && /Companion|pair/i.test(error.message) ? error.message : "Could not pair this device. Open AgenticThat Companion here, then try again." });
     } finally {
@@ -1677,27 +1707,44 @@ function PublishingManager({
         </div>
       </div>
 
-      {!workspaceCompanion ? (
-        <section className="config-companion-guide" aria-labelledby="companion-guide-title">
-          <header>
-            <span><MonitorCheck size={20} /></span>
-            <div><p>One-time manager setup</p><h3 id="companion-guide-title">Set up this publishing computer</h3><small>Only one Publishing Manager needs Companion. Everyone else works from the browser.</small></div>
-          </header>
-          <ConnectionSteps
-            activeIndex={0}
-            steps={[
-              { icon: Download, title: "Install and open", copy: "Download Companion on this computer." },
-              { icon: Link2, title: "Pair this device", copy: "Keep Companion open, then connect it here." },
-              { icon: Plug, title: "Connect accounts", copy: "Add a platform account and complete Login." }
-            ]}
-          />
-          <div className="config-companion-guide-actions">
-            <a className="config-secondary" href={publishingCompanionDownloadUrl}><ExternalLink size={15} />Download Companion</a>
-            <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Pair this device</button>
-          </div>
-          <p>Already installed? Open Companion and select <strong>Pair this device</strong>.</p>
-        </section>
-      ) : (
+      <section className={`config-companion-guide publishing-onboarding${setupComplete ? " setup-complete" : ""}`} aria-labelledby="companion-guide-title">
+        <header>
+          <span>{setupComplete ? <CheckCircle2 size={22} /> : <MonitorCheck size={20} />}</span>
+          <div><p>{setupComplete ? "Setup complete" : "First-time setup"}</p><h3 id="companion-guide-title">{setupComplete ? "Your publishing workspace is ready" : "Complete one clear step at a time"}</h3><small>{setupComplete ? "Companion, your account, and a successful first post are confirmed." : "Only one Publishing Manager completes this flow. Progress is saved automatically."}</small></div>
+        </header>
+        <ConnectionSteps
+          className="publishing-onboarding-steps"
+          activeIndex={setupActiveIndex}
+          steps={[
+            { icon: Download, title: "Install Companion", copy: localCompanionStatus.state === "connected" ? "Detected on this device." : companionInstalled ? "Registered for this workspace." : "Download, install, and open it." },
+            { icon: Link2, title: "Pair", copy: companionPaired ? "Workspace paired." : "Pair this manager computer." },
+            { icon: Plug, title: "Connect Account", copy: connectedAccount ? `${connectedAccount.displayName} is ready.` : "Add an account and complete Login." },
+            { icon: Send, title: "Test Post", copy: hasSuccessfulPost ? "First post confirmed." : "Publish one small post you approve." },
+            { icon: CheckCircle2, title: "Success", copy: setupComplete ? "Ready for your team." : "Unlocks after a confirmed post." }
+          ]}
+        />
+        <div className="config-companion-guide-actions">
+          {!companionInstalled && <>
+            <a className="config-secondary" href={publishingCompanionDownloadUrl}><Download size={15} />Install Companion</a>
+            <button className="config-primary" type="button" onClick={() => void refreshLocalCompanion({ force: true })}><RefreshCw size={15} />Check again</button>
+          </>}
+          {companionInstalled && !companionPaired && <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Pair this device</button>}
+          {companionPaired && !connectedAccount && <button className="config-primary" type="button" onClick={beginFirstAccountConnection}><Plus size={15} />Connect first account</button>}
+          {connectedAccount && !hasSuccessfulPost && <a className="config-primary" href={publishQueueUrl}><Send size={15} />Create test post</a>}
+          {setupComplete && <a className="config-primary" href={publishQueueUrl}><ArrowRight size={15} />Open publishing workspace</a>}
+        </div>
+        <p>{!companionInstalled
+          ? "Keep Companion open after installation, then return here and select Check again."
+          : !companionPaired
+            ? "Companion is open. Pair it once with this workspace."
+            : !connectedAccount
+              ? "Choose a platform below, add the account, and complete its secure Login action."
+              : !hasSuccessfulPost
+                ? "The test is a real social post and is published only after you review and confirm it."
+                : "Setup is complete. Future posts can be created by permitted workspace members."}</p>
+      </section>
+
+      {workspaceCompanion && (
         <section className="config-shared-companion">
           <div>
             <span><MonitorCheck size={18} /></span>
@@ -1750,7 +1797,7 @@ function PublishingManager({
         })}
       </div>
 
-      <div className="config-publishing-toolbar">
+      <div className="config-publishing-toolbar" id="publishing-account-connections">
         <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, queues, and channel views.</p></div>
         {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>

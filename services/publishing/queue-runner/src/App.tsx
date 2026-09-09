@@ -767,9 +767,42 @@ function formatEventTime(value: string) {
   });
 }
 
+function companionAvailabilityLabel(account?: PlatformAccount) {
+  if (account?.companionStatus === 'outdated') return 'Companion Update Required';
+  if (account?.companionStatus === 'error') return 'Companion Needs Attention';
+  if (account?.companionStatus === 'updating') return 'Companion Updating';
+  if (account?.companionStatus === 'online') return 'Companion Online';
+  return 'Companion Offline';
+}
+
+function isOverdueForCompanion(upload: PlatformUpload, timestamp = Date.now()) {
+  if (!isWaitingForCompanion(upload) || !upload.scheduledAt) return false;
+  const scheduledTimestamp = Date.parse(upload.scheduledAt);
+  return Number.isFinite(scheduledTimestamp) && scheduledTimestamp <= timestamp;
+}
+
+function WaitingForCompanionTimeline({ upload, account }: { upload: PlatformUpload; account?: PlatformAccount }) {
+  if (!isWaitingForCompanion(upload)) return null;
+  const firstStep = upload.scheduledAt
+    ? `Scheduled ${formatEventTime(upload.scheduledAt)}`
+    : upload.scheduleId
+      ? `Schedule #${upload.scheduleId} is ready`
+      : 'Ready to publish';
+  const overdue = isOverdueForCompanion(upload);
+
+  return <span className={`delivery-wait-timeline${overdue ? ' overdue' : ''}`} aria-label={`${firstStep}, ${companionAvailabilityLabel(account)}, Waiting for Companion`}>
+    {overdue && <em>Overdue</em>}
+    <span>{firstStep}</span>
+    <ChevronRight size={11} />
+    <span>{companionAvailabilityLabel(account)}</span>
+    <ChevronRight size={11} />
+    <span>Waiting for Companion</span>
+  </span>;
+}
+
 type DeliveryOutcomeTone = 'posted' | 'failed' | 'uncertain' | 'processing' | 'deferred' | 'scheduled' | 'queued';
 
-function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone; label: string; detail: string; timestamp: string } {
+function getDeliveryOutcome(upload: PlatformUpload, account?: PlatformAccount): { tone: DeliveryOutcomeTone; label: string; detail: string; timestamp: string } {
   const timestamp = upload.postedAt ?? upload.lastAttemptAt ?? upload.updatedAt ?? upload.uploadedAt;
   if (upload.status === 'posted') {
     return { tone: 'posted', label: 'Posted', detail: `Confirmed delivered ${formatEventTime(timestamp)}`, timestamp };
@@ -794,7 +827,10 @@ function getDeliveryOutcome(upload: PlatformUpload): { tone: DeliveryOutcomeTone
     return { tone: 'deferred', label: 'Safety paused', detail: `${upload.safetyReason || 'Held by a safety limit.'} Resumes after ${formatEventTime(upload.safetyDeferredUntil)}.`, timestamp };
   }
   if (isWaitingForCompanion(upload)) {
-    return { tone: 'scheduled', label: 'Waiting for Companion', detail: 'The job is safely queued and will retry when its assigned Companion is available.', timestamp: upload.scheduledAt! };
+    const scheduledDetail = upload.scheduledAt && isOverdueForCompanion(upload)
+      ? `The ${formatEventTime(upload.scheduledAt)} publish time has passed. `
+      : '';
+    return { tone: 'scheduled', label: 'Waiting for Companion', detail: `${scheduledDetail}${companionAvailabilityLabel(account)}. The post is safely queued and will continue automatically when Companion is available.`, timestamp: upload.scheduledAt ?? timestamp };
   }
   if (upload.scheduledAt) {
     return { tone: 'scheduled', label: 'Scheduled', detail: `Will publish ${formatEventTime(upload.scheduledAt)}`, timestamp: upload.scheduledAt };
@@ -1614,6 +1650,13 @@ function Workboard({
   const recentDeliveries = useMemo(() => [...uploads]
     .sort((a, b) => Date.parse(b.postedAt ?? b.lastAttemptAt ?? b.updatedAt ?? b.uploadedAt) - Date.parse(a.postedAt ?? a.lastAttemptAt ?? a.updatedAt ?? a.uploadedAt))
     .slice(0, 18), [uploads]);
+  const waitingForCompanionUploads = useMemo(() => uploads.filter(isWaitingForCompanion), [uploads]);
+  const overdueWaitingCount = waitingForCompanionUploads.filter(upload => isOverdueForCompanion(upload)).length;
+  const earliestWaitingUpload = [...waitingForCompanionUploads]
+    .filter(upload => upload.scheduledAt)
+    .sort((a, b) => Date.parse(a.scheduledAt ?? '') - Date.parse(b.scheduledAt ?? ''))[0];
+  const representativeWaitingUpload = earliestWaitingUpload ?? waitingForCompanionUploads[0];
+  const waitingCompanionLabel = companionAvailabilityLabel(representativeWaitingUpload ? accountById.get(representativeWaitingUpload.accountId) : undefined);
   const deliveredTotal = broadcastMix.reduce((total, channel) => total + channel.value, 0);
   const broadcastSegments = useMemo(() => {
     if (!deliveredTotal) return [];
@@ -1631,7 +1674,7 @@ function Workboard({
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
   const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
   const accountAttentionCount = accounts.filter(account => accountHealthStatus(account) !== 'healthy').length;
-  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed').length + awaitingSubmissions.length + accountAttentionCount;
+  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed').length + awaitingSubmissions.length + accountAttentionCount + waitingForCompanionUploads.length;
   const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && accountHealthStatus(account) === 'healthy')).length;
   const overviewCards = [
     { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
@@ -1676,6 +1719,19 @@ function Workboard({
       </header>
 
       {error && <div className='workspace-error' role='alert'><CircleAlert size={18} /><span><strong>Workspace data could not refresh</strong><small>{error}</small></span><button type='button' onClick={onRefresh}><RefreshCw size={14} />Retry</button></div>}
+
+      {waitingForCompanionUploads.length > 0 && <section className='companion-waiting-alert' role='status' aria-label='Posts waiting for Companion'>
+        <span className='companion-waiting-alert-icon'><MonitorCheck size={21} /></span>
+        <div>
+          <strong>{overdueWaitingCount > 0
+            ? `${overdueWaitingCount} scheduled ${overdueWaitingCount === 1 ? 'post is' : 'posts are'} past the publish time`
+            : `${waitingForCompanionUploads.length} ${waitingForCompanionUploads.length === 1 ? 'post is' : 'posts are'} waiting for Companion`}</strong>
+          <small>{earliestWaitingUpload?.scheduledAt
+            ? `Scheduled ${formatEventTime(earliestWaitingUpload.scheduledAt)} → ${waitingCompanionLabel} → Waiting for Companion`
+            : `${waitingCompanionLabel} → Posts are safely queued → Publishing continues automatically when it reconnects`}</small>
+        </div>
+        <a href='/config-manager?service=publishing'>Open Companion setup<ArrowRight size={14} /></a>
+      </section>}
 
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>
@@ -1753,12 +1809,12 @@ function Workboard({
         ) : (
           <div className='delivery-ledger-list'>
             {recentDeliveries.map(upload => {
-              const outcome = getDeliveryOutcome(upload);
               const account = accountById.get(upload.accountId);
+              const outcome = getDeliveryOutcome(upload, account);
               return <button type='button' className={`delivery-ledger-row tone-${outcome.tone}`} key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <span className='delivery-ledger-media'><PostMediaPreview upload={upload} compact /></span>
                 <span className='delivery-ledger-destination'><CustomIcon platform={upload.platform} size={20} /><span><strong>{account?.displayName || platformLabels[upload.platform]}</strong><small>{account?.handle || platformLabels[upload.platform]}</small></span></span>
-                <span className='delivery-ledger-content'><strong>{upload.title || upload.originalName}</strong><small title={outcome.detail}>{outcome.detail}</small></span>
+                <span className='delivery-ledger-content'><strong>{upload.title || upload.originalName}</strong><small title={outcome.detail}>{outcome.detail}</small><WaitingForCompanionTimeline upload={upload} account={account} /></span>
                 <span className={`delivery-outcome tone-${outcome.tone}`}><StatusStateIcon state={outcome.tone} size={15} /><span><strong>{outcome.label}</strong><small>{upload.attemptCount ? `${upload.attemptCount} ${upload.attemptCount === 1 ? 'attempt' : 'attempts'}` : formatEventTime(outcome.timestamp)}</small></span></span>
                 {canEditPosts && <ChevronRight size={16} />}
               </button>;

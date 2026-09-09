@@ -118,7 +118,7 @@ export const platformAccountSchema = z.object({
   loginIdentifier: z.string(),
   credentialConfigured: z.boolean(),
   enabled: z.boolean(),
-  companionStatus: z.enum(["online", "offline"]).optional(),
+  companionStatus: z.enum(["online", "offline", "outdated", "error", "updating"]).optional(),
   sessionStatus: z.enum(["connected", "reconnect_required"]).optional(),
   readiness: z.enum(["ready", "waiting_for_companion", "reconnect_required", "unavailable"]).optional(),
   executionEngine: publishingEngineSchema.optional(),

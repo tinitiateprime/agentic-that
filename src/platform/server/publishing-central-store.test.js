@@ -68,6 +68,35 @@ test("central publishing reports account readiness and accepts only the active C
   assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1_000).toISOString() }, "companion_1", timestamp), false);
 });
 
+test("central publishing distinguishes future schedules from overdue Companion waits", () => {
+  const timestamp = Date.now();
+  const offlineCompanion = {
+    id: "companion_1", workspaceId: "workspace_1", status: "offline", version: "2.1.8",
+    lastSeenAt: new Date(timestamp - 10 * 60_000).toISOString(), updatedAt: new Date(timestamp - 10 * 60_000).toISOString(),
+  };
+  const document = {
+    companions: [offlineCompanion],
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", companionId: "companion_1",
+      enabled: true, credentialConfigured: true,
+    }],
+    jobs: [
+      { id: "job_future", uploadId: "upload_future", state: "waiting_for_companion", notBefore: new Date(timestamp + 60_000).toISOString(), updatedAt: new Date(timestamp).toISOString() },
+      { id: "job_overdue", uploadId: "upload_overdue", state: "waiting_for_companion", notBefore: new Date(timestamp - 60_000).toISOString(), updatedAt: new Date(timestamp).toISOString() },
+    ],
+  };
+  const future = centralPublishingTestHelpers.uploadPublic(document, {
+    id: "upload_future", accountId: "account_1", status: "queued", scheduledAt: new Date(timestamp + 60_000).toISOString(),
+  });
+  const overdue = centralPublishingTestHelpers.uploadPublic(document, {
+    id: "upload_overdue", accountId: "account_1", status: "queued", scheduledAt: new Date(timestamp - 60_000).toISOString(),
+  });
+
+  assert.equal(future.statusDetail, "queued");
+  assert.equal(overdue.statusDetail, "waiting_for_companion");
+  assert.equal(overdue.companionStatus, "offline");
+});
+
 test("central publishing accepts a confirmed late success without reopening other failed work", () => {
   const timestamp = Date.now();
   const failedJob = { state: "failed", leaseOwner: null, leaseExpiresAt: null };
