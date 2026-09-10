@@ -73,6 +73,7 @@ const SAMPLE_SERVICE = {
   invitationType: "service",
   name: "Instagram Publishing",
   description: "Prepare, preview, and publish Instagram content from one controlled workspace.",
+  logo: "/instagram-logo.svg",
   url: "https://agenticthat.com/apps/publishing/instagram",
   highlights: [],
 };
@@ -169,8 +170,10 @@ function EmailPreview({ template, product = SAMPLE_PLATFORM, sender = null, comp
             </div>
           )}
           <div className={`studio-email-product${isPlatform ? " platform" : ""}`}>
-            <ProductIcon size={16} />
-            <span><strong>{product?.name || SAMPLE_PLATFORM.name}</strong><small>{product?.description || SAMPLE_PLATFORM.description}</small></span>
+            <span className="studio-email-product-icon">
+              {!isPlatform && product?.logo ? <img src={product.logo} alt="" /> : <ProductIcon size={17} />}
+            </span>
+            <span className="studio-email-product-copy"><strong>{product?.name || SAMPLE_PLATFORM.name}</strong><small>{product?.description || SAMPLE_PLATFORM.description}</small></span>
           </div>
           <span className="studio-email-button">
             {sample(template.buttonLabel, product, sender) || "Explore AgenticThat"}<ArrowRight size={13} />

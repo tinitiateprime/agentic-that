@@ -13,6 +13,7 @@ const variables = {
   product_name: "Instagram Publishing & Preview",
   product_description: "Create <safe> previews before publishing.",
   product_url: "https://agenticthat.com/apps/publishing/instagram?from=email&client=one",
+  product_logo: "https://agenticthat.com/email-icons/instagram-logo.png",
   sender_name: "Taylor",
   company_name: "AgenticThat",
 };
@@ -32,6 +33,8 @@ test("product invitation templates render a safe product introduction", () => {
   assert.match(rendered.html, /Instagram Publishing &amp; Preview/);
   assert.match(rendered.html, /Create &lt;safe&gt; previews before publishing\./);
   assert.match(rendered.html, /from=email&amp;client=one/);
+  assert.match(rendered.html, /email-icons\/instagram-logo\.png/);
+  assert.match(rendered.html, /font-family:Inter,-apple-system/);
   assert.doesNotMatch(rendered.html, /Alex <Buyer>/);
 });
 
@@ -57,9 +60,9 @@ test("AgenticThat overview templates include a concise services section", () => 
     product_description: "One platform for practical automation.",
     product_url: "https://agenticthat.com/apps",
     service_highlights: [
-      { name: "Messaging", description: "Manage conversations and outreach.", services: "WhatsApp · Telegram" },
-      { name: "Publishing", description: "Prepare and publish social content.", services: "Instagram · LinkedIn" },
-      { name: "Public data", description: "Collect structured public signals.", services: "Instagram · Facebook" },
+      { key: "messaging", name: "Messaging", description: "Manage conversations and outreach.", services: "WhatsApp · Telegram", logos: [{ src: "https://agenticthat.com/email-icons/whatsapp-logo.png", name: "WhatsApp" }] },
+      { key: "publishing", name: "Publishing", description: "Prepare and publish social content.", services: "Instagram · LinkedIn", logos: [{ src: "https://agenticthat.com/email-icons/instagram-logo.png", name: "Instagram" }] },
+      { key: "scraping", name: "Public data", description: "Collect structured public signals.", services: "Instagram · Facebook", logos: [{ src: "https://agenticthat.com/email-icons/facebook-logo.png", name: "Facebook" }] },
     ],
   });
 
@@ -69,6 +72,8 @@ test("AgenticThat overview templates include a concise services section", () => 
   assert.match(rendered.html, /Platform introduction/);
   assert.match(rendered.html, /What your team can use/);
   assert.match(rendered.html, /WhatsApp · Telegram/);
+  assert.match(rendered.html, /email-icons\/whatsapp-logo\.png/);
+  assert.match(rendered.html, /email-icons\/facebook-logo\.png/);
 });
 
 test("product invitation templates retain their intended invitation type", () => {

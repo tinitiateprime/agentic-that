@@ -960,14 +960,14 @@
 
 .admin-email-studio .studio-preview-subject small {
   color: #87958f;
-  font-size: 8px;
+  font-size: 9px;
   text-transform: uppercase;
 }
 
 .admin-email-studio .studio-preview-subject strong {
   overflow: hidden;
   color: #34463f;
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -978,12 +978,14 @@
   border: 1px solid #d7dfdc;
   border-radius: 9px;
   background: #fff;
+  color: #111827;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
 }
 
 .admin-email-studio .studio-email-brand {
-  min-height: 44px;
+  min-height: 52px;
   display: grid;
-  grid-template-columns: 29px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 0 12px;
@@ -992,35 +994,37 @@
 }
 
 .admin-email-studio .studio-email-brand > span {
-  width: 27px;
-  height: 27px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 7px;
   color: #182017;
   background: var(--studio-yellow);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
 }
 
 .admin-email-studio .studio-email-brand > strong {
-  font-size: 10px;
+  color: #111827;
+  font-size: 12px;
+  letter-spacing: -0.02em;
 }
 
 .admin-email-studio .studio-email-brand > small {
-  color: #85938d;
-  font-size: 6.5px;
+  color: #7c8796;
+  font-size: 8px;
   font-weight: 670;
   text-transform: uppercase;
 }
 
 .admin-email-studio .studio-email-content {
-  padding: 23px 20px;
+  padding: 28px 24px;
 }
 
 .admin-email-studio .studio-email-content > em {
-  color: #866600;
-  font-size: 7px;
+  color: #896600;
+  font-size: 9px;
   font-style: normal;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -1028,29 +1032,30 @@
 }
 
 .admin-email-studio .studio-email-content h3 {
-  margin: 7px 0 12px;
-  color: #14201b;
-  font-size: 20px;
-  line-height: 1.15;
-  letter-spacing: -0.04em;
+  margin: 9px 0 14px;
+  color: #111827;
+  font-size: 27px;
+  font-weight: 720;
+  line-height: 1.12;
+  letter-spacing: -0.045em;
 }
 
 .admin-email-studio .studio-email-copy p {
-  margin: 0 0 8px;
-  color: #576861;
-  font-size: 9px;
+  margin: 0 0 10px;
+  color: #5b6574;
+  font-size: 12px;
   line-height: 1.55;
 }
 
 .admin-email-studio .studio-email-services {
   display: grid;
-  gap: 6px;
-  margin-top: 13px;
+  gap: 8px;
+  margin-top: 17px;
 }
 
 .admin-email-studio .studio-email-services > span {
-  color: #147357;
-  font-size: 6.5px;
+  color: #687384;
+  font-size: 8.5px;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1058,23 +1063,23 @@
 
 .admin-email-studio .studio-email-services > div {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
-  padding: 7px;
-  border: 1px solid #dee8e3;
-  border-radius: 7px;
-  background: #f8faf9;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #e1e5ec;
+  border-radius: 9px;
+  background: #fff;
 }
 
 .admin-email-studio .studio-email-services i {
-  width: 21px;
-  height: 21px;
+  width: 29px;
+  height: 29px;
   display: grid;
   place-items: center;
-  border-radius: 6px;
-  color: var(--studio-green);
-  background: #e5f6ef;
+  border-radius: 8px;
+  color: #6d5bd0;
+  background: #f1edff;
 }
 
 .admin-email-studio .studio-email-services div > span {
@@ -1083,27 +1088,27 @@
 }
 
 .admin-email-studio .studio-email-services strong {
-  color: #33463e;
-  font-size: 7.5px;
+  color: #111827;
+  font-size: 11px;
 }
 
 .admin-email-studio .studio-email-services small {
-  color: #72827b;
-  font-size: 6.5px;
+  color: #5b6574;
+  font-size: 9px;
   line-height: 1.35;
 }
 
 .admin-email-studio .studio-email-product {
   display: grid;
-  grid-template-columns: 21px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
-  margin-top: 13px;
-  padding: 9px;
-  border: 1px solid #dce7e2;
-  border-radius: 7px;
-  color: var(--studio-green);
-  background: #f7faf8;
+  gap: 10px;
+  margin-top: 17px;
+  padding: 12px;
+  border: 1px solid #e1e5ec;
+  border-radius: 10px;
+  color: #6d5bd0;
+  background: #fafbfc;
 }
 
 .admin-email-studio .studio-email-product.platform {
@@ -1112,19 +1117,32 @@
   background: #fffaf0;
 }
 
-.admin-email-studio .studio-email-product > span {
+.admin-email-studio .studio-email-product-copy {
   display: grid;
-  gap: 2px;
+  gap: 3px;
+}
+
+.admin-email-studio .studio-email-product-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+}
+
+.admin-email-studio .studio-email-product-icon img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 .admin-email-studio .studio-email-product strong {
-  color: #33463d;
-  font-size: 8px;
+  color: #111827;
+  font-size: 12px;
 }
 
 .admin-email-studio .studio-email-product small {
-  color: #71827b;
-  font-size: 6.5px;
+  color: #5b6574;
+  font-size: 9.5px;
   line-height: 1.4;
 }
 
@@ -1133,13 +1151,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 15px 0 0;
-  padding: 9px 11px;
+  margin: 18px 0 0;
+  padding: 11px 14px;
   border-radius: 7px;
   color: #1c241c;
   background: var(--studio-yellow);
   box-shadow: 0 5px 12px rgba(206, 158, 0, 0.15);
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 780;
 }
 
@@ -1150,13 +1168,13 @@
 }
 
 .admin-email-studio .studio-email-footer strong {
-  font-size: 7.5px;
+  font-size: 10px;
 }
 
 .admin-email-studio .studio-email-footer p {
   margin: 5px 0 0;
   color: #aebbb5;
-  font-size: 6.8px;
+  font-size: 9px;
   line-height: 1.5;
 }
 

@@ -26,6 +26,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function safeImageSource(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    return escapeHtml(url.toString());
+  } catch {
+    return "";
+  }
+}
+
 export function platformAuthEmailTemplate({
   preheader,
   eyebrow,
@@ -130,6 +140,7 @@ export function platformProductEmailTemplate({
   actionUrl,
   productName,
   productDescription,
+  productLogo,
   serviceHighlights = [],
   footerNote,
 }) {
@@ -142,21 +153,41 @@ export function platformProductEmailTemplate({
     actionUrl: escapeHtml(actionUrl),
     productName: escapeHtml(productName),
     productDescription: escapeHtml(productDescription),
+    productLogo: safeImageSource(productLogo),
     footerNote: escapeHtml(footerNote),
   };
   const safeServices = (Array.isArray(serviceHighlights) ? serviceHighlights : [])
     .map((item) => ({
+      key: ["messaging", "publishing", "scraping"].includes(String(item?.key || "").toLowerCase())
+        ? String(item.key).toLowerCase()
+        : "",
       name: escapeHtml(item?.name || ""),
       description: escapeHtml(item?.description || ""),
       services: escapeHtml(item?.services || ""),
+      logos: (Array.isArray(item?.logos) ? item.logos : [])
+        .map((logo) => ({ src: safeImageSource(logo?.src), name: escapeHtml(logo?.name || "Service") }))
+        .filter((logo) => logo.src)
+        .slice(0, 5),
     }))
     .filter((item) => item.name && item.description)
     .slice(0, 6);
+  const servicePresentation = {
+    messaging: { accent: "#087360", tint: "#e6f4f0", icon: "&#9993;&#65038;" },
+    publishing: { accent: "#7857e8", tint: "#f1edff", icon: "&#8599;&#65038;" },
+    scraping: { accent: "#2378d4", tint: "#eaf3ff", icon: "&#9638;" },
+  };
   const servicesHtml = safeServices.length ? `
-            <div style="margin:27px 0 0;color:#177052;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">What your team can use</div>
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:10px 0 0;">
-              ${safeServices.map((service) => `<tr><td style="padding:0 0 8px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #dce7e2;border-radius:11px;background:#f8faf9;"><tr><td style="padding:14px 16px;"><div style="color:#1b2a23;font-size:15px;font-weight:800;">${service.name}</div><div style="margin-top:4px;color:#62736b;font-size:12px;line-height:18px;">${service.description}</div>${service.services ? `<div style="margin-top:7px;color:#177052;font-size:10px;font-weight:700;">${service.services}</div>` : ""}</td></tr></table></td></tr>`).join("")}
+            <div style="margin:30px 0 0;color:#687384;font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;">What your team can use</div>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:12px 0 0;">
+              ${safeServices.map((service, index) => {
+                const presentation = servicePresentation[service.key] || Object.values(servicePresentation)[index % 3];
+                const logos = service.logos.length ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;"><tr>${service.logos.map((logo) => `<td style="padding-right:7px;"><img src="${logo.src}" width="24" height="24" alt="${logo.name}" style="display:block;width:24px;height:24px;border:0;object-fit:contain;" /></td>`).join("")}</tr></table>` : "";
+                return `<tr><td style="padding:0 0 10px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e1e5ec;border-radius:14px;background:#ffffff;box-shadow:0 5px 18px rgba(15,23,42,.045);"><tr><td width="58" valign="top" style="padding:16px 0 16px 16px;"><div style="width:42px;height:42px;border:1px solid ${presentation.accent}33;border-radius:11px;background:${presentation.tint};color:${presentation.accent};font-family:Arial,sans-serif;font-size:21px;font-weight:700;line-height:42px;text-align:center;">${presentation.icon}</div></td><td valign="top" style="padding:16px 17px 16px 12px;"><div style="color:#111827;font-size:16px;font-weight:760;line-height:21px;letter-spacing:-.2px;">${service.name}</div><div style="margin-top:5px;color:#5b6574;font-size:13.5px;line-height:20px;">${service.description}</div>${service.services ? `<div style="margin-top:8px;color:${presentation.accent};font-size:11.5px;font-weight:700;line-height:17px;">${service.services}</div>` : ""}${logos}</td></tr></table></td></tr>`;
+              }).join("")}
             </table>` : "";
+  const productIcon = safe.productLogo
+    ? `<img src="${safe.productLogo}" width="42" height="42" alt="" style="display:block;width:42px;height:42px;border:0;object-fit:contain;" />`
+    : `<div style="width:42px;height:42px;border-radius:11px;background:#fef3c7;color:#9a6800;font-size:13px;font-weight:800;line-height:42px;text-align:center;">AT</div>`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -167,46 +198,49 @@ export function platformProductEmailTemplate({
     <style>
       @media only screen and (max-width: 620px) {
         .email-shell { width: 100% !important; border-radius: 0 !important; }
-        .email-main, .email-header, .email-footer { padding-left: 24px !important; padding-right: 24px !important; }
-        .email-title { font-size: 30px !important; line-height: 36px !important; }
+        .email-main, .email-header, .email-footer { padding-left: 22px !important; padding-right: 22px !important; }
+        .email-title { font-size: 34px !important; line-height: 39px !important; }
         .email-action { display: block !important; text-align: center !important; }
       }
     </style>
   </head>
-  <body style="margin:0;padding:0;background:#f3f4f1;color:#111814;font-family:Arial,Helvetica,sans-serif;">
+  <body style="margin:0;padding:0;background:#f4f6f8;color:#111827;font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;-webkit-font-smoothing:antialiased;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;font-size:1px;">${safe.preheader}&#847; &zwnj;&#847;</div>
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f3f4f1;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f4f6f8;">
       <tr><td align="center" style="padding:38px 16px;">
-        <table role="presentation" class="email-shell" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#fff;border:1px solid #dde2de;border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(16,35,27,.08);">
-          <tr><td class="email-header" style="padding:22px 34px;border-bottom:1px solid #e8ebe8;background:#fbfcfa;">
+        <table role="presentation" class="email-shell" width="640" cellspacing="0" cellpadding="0" border="0" style="width:640px;max-width:640px;background:#ffffff;border:1px solid #e0e4ea;border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(15,23,42,.08);">
+          <tr><td class="email-header" style="padding:23px 36px;border-bottom:1px solid #e5e8ed;background:#fbfcfd;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-              <td width="46"><div style="width:40px;height:40px;border-radius:11px;background:#ffd229;color:#101510;font-size:14px;font-weight:800;line-height:40px;text-align:center;">AT</div></td>
-              <td style="padding-left:10px;color:#111814;font-size:19px;font-weight:800;">AgenticThat</td>
-              <td align="right" style="color:#748078;font-size:11px;font-weight:700;text-transform:uppercase;">${safeServices.length ? "Platform introduction" : "Service introduction"}</td>
+              <td width="48"><div style="width:42px;height:42px;border-radius:12px;background:#facc15;color:#171203;font-size:14px;font-weight:850;line-height:42px;text-align:center;box-shadow:0 6px 16px rgba(250,204,21,.22);">AT</div></td>
+              <td style="padding-left:10px;color:#111827;font-size:20px;font-weight:780;letter-spacing:-.4px;">AgenticThat</td>
+              <td align="right" style="color:#7c8796;font-size:11px;font-weight:750;letter-spacing:.7px;text-transform:uppercase;">${safeServices.length ? "Platform introduction" : "Service introduction"}</td>
             </tr></table>
           </td></tr>
-          <tr><td class="email-main" style="padding:44px 42px 38px;">
-            <div style="margin:0 0 13px;color:#8b6a00;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;">${safe.eyebrow}</div>
-            <h1 class="email-title" style="margin:0;color:#101510;font-size:36px;font-weight:800;line-height:42px;letter-spacing:-1.2px;">${safe.title}</h1>
-            <p style="margin:18px 0 0;color:#536159;font-size:16px;line-height:25px;">${safe.introduction}</p>
+          <tr><td class="email-main" style="padding:48px 44px 42px;">
+            <div style="margin:0 0 14px;color:#896600;font-size:12px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;">${safe.eyebrow}</div>
+            <h1 class="email-title" style="margin:0;color:#111827;font-size:40px;font-weight:720;line-height:46px;letter-spacing:-1.7px;">${safe.title}</h1>
+            <p style="margin:20px 0 0;color:#5b6574;font-size:17px;line-height:27px;">${safe.introduction}</p>
             ${servicesHtml}
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 0;border:1px solid #dce7e2;border-radius:12px;background:#f7faf8;">
-              <tr><td style="padding:18px 20px;">
-                <div style="color:#177052;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">${safeServices.length ? "Explore the platform" : "Selected service"}</div>
-                <div style="margin-top:6px;color:#1b2a23;font-size:18px;font-weight:800;">${safe.productName}</div>
-                <div style="margin-top:6px;color:#62736b;font-size:13px;line-height:20px;">${safe.productDescription}</div>
-              </td></tr>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 0;border:1px solid #e1e5ec;border-radius:14px;background:#fafbfc;">
+              <tr>
+                <td width="62" valign="top" style="padding:19px 0 19px 19px;">${productIcon}</td>
+                <td valign="top" style="padding:19px 20px 19px 13px;">
+                  <div style="color:#687384;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">${safeServices.length ? "Explore the platform" : "Selected service"}</div>
+                  <div style="margin-top:6px;color:#111827;font-size:19px;font-weight:760;letter-spacing:-.3px;">${safe.productName}</div>
+                  <div style="margin-top:6px;color:#5b6574;font-size:14px;line-height:21px;">${safe.productDescription}</div>
+                </td>
+              </tr>
             </table>
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0 22px;"><tr>
-              <td align="left" style="border-radius:10px;background:#ffd229;box-shadow:0 10px 24px rgba(236,181,0,.2);">
-                <a class="email-action" href="${safe.actionUrl}" style="display:inline-block;padding:15px 24px;color:#111814;font-size:15px;font-weight:800;text-decoration:none;">${safe.actionLabel}&nbsp;&nbsp;&#8594;</a>
+              <td align="left" style="border-radius:10px;background:#facc15;box-shadow:0 10px 24px rgba(250,190,40,.22);">
+                <a class="email-action" href="${safe.actionUrl}" style="display:inline-block;padding:16px 25px;color:#171203;font-size:15px;font-weight:800;line-height:20px;text-decoration:none;">${safe.actionLabel}&nbsp;&nbsp;&#8594;</a>
               </td>
             </tr></table>
-            <p style="margin:0;color:#748078;font-size:12px;line-height:19px;">Or open the official AgenticThat product page:<br><a href="${safe.actionUrl}" style="color:#315e4c;word-break:break-all;">${safe.actionUrl}</a></p>
+            <p style="margin:0;color:#7c8796;font-size:13px;line-height:20px;">Or open the official AgenticThat page:<br><a href="${safe.actionUrl}" style="color:#4f46a5;text-decoration:underline;word-break:break-all;">${safe.actionUrl}</a></p>
           </td></tr>
-          <tr><td class="email-footer" style="padding:24px 34px;border-top:1px solid #e8ebe8;background:#111814;">
-            <p style="margin:0;color:#aeb9b2;font-size:12px;line-height:19px;">${safe.footerNote}</p>
-            <p style="margin:16px 0 0;color:#7f8c84;font-size:11px;line-height:18px;">AgenticThat &nbsp;&middot;&nbsp; Business automation, made clear<br><a href="https://agenticthat.com" style="color:#d5ddd8;text-decoration:none;">agenticthat.com</a></p>
+          <tr><td class="email-footer" style="padding:26px 36px;border-top:1px solid #e5e8ed;background:#111827;">
+            <p style="margin:0;color:#d6dae1;font-size:13px;line-height:21px;">${safe.footerNote}</p>
+            <p style="margin:17px 0 0;color:#8f98a8;font-size:12px;line-height:19px;">AgenticThat &nbsp;&middot;&nbsp; Business automation, made clear<br><a href="https://agenticthat.com" style="color:#f2f4f7;text-decoration:none;">agenticthat.com</a></p>
           </td></tr>
         </table>
       </td></tr>
