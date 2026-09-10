@@ -1618,9 +1618,23 @@ function PublishingAutomationShowcase() {
             ))}
           </div>
 
-          <div className={`publishing-calendar${isAtLeast("date") ? " is-selected" : ""}`}>
-            <header><strong>Destination review</strong></header>
-            <div className={`publishing-time-select${isAtLeast("time") ? " is-selected" : ""}`}><CheckCheck /><span>Content and accounts confirmed</span><b aria-hidden="true" /></div>
+          <div className={`publishing-destination-review${isAtLeast("date") ? " is-selected" : ""}${isAtLeast("time") ? " is-confirmed" : ""}`}>
+            <header>
+              <span><strong>Destination review</strong><small>Preflight checks</small></span>
+              <b><ShieldCheck />Ready</b>
+            </header>
+            <div className="publishing-review-post">
+              <img src="/publishing-nature-cove.webp" alt="" />
+              <p><strong>Morning light over the alpine lake</strong><small>1 image &middot; Caption &middot; 3 hashtags</small></p>
+            </div>
+            <ul className="publishing-review-checks">
+              <li><span><CheckCheck />Post content</span><b>Ready</b></li>
+              <li><span><CheckCheck />Connected accounts</span><b>{demo.selectedChannels} / 5</b></li>
+              <li><span><CheckCheck />Destinations</span><b>{demo.selectedChannels} / 5</b></li>
+            </ul>
+            <div className="publishing-review-confirmation">
+              <CheckCheck /><span><strong>All checks passed</strong><small>Content and accounts confirmed</small></span>
+            </div>
           </div>
 
           <div className={`publishing-schedule-confirmation${isAtLeast("time") ? " is-visible" : ""}`}>
