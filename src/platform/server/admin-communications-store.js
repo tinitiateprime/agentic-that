@@ -19,6 +19,7 @@ import {
   normalizeProductInvitationTemplate,
   PRODUCT_INVITATION_TEMPLATE_VARIABLES,
   renderProductInvitationEmail,
+  STARTER_PLATFORM_INVITATION_TEMPLATE,
   STARTER_PRODUCT_INVITATION_TEMPLATE,
 } from "./product-invitation-email-template.js";
 import {
@@ -29,18 +30,56 @@ import {
 
 const STARTER_TEMPLATE_ID = "template_workspace_invitation_default";
 const STARTER_PRODUCT_TEMPLATE_ID = "template_product_invitation_default";
+const STARTER_PLATFORM_TEMPLATE_ID = "template_platform_invitation_default";
 const invitationRoleIds = new Set(OPERATIONAL_ROLE_IDS);
-const invitationalProducts = productServices
+const serviceInvitationProducts = productServices
   .filter((product) => product.availability === "live")
   .map((product) => ({
     key: `${product.category}:${product.slug}`,
+    invitationType: "service",
     category: product.category,
     slug: product.slug,
     name: product.name,
     description: product.shortDescription,
     logo: product.logo,
     url: platformPublicLink(serviceDetailHref(product)),
+    highlights: [],
   }));
+const serviceNames = (category) => serviceInvitationProducts
+  .filter((product) => product.category === category)
+  .map((product) => product.name.replace(/ (Messaging|Publishing)$/, ""))
+  .join(" · ");
+const platformInvitationProduct = {
+  key: "platform:agenticthat",
+  invitationType: "platform",
+  category: "platform",
+  slug: "agenticthat",
+  name: "AgenticThat",
+  description: "A practical automation platform for customer messaging, social publishing, and structured public-data workflows.",
+  logo: null,
+  url: platformPublicLink("/apps"),
+  highlights: [
+    {
+      key: "messaging",
+      name: "Messaging",
+      description: "Manage conversations, outreach, templates, and follow-ups from connected business accounts.",
+      services: serviceNames("messaging"),
+    },
+    {
+      key: "publishing",
+      name: "Publishing",
+      description: "Prepare, preview, publish, and track content across the social channels your team uses.",
+      services: serviceNames("publishing"),
+    },
+    {
+      key: "scraping",
+      name: "Public data",
+      description: "Collect structured public Instagram and Facebook signals for research and review.",
+      services: serviceNames("scraping"),
+    },
+  ],
+};
+const invitationalProducts = [platformInvitationProduct, ...serviceInvitationProducts];
 const productByKey = new Map(invitationalProducts.map((product) => [product.key, product]));
 
 function requiredText(value, label, max = 200) {
@@ -68,6 +107,7 @@ function normalizeRoleIds(value) {
 
 function templateContent(template) {
   return {
+    ...(template.invitationType ? { invitationType: template.invitationType } : {}),
     preheader: template.preheader,
     eyebrow: template.eyebrow,
     heading: template.heading,
@@ -82,6 +122,7 @@ function publicTemplate(row) {
   return {
     id: String(row.id),
     purpose: row.purpose,
+    invitationType: content.invitationType || (row.purpose === "product_invitation" ? "service" : null),
     channel: row.channel,
     name: row.name,
     description: row.description || "",
@@ -141,6 +182,7 @@ function publicProductDelivery(row) {
     recipientName: row.recipient_name || "",
     recipientEmail: row.recipient_email,
     productKey: row.product_key,
+    invitationType: row.product_key === platformInvitationProduct.key ? "platform" : "service",
     productName: row.product_name || "Unavailable product",
     productDescription: row.product_description || "",
     productUrl: row.product_url,
@@ -185,6 +227,16 @@ async function ensureStarterTemplate(sql) {
     VALUES
       (${STARTER_PRODUCT_TEMPLATE_ID}, 'product_invitation', 'email', ${productStarter.name},
        ${productStarter.description}, ${productStarter.subject}, ${sql.json(templateContent(productStarter))},
+       'published', 1)
+    ON CONFLICT DO NOTHING`;
+
+  const platformStarter = normalizeProductInvitationTemplate(STARTER_PLATFORM_INVITATION_TEMPLATE);
+  await sql`
+    INSERT INTO notification_templates
+      (id, purpose, channel, name, description, subject, content, status, version)
+    VALUES
+      (${STARTER_PLATFORM_TEMPLATE_ID}, 'product_invitation', 'email', ${platformStarter.name},
+       ${platformStarter.description}, ${platformStarter.subject}, ${sql.json(templateContent(platformStarter))},
        'published', 1)
     ON CONFLICT DO NOTHING`;
 }
@@ -310,6 +362,9 @@ export async function sendInvitationTemplateTest(actor, input) {
   const template = normalizeProductInvitationTemplate(input.template);
   const product = productByKey.get(String(input.productKey || "")) || invitationalProducts[0];
   if (!product) throw new Error("Choose an available AgenticThat product.");
+  if (template.invitationType !== product.invitationType) {
+    throw new Error(`Choose a ${template.invitationType === "platform" ? "platform" : "single-service"} preview.`);
+  }
   const rendered = renderProductInvitationEmail(template, {
     recipient_name: "Alex Morgan",
     recipient_email: recipientEmail,
@@ -318,6 +373,7 @@ export async function sendInvitationTemplateTest(actor, input) {
     product_url: product.url,
     sender_name: sender.name,
     company_name: "AgenticThat",
+    service_highlights: product.highlights,
   });
   const result = await sendPlatformAuthEmail({
     to: recipientEmail,
@@ -396,15 +452,18 @@ function productRenderContext({ recipientName, recipientEmail, product, sender }
     product_url: product.url,
     sender_name: sender.name,
     company_name: "AgenticThat",
+    service_highlights: product.highlights || [],
   };
 }
 
 async function deliverProductInvitation({ sql, actor, delivery, template, sender }) {
+  const catalogProduct = productByKey.get(delivery.product_key);
   const product = {
     key: delivery.product_key,
     name: delivery.product_name,
     description: delivery.product_description,
     url: delivery.product_url,
+    highlights: catalogProduct?.highlights || [],
   };
   const rendered = renderProductInvitationEmail(
     privateProductTemplate(template),
@@ -456,6 +515,9 @@ export async function sendAdminProductInvitation(actor, input) {
   const sender = resolvePlatformEmailStudioSender(input.senderId);
   const template = await templateRow(sql, templateId, { published: true, purpose: "product_invitation" });
   const templateValue = privateProductTemplate(template);
+  if (templateValue.invitationType !== product.invitationType) {
+    throw new Error(`Choose a published ${product.invitationType === "platform" ? "AgenticThat overview" : "single-service"} template.`);
+  }
   const rendered = renderProductInvitationEmail(templateValue, productRenderContext({
     recipientName,
     recipientEmail,

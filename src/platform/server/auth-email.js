@@ -130,6 +130,7 @@ export function platformProductEmailTemplate({
   actionUrl,
   productName,
   productDescription,
+  serviceHighlights = [],
   footerNote,
 }) {
   const safe = {
@@ -143,6 +144,19 @@ export function platformProductEmailTemplate({
     productDescription: escapeHtml(productDescription),
     footerNote: escapeHtml(footerNote),
   };
+  const safeServices = (Array.isArray(serviceHighlights) ? serviceHighlights : [])
+    .map((item) => ({
+      name: escapeHtml(item?.name || ""),
+      description: escapeHtml(item?.description || ""),
+      services: escapeHtml(item?.services || ""),
+    }))
+    .filter((item) => item.name && item.description)
+    .slice(0, 6);
+  const servicesHtml = safeServices.length ? `
+            <div style="margin:27px 0 0;color:#177052;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">What your team can use</div>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:10px 0 0;">
+              ${safeServices.map((service) => `<tr><td style="padding:0 0 8px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #dce7e2;border-radius:11px;background:#f8faf9;"><tr><td style="padding:14px 16px;"><div style="color:#1b2a23;font-size:15px;font-weight:800;">${service.name}</div><div style="margin-top:4px;color:#62736b;font-size:12px;line-height:18px;">${service.description}</div>${service.services ? `<div style="margin-top:7px;color:#177052;font-size:10px;font-weight:700;">${service.services}</div>` : ""}</td></tr></table></td></tr>`).join("")}
+            </table>` : "";
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -168,16 +182,17 @@ export function platformProductEmailTemplate({
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
               <td width="46"><div style="width:40px;height:40px;border-radius:11px;background:#ffd229;color:#101510;font-size:14px;font-weight:800;line-height:40px;text-align:center;">AT</div></td>
               <td style="padding-left:10px;color:#111814;font-size:19px;font-weight:800;">AgenticThat</td>
-              <td align="right" style="color:#748078;font-size:11px;font-weight:700;text-transform:uppercase;">Product introduction</td>
+              <td align="right" style="color:#748078;font-size:11px;font-weight:700;text-transform:uppercase;">${safeServices.length ? "Platform introduction" : "Service introduction"}</td>
             </tr></table>
           </td></tr>
           <tr><td class="email-main" style="padding:44px 42px 38px;">
             <div style="margin:0 0 13px;color:#8b6a00;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;">${safe.eyebrow}</div>
             <h1 class="email-title" style="margin:0;color:#101510;font-size:36px;font-weight:800;line-height:42px;letter-spacing:-1.2px;">${safe.title}</h1>
             <p style="margin:18px 0 0;color:#536159;font-size:16px;line-height:25px;">${safe.introduction}</p>
+            ${servicesHtml}
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 0;border:1px solid #dce7e2;border-radius:12px;background:#f7faf8;">
               <tr><td style="padding:18px 20px;">
-                <div style="color:#177052;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Selected product</div>
+                <div style="color:#177052;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">${safeServices.length ? "Explore the platform" : "Selected service"}</div>
                 <div style="margin-top:6px;color:#1b2a23;font-size:18px;font-weight:800;">${safe.productName}</div>
                 <div style="margin-top:6px;color:#62736b;font-size:13px;line-height:20px;">${safe.productDescription}</div>
               </td></tr>

@@ -1,6 +1,7 @@
 import { requireGlobalAdmin } from "@platform/server/access-control";
 import AdminCenter from "./AdminCenter";
 import "./admin-center.css";
+import "./email-studio.css";
 
 export const metadata = { title: "Admin Center - AgenticThat" };
 export const dynamic = "force-dynamic";

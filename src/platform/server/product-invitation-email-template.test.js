@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeProductInvitationTemplate,
   renderProductInvitationEmail,
+  STARTER_PLATFORM_INVITATION_TEMPLATE,
   STARTER_PRODUCT_INVITATION_TEMPLATE,
 } from "./product-invitation-email-template.js";
 
@@ -47,4 +48,30 @@ test("product invitation templates fail closed when a variable value is missing"
     () => renderProductInvitationEmail(STARTER_PRODUCT_INVITATION_TEMPLATE, incomplete),
     /Missing value for template variable: product_description/,
   );
+});
+
+test("AgenticThat overview templates include a concise services section", () => {
+  const rendered = renderProductInvitationEmail(STARTER_PLATFORM_INVITATION_TEMPLATE, {
+    ...variables,
+    product_name: "AgenticThat",
+    product_description: "One platform for practical automation.",
+    product_url: "https://agenticthat.com/apps",
+    service_highlights: [
+      { name: "Messaging", description: "Manage conversations and outreach.", services: "WhatsApp · Telegram" },
+      { name: "Publishing", description: "Prepare and publish social content.", services: "Instagram · LinkedIn" },
+      { name: "Public data", description: "Collect structured public signals.", services: "Instagram · Facebook" },
+    ],
+  });
+
+  assert.equal(rendered.subject, "Meet AgenticThat | Practical automation in one place");
+  assert.match(rendered.text, /What you can use:/);
+  assert.match(rendered.text, /Messaging: Manage conversations and outreach/);
+  assert.match(rendered.html, /Platform introduction/);
+  assert.match(rendered.html, /What your team can use/);
+  assert.match(rendered.html, /WhatsApp · Telegram/);
+});
+
+test("product invitation templates retain their intended invitation type", () => {
+  assert.equal(normalizeProductInvitationTemplate(STARTER_PLATFORM_INVITATION_TEMPLATE).invitationType, "platform");
+  assert.equal(normalizeProductInvitationTemplate(STARTER_PRODUCT_INVITATION_TEMPLATE).invitationType, "service");
 });
