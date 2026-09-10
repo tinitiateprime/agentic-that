@@ -1129,12 +1129,6 @@
   place-items: center;
 }
 
-.admin-email-studio .studio-email-product-icon img {
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
-}
-
 .admin-email-studio .studio-email-product strong {
   color: #111827;
   font-size: 12px;

@@ -140,7 +140,7 @@ export function platformProductEmailTemplate({
   actionUrl,
   productName,
   productDescription,
-  productLogo,
+  productIcon,
   serviceHighlights = [],
   footerNote,
 }) {
@@ -153,7 +153,7 @@ export function platformProductEmailTemplate({
     actionUrl: escapeHtml(actionUrl),
     productName: escapeHtml(productName),
     productDescription: escapeHtml(productDescription),
-    productLogo: safeImageSource(productLogo),
+    productIcon: safeImageSource(productIcon),
     footerNote: escapeHtml(footerNote),
   };
   const safeServices = (Array.isArray(serviceHighlights) ? serviceHighlights : [])
@@ -164,10 +164,7 @@ export function platformProductEmailTemplate({
       name: escapeHtml(item?.name || ""),
       description: escapeHtml(item?.description || ""),
       services: escapeHtml(item?.services || ""),
-      logos: (Array.isArray(item?.logos) ? item.logos : [])
-        .map((logo) => ({ src: safeImageSource(logo?.src), name: escapeHtml(logo?.name || "Service") }))
-        .filter((logo) => logo.src)
-        .slice(0, 5),
+      icon: safeImageSource(item?.icon),
     }))
     .filter((item) => item.name && item.description)
     .slice(0, 6);
@@ -181,12 +178,14 @@ export function platformProductEmailTemplate({
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:12px 0 0;">
               ${safeServices.map((service, index) => {
                 const presentation = servicePresentation[service.key] || Object.values(servicePresentation)[index % 3];
-                const logos = service.logos.length ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:10px;"><tr>${service.logos.map((logo) => `<td style="padding-right:7px;"><img src="${logo.src}" width="24" height="24" alt="${logo.name}" style="display:block;width:24px;height:24px;border:0;object-fit:contain;" /></td>`).join("")}</tr></table>` : "";
-                return `<tr><td style="padding:0 0 10px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e1e5ec;border-radius:14px;background:#ffffff;box-shadow:0 5px 18px rgba(15,23,42,.045);"><tr><td width="58" valign="top" style="padding:16px 0 16px 16px;"><div style="width:42px;height:42px;border:1px solid ${presentation.accent}33;border-radius:11px;background:${presentation.tint};color:${presentation.accent};font-family:Arial,sans-serif;font-size:21px;font-weight:700;line-height:42px;text-align:center;">${presentation.icon}</div></td><td valign="top" style="padding:16px 17px 16px 12px;"><div style="color:#111827;font-size:16px;font-weight:760;line-height:21px;letter-spacing:-.2px;">${service.name}</div><div style="margin-top:5px;color:#5b6574;font-size:13.5px;line-height:20px;">${service.description}</div>${service.services ? `<div style="margin-top:8px;color:${presentation.accent};font-size:11.5px;font-weight:700;line-height:17px;">${service.services}</div>` : ""}${logos}</td></tr></table></td></tr>`;
+                const icon = service.icon
+                  ? `<img src="${service.icon}" width="21" height="21" alt="" style="display:block;width:21px;height:21px;border:0;" />`
+                  : presentation.icon;
+                return `<tr><td style="padding:0 0 10px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid #e1e5ec;border-radius:14px;background:#ffffff;box-shadow:0 5px 18px rgba(15,23,42,.045);"><tr><td width="58" valign="top" style="padding:16px 0 16px 16px;"><div style="width:42px;height:42px;border:1px solid ${presentation.accent}33;border-radius:11px;background:${presentation.tint};color:${presentation.accent};font-family:Arial,sans-serif;font-size:21px;font-weight:700;line-height:42px;text-align:center;"><table role="presentation" width="100%" height="42" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" valign="middle">${icon}</td></tr></table></div></td><td valign="top" style="padding:16px 17px 16px 12px;"><div style="color:#111827;font-size:16px;font-weight:760;line-height:21px;letter-spacing:-.2px;">${service.name}</div><div style="margin-top:5px;color:#5b6574;font-size:13.5px;line-height:20px;">${service.description}</div>${service.services ? `<div style="margin-top:8px;color:${presentation.accent};font-size:11.5px;font-weight:700;line-height:17px;">${service.services}</div>` : ""}</td></tr></table></td></tr>`;
               }).join("")}
             </table>` : "";
-  const productIcon = safe.productLogo
-    ? `<img src="${safe.productLogo}" width="42" height="42" alt="" style="display:block;width:42px;height:42px;border:0;object-fit:contain;" />`
+  const productIconHtml = safe.productIcon
+    ? `<div style="width:42px;height:42px;border:1px solid #ead28a;border-radius:11px;background:#fff8df;"><table role="presentation" width="100%" height="42" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" valign="middle"><img src="${safe.productIcon}" width="22" height="22" alt="" style="display:block;width:22px;height:22px;border:0;" /></td></tr></table></div>`
     : `<div style="width:42px;height:42px;border-radius:11px;background:#fef3c7;color:#9a6800;font-size:13px;font-weight:800;line-height:42px;text-align:center;">AT</div>`;
   return `<!doctype html>
 <html lang="en">
@@ -223,7 +222,7 @@ export function platformProductEmailTemplate({
             ${servicesHtml}
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 0;border:1px solid #e1e5ec;border-radius:14px;background:#fafbfc;">
               <tr>
-                <td width="62" valign="top" style="padding:19px 0 19px 19px;">${productIcon}</td>
+                <td width="62" valign="top" style="padding:19px 0 19px 19px;">${productIconHtml}</td>
                 <td valign="top" style="padding:19px 20px 19px 13px;">
                   <div style="color:#687384;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">${safeServices.length ? "Explore the platform" : "Selected service"}</div>
                   <div style="margin-top:6px;color:#111827;font-size:19px;font-weight:760;letter-spacing:-.3px;">${safe.productName}</div>

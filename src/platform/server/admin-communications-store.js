@@ -32,10 +32,7 @@ const STARTER_TEMPLATE_ID = "template_workspace_invitation_default";
 const STARTER_PRODUCT_TEMPLATE_ID = "template_product_invitation_default";
 const STARTER_PLATFORM_TEMPLATE_ID = "template_platform_invitation_default";
 const invitationRoleIds = new Set(OPERATIONAL_ROLE_IDS);
-const emailLogoUrl = (logo) => {
-  const fileName = String(logo || "").split("/").pop().replace(/\.svg$/i, ".png");
-  return fileName ? platformPublicLink(`/email-icons/${fileName}`) : null;
-};
+const emailServiceIcon = (category) => platformPublicLink(`/email-icons/${category === "scraping" ? "public-data" : category}.png`);
 const serviceInvitationProducts = productServices
   .filter((product) => product.availability === "live")
   .map((product) => ({
@@ -46,8 +43,7 @@ const serviceInvitationProducts = productServices
     name: product.name,
     description: product.shortDescription,
     logo: product.logo,
-    emailLogo: emailLogoUrl(product.logo),
-    iconName: product.platformName || product.name.replace(/ (Messaging|Publishing|Public Data)$/, ""),
+    emailIcon: emailServiceIcon(product.category),
     url: platformPublicLink(serviceDetailHref(product)),
     highlights: [],
   }));
@@ -55,11 +51,6 @@ const serviceNames = (category) => serviceInvitationProducts
   .filter((product) => product.category === category)
   .map((product) => product.name.replace(/ (Messaging|Publishing)$/, ""))
   .join(" · ");
-const serviceLogos = (category) => serviceInvitationProducts
-  .filter((product) => product.category === category && product.emailLogo)
-  .map((product) => ({ src: product.emailLogo, name: product.iconName }))
-  .filter((logo, index, logos) => logos.findIndex((item) => item.src === logo.src) === index)
-  .slice(0, 5);
 const platformInvitationProduct = {
   key: "platform:agenticthat",
   invitationType: "platform",
@@ -68,6 +59,7 @@ const platformInvitationProduct = {
   name: "AgenticThat",
   description: "A practical automation platform for customer messaging, social publishing, and structured public-data workflows.",
   logo: null,
+  emailIcon: platformPublicLink("/email-icons/store.png"),
   url: platformPublicLink("/apps"),
   highlights: [
     {
@@ -75,21 +67,21 @@ const platformInvitationProduct = {
       name: "Messaging",
       description: "Manage conversations, outreach, templates, and follow-ups from connected business accounts.",
       services: serviceNames("messaging"),
-      logos: serviceLogos("messaging"),
+      icon: emailServiceIcon("messaging"),
     },
     {
       key: "publishing",
       name: "Publishing",
       description: "Prepare, preview, publish, and track content across the social channels your team uses.",
       services: serviceNames("publishing"),
-      logos: serviceLogos("publishing"),
+      icon: emailServiceIcon("publishing"),
     },
     {
       key: "scraping",
       name: "Public data",
       description: "Collect structured public Instagram and Facebook signals for research and review.",
       services: serviceNames("scraping"),
-      logos: serviceLogos("scraping"),
+      icon: emailServiceIcon("scraping"),
     },
   ],
 };
@@ -385,7 +377,7 @@ export async function sendInvitationTemplateTest(actor, input) {
     product_name: product.name,
     product_description: product.description,
     product_url: product.url,
-    product_logo: product.emailLogo,
+    product_icon: product.emailIcon,
     sender_name: sender.name,
     company_name: "AgenticThat",
     service_highlights: product.highlights,
@@ -465,7 +457,7 @@ function productRenderContext({ recipientName, recipientEmail, product, sender }
     product_name: product.name,
     product_description: product.description,
     product_url: product.url,
-    product_logo: product.emailLogo,
+    product_icon: product.emailIcon,
     sender_name: sender.name,
     company_name: "AgenticThat",
     service_highlights: product.highlights || [],
@@ -479,7 +471,7 @@ async function deliverProductInvitation({ sql, actor, delivery, template, sender
     name: delivery.product_name,
     description: delivery.product_description,
     url: delivery.product_url,
-    emailLogo: catalogProduct?.emailLogo || null,
+    emailIcon: catalogProduct?.emailIcon || null,
     highlights: catalogProduct?.highlights || [],
   };
   const rendered = renderProductInvitationEmail(

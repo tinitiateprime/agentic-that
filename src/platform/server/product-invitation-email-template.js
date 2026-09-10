@@ -105,7 +105,7 @@ export function renderProductInvitationEmail(templateInput, variables) {
   }
   const productName = String(variables.product_name || "AgenticThat product");
   const productDescription = String(variables.product_description || "");
-  const productLogo = String(variables.product_logo || "").trim();
+  const productIcon = String(variables.product_icon || "").trim();
   const serviceHighlights = Array.isArray(variables.service_highlights)
     ? variables.service_highlights
       .map((item) => ({
@@ -113,12 +113,7 @@ export function renderProductInvitationEmail(templateInput, variables) {
         name: String(item?.name || "").trim(),
         description: String(item?.description || "").trim(),
         services: String(item?.services || "").trim(),
-        logos: Array.isArray(item?.logos)
-          ? item.logos.map((logo) => ({
-            src: String(logo?.src || "").trim(),
-            name: String(logo?.name || "").trim(),
-          })).filter((logo) => logo.src).slice(0, 5)
-          : [],
+        icon: String(item?.icon || "").trim(),
       }))
       .filter((item) => item.name && item.description)
       .slice(0, 6)
@@ -136,7 +131,7 @@ export function renderProductInvitationEmail(templateInput, variables) {
     actionUrl: productUrl,
     productName,
     productDescription,
-    productLogo,
+    productIcon,
     serviceHighlights,
     footerNote: rendered.footer,
   });

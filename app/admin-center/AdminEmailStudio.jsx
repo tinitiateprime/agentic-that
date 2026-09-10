@@ -71,9 +71,9 @@ const SAMPLE_PLATFORM = {
 const SAMPLE_SERVICE = {
   key: "publishing:instagram",
   invitationType: "service",
+  category: "publishing",
   name: "Instagram Publishing",
   description: "Prepare, preview, and publish Instagram content from one controlled workspace.",
-  logo: "/instagram-logo.svg",
   url: "https://agenticthat.com/apps/publishing/instagram",
   highlights: [],
 };
@@ -129,7 +129,7 @@ function EmailPreview({ template, product = SAMPLE_PLATFORM, sender = null, comp
   const body = sample(template.body, product, sender).split(/\n{2,}/).filter(Boolean);
   const isPlatform = product.invitationType === "platform";
   const highlights = isPlatform ? (product.highlights || SAMPLE_PLATFORM.highlights) : [];
-  const ProductIcon = isPlatform ? Store : PackageOpen;
+  const ProductIcon = isPlatform ? Store : HIGHLIGHT_ICONS[product.category] || PackageOpen;
 
   return (
     <div className={`studio-preview-shell${compact ? " compact" : ""}`}>
@@ -171,7 +171,7 @@ function EmailPreview({ template, product = SAMPLE_PLATFORM, sender = null, comp
           )}
           <div className={`studio-email-product${isPlatform ? " platform" : ""}`}>
             <span className="studio-email-product-icon">
-              {!isPlatform && product?.logo ? <img src={product.logo} alt="" /> : <ProductIcon size={17} />}
+              <ProductIcon size={17} />
             </span>
             <span className="studio-email-product-copy"><strong>{product?.name || SAMPLE_PLATFORM.name}</strong><small>{product?.description || SAMPLE_PLATFORM.description}</small></span>
           </div>
