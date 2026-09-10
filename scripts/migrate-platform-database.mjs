@@ -1,6 +1,6 @@
-import crypto from "node:crypto";
 import dotenv from "dotenv";
 import { readdir, readFile } from "node:fs/promises";
+import { migrationChecksum, migrationChecksumMatches } from "./migration-checksum.mjs";
 
 dotenv.config({ path: ".env.local", quiet: true });
 dotenv.config({ path: ".env", quiet: true });
@@ -16,10 +16,6 @@ process.env.RUN_DATABASE_MIGRATIONS = "true";
 const { getPlatformSql } = await import("../src/platform/server/auth-store.js");
 const sql = await getPlatformSql();
 const migrationsDirectory = new URL("../supabase/migrations/", import.meta.url);
-
-function checksum(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
 
 try {
   await sql`CREATE SCHEMA IF NOT EXISTS agentic_that`;
@@ -37,11 +33,11 @@ try {
 
   for (const name of names) {
     const source = await readFile(new URL(name, migrationsDirectory), "utf8");
-    const digest = checksum(source);
+    const digest = migrationChecksum(source);
     const [applied] = await sql`
       SELECT checksum FROM agentic_that.schema_migrations WHERE name = ${name}`;
     if (applied) {
-      if (applied.checksum !== digest) {
+      if (!migrationChecksumMatches(source, applied.checksum)) {
         throw new Error(`Applied migration ${name} was modified. Create a new migration instead.`);
       }
       continue;
@@ -52,7 +48,7 @@ try {
       const [concurrent] = await transaction`
         SELECT checksum FROM agentic_that.schema_migrations WHERE name = ${name}`;
       if (concurrent) {
-        if (concurrent.checksum !== digest) {
+        if (!migrationChecksumMatches(source, concurrent.checksum)) {
           throw new Error(`Applied migration ${name} has an unexpected checksum.`);
         }
         return;
