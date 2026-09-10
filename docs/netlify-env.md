@@ -24,7 +24,7 @@ SESSION_COOKIE_SECURE=true
 TELEGRAM_DATA_STORE=postgres
 
 # Platform authentication, verification, reset, and distributed abuse controls
-PLATFORM_PUBLIC_URL=https://<your-netlify-site>.netlify.app
+PLATFORM_PUBLIC_URL=https://agenticthat.com
 PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
 AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
 RESEND_API_KEY=<server-only-resend-api-key>
