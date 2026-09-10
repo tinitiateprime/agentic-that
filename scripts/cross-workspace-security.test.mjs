@@ -63,6 +63,8 @@ test("every Admin Center API handler requires global-admin authorization", async
     "app/api/admin-center/email-templates/test/route.js",
     "app/api/admin-center/invitations/route.js",
     "app/api/admin-center/invitations/[id]/route.js",
+    "app/api/admin-center/product-invitations/route.js",
+    "app/api/admin-center/product-invitations/[id]/route.js",
   ];
   for (const route of routes) {
     assert.match(await source(route), /authorizeGlobalAdminApi\(\)/, route);
@@ -75,6 +77,15 @@ test("notification tables remain server-only after the final security migration"
     assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`));
     assert.match(migration, new RegExp(`revoke all on table public\\.${table} from authenticated`));
   }
+});
+
+test("client product invitations are separated from secure workspace invitations", async () => {
+  const migration = await source("supabase/migrations/202609100002_client_product_invitations.sql");
+  assert.match(migration, /purpose in \('workspace_invitation', 'product_invitation'\)/);
+  assert.match(migration, /alter column invitation_id drop not null/);
+  assert.match(migration, /notification_deliveries_purpose_fields_check/);
+  assert.match(migration, /purpose = 'workspace_invitation' and invitation_id is not null/);
+  assert.match(migration, /purpose = 'product_invitation'/);
 });
 
 test("the final Supabase migration locks every public table and restores only token-scoped RPCs", async () => {

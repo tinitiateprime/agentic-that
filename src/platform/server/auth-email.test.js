@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { platformAuthEmailTemplate, platformAuthLink, sendVerificationEmail } from "./auth-email.js";
+import {
+  platformAuthEmailTemplate,
+  platformAuthLink,
+  platformEmailStudioConfiguration,
+  resolvePlatformEmailStudioSender,
+  sendPlatformAuthEmail,
+  sendVerificationEmail,
+} from "./auth-email.js";
 
 test("authentication links use the canonical domain instead of the legacy Netlify hostname", () => {
   const originalOrigin = process.env.PLATFORM_PUBLIC_URL;
@@ -73,6 +80,79 @@ test("verification delivery sends a polished HTML email with a useful plain-text
     else process.env.RESEND_API_KEY = original.key;
     if (original.origin === undefined) delete process.env.PLATFORM_PUBLIC_URL;
     else process.env.PLATFORM_PUBLIC_URL = original.origin;
+  }
+});
+
+test("Email Studio uses only its approved sender list and never inherits the account sender", async () => {
+  const original = {
+    fetch: globalThis.fetch,
+    authFrom: process.env.AUTH_EMAIL_FROM,
+    senders: process.env.EMAIL_STUDIO_SENDERS,
+    defaultSender: process.env.EMAIL_STUDIO_DEFAULT_SENDER,
+    key: process.env.RESEND_API_KEY,
+  };
+  let request;
+  process.env.AUTH_EMAIL_FROM = "AgenticThat Accounts <accounts@agenticthat.com>";
+  process.env.EMAIL_STUDIO_SENDERS = "AgenticThat Sales <sales@agenticthat.com>;AgenticThat Team <hello@agenticthat.com>";
+  process.env.EMAIL_STUDIO_DEFAULT_SENDER = "hello@agenticthat.com";
+  process.env.RESEND_API_KEY = "re_test_key";
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return Response.json({ id: "email_product_123" });
+  };
+
+  try {
+    const configuration = platformEmailStudioConfiguration();
+    assert.equal(configuration.defaultSenderId, "hello@agenticthat.com");
+    assert.deepEqual(configuration.senders.map((sender) => sender.email), ["sales@agenticthat.com", "hello@agenticthat.com"]);
+    assert.throws(() => resolvePlatformEmailStudioSender("accounts@agenticthat.com"), /configured Email Studio sender/);
+
+    await sendPlatformAuthEmail({
+      to: "client@example.com",
+      subject: "A product for you",
+      text: "Take a look.",
+      html: "<p>Take a look.</p>",
+      senderId: "sales@agenticthat.com",
+    });
+    const payload = JSON.parse(request.options.body);
+    assert.equal(payload.from, "AgenticThat Sales <sales@agenticthat.com>");
+    assert.notEqual(payload.from, process.env.AUTH_EMAIL_FROM);
+  } finally {
+    globalThis.fetch = original.fetch;
+    for (const [key, value] of [
+      ["AUTH_EMAIL_FROM", original.authFrom],
+      ["EMAIL_STUDIO_SENDERS", original.senders],
+      ["EMAIL_STUDIO_DEFAULT_SENDER", original.defaultSender],
+      ["RESEND_API_KEY", original.key],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("Email Studio stays unconfigured when no dedicated sender list exists", () => {
+  const original = {
+    authFrom: process.env.AUTH_EMAIL_FROM,
+    senders: process.env.EMAIL_STUDIO_SENDERS,
+    key: process.env.RESEND_API_KEY,
+  };
+  process.env.AUTH_EMAIL_FROM = "AgenticThat Accounts <accounts@agenticthat.com>";
+  delete process.env.EMAIL_STUDIO_SENDERS;
+  process.env.RESEND_API_KEY = "re_test_key";
+  try {
+    const configuration = platformEmailStudioConfiguration();
+    assert.equal(configuration.configured, false);
+    assert.deepEqual(configuration.senders, []);
+  } finally {
+    for (const [key, value] of [
+      ["AUTH_EMAIL_FROM", original.authFrom],
+      ["EMAIL_STUDIO_SENDERS", original.senders],
+      ["RESEND_API_KEY", original.key],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 
