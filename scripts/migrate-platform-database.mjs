@@ -76,12 +76,14 @@ try {
       to_regclass('agentic_that.telegram_accounts') IS NOT NULL AS telegram_ready,
       to_regclass('agentic_that.publishing_uploads') IS NOT NULL AS publishing_ready,
       to_regclass('public.platform_auth_tokens') IS NOT NULL AS auth_security_ready,
+      to_regclass('public.notification_templates') IS NOT NULL AS notification_templates_ready,
+      to_regclass('public.notification_deliveries') IS NOT NULL AS notification_deliveries_ready,
       to_regprocedure('public.companion_claim_jobs(text,text,integer)') IS NOT NULL AS companion_rpc_ready,
       (SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version') AS minimum_companion_version`;
   const required = [
     "platform_users_ready", "memberships_ready", "roles_ready", "companion_devices_ready",
     "jobs_ready", "staged_uploads_ready", "telegram_ready", "publishing_ready",
-    "auth_security_ready", "companion_rpc_ready",
+    "auth_security_ready", "notification_templates_ready", "notification_deliveries_ready", "companion_rpc_ready",
   ];
   const missing = required.filter((key) => !status?.[key]);
   if (missing.length || status?.minimum_companion_version !== "2.1.13") {

@@ -205,6 +205,21 @@ export async function workspaceTeamSnapshot(principal) {
   };
 }
 
+export async function adminWorkspaceInvitationsSnapshot() {
+  await initializeInvitations();
+  const sql = await getPlatformSql();
+  const [row] = await sql`
+    SELECT value FROM agentic_that.app_document_store
+     WHERE key = ${INVITATIONS_DOCUMENT_KEY}`;
+  const now = Date.now();
+  return invitationsDocument(row?.value).invitations.map((invitation) => ({
+    ...publicInvitation(invitation),
+    status: invitation.status === "pending" && Date.parse(invitation.expiresAt) <= now
+      ? "expired"
+      : invitation.status,
+  }));
+}
+
 export async function inviteWorkspaceMember(principal, input) {
   await initializeInvitations();
   const sql = await getPlatformSql();

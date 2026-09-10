@@ -57,9 +57,23 @@ test("every Admin Center API handler requires global-admin authorization", async
     "app/api/admin-center/roles/route.js",
     "app/api/admin-center/roles/[id]/route.js",
     "app/api/admin-center/identity-reviews/[id]/route.js",
+    "app/api/admin-center/communications/route.js",
+    "app/api/admin-center/email-templates/route.js",
+    "app/api/admin-center/email-templates/[id]/route.js",
+    "app/api/admin-center/email-templates/test/route.js",
+    "app/api/admin-center/invitations/route.js",
+    "app/api/admin-center/invitations/[id]/route.js",
   ];
   for (const route of routes) {
     assert.match(await source(route), /authorizeGlobalAdminApi\(\)/, route);
+  }
+});
+
+test("notification tables remain server-only after the final security migration", async () => {
+  const migration = await source("supabase/migrations/202609100001_admin_invitation_email_studio.sql");
+  for (const table of ["notification_templates", "notification_deliveries"]) {
+    assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`));
+    assert.match(migration, new RegExp(`revoke all on table public\\.${table} from authenticated`));
   }
 });
 

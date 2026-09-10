@@ -1,0 +1,446 @@
+import crypto from "node:crypto";
+import { OPERATIONAL_ROLE_IDS } from "../access-catalog.js";
+import { getPlatformSql } from "./auth-store.js";
+import {
+  platformAuthLink,
+  platformEmailConfiguration,
+  sendPlatformAuthEmail,
+} from "./auth-email.js";
+import {
+  INVITATION_TEMPLATE_VARIABLES,
+  normalizeInvitationTemplate,
+  renderInvitationEmail,
+  STARTER_INVITATION_TEMPLATE,
+} from "./invitation-email-template.js";
+import {
+  adminWorkspaceInvitationsSnapshot,
+  cancelWorkspaceInvitation,
+  inviteWorkspaceMember,
+  resendWorkspaceInvitation,
+} from "./workspace-team-store.js";
+
+const STARTER_TEMPLATE_ID = "template_workspace_invitation_default";
+const invitationRoleIds = new Set(OPERATIONAL_ROLE_IDS);
+
+function requiredText(value, label, max = 200) {
+  const normalized = String(value || "").trim();
+  if (!normalized || normalized.length > max) throw new Error(`${label} is required.`);
+  return normalized;
+}
+
+function normalizeEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    throw new Error("Enter a valid recipient email address.");
+  }
+  return email;
+}
+
+function normalizeRoleIds(value) {
+  const roleIds = [...new Set((Array.isArray(value) ? value : []).map(String))];
+  if (!roleIds.length) throw new Error("Assign at least one role.");
+  if (roleIds.some((roleId) => !invitationRoleIds.has(roleId))) {
+    throw new Error("One or more invitation roles are invalid.");
+  }
+  return roleIds;
+}
+
+function templateContent(template) {
+  return {
+    preheader: template.preheader,
+    eyebrow: template.eyebrow,
+    heading: template.heading,
+    body: template.body,
+    buttonLabel: template.buttonLabel,
+    footer: template.footer,
+  };
+}
+
+function publicTemplate(row) {
+  const content = row.content && typeof row.content === "object" ? row.content : {};
+  return {
+    id: String(row.id),
+    purpose: row.purpose,
+    channel: row.channel,
+    name: row.name,
+    description: row.description || "",
+    subject: row.subject,
+    preheader: content.preheader || "",
+    eyebrow: content.eyebrow || "Workspace invitation",
+    heading: content.heading || "",
+    body: content.body || "",
+    buttonLabel: content.buttonLabel || "Accept invitation",
+    footer: content.footer || "",
+    status: row.status,
+    version: Number(row.version || 1),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function privateTemplate(row) {
+  return normalizeInvitationTemplate(row?.content ? publicTemplate(row) : row);
+}
+
+function publicDelivery(row, invitation) {
+  return {
+    id: String(row.id),
+    invitationId: row.invitation_id,
+    templateId: row.template_id,
+    templateName: row.template_name || row.template_snapshot?.name || "Archived template",
+    templateVersion: Number(row.template_version || 1),
+    recipientName: row.recipient_name || "",
+    recipientEmail: row.recipient_email,
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name || "Unavailable workspace",
+    roleIds: Array.isArray(row.role_ids) ? row.role_ids.map(String) : [],
+    subject: row.subject_snapshot,
+    status: row.status,
+    invitationStatus: invitation?.status || "unknown",
+    attemptCount: Number(row.attempt_count || 0),
+    provider: row.provider,
+    providerMessageId: row.provider_message_id,
+    error: row.error,
+    queuedAt: row.queued_at,
+    sentAt: row.sent_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function audit(tx, actorUserId, targetType, targetId, action, before, after) {
+  await tx`
+    INSERT INTO rbac_audit_events
+      (id, actor_user_id, target_type, target_id, action, before_value, after_value)
+    VALUES
+      (${crypto.randomUUID()}, ${actorUserId}, ${targetType}, ${targetId}, ${action},
+       ${before ? tx.json(before) : null}, ${after ? tx.json(after) : null})`;
+}
+
+async function ensureStarterTemplate(sql) {
+  const starter = normalizeInvitationTemplate(STARTER_INVITATION_TEMPLATE);
+  await sql`
+    INSERT INTO notification_templates
+      (id, purpose, channel, name, description, subject, content, status, version)
+    VALUES
+      (${STARTER_TEMPLATE_ID}, 'workspace_invitation', 'email', ${starter.name},
+       ${starter.description}, ${starter.subject}, ${sql.json(templateContent(starter))},
+       'published', 1)
+    ON CONFLICT DO NOTHING`;
+}
+
+async function templateRow(sql, templateId, { published = false } = {}) {
+  const rows = published
+    ? await sql`SELECT * FROM notification_templates WHERE id = ${templateId} AND status = 'published' LIMIT 1`
+    : await sql`SELECT * FROM notification_templates WHERE id = ${templateId} LIMIT 1`;
+  if (!rows[0]) throw new Error(published ? "Choose a published invitation template." : "Template not found.");
+  return rows[0];
+}
+
+async function invitationContext(sql, workspaceIdInput, roleIdsInput) {
+  const workspaceId = requiredText(workspaceIdInput, "Workspace", 220);
+  const roleIds = normalizeRoleIds(roleIdsInput);
+  const [workspace] = await sql`
+    SELECT id, name FROM platform_workspaces
+     WHERE id = ${workspaceId} AND status = 'active' LIMIT 1`;
+  if (!workspace) throw new Error("Choose an active workspace.");
+  const roles = await sql`
+    SELECT id, name FROM rbac_roles
+     WHERE id = ANY(${roleIds}) AND is_system = true AND is_self_selectable = false`;
+  if (roles.length !== roleIds.length) throw new Error("One or more invitation roles are unavailable.");
+  const roleById = new Map(roles.map((role) => [String(role.id), role.name]));
+  return { workspace, roleIds, roleNames: roleIds.map((id) => roleById.get(id)) };
+}
+
+function renderContext({ actor, recipientName, recipientEmail, workspaceName, roleNames, invitationUrl }) {
+  return {
+    recipient_name: recipientName || "there",
+    recipient_email: recipientEmail,
+    workspace_name: workspaceName,
+    role_names: roleNames.join(", "),
+    inviter_name: actor.name || actor.email || "AgenticThat",
+    invitation_url: invitationUrl,
+    expires_in: "7 days",
+  };
+}
+
+function assertEmailReady() {
+  const sender = platformEmailConfiguration();
+  if (!sender.configured) {
+    throw new Error("Configure AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL before sending invitations.");
+  }
+  return sender;
+}
+
+export async function adminCommunicationsSnapshot() {
+  const sql = await getPlatformSql();
+  await ensureStarterTemplate(sql);
+  const templates = await sql`
+    SELECT * FROM notification_templates
+     WHERE purpose = 'workspace_invitation' AND channel = 'email'
+     ORDER BY CASE status WHEN 'published' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+              updated_at DESC`;
+  const deliveries = await sql`
+    SELECT delivery.*, template.name AS template_name, workspace.name AS workspace_name
+      FROM notification_deliveries delivery
+      LEFT JOIN notification_templates template ON template.id = delivery.template_id
+      LEFT JOIN platform_workspaces workspace ON workspace.id = delivery.workspace_id
+     WHERE delivery.channel = 'email'
+     ORDER BY delivery.queued_at DESC
+     LIMIT 150`;
+  const invitations = await adminWorkspaceInvitationsSnapshot();
+  const invitationById = new Map(invitations.map((item) => [item.id, item]));
+  return {
+    sender: platformEmailConfiguration(),
+    variables: INVITATION_TEMPLATE_VARIABLES,
+    templates: templates.map(publicTemplate),
+    deliveries: deliveries.map((delivery) => publicDelivery(delivery, invitationById.get(delivery.invitation_id))),
+  };
+}
+
+export async function createInvitationTemplate(actor, input) {
+  const sql = await getPlatformSql();
+  const template = normalizeInvitationTemplate(input);
+  const id = `template_${crypto.randomUUID()}`;
+  try {
+    const [row] = await sql.begin(async (tx) => {
+      const inserted = await tx`
+        INSERT INTO notification_templates
+          (id, purpose, channel, name, description, subject, content, status, version, created_by, updated_by)
+        VALUES
+          (${id}, 'workspace_invitation', 'email', ${template.name}, ${template.description},
+           ${template.subject}, ${tx.json(templateContent(template))}, ${template.status}, 1,
+           ${actor.userId}, ${actor.userId})
+        RETURNING *`;
+      await audit(tx, actor.userId, "notification_template", id, "notification_template.created", null, publicTemplate(inserted[0]));
+      return inserted;
+    });
+    return publicTemplate(row);
+  } catch (error) {
+    if (error?.code === "23505") throw new Error("An active template with this name already exists.");
+    throw error;
+  }
+}
+
+export async function updateInvitationTemplate(actor, templateIdInput, input) {
+  const sql = await getPlatformSql();
+  const templateId = requiredText(templateIdInput, "Template ID", 220);
+  return sql.begin(async (tx) => {
+    const beforeRow = await templateRow(tx, templateId);
+    const before = publicTemplate(beforeRow);
+    const next = normalizeInvitationTemplate({ ...before, ...input });
+    try {
+      const [row] = await tx`
+        UPDATE notification_templates
+           SET name = ${next.name}, description = ${next.description}, subject = ${next.subject},
+               content = ${tx.json(templateContent(next))}, status = ${next.status},
+               version = version + 1, updated_by = ${actor.userId}, updated_at = now()
+         WHERE id = ${templateId}
+         RETURNING *`;
+      await audit(tx, actor.userId, "notification_template", templateId, `notification_template.${next.status === "archived" ? "archived" : "updated"}`, before, publicTemplate(row));
+      return publicTemplate(row);
+    } catch (error) {
+      if (error?.code === "23505") throw new Error("An active template with this name already exists.");
+      throw error;
+    }
+  });
+}
+
+export async function sendInvitationTemplateTest(actor, input) {
+  assertEmailReady();
+  const recipientEmail = normalizeEmail(input.email);
+  const template = normalizeInvitationTemplate(input.template);
+  const rendered = renderInvitationEmail(template, {
+    recipient_name: "Alex Morgan",
+    recipient_email: recipientEmail,
+    workspace_name: "Northstar Workspace",
+    role_names: "Content Manager, Publishing Viewer",
+    inviter_name: actor.name || actor.email || "AgenticThat",
+    invitation_url: platformAuthLink("/join-workspace", "test-invitation-preview"),
+    expires_in: "7 days",
+  });
+  const result = await sendPlatformAuthEmail({
+    to: recipientEmail,
+    subject: `[TEST] ${rendered.subject}`,
+    text: rendered.text,
+    html: rendered.html,
+  });
+  const sql = await getPlatformSql();
+  await audit(sql, actor.userId, "notification_template", null, "notification_template.test_sent", null, {
+    templateName: template.name,
+    recipientEmail,
+    provider: result.provider,
+  });
+  return { recipientEmail, provider: result.provider };
+}
+
+async function markDeliveryAttempt(sql, deliveryId, values) {
+  const status = values.error ? "failed" : "sent";
+  const [row] = await sql`
+    UPDATE notification_deliveries
+       SET status = ${status}, provider = ${values.provider || null},
+           provider_message_id = ${values.messageId || null}, error = ${values.error || null},
+           attempt_count = attempt_count + 1, last_attempt_at = now(),
+           sent_at = ${status === "sent" ? new Date().toISOString() : null}, updated_at = now()
+     WHERE id = ${deliveryId}
+     RETURNING *`;
+  return row;
+}
+
+async function deliverInvitation({ sql, actor, delivery, template, context, invitationUrl }) {
+  const rendered = renderInvitationEmail(privateTemplate(template), renderContext({
+    actor,
+    recipientName: delivery.recipient_name,
+    recipientEmail: delivery.recipient_email,
+    workspaceName: context.workspace.name,
+    roleNames: context.roleNames,
+    invitationUrl,
+  }));
+  try {
+    const result = await sendPlatformAuthEmail({
+      to: delivery.recipient_email,
+      subject: rendered.subject,
+      text: rendered.text,
+      html: rendered.html,
+    });
+    const row = await markDeliveryAttempt(sql, delivery.id, result);
+    await audit(sql, actor.userId, "notification_delivery", delivery.id, "notification_delivery.sent", null, {
+      invitationId: delivery.invitation_id,
+      recipientEmail: delivery.recipient_email,
+      provider: result.provider,
+      attemptCount: row.attempt_count,
+    });
+    return { row, error: null };
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : "Email delivery failed.").slice(0, 1000);
+    const row = await markDeliveryAttempt(sql, delivery.id, { error: message });
+    await audit(sql, actor.userId, "notification_delivery", delivery.id, "notification_delivery.failed", null, {
+      invitationId: delivery.invitation_id,
+      recipientEmail: delivery.recipient_email,
+      error: message,
+      attemptCount: row.attempt_count,
+    });
+    return { row, error: message };
+  }
+}
+
+export async function sendAdminWorkspaceInvitation(actor, input) {
+  assertEmailReady();
+  const sql = await getPlatformSql();
+  const recipientEmail = normalizeEmail(input.email);
+  const recipientName = String(input.recipientName || "").trim().slice(0, 100);
+  const templateId = requiredText(input.templateId, "Template", 220);
+  const context = await invitationContext(sql, input.workspaceId, input.roleIds);
+  const template = await templateRow(sql, templateId, { published: true });
+  const templateValue = privateTemplate(template);
+  const baseRenderValues = {
+    actor,
+    recipientName,
+    recipientEmail,
+    workspaceName: context.workspace.name,
+    roleNames: context.roleNames,
+  };
+  renderInvitationEmail(templateValue, renderContext({
+    ...baseRenderValues,
+    invitationUrl: platformAuthLink("/join-workspace", "invitation-validation"),
+  }));
+  const invitation = await inviteWorkspaceMember(
+    { ...actor, workspaceId: context.workspace.id },
+    { email: recipientEmail, roleIds: context.roleIds },
+  );
+  const invitationUrl = platformAuthLink("/join-workspace", invitation.token);
+  const subject = renderInvitationEmail(templateValue, renderContext({
+    ...baseRenderValues,
+    invitationUrl,
+  })).subject;
+  const deliveryId = `delivery_${crypto.randomUUID()}`;
+  let delivery;
+  try {
+    [delivery] = await sql`
+      INSERT INTO notification_deliveries
+        (id, invitation_id, template_id, template_version, template_snapshot,
+         recipient_name, recipient_email, workspace_id, role_ids, channel,
+         subject_snapshot, status, created_by)
+      VALUES
+        (${deliveryId}, ${invitation.id}, ${template.id}, ${template.version},
+         ${sql.json({ ...templateValue, name: template.name })}, ${recipientName}, ${recipientEmail},
+         ${context.workspace.id}, ${sql.json(context.roleIds)}, 'email', ${subject}, 'queued', ${actor.userId})
+      RETURNING *`;
+  } catch (error) {
+    await cancelWorkspaceInvitation(
+      { ...actor, workspaceId: context.workspace.id },
+      invitation.id,
+    ).catch((cancelError) => console.error("Unable to roll back an untracked workspace invitation", cancelError));
+    throw error;
+  }
+  const result = await deliverInvitation({ sql, actor, delivery, template, context, invitationUrl });
+  return {
+    delivery: publicDelivery({ ...result.row, template_name: template.name, workspace_name: context.workspace.name }, invitation),
+    error: result.error,
+  };
+}
+
+async function deliveryContext(sql, deliveryIdInput) {
+  const deliveryId = requiredText(deliveryIdInput, "Delivery ID", 220);
+  const [delivery] = await sql`
+    SELECT delivery.*, template.name AS template_name, workspace.name AS workspace_name
+      FROM notification_deliveries delivery
+      LEFT JOIN notification_templates template ON template.id = delivery.template_id
+      LEFT JOIN platform_workspaces workspace ON workspace.id = delivery.workspace_id
+     WHERE delivery.id = ${deliveryId} LIMIT 1`;
+  if (!delivery) throw new Error("Invitation delivery not found.");
+  return delivery;
+}
+
+export async function retryAdminWorkspaceInvitation(actor, deliveryIdInput) {
+  assertEmailReady();
+  const sql = await getPlatformSql();
+  const delivery = await deliveryContext(sql, deliveryIdInput);
+  const context = await invitationContext(sql, delivery.workspace_id, delivery.role_ids);
+  const template = delivery.template_snapshot;
+  const [claimed] = await sql`
+    UPDATE notification_deliveries
+       SET status = 'queued', error = NULL, updated_at = now()
+     WHERE id = ${delivery.id}
+       AND (status <> 'queued' OR updated_at < now() - interval '2 minutes')
+     RETURNING *`;
+  if (!claimed) throw new Error("This invitation is already being processed. Refresh its status in a moment.");
+  let invitation;
+  try {
+    invitation = await resendWorkspaceInvitation(
+      { ...actor, workspaceId: context.workspace.id },
+      delivery.invitation_id,
+    );
+  } catch (error) {
+    await sql`
+      UPDATE notification_deliveries
+         SET status = ${delivery.status}, error = ${delivery.error}, updated_at = now()
+       WHERE id = ${delivery.id} AND status = 'queued'`;
+    throw error;
+  }
+  const result = await deliverInvitation({
+    sql,
+    actor,
+    delivery: { ...delivery, ...claimed },
+    template,
+    context,
+    invitationUrl: platformAuthLink("/join-workspace", invitation.token),
+  });
+  return {
+    delivery: publicDelivery({ ...result.row, template_name: delivery.template_name, workspace_name: context.workspace.name }, invitation),
+    error: result.error,
+  };
+}
+
+export async function cancelAdminWorkspaceInvitation(actor, deliveryIdInput) {
+  const sql = await getPlatformSql();
+  const delivery = await deliveryContext(sql, deliveryIdInput);
+  const invitation = await cancelWorkspaceInvitation(
+    { ...actor, workspaceId: delivery.workspace_id },
+    delivery.invitation_id,
+  );
+  await audit(sql, actor.userId, "notification_delivery", delivery.id, "notification_delivery.invitation_canceled", null, {
+    invitationId: invitation.id,
+    recipientEmail: delivery.recipient_email,
+  });
+  return { id: delivery.id, invitationStatus: invitation.status };
+}

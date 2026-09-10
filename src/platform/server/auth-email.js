@@ -36,7 +36,7 @@ export function platformAuthEmailTemplate({
     preheader: escapeHtml(preheader),
     eyebrow: escapeHtml(eyebrow),
     title: escapeHtml(title),
-    introduction: escapeHtml(introduction),
+    introduction: escapeHtml(introduction).replace(/\r?\n/g, "<br>"),
     actionLabel: escapeHtml(actionLabel),
     actionUrl: escapeHtml(actionUrl),
     expiry: escapeHtml(expiry),
@@ -127,9 +127,11 @@ export async function sendPlatformAuthEmail({ to, subject, text, html }) {
       method: "POST",
       headers: { authorization: `Bearer ${resendKey}`, "content-type": "application/json" },
       body: JSON.stringify({ from, to: [to], subject, text, html }),
+      signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error(`Authentication email provider returned HTTP ${response.status}.`);
-    return;
+    if (!response.ok) throw new Error(`Email provider returned HTTP ${response.status}.`);
+    const result = await response.json().catch(() => ({}));
+    return { provider: "resend", messageId: String(result.id || "") || null, skipped: false };
   }
 
   if (webhookUrl && from) {
@@ -141,15 +143,32 @@ export async function sendPlatformAuthEmail({ to, subject, text, html }) {
         ...(secret ? { authorization: `Bearer ${secret}` } : {}),
       },
       body: JSON.stringify({ from, to, subject, text, html }),
+      signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error(`Authentication email webhook returned HTTP ${response.status}.`);
-    return;
+    if (!response.ok) throw new Error(`Email webhook returned HTTP ${response.status}.`);
+    const result = await response.json().catch(() => ({}));
+    return { provider: "webhook", messageId: String(result.id || result.messageId || "") || null, skipped: false };
   }
 
   if (process.env.NODE_ENV === "production") {
     throw new Error("AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL are required.");
   }
   console.warn(`Authentication email for ${to} was not sent because no development email provider is configured.`);
+  return { provider: "development", messageId: null, skipped: true };
+}
+
+export function platformEmailConfiguration() {
+  const from = String(process.env.AUTH_EMAIL_FROM || "").trim();
+  const provider = process.env.RESEND_API_KEY?.trim()
+    ? "Resend"
+    : process.env.AUTH_EMAIL_WEBHOOK_URL?.trim()
+      ? "Email webhook"
+      : null;
+  return {
+    configured: Boolean(from && provider),
+    from: from || "Not configured",
+    provider,
+  };
 }
 
 export async function sendVerificationEmail(email, token) {

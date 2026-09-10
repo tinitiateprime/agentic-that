@@ -52,13 +52,15 @@ test("verification delivery sends a polished HTML email with a useful plain-text
   process.env.PLATFORM_PUBLIC_URL = "https://agenticthat.com";
   globalThis.fetch = async (url, options) => {
     request = { url, options };
-    return new Response("{}", { status: 200 });
+    return Response.json({ id: "email_123" });
   };
 
   try {
-    await sendVerificationEmail("person@example.com", "a".repeat(48));
+    const delivery = await sendVerificationEmail("person@example.com", "a".repeat(48));
     const payload = JSON.parse(request.options.body);
+    assert.deepEqual(delivery, { provider: "resend", messageId: "email_123", skipped: false });
     assert.equal(request.url, "https://api.resend.com/emails");
+    assert.ok(request.options.signal instanceof AbortSignal);
     assert.equal(payload.subject, "Confirm your email address | AgenticThat");
     assert.match(payload.html, /Confirm your email address/);
     assert.match(payload.html, /This secure link expires in 24 hours/);
