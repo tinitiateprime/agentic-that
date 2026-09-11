@@ -1515,7 +1515,7 @@ function UnifiedComposer({
                 </button>
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
                   {platformAccounts.map(account => <div className={`composer-account-group ${account.platform === 'linkedin' ? 'linkedin-destinations' : ''}`} key={account.id}>
-                    {composerDestinationChoices(account).map(destination => <label key={destination.key} className={accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedDestinationKeys.includes(destination.key)} onChange={() => toggleDestination(destination.key)} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
+                    {composerDestinationChoices(account).map(destination => <label key={destination.key} className={`${accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}${destination.linkedinPage ? ' managed-linkedin-page' : account.platform === 'linkedin' ? ' linkedin-personal-profile' : ''}`}><input type='checkbox' checked={selectedDestinationKeys.includes(destination.key)} onChange={() => toggleDestination(destination.key)} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
                   </div>)}
                 </div>}
                 {platform === 'linkedin' && selectedCount > 0 && <div className='composer-linkedin-copy-list'>

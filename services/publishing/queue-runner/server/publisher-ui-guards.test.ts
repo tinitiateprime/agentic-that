@@ -95,6 +95,7 @@ test("LinkedIn composer exposes personal and managed Page destinations with inde
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   assert.match(appSource, /Personal profile/);
   assert.match(appSource, /account\.linkedinManagedPages/);
+  assert.match(appSource, /managed-linkedin-page/);
   assert.match(appSource, /composer-linkedin-copy-list/);
   assert.match(appSource, /linkedinPageId: destination\.linkedinPage\?\.id/);
   assert.match(appSource, /destinationDescriptions\[destination\.key\]/);

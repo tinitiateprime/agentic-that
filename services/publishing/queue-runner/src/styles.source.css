@@ -998,6 +998,8 @@ textarea, input[type="datetime-local"], .field input[type="text"] {
 .composer-account-choices small { color: #74857E; font-size: 8px; }
 .composer-account-group { display: grid; gap: 5px; }
 .composer-account-group.linkedin-destinations { padding: 4px; border: 1px solid #DCE7F2; border-radius: 9px; background: #F7FAFD; }
+.composer-account-group.linkedin-destinations > .managed-linkedin-page { position: relative; width: calc(100% - 16px); margin-left: 16px; background: #FBFDFF; }
+.composer-account-group.linkedin-destinations > .managed-linkedin-page::before { content: ""; position: absolute; left: -11px; top: -6px; width: 7px; height: 26px; border-left: 1px solid #B9CFE1; border-bottom: 1px solid #B9CFE1; border-radius: 0 0 0 5px; pointer-events: none; }
 .composer-linkedin-copy-list { display: grid; gap: 8px; max-height: 310px; overflow: auto; padding: 0 9px 10px; }
 .composer-linkedin-copy-list .composer-platform-copy { background: #F7FAFD; border-color: #D7E5F1; }
 .composer-linkedin-copy-list .composer-platform-copy textarea { min-height: 82px; }
