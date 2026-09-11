@@ -841,7 +841,14 @@ async function runAccountQueue(
         signal.throwIfAborted();
       } catch (error) {
         hadFailure = true;
-        const message = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+        const originalMessage = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+        const youtubeStudioReview = !signal.aborted
+          && finalActionSubmitted
+          && account.platform === "youtube"
+          && upload.postFormat === "video";
+        const message = youtubeStudioReview && !/check youtube studio/i.test(originalMessage)
+          ? `YouTube accepted Publish, but video completion was not confirmed. Check YouTube Studio before retrying. Detail: ${originalMessage}`
+          : originalMessage;
         const visibleRisk = signal.aborted ? "" : await visiblePublishingRiskSignal(page).catch(() => "");
         const risk = signal.aborted
           ? null
@@ -866,7 +873,7 @@ async function runAccountQueue(
         await updateUploadStatus(upload.id, "failed", `Automation ${trigger} run ${automationRunId} failed: ${message}`);
         if (runPostId) await finishAutomationRunPost(runPostId, "failed", message);
         await browser.update({
-          state: signal.aborted ? "stopped" : "failed",
+          state: signal.aborted ? "stopped" : youtubeStudioReview ? "review" : "failed",
           detail: message,
           currentItem: upload.title || upload.originalName || "Post",
           currentIndex: uploadIndex + 1,

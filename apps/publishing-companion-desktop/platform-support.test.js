@@ -59,3 +59,14 @@ test("macOS release rebuilds the host DMG helper and verifies retry output", asy
   assert.match(source, /attempt <= 3/);
   assert.match(source, /hdiutil", \["verify"/);
 });
+
+test("uncertain YouTube video delivery is presented as a Studio review, not a failed post", async () => {
+  const [controlSource, styles] = await Promise.all([
+    readFile(new URL("./control.js", import.meta.url), "utf8"),
+    readFile(new URL("./control.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(controlSource, /review: "Check Studio"/);
+  assert.match(controlSource, /review: "history"/);
+  assert.match(styles, /\.timeline-mark\.review/);
+  assert.match(styles, /\.state-pill\.review/);
+});

@@ -13,7 +13,12 @@ import {
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
-import { YOUTUBE_PUBLISH_CONFIRMATION_TEXT } from "./services/publishers/youtube.js";
+import {
+  YOUTUBE_PUBLISH_CONFIRMATION_TEXT,
+  YOUTUBE_VIDEO_REJECTION_TEXT,
+  YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT,
+  youtubeVideoCompletionTimeout,
+} from "./services/publishers/youtube.js";
 
 test("LinkedIn publishing ignores role-button duplicates outside the current viewport", () => {
   const viewport = { width: 1280, height: 900 };
@@ -64,10 +69,32 @@ test("Facebook recognizes its durable authenticated cookie pair", () => {
   assert.equal(hasFacebookAuthenticationCookies([{ name: "datr", value: "browser-only" }]), false);
 });
 
-test("Facebook and YouTube recognize accepted long-running video publishing", () => {
+test("Facebook and YouTube recognize accepted long-running video publishing", t => {
+  const configuredTimeout = process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS;
+  delete process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS;
+  t.after(() => {
+    if (configuredTimeout === undefined) delete process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS;
+    else process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS = configuredTimeout;
+  });
   assert.match("Your video is being processed", FACEBOOK_POST_ACCEPTED_TEXT);
   assert.match("Video processing", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
   assert.match("Processing will begin shortly", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
+  assert.match("Uploading 17%", YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT);
+  assert.match("Processing abandoned", YOUTUBE_VIDEO_REJECTION_TEXT);
+  assert.ok(youtubeVideoCompletionTimeout(126_716_294) > 30 * 60_000);
+});
+
+test("YouTube video completion ignores stale failures outside the active upload surface", async () => {
+  const youtube = await readFile(new URL("./services/publishers/youtube.ts", import.meta.url), "utf8");
+  const waitSource = youtube.slice(
+    youtube.indexOf("async function waitForPublishComplete"),
+    youtube.indexOf("async function openYouTubeCreateMenu"),
+  );
+  assert.match(waitSource, /ytcp-uploads-dialog[\s\S]{0,120}YOUTUBE_VIDEO_REJECTION_TEXT/);
+  assert.match(waitSource, /ytcp-toast, tp-yt-paper-toast/);
+  assert.match(waitSource, /currentYouTubeVideoRow/);
+  assert.doesNotMatch(waitSource, /page\.getByText\(YOUTUBE_VIDEO_REJECTION_TEXT/);
+  assert.match(waitSource, /Keeping Studio open/);
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {

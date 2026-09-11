@@ -41,7 +41,7 @@ export type DesktopExternalBrowserLayout = {
 };
 
 export type DesktopBrowserActivity = {
-  state?: "opening" | "waiting" | "publishing" | "posted" | "failed" | "stopped";
+  state?: "opening" | "waiting" | "publishing" | "posted" | "review" | "failed" | "stopped";
   detail?: string;
   currentItem?: string;
   currentIndex?: number;

@@ -808,6 +808,9 @@ function getDeliveryOutcome(upload: PlatformUpload, account?: PlatformAccount): 
     return { tone: 'posted', label: 'Posted', detail: `Confirmed delivered ${formatEventTime(timestamp)}`, timestamp };
   }
   if (upload.publishActionState === 'uncertain') {
+    if (upload.platform === 'youtube' && upload.postFormat === 'video') {
+      return { tone: 'uncertain', label: 'Check YouTube Studio', detail: upload.failureReason || 'YouTube accepted Publish, but final upload or processing could not be confirmed. Inspect Studio before trying again.', timestamp };
+    }
     return { tone: 'uncertain', label: 'Confirmation unclear', detail: upload.failureReason || 'The final action was not retried. Inspect the platform before trying again.', timestamp };
   }
   if (upload.statusDetail === 'reconnect_required') {

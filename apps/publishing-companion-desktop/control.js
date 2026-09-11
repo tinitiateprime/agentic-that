@@ -54,6 +54,7 @@ function stateLabel(session) {
     waiting: "Waiting",
     publishing: "Publishing",
     posted: "Posted",
+    review: "Check Studio",
     failed: "Needs review",
     stopped: "Stopped",
   };
@@ -262,6 +263,7 @@ function createTimelineItem(session) {
     waiting: "history",
     publishing: "send",
     posted: "check",
+    review: "history",
     failed: "alert",
     stopped: "x",
   };

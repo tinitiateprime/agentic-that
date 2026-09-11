@@ -33,6 +33,17 @@ test("publishing API supports login, role-scoped handoffs, scheduling, and failu
     retry: false,
     state: "uncertain",
   });
+  assert.deepEqual(centralDeliveryFailure({
+    platform: "youtube",
+    postFormat: "video",
+    status: "failed",
+    publishActionState: "uncertain",
+    failureReason: "Automation run failed: Processing abandoned",
+  } as never), {
+    message: "YouTube accepted Publish, but the video upload or processing could not be confirmed. Check YouTube Studio before retrying.",
+    retry: false,
+    state: "uncertain",
+  });
   const server = createPublishingHttpServer({ host: "127.0.0.1", port: 0, startBackgroundServices: false });
   await new Promise<void>((resolve, reject) => {
     if (server.listening) return resolve();

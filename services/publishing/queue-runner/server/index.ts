@@ -401,6 +401,12 @@ async function updateCentralJobStatus(
 }
 
 export function centralDeliveryFailure(upload?: PlatformUpload) {
+  const finalActionUncertain = upload?.publishActionState === "submitted" || upload?.publishActionState === "uncertain";
+  if (upload?.platform === "youtube" && upload.postFormat === "video" && finalActionUncertain) return {
+    message: "YouTube accepted Publish, but the video upload or processing could not be confirmed. Check YouTube Studio before retrying.",
+    retry: false,
+    state: "uncertain",
+  };
   const recordedFailure = upload?.failureReason?.trim();
   if (recordedFailure) return {
     message: recordedFailure,
@@ -417,7 +423,6 @@ export function centralDeliveryFailure(upload?: PlatformUpload) {
     retry: true,
     state: "failed",
   };
-  const finalActionUncertain = upload.publishActionState === "submitted" || upload.publishActionState === "uncertain";
   if (finalActionUncertain) return {
     message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
     retry: false,

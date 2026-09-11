@@ -253,32 +253,100 @@ async function clickNextWhenReady(page: Page) {
 
 
 export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|processing)|Your video has been published|Processing will begin shortly/i;
+export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i;
+export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress/i;
 
-async function waitForPublishComplete(page: Page) {
+export function youtubeVideoCompletionTimeout(sizeBytes: number) {
+  const configured = Number(process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 60_000) return configured;
+
+  // Keep Studio alive long enough to send the file even on a slow upstream
+  // connection. Server-side processing may continue after the bytes finish.
+  const estimatedAtHalfMegabit = (Math.max(0, sizeBytes) * 8 * 1000) / 500_000;
+  return Math.max(15 * 60_000, Math.min(2 * 60 * 60_000, estimatedAtHalfMegabit + 5 * 60_000));
+}
+
+async function currentYouTubeVideoRow(page: Page, title: string) {
+  const normalizedTitle = title.trim().slice(0, 160);
+  if (!normalizedTitle) return null;
+  const titleMatcher = new RegExp(escapeRegExp(normalizedTitle), "i");
+  return firstVisible([
+    page.locator("ytcp-video-row").filter({ hasText: titleMatcher }),
+    page.locator("#row-container").filter({ hasText: titleMatcher }),
+  ]);
+}
+
+async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes: number) {
   console.log("Waiting for YouTube publish confirmation...");
-  const deadline = Date.now() + 180_000;
+  const timeout = youtubeVideoCompletionTimeout(sizeBytes);
+  const deadline = Date.now() + timeout;
+  let uploadDialogGoneAt: number | null = null;
+  let sawCurrentUploadProgress = false;
+  let lastProgress = "";
   let confirmed: Locator | null = null;
   while (Date.now() < deadline) {
     confirmed = await waitForVisible([
       page.locator('ytcp-video-share-dialog').first(),
-      page.getByText(YOUTUBE_PUBLISH_CONFIRMATION_TEXT).first(),
+      page.locator("ytcp-uploads-dialog").getByText(YOUTUBE_PUBLISH_CONFIRMATION_TEXT),
+      page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
     ], 500);
     if (confirmed) break;
 
     const rejected = await waitForVisible([
-      page.getByText(/Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i).first(),
-      page.locator('[role="alert"]').filter({ hasText: /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i }).first(),
+      page.locator("ytcp-uploads-dialog").getByText(YOUTUBE_VIDEO_REJECTION_TEXT),
+      page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_VIDEO_REJECTION_TEXT }),
     ], 100);
-    if (rejected) throw new Error((await rejected.textContent())?.trim() || "YouTube rejected the video upload.");
-
-    const uploadDialogVisible = await page.locator("ytcp-uploads-dialog").first().isVisible().catch(() => false);
-    if (!uploadDialogVisible) {
-      console.log("YouTube closed the upload dialog after accepting the final action.");
-      return;
+    if (rejected) {
+      const detail = (await rejected.textContent())?.trim() || "YouTube did not finish the video upload.";
+      throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
     }
-    await page.waitForTimeout(300);
+
+    const uploadDialog = await firstVisible([page.locator("ytcp-uploads-dialog")]);
+    if (uploadDialog) {
+      uploadDialogGoneAt = null;
+      const dialogText = (await uploadDialog.textContent().catch(() => "")) || "";
+      const progress = dialogText.match(/Uploading\s+\d{1,3}(?:\.\d+)?%/i)?.[0] || "";
+      if (progress && progress !== lastProgress) {
+        lastProgress = progress;
+        sawCurrentUploadProgress = true;
+        console.log(`YouTube video is still ${progress.toLowerCase()}. Keeping Studio open.`);
+      }
+      await page.waitForTimeout(500);
+      continue;
+    }
+
+    uploadDialogGoneAt ??= Date.now();
+    const currentRow = await currentYouTubeVideoRow(page, videoTitle);
+    if (currentRow) {
+      const rowText = (await currentRow.textContent().catch(() => "")) || "";
+      if (YOUTUBE_VIDEO_REJECTION_TEXT.test(rowText)) {
+        const detail = rowText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
+        throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
+      }
+      const progress = rowText.match(/Uploading\s+\d{1,3}(?:\.\d+)?%/i)?.[0] || "";
+      if (YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT.test(rowText)) {
+        sawCurrentUploadProgress = true;
+        if (progress && progress !== lastProgress) {
+          lastProgress = progress;
+          console.log(`YouTube video is still ${progress.toLowerCase()}. Keeping Studio open.`);
+        }
+        await page.waitForTimeout(750);
+        continue;
+      }
+      if (sawCurrentUploadProgress || Date.now() - uploadDialogGoneAt >= 5_000) {
+        console.log("YouTube finished transferring the video. Studio can continue server-side processing.");
+        return;
+      }
+    }
+
+    if (Date.now() - uploadDialogGoneAt >= 30_000) {
+      throw new Error("YouTube accepted Publish, but the current video could not be verified in Studio. Check YouTube Studio before retrying.");
+    }
+    await page.waitForTimeout(500);
   }
-  if (!confirmed) throw new Error("YouTube publish confirmation did not appear.");
+  if (!confirmed) {
+    throw new Error(`YouTube accepted Publish, but the video upload did not finish within ${Math.round(timeout / 60_000)} minutes. Check YouTube Studio before retrying.`);
+  }
 
   console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
 
@@ -1027,7 +1095,7 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await selectYouTubeOption(page, "visibility", options);
   const action = youtubeFinalAction(options.visibility);
   await clickDialogButtonWhenReady(page, [action], action, accountLogin?.onFinalActionSubmitted);
-  await waitForPublishComplete(page);
+  await waitForPublishComplete(page, videoTitle, upload.size);
 
   console.log("Step completed: video published.");
   return { success: true };

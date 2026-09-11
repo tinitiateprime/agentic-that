@@ -190,6 +190,7 @@ h3 { margin: 4px 0 0; color: var(--ink); font-size: 17px; line-height: 1.3; lett
 .session-tab small { color: var(--muted); font-size: 9px; }
 .session-tab > i { width: 8px; height: 8px; border-radius: 50%; background: #d49a2a; }
 .session-tab > i.posted { background: var(--success); }
+.session-tab > i.review { background: var(--amber); }
 .session-tab > i.failed, .session-tab > i.stopped { background: var(--danger); }
 .session-tab .platform-mark { width: 31px; height: 31px; border-radius: 8px; font-size: 9px; }
 
@@ -216,6 +217,7 @@ h3 { margin: 4px 0 0; color: var(--ink); font-size: 17px; line-height: 1.3; lett
 .live-card-header small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .state-pill { padding: 5px 9px; border-radius: 99px; color: #32609d; background: var(--blue-soft); font-size: 9px; font-weight: 850; text-transform: capitalize; }
 .state-pill.posted { color: #15684f; background: var(--success-soft); }
+.state-pill.review { color: #7f5918; background: var(--amber-soft); }
 .state-pill.failed, .state-pill.stopped { color: #9c3541; background: var(--danger-soft); }
 .state-pill.waiting { color: #7f5918; background: var(--amber-soft); }
 .live-browser-slot { height: clamp(330px, 48vh, 560px); border: 0; border-radius: 0; box-shadow: none; }
@@ -267,6 +269,7 @@ h3 { margin: 4px 0 0; color: var(--ink); font-size: 17px; line-height: 1.3; lett
 .timeline-mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: var(--blue); background: var(--blue-soft); }
 .timeline-mark .icon { width: 16px; height: 16px; }
 .timeline-mark.posted { color: var(--success); background: var(--success-soft); }
+.timeline-mark.review { color: var(--amber); background: var(--amber-soft); }
 .timeline-mark.failed, .timeline-mark.stopped { color: var(--danger); background: var(--danger-soft); }
 .timeline-mark.waiting { color: var(--amber); background: var(--amber-soft); }
 .timeline-item strong, .timeline-item small { display: block; }
