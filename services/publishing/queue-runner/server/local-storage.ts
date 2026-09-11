@@ -7,6 +7,7 @@ import nodeCron from "node-cron";
 import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
 import { publishingEngineForPlatform } from "./services/login-surface.js";
 import { publishingSafetyPacingEnabled } from "./services/safety-governor.js";
+import { mergeLinkedInManagedPageInventory } from "./linkedin-managed-page-inventory.js";
 import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import {
   type ActivityLog,
@@ -1449,6 +1450,9 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
     }
     const existing = store.accounts[index];
     const engineChanged = executionEngine !== existing.executionEngine;
+    const linkedinInventory = input.platform === "linkedin"
+      ? mergeLinkedInManagedPageInventory(existing, input)
+      : {};
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName || existing.displayName,
@@ -1463,12 +1467,8 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
         ? false
         : Boolean(input.credentialConfigured) || existing.credentialConfigured,
       safetyStatus: input.enabled === false ? "paused" : existing.safetyStatus === "paused" ? "healthy" : existing.safetyStatus,
-      linkedinManagedPages: input.platform === "linkedin" && input.linkedinManagedPages !== undefined
-        ? input.linkedinManagedPages
-        : existing.linkedinManagedPages,
-      linkedinManagedPagesUpdatedAt: input.platform === "linkedin" && input.linkedinManagedPagesUpdatedAt
-        ? input.linkedinManagedPagesUpdatedAt
-        : existing.linkedinManagedPagesUpdatedAt,
+      linkedinManagedPages: linkedinInventory.linkedinManagedPages ?? existing.linkedinManagedPages,
+      linkedinManagedPagesUpdatedAt: linkedinInventory.linkedinManagedPagesUpdatedAt ?? existing.linkedinManagedPagesUpdatedAt,
       updatedAt: timestamp,
     };
     store.accounts[index] = updated;

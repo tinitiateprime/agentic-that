@@ -7,6 +7,7 @@ import {
   LINKEDIN_POST_ACCEPTED_TEXT,
   LINKEDIN_UPLOAD_ACTIVE_TEXT,
   isLinkedInPublishResponse,
+  isLinkedInManagedPagePostsUrl,
   linkedInManagedPageFromLink,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
@@ -122,6 +123,22 @@ test("LinkedIn managed Page links become stable direct Page-post destinations", 
       pagePostsUrl: "https://www.linkedin.com/company/public-link-page/admin/page-posts/published/",
     },
   );
+});
+
+test("LinkedIn managed Page navigation accepts a canonical numeric admin redirect", () => {
+  assert.equal(isLinkedInManagedPagePostsUrl(
+    "https://www.linkedin.com/company/tinitiate-ai/admin/page-posts/published/",
+    "tinitiate-ai",
+  ), true);
+  assert.equal(isLinkedInManagedPagePostsUrl(
+    "https://www.linkedin.com/company/117884053/admin/page-posts/published/",
+    "tinitiate-ai",
+  ), false);
+  assert.equal(isLinkedInManagedPagePostsUrl(
+    "https://www.linkedin.com/company/117884053/admin/page-posts/published/",
+  ), true);
+  assert.equal(isLinkedInManagedPagePostsUrl("https://example.com/company/117884053/admin/page-posts/published/"), false);
+  assert.equal(isLinkedInManagedPagePostsUrl("https://www.linkedin.com/company/117884053/admin/dashboard/"), false);
 });
 
 test("normal CI and Companion releases share the complete verification suite", async () => {
