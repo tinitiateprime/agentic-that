@@ -8,6 +8,10 @@ import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
 import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
 import type { YouTubeOptions } from "../../../shared/schema.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import {
+  prepareYouTubeCommunityMedia,
+  youtubeCommunityImagePreviewTimeout,
+} from "./youtube-community-media.js";
 
 const YOUTUBE_HOME_URL = "https://www.youtube.com/";
 const YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload";
@@ -354,47 +358,121 @@ async function getCommunityComposer(page: Page) {
   return composer;
 }
 
-async function waitForCommunityImagePreview(page: Page, timeout = 60000) {
-  const composer = await getCommunityComposer(page);
+async function completeCommunityImageEditor(page: Page) {
+  const editor = await firstVisible([
+    page.locator("ytd-backstage-image-editor-renderer, ytd-backstage-image-dialog-renderer").last(),
+    page.locator("[role='dialog']").filter({ hasText: /Crop|Edit (?:image|photo)|Adjust (?:image|photo)/i }).last(),
+    page.locator("tp-yt-paper-dialog").filter({ hasText: /Crop|Edit (?:image|photo)|Adjust (?:image|photo)/i }).last(),
+  ]);
+  if (!editor) return false;
 
-  const previewActions = await waitForVisible([
-    composer.getByText(/Edit preview/i).first(),
-    composer.getByText(/^Delete$/i).first(),
-  ], Math.min(timeout, 15000));
+  const confirmation = await firstVisible([
+    editor.getByRole("button", { name: /^(?:Done|Save|Apply)$/i }).last(),
+    editor.locator("button, yt-button-shape button, tp-yt-paper-button, [role='button']")
+      .filter({ hasText: /^\s*(?:Done|Save|Apply)\s*$/i }).last(),
+  ]);
+  if (!confirmation) return false;
 
-  if (previewActions) {
-    console.log("YouTube Community image preview action is visible.");
-    return;
-  }
+  const disabled = await confirmation.evaluate((element) => Boolean(
+    element.closest("[disabled], [aria-disabled='true']"),
+  )).catch(() => true);
+  if (disabled) return false;
 
-  try {
-    await page.waitForFunction(() => {
-      const roots = Array.from(document.querySelectorAll<HTMLElement>(
-        "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
-      )).filter((root) => {
-        const text = root.textContent ?? "";
-        const rect = root.getBoundingClientRect();
-        const style = window.getComputedStyle(root);
-        return /Image poll|Text poll|Quiz|Video|Visibility/i.test(text)
-          && rect.width > 0
-          && rect.height > 0
-          && style.display !== "none"
-          && style.visibility !== "hidden";
+  console.log("Confirming the YouTube Community image editor...");
+  await confirmation.click({ timeout: 5000 });
+  await page.waitForTimeout(1000);
+  return true;
+}
+
+async function communityImagePreviewState(page: Page) {
+  return page.evaluate(() => {
+    const isVisible = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== "none"
+        && style.visibility !== "hidden";
+    };
+    const roots = Array.from(document.querySelectorAll<HTMLElement>(
+      "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
+    )).filter((root) => {
+      const text = root.textContent ?? "";
+      return isVisible(root) && (
+        root.matches("ytd-backstage-post-dialog-renderer")
+        || (/Visibility/i.test(text) && /Post/i.test(text))
+        || Boolean(root.querySelector("#contenteditable-root, [contenteditable='true'], textarea"))
+      );
+    });
+
+    for (const root of roots) {
+      const rejection = Array.from(root.querySelectorAll<HTMLElement>(
+        "[role='alert'], yt-formatted-string#message, #message, .message, [class*='error']",
+      ))
+        .filter(isVisible)
+        .map((element) => element.textContent?.replace(/\s+/g, " ").trim() || "")
+        .find((text) => /could(?:n't| not) upload|upload failed|file.{0,30}too (?:large|big)|unsupported.{0,30}(?:image|file)|invalid.{0,30}file|something went wrong/i.test(text));
+      if (rejection) return { ready: false, rejection };
+
+      const previewAction = Array.from(root.querySelectorAll<HTMLElement>(
+        "button, yt-button-shape button, ytd-button-renderer, tp-yt-paper-button, [role='button']",
+      )).some((element) => {
+        const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
+        const label = element.getAttribute("aria-label") || "";
+        const isPreviewAction = /^(?:Edit preview|Edit image|Edit photo|Remove image|Remove photo|Delete)$/i;
+        return isVisible(element) && (isPreviewAction.test(text) || isPreviewAction.test(label));
       });
+      if (previewAction) return { ready: true, rejection: "" };
 
-      return roots.some((root) => Array.from(root.querySelectorAll<HTMLImageElement>("img")).some((image) => {
+      const renderedAttachment = Array.from(root.querySelectorAll<HTMLElement>(
+        "ytd-backstage-image-renderer, ytd-backstage-image-preview-renderer, ytd-backstage-attachment-renderer, [class*='image-preview'], [id*='image-preview'], [aria-label*='Remove image' i], [aria-label*='Edit image' i]",
+      )).some((element) => {
+        const rect = element.getBoundingClientRect();
+        return isVisible(element) && rect.width >= 90 && rect.height >= 90;
+      });
+      if (renderedAttachment) return { ready: true, rejection: "" };
+
+      const renderedImage = Array.from(root.querySelectorAll<HTMLImageElement>("img")).some((image) => {
         const rect = image.getBoundingClientRect();
         const src = image.currentSrc || image.src || "";
-        const looksLikePostImage = rect.width >= 90 && rect.height >= 90 && image.naturalWidth >= 40 && image.naturalHeight >= 40;
+        const looksLikePostImage = rect.width >= 90
+          && rect.height >= 90
+          && image.naturalWidth >= 40
+          && image.naturalHeight >= 40;
         const looksLikeAvatar = /avatar|profile|yt3\.ggpht|s32-|s48-|s88-/i.test(src);
-        return looksLikePostImage && !looksLikeAvatar;
-      }));
-    }, undefined, { timeout });
-    console.log("YouTube Community image preview is visible.");
-    return;
-  } catch {
-    throw new Error("YouTube Community image preview did not appear after upload.");
+        return isVisible(image) && looksLikePostImage && !looksLikeAvatar;
+      });
+      if (renderedImage) return { ready: true, rejection: "" };
+
+      const renderedBackground = Array.from(root.querySelectorAll<HTMLElement>("*"))
+        .filter(isVisible)
+        .some((element) => {
+          const rect = element.getBoundingClientRect();
+          const background = window.getComputedStyle(element).backgroundImage;
+          return rect.width >= 90
+            && rect.height >= 90
+            && background !== "none"
+            && /(?:blob:|data:image|googleusercontent|ggpht)/i.test(background);
+        });
+      if (renderedBackground) return { ready: true, rejection: "" };
+    }
+    return { ready: false, rejection: "" };
+  });
+}
+
+async function waitForCommunityImagePreview(page: Page, timeout = 90000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    await completeCommunityImageEditor(page);
+    const state = await communityImagePreviewState(page);
+    if (state.rejection) throw new Error(`YouTube rejected the Community image: ${state.rejection}`);
+    if (state.ready) {
+      console.log("YouTube Community image preview is visible.");
+      return;
+    }
+    await page.waitForTimeout(500);
   }
+  throw new Error("YouTube Community image preview did not appear after upload.");
 }
 
 async function clickCommunityBlankTextSpace(page: Page) {
@@ -478,14 +556,24 @@ async function clickVisibleCommunityImageControl(page: Page) {
 }
 
 async function setCommunityImageInputFiles(page: Page, composer: Locator, imagePath: string, previousInputCount: number) {
-  const imageInputSelector = 'input[type="file"][accept*="image"], input[type="file"][accept*=".png"], input[type="file"][accept*=".jpg"], input[type="file"][accept*=".jpeg"], input[type="file"]';
-  await page.waitForFunction((count) => document.querySelectorAll('input[type="file"]').length > count, previousInputCount, { timeout: 4000 }).catch(() => undefined);
+  const imageInputSelector = [
+    'input[type="file"][accept*="image" i]',
+    'input[type="file"][accept*=".png" i]',
+    'input[type="file"][accept*=".jpg" i]',
+    'input[type="file"][accept*=".jpeg" i]',
+    'input[type="file"][accept*=".gif" i]',
+    'input[type="file"][accept*=".webp" i]',
+  ].join(", ");
+  await page.waitForFunction(({ count, selector }) => (
+    document.querySelectorAll('input[type="file"]').length > count
+    || document.querySelectorAll(selector).length > 0
+  ), { count: previousInputCount, selector: imageInputSelector }, { timeout: 5000 }).catch(() => undefined);
 
   const composerInputs = composer.locator(imageInputSelector);
   const pageInputs = page.locator(imageInputSelector);
   const composerCount = await composerInputs.count().catch(() => 0);
   const pageCount = await pageInputs.count().catch(() => 0);
-  console.log(`YouTube Community file inputs available: composer=${composerCount}, page=${pageCount}`);
+  console.log(`YouTube Community image inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
     await setLocalInputFile(page, composerInputs.last(), imagePath);
@@ -500,7 +588,7 @@ async function setCommunityImageInputFiles(page: Page, composer: Locator, imageP
   return false;
 }
 
-async function dropCommunityImageOnComposer(page: Page, imagePath: string) {
+async function dropCommunityImageOnComposer(page: Page, imagePath: string, previewTimeout: number) {
   console.log("Dropping image file directly onto YouTube Community composer...");
   const payload = {
     base64: fs.readFileSync(imagePath).toString("base64"),
@@ -545,59 +633,66 @@ async function dropCommunityImageOnComposer(page: Page, imagePath: string) {
 
   await page.waitForTimeout(3000);
   try {
-    await waitForCommunityImagePreview(page, 10000);
+    await waitForCommunityImagePreview(page, previewTimeout);
     return true;
   } catch {
     return false;
   }
 }
 
-async function attachCommunityPostImage(page: Page, imagePath: string) {
+async function attachCommunityPostImage(page: Page, imagePath: string, previewTimeout: number) {
   console.log(`Adding image to YouTube Community post: ${imagePath} (${imageMimeType(imagePath)})`);
 
   const composer = await getCommunityComposer(page);
 
   const fileInputCountBefore = await page.locator('input[type="file"]').count().catch(() => 0);
-  const fileChooserPromise = page.waitForEvent("filechooser", { timeout: 12000 }).catch(() => null);
+  const fileChooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
   const box = await composer.boundingBox();
   if (!box) throw new Error("YouTube Community composer position was not available.");
 
   console.log("Opening YouTube Community image uploader, then setting uploaded file path...");
-  const imageSlotX = box.x + 74;
-  const imageSlotY = box.y + Math.max(96, Math.min(166, box.height - 92));
-  await page.mouse.click(imageSlotX, imageSlotY);
+  const clickedImageControl = await clickVisibleCommunityImageControl(page);
+  if (!clickedImageControl) {
+    const imageSlotX = box.x + 74;
+    const imageSlotY = box.y + Math.max(96, Math.min(166, box.height - 92));
+    await page.mouse.click(imageSlotX, imageSlotY);
+  }
   await page.waitForTimeout(700);
 
   const fileChooser = await fileChooserPromise;
+  let attached = false;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
     await setLocalFileChooserFile(fileChooser, imagePath);
+    attached = true;
   } else {
-    if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
-      const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
+    attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
+    if (!attached) {
+      const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
       await clickVisibleCommunityImageControl(page);
       const retryChooser = await retryChooserPromise;
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
         await setLocalFileChooserFile(retryChooser, imagePath);
-      } else if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
-        if (!await dropCommunityImageOnComposer(page, imagePath)) {
-          throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
-        }
-        return;
+        attached = true;
+      } else {
+        attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
       }
     }
   }
 
-  await page.waitForTimeout(2500);
-  try {
-    await waitForCommunityImagePreview(page, 20000);
-  } catch {
-    if (!await dropCommunityImageOnComposer(page, imagePath)) {
-      throw new Error("YouTube Community image preview did not appear after upload.");
+  if (!attached) {
+    if (!await dropCommunityImageOnComposer(page, imagePath, previewTimeout)) {
+      throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
     }
+    return;
   }
+
+  await page.waitForTimeout(2500);
+  // A successful file assignment can take time to decode and upload. Do not
+  // dispatch the same image again while YouTube is still processing it.
+  await waitForCommunityImagePreview(page, previewTimeout);
 }
 
 async function clickCommunityPostWhenReady(
@@ -819,12 +914,22 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
   await fillCommunityPostDescription(page, upload.caption ?? "");
-  await attachCommunityPostImage(page, imagePath);
-  await waitForCommunityImagePreview(page, 30000);
-  await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
-  await waitForCommunityPostComplete(page);
-  console.log("Step completed: YouTube Community image post published.");
-  return { success: true };
+  const prepared = await prepareYouTubeCommunityMedia(imagePath, upload.mimeType || imageMimeType(imagePath));
+  const previewTimeout = youtubeCommunityImagePreviewTimeout(prepared.sourceByteSize);
+  try {
+    if (prepared.normalized) {
+      console.log(
+        `Prepared a YouTube Community image without cropping: ${prepared.width}x${prepared.height}, ${prepared.byteSize} bytes.`,
+      );
+    }
+    await attachCommunityPostImage(page, prepared.filePath, previewTimeout);
+    await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
+    await waitForCommunityPostComplete(page);
+    console.log("Step completed: YouTube Community image post published.");
+    return { success: true };
+  } finally {
+    await prepared.cleanup();
+  }
 }
 
 async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
