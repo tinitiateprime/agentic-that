@@ -2,6 +2,19 @@ const releaseRepository = process.env.COMPANION_RELEASE_REPOSITORY?.trim() || "t
 const releaseApiBase = `https://api.github.com/repos/${releaseRepository}/releases`;
 const releasePageUrl = `https://github.com/${releaseRepository}/releases/latest`;
 const releaseCacheSeconds = Number(process.env.COMPANION_RELEASE_CACHE_SECONDS || 900);
+const requiredReleaseAssets = new Set([
+  "AgenticThat-Publishing-Companion-Setup.exe",
+  "AgenticThat-Publishing-Companion-Windows-x64-Portable.zip",
+  "AgenticThat-Publishing-Companion-macOS-universal.dmg",
+  "AgenticThat-Publishing-Companion-darwin-universal.zip",
+  "AgenticThat-Publishing-Companion-Linux-x64.deb",
+  "AgenticThat-Publishing-Companion-Linux-x64.rpm",
+  "AgenticThat-Publishing-Companion-Linux-x64.zip",
+  "AgenticThat-Publishing-Companion-Linux-arm64.deb",
+  "AgenticThat-Publishing-Companion-Linux-arm64.rpm",
+  "AgenticThat-Publishing-Companion-Linux-arm64.zip",
+  "SHA256SUMS.txt",
+]);
 // Pin a specific tag (for example v2.1.12-qa.1) to stop tracking the newest published build.
 // NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG is honoured too: the download page used to
 // hard-code its tag from that variable before releases were resolved from the GitHub feed.
@@ -17,26 +30,26 @@ const platformCatalog = [
     architectures: [{ id: "x64", label: "64-bit (x64)", shortLabel: "x64" }],
     downloads: [
       {
-        id: "windows-x64-setup",
-        architecture: "x64",
-        format: "EXE",
-        label: "Installer",
-        asset: "AgenticThat-Publishing-Companion-Setup.exe",
-        detail: "Installs Companion, starts it with Windows, and keeps it updated automatically.",
-        primary: true,
-      },
-      {
         id: "windows-x64-portable",
         architecture: "x64",
         format: "ZIP",
         label: "Portable build",
         asset: "AgenticThat-Publishing-Companion-Windows-x64-Portable.zip",
         detail: "Unzip and run without installing. Updates must be downloaded manually.",
+        primary: true,
+      },
+      {
+        id: "windows-x64-setup",
+        architecture: "x64",
+        format: "EXE",
+        label: "Installer",
+        asset: "AgenticThat-Publishing-Companion-Setup.exe",
+        detail: "Installs Companion, starts it with Windows, and keeps it updated automatically.",
       },
     ],
     steps: [
-      "Run the installer and allow Windows SmartScreen to continue if it appears.",
-      "Companion opens on http://127.0.0.1:8792 and starts with Windows from then on.",
+      "Extract the portable ZIP completely, then run AgenticThat Publishing Companion.exe.",
+      "Allow Windows SmartScreen to continue if it appears. Use the installer instead when you want automatic startup and updates.",
     ],
   },
   {
@@ -159,17 +172,29 @@ function publishedTime(release) {
   return Number.isNaN(value) ? 0 : value;
 }
 
+function isCompleteCompanionRelease(release) {
+  if (!release || release.draft) return false;
+  const names = new Set(Array.isArray(release.assets) ? release.assets.map(asset => asset?.name) : []);
+  return [...requiredReleaseAssets].every(name => names.has(name));
+}
+
 /**
  * Resolves the newest published Companion build. GitHub's `releases/latest` endpoint
  * skips pre-releases, so QA tags such as v2.1.12-qa.1 are only found by listing releases.
  */
 async function fetchLatestRelease() {
   if (pinnedReleaseTag) {
-    return await requestGithub(`/tags/${encodeURIComponent(pinnedReleaseTag)}`) || await requestGithub("/latest");
+    const pinned = await requestGithub(`/tags/${encodeURIComponent(pinnedReleaseTag)}`);
+    if (isCompleteCompanionRelease(pinned)) return pinned;
+    const stable = await requestGithub("/latest");
+    return isCompleteCompanionRelease(stable) ? stable : null;
   }
   const releases = await requestGithub("?per_page=30");
-  const published = Array.isArray(releases) ? releases.filter(release => release && !release.draft) : [];
-  if (published.length === 0) return await requestGithub("/latest");
+  const published = Array.isArray(releases) ? releases.filter(isCompleteCompanionRelease) : [];
+  if (published.length === 0) {
+    const stable = await requestGithub("/latest");
+    return isCompleteCompanionRelease(stable) ? stable : null;
+  }
   return published.reduce((newest, release) => (publishedTime(release) > publishedTime(newest) ? release : newest));
 }
 
