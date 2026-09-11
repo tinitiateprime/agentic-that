@@ -13,6 +13,7 @@ export type ContentPreflightDestination = {
   accountId: string;
   platform: Platform;
   description: string;
+  linkedinPageId?: string;
   scheduledAt?: string;
   scheduleId?: number;
 };
@@ -66,6 +67,10 @@ function normalizedScheduledAt(value: string | undefined) {
 function sameTiming(destination: ContentPreflightDestination, upload: PlatformUpload) {
   return normalizedScheduledAt(destination.scheduledAt) === normalizedScheduledAt(upload.scheduledAt)
     && (destination.scheduleId ?? null) === (upload.scheduleId ?? null);
+}
+
+function samePublishingIdentity(destination: ContentPreflightDestination, upload: PlatformUpload) {
+  return (destination.linkedinPageId ?? "personal") === (upload.linkedinTarget?.id ?? "personal");
 }
 
 function sameContent(input: ContentPreflightInput, destination: ContentPreflightDestination, upload: PlatformUpload) {
@@ -215,7 +220,7 @@ export function evaluateContentPreflight(
   const oneDayAgo = now - 24 * 60 * 60_000;
   for (const destination of destinations) {
     for (const upload of existingUploads) {
-      if (upload.accountId !== destination.accountId || !sameContent(input, destination, upload)) continue;
+      if (upload.accountId !== destination.accountId || !samePublishingIdentity(destination, upload) || !sameContent(input, destination, upload)) continue;
       if ((upload.status === "queued" || upload.status === "processing") && sameTiming(destination, upload)) {
         issues.push({
           code: "exact_queued_duplicate",
@@ -267,6 +272,7 @@ export function isExactQueuedDuplicate(
   upload: PlatformUpload,
 ) {
   return upload.accountId === destination.accountId
+    && samePublishingIdentity(destination, upload)
     && (upload.status === "queued" || upload.status === "processing")
     && sameContent(input, destination, upload)
     && sameTiming(destination, upload);

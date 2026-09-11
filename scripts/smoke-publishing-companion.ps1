@@ -271,7 +271,7 @@ process.stdout.write(JSON.stringify({ token, publicKey: serviceTokenPublicKeyPem
     throw "The packaged Companion did not persist the publishing schedule."
   }
 
-  $productionOrigin = "https://agentic-that.netlify.app"
+  $productionOrigin = "https://agenticthat.com"
   $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "$serviceOrigin/api/health" -Headers @{
     Origin = $productionOrigin
     "Access-Control-Request-Method" = "GET"

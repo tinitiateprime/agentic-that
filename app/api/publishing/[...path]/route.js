@@ -262,14 +262,51 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
 async function createPosts(principalValue, input) {
   const destinations = Array.isArray(input.destinations) ? input.destinations : [];
   if (!destinations.length) throw new Error("Choose at least one workspace account.");
-  await centralAccountsForPrincipal(principalValue, destinations.map((destination) => destination.accountId), "operate");
-  return createCentralUploads(principalValue, destinations.map((destination) => ({
-    ...input,
-    accountId: destination.accountId,
-    caption: destination.caption ?? destination.description ?? input.description ?? input.caption,
-    scheduledAt: destination.scheduledAt || null,
-    scheduleId: destination.scheduleId || null,
-  })));
+  const keys = destinations.map(destination => `${destination.accountId}::${destination.linkedinPageId || "personal"}`);
+  if (new Set(keys).size !== keys.length) throw new Error("Each publishing destination can be selected only once.");
+  const accounts = await centralAccountsForPrincipal(principalValue, destinations.map((destination) => destination.accountId), "operate");
+  const accountsById = new Map(accounts.map(account => [account.id, account]));
+  return createCentralUploads(principalValue, destinations.map((destination) => {
+    const account = accountsById.get(destination.accountId);
+    if (!account) throw new Error("The selected publishing account is no longer available.");
+    const linkedinTarget = destination.linkedinPageId
+      ? account.platform === "linkedin"
+        ? account.linkedinManagedPages?.find(page => page.id === destination.linkedinPageId)
+        : null
+      : undefined;
+    if (destination.linkedinPageId && !linkedinTarget) {
+      throw new Error("The selected managed LinkedIn Page is no longer available. Reconnect LinkedIn and choose it again.");
+    }
+    return {
+      ...input,
+      accountId: destination.accountId,
+      linkedinTarget,
+      caption: destination.caption ?? destination.description ?? input.description ?? input.caption,
+      scheduledAt: destination.scheduledAt || null,
+      scheduleId: destination.scheduleId || null,
+    };
+  }));
+}
+
+async function validatedPublishingDestinations(principalValue, destinations, level = "operate") {
+  const requested = Array.isArray(destinations) ? destinations : [];
+  const accounts = await centralAccountsForPrincipal(principalValue, requested.map(destination => destination.accountId), level);
+  const accountsById = new Map(accounts.map(account => [account.id, account]));
+  const keys = requested.map(destination => `${destination.accountId}::${destination.linkedinPageId || "personal"}`);
+  if (new Set(keys).size !== keys.length) throw new Error("Each publishing destination can be selected only once.");
+  return requested.map(destination => {
+    const account = accountsById.get(destination.accountId);
+    if (!account) throw new Error("The selected publishing account is no longer available.");
+    const linkedinTarget = destination.linkedinPageId
+      ? account.platform === "linkedin"
+        ? account.linkedinManagedPages?.find(page => page.id === destination.linkedinPageId)
+        : null
+      : undefined;
+    if (destination.linkedinPageId && !linkedinTarget) {
+      throw new Error("The selected managed LinkedIn Page is no longer available. Reconnect LinkedIn and choose it again.");
+    }
+    return { ...destination, linkedinTarget };
+  });
 }
 
 async function requestJson(request) {
@@ -497,21 +534,39 @@ export async function POST(request, context) {
       const user = await principal("publishing.content.create");
       await assertPrincipalCapability(user, "publishing.destinations.select");
       await assertPrincipalCapability(user, "publishing.submissions.create");
-      await centralAccountsForPrincipal(user, body.selectedAccountIds || [], "operate");
-      return Response.json(await createCentralSubmission(user, { ...body, postFormat: "text", description: body.description || "" }), { status: 201 });
+      const selectedDestinations = await validatedPublishingDestinations(
+        user,
+        body.selectedDestinations || (body.selectedAccountIds || []).map(accountId => ({ accountId })),
+      );
+      return Response.json(await createCentralSubmission(user, {
+        ...body,
+        selectedAccountIds: [...new Set(selectedDestinations.map(destination => destination.accountId))],
+        selectedDestinations: selectedDestinations.map(({ linkedinTarget: _target, ...destination }) => destination),
+        postFormat: "text",
+        description: body.description || "",
+      }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[1] === "staged") {
       const user = await principal("publishing.content.create");
       await assertPrincipalCapability(user, "publishing.destinations.select");
       await assertPrincipalCapability(user, "publishing.submissions.create");
-      await centralAccountsForPrincipal(user, body.selectedAccountIds || [], "operate");
+      const selectedDestinations = await validatedPublishingDestinations(
+        user,
+        body.selectedDestinations || (body.selectedAccountIds || []).map(accountId => ({ accountId })),
+      );
       const media = await finishStagedMedia(user, body.stagedUploadId);
-      return Response.json(await createCentralSubmission(user, { ...body, ...media, description: body.description || "" }), { status: 201 });
+      return Response.json(await createCentralSubmission(user, {
+        ...body,
+        ...media,
+        selectedAccountIds: [...new Set(selectedDestinations.map(destination => destination.accountId))],
+        selectedDestinations: selectedDestinations.map(({ linkedinTarget: _target, ...destination }) => destination),
+        description: body.description || "",
+      }), { status: 201 });
     }
     if (parts[0] === "submissions" && parts[2] === "schedule") {
       const user = await principal("publishing.schedule.manage");
-      await centralAccountsForPrincipal(user, (body.destinations || []).map((destination) => destination.accountId), "operate");
-      return Response.json(await scheduleCentralSubmission(user, parts[1], body.destinations || []), { status: 201 });
+      const destinations = await validatedPublishingDestinations(user, body.destinations || []);
+      return Response.json(await scheduleCentralSubmission(user, parts[1], destinations), { status: 201 });
     }
     if (parts[0] === "platforms" && parts[2] === "accounts") {
       const user = await principal("publishing.accounts.configure");

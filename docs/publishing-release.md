@@ -11,7 +11,7 @@ offered:
    `artifacts/` as a new listing.
 3. Copy the listing text and permission explanations from
    `docs/chrome-web-store-listing.md`, use
-   `https://agentic-that.netlify.app/publishing/privacy` as the privacy URL, and
+   `https://agenticthat.com/publishing/privacy` as the privacy URL, and
    submit the extension for review.
 4. After approval, add the public listing URL to Netlify as
    `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` with Builds scope.

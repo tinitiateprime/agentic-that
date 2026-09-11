@@ -6,7 +6,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const extensionRoot = path.join(projectRoot, "extensions", "publishing-companion");
 const manifestPath = path.join(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const productionOrigin = "https://agentic-that.netlify.app";
+const productionOrigin = "https://agenticthat.com";
 const productionMatch = `${productionOrigin}/*`;
 
 if (manifest.manifest_version !== 3) throw new Error("Publishing extension must use Manifest V3.");

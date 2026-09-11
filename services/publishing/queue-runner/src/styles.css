@@ -1034,6 +1034,11 @@
 .publish-queue-runner .composer-account-choices small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .publish-queue-runner .composer-account-choices strong { color: #28443A; font-size: 9px; }
 .publish-queue-runner .composer-account-choices small { color: #74857E; font-size: 8px; }
+.publish-queue-runner .composer-account-group { display: grid; gap: 5px; }
+.publish-queue-runner .composer-account-group.linkedin-destinations { padding: 4px; border: 1px solid #DCE7F2; border-radius: 9px; background: #F7FAFD; }
+.publish-queue-runner .composer-linkedin-copy-list { display: grid; gap: 8px; max-height: 310px; overflow: auto; padding: 0 9px 10px; }
+.publish-queue-runner .composer-linkedin-copy-list .composer-platform-copy { background: #F7FAFD; border-color: #D7E5F1; }
+.publish-queue-runner .composer-linkedin-copy-list .composer-platform-copy textarea { min-height: 82px; }
 .publish-queue-runner .composer-no-account { min-height: 36px; display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 9px 9px; padding: 7px 8px; border-radius: 7px; background: #FFF7E8; color: #8B641A; font-size: 8px; font-weight: 700; }
 .publish-queue-runner .composer-no-account button { border: 0; background: transparent; color: #80590B; font-size: 8px; font-weight: 800; text-decoration: underline; cursor: pointer; }
 

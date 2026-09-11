@@ -4,7 +4,7 @@ const COMPANION_ORIGIN = "http://127.0.0.1:8792";
 const REQUEST_TYPE = "agenticthat.publishing.proxy.request.v1";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD"]);
 const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
-const BUILT_IN_ORIGINS = new Set(["https://agentic-that.netlify.app"]);
+const BUILT_IN_ORIGINS = new Set(["https://agenticthat.com"]);
 const { normalizeDashboardOrigin, hasStaticBridgeForOrigin, trustedScriptId } = globalThis.AgenticThatTrustedOrigins;
 
 async function savedTrustedOrigins() {

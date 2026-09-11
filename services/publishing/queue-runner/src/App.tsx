@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, ContentSubmission, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import type { ActivityLog, ContentSubmission, LinkedInManagedPage, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
@@ -108,7 +108,7 @@ type AutomationNotice = {
 
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || 'https://agentic-that.netlify.app/companion/download';
+  || 'https://agenticthat.com/companion/download';
 const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
 const extensionInstallUrl = configuredExtensionInstallUrl
   || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension.zip';
@@ -868,6 +868,35 @@ type PlatformEligibility = {
   reason: string;
 };
 
+type ComposerDestinationChoice = {
+  key: string;
+  account: PlatformAccount;
+  linkedinPage?: LinkedInManagedPage;
+  displayName: string;
+  detail: string;
+};
+
+function composerDestinationKey(accountId: string, linkedinPageId?: string) {
+  return `${accountId}::${linkedinPageId || 'personal'}`;
+}
+
+function composerDestinationChoices(account: PlatformAccount): ComposerDestinationChoice[] {
+  const personal: ComposerDestinationChoice = {
+    key: composerDestinationKey(account.id),
+    account,
+    displayName: account.displayName,
+    detail: account.platform === 'linkedin' ? 'Personal profile' : account.handle,
+  };
+  if (account.platform !== 'linkedin') return [personal];
+  return [personal, ...(account.linkedinManagedPages ?? []).map(linkedinPage => ({
+    key: composerDestinationKey(account.id, linkedinPage.id),
+    account,
+    linkedinPage,
+    displayName: linkedinPage.name,
+    detail: `Managed Page · ${account.displayName}`,
+  }))];
+}
+
 const emptyComposerSchedule = (): ComposerScheduleDraft => ({ mode: 'now', exactAt: '', scheduleId: '' });
 const defaultSchedulerTiming = (): ComposerScheduleDraft => ({
   mode: 'exact',
@@ -1131,9 +1160,10 @@ function UnifiedComposer({
   const [youtubeVisibility, setYoutubeVisibility] = useState<'' | 'private' | 'unlisted' | 'public'>('');
   const [description, setDescription] = useState('');
   const [platformDescriptions, setPlatformDescriptions] = useState<Partial<Record<Platform, string>>>({});
+  const [destinationDescriptions, setDestinationDescriptions] = useState<Record<string, string>>({});
   const [copyMode, setCopyMode] = useState<ComposerCopyMode>('preview');
   const [activeCopyPlatform, setActiveCopyPlatform] = useState<Platform>('instagram');
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [selectedDestinationKeys, setSelectedDestinationKeys] = useState<string[]>([]);
   const [sharedSchedule, setSharedSchedule] = useState<ComposerScheduleDraft>(emptyComposerSchedule);
   const [scheduleOverrides, setScheduleOverrides] = useState<Record<string, ComposerScheduleDraft>>({});
   const [dragActive, setDragActive] = useState(false);
@@ -1156,7 +1186,7 @@ function UnifiedComposer({
   useEffect(() => {
     setPendingPreflightWarnings([]);
     setMessage(current => current?.type === 'warning' ? null : current);
-  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, description, platformDescriptions, selectedAccountIds, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, description, platformDescriptions, destinationDescriptions, selectedDestinationKeys, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
@@ -1164,23 +1194,30 @@ function UnifiedComposer({
   ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
 
   const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled), [accounts]);
-  const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
-    .filter(account => eligibility[account.platform].allowed)
-    .map(account => account.id)), [enabledAccounts, eligibility]);
+  const availableDestinations = useMemo(() => enabledAccounts.flatMap(composerDestinationChoices), [enabledAccounts]);
+  const eligibleDestinationKeys = useMemo(() => new Set(availableDestinations
+    .filter(destination => eligibility[destination.account.platform].allowed)
+    .map(destination => destination.key)), [availableDestinations, eligibility]);
 
   useEffect(() => {
-    setSelectedAccountIds(current => current.filter(accountId => eligibleAccountIds.has(accountId)));
-    setScheduleOverrides(current => Object.fromEntries(Object.entries(current).filter(([accountId]) => eligibleAccountIds.has(accountId))));
-  }, [eligibleAccountIds]);
+    setSelectedDestinationKeys(current => current.filter(key => eligibleDestinationKeys.has(key)));
+    setScheduleOverrides(current => Object.fromEntries(Object.entries(current).filter(([key]) => eligibleDestinationKeys.has(key))));
+    setDestinationDescriptions(current => Object.fromEntries(Object.entries(current).filter(([key]) => eligibleDestinationKeys.has(key))));
+  }, [eligibleDestinationKeys]);
 
-  const selectedAccounts = useMemo(() => selectedAccountIds
-    .map(accountId => accounts.find(account => account.id === accountId))
-    .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
+  const selectedDestinations = useMemo(() => selectedDestinationKeys
+    .map(key => availableDestinations.find(destination => destination.key === key))
+    .filter((destination): destination is ComposerDestinationChoice => Boolean(destination)), [availableDestinations, selectedDestinationKeys]);
+  const selectedAccounts = useMemo(() => selectedDestinations.map(destination => destination.account), [selectedDestinations]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
+  const descriptionForDestination = (destination: ComposerDestinationChoice) => (
+    destinationDescriptions[destination.key]?.trim()
+    || effectivePlatformDescription(destination.account.platform, description, platformDescriptions)
+  );
   const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const youtubeDetailsReady = !selectedNeedsTitle || Boolean(title.trim() && youtubeAudience && youtubeVisibility);
-  const destinationsReady = Boolean(selectedAccounts.length && youtubeDetailsReady);
+  const destinationsReady = Boolean(selectedDestinations.length && youtubeDetailsReady);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
   useEffect(() => {
@@ -1214,22 +1251,22 @@ function UnifiedComposer({
     if (nextFormat !== 'video') setTitle('');
   };
 
-  const toggleAccount = (accountId: string) => {
-    setSelectedAccountIds(current => current.includes(accountId)
-      ? current.filter(id => id !== accountId)
-      : [...current, accountId]);
+  const toggleDestination = (destinationKey: string) => {
+    setSelectedDestinationKeys(current => current.includes(destinationKey)
+      ? current.filter(key => key !== destinationKey)
+      : [...current, destinationKey]);
   };
 
   const togglePlatform = (platform: Platform) => {
-    const platformAccountIds = enabledAccounts
-      .filter(account => account.platform === platform && eligibility[platform].allowed)
-      .map(account => account.id);
-    if (!platformAccountIds.length) return;
-    setSelectedAccountIds(current => {
-      const allSelected = platformAccountIds.every(accountId => current.includes(accountId));
+    const platformDestinationKeys = availableDestinations
+      .filter(destination => destination.account.platform === platform && eligibility[platform].allowed)
+      .map(destination => destination.key);
+    if (!platformDestinationKeys.length) return;
+    setSelectedDestinationKeys(current => {
+      const allSelected = platformDestinationKeys.every(key => current.includes(key));
       return allSelected
-        ? current.filter(accountId => !platformAccountIds.includes(accountId))
-        : [...new Set([...current, ...platformAccountIds])];
+        ? current.filter(key => !platformDestinationKeys.includes(key))
+        : [...new Set([...current, ...platformDestinationKeys])];
     });
   };
 
@@ -1271,8 +1308,9 @@ function UnifiedComposer({
     setYoutubeVisibility('');
     setDescription('');
     setPlatformDescriptions({});
+    setDestinationDescriptions({});
     setCopyMode('preview');
-    setSelectedAccountIds([]);
+    setSelectedDestinationKeys([]);
     setRightsConfirmed(false);
     setPendingPreflightWarnings([]);
     setScheduleOverrides({});
@@ -1290,7 +1328,7 @@ function UnifiedComposer({
       ? { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } } : undefined;
     if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (handoffOnly) {
-      if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
+      if (!selectedDestinations.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing destination.' });
       setSubmitting(true);
       setPreparationProgress({ label: file ? 'Starting media upload…' : 'Preparing posts…' });
       try {
@@ -1301,7 +1339,11 @@ function UnifiedComposer({
           platformOptions,
           description: description.trim(),
           rightsConfirmed,
-          destinations: selectedAccounts.map(account => ({ accountId: account.id })),
+          destinations: selectedDestinations.map(destination => ({
+            accountId: destination.account.id,
+            linkedinPageId: destination.linkedinPage?.id,
+            description: descriptionForDestination(destination),
+          })),
           confirmWarnings,
           onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
             ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
@@ -1325,30 +1367,31 @@ function UnifiedComposer({
       }
       return;
     }
-    if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
+    if (!selectedDestinations.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing destination.' });
     const invalidAccount = selectedAccounts.find(account => !eligibility[account.platform].allowed);
     if (invalidAccount) return setMessage({ type: 'error', text: `${platformLabels[invalidAccount.platform]} is not compatible with the current post.` });
 
     if (canSchedule) {
       const sharedError = scheduleDraftError(sharedSchedule, schedules);
       if (sharedError) return setMessage({ type: 'error', text: `Shared timing: ${sharedError}` });
-      for (const account of selectedAccounts) {
-        const override = scheduleOverrides[account.id];
+      for (const destination of selectedDestinations) {
+        const override = scheduleOverrides[destination.key];
         if (!override) continue;
         const overrideError = scheduleDraftError(override, schedules);
-        if (overrideError) return setMessage({ type: 'error', text: `${account.displayName}: ${overrideError}` });
+        if (overrideError) return setMessage({ type: 'error', text: `${destination.displayName}: ${overrideError}` });
       }
     }
 
-    for (const platform of selectedPlatforms) {
-      const error = platformDescriptionError(platform, effectivePlatformDescription(platform, description, platformDescriptions));
-      if (error) return setMessage({ type: 'error', text: `${platformLabels[platform]}: ${error}` });
+    for (const destination of selectedDestinations) {
+      const error = platformDescriptionError(destination.account.platform, descriptionForDestination(destination));
+      if (error) return setMessage({ type: 'error', text: `${destination.displayName}: ${error}` });
     }
 
-    const destinations: UnifiedPostDestinationInput[] = selectedAccounts.map(account => ({
-      accountId: account.id,
-      description: effectivePlatformDescription(account.platform, description, platformDescriptions),
-      ...(canSchedule ? destinationSchedule(scheduleOverrides[account.id] ?? sharedSchedule) : {}),
+    const destinations: UnifiedPostDestinationInput[] = selectedDestinations.map(destination => ({
+      accountId: destination.account.id,
+      linkedinPageId: destination.linkedinPage?.id,
+      description: descriptionForDestination(destination),
+      ...(canSchedule ? destinationSchedule(scheduleOverrides[destination.key] ?? sharedSchedule) : {}),
     }));
 
     setSubmitting(true);
@@ -1453,12 +1496,13 @@ function UnifiedComposer({
         </div>
 
         <div className='composer-destination-column'>
-          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Step 2 · Destinations</small><strong>Where should this be published?</strong><small>Select each app and account. App-specific controls appear directly inside the selected app.</small></span><span className='composer-selected-count'>{selectedAccounts.length} selected</span></div>
+          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Step 2 · Destinations</small><strong>Where should this be published?</strong><small>Select the personal profile, any managed LinkedIn Pages, and other app accounts independently.</small></span><span className='composer-selected-count'>{selectedDestinations.length} selected</span></div>
           <div className='composer-platform-grid'>
             {platforms.map(platform => {
               const state = eligibility[platform];
               const platformAccounts = enabledAccounts.filter(account => account.platform === platform);
-              const selectedCount = platformAccounts.filter(account => selectedAccountIds.includes(account.id)).length;
+              const platformDestinations = availableDestinations.filter(destination => destination.account.platform === platform);
+              const selectedCount = platformDestinations.filter(destination => selectedDestinationKeys.includes(destination.key)).length;
               const selectable = state.allowed && platformAccounts.length > 0;
               const activePanel = selectedCount > 0 && activeCopyPlatform === platform;
               const platformText = effectivePlatformDescription(platform, description, platformDescriptions);
@@ -1467,10 +1511,19 @@ function UnifiedComposer({
                 <button type='button' className='composer-platform-toggle' disabled={!selectable} onClick={() => togglePlatform(platform)}>
                   <span className='composer-platform-logo'><CustomIcon platform={platform} size={27} /></span>
                   <span><strong>{platformLabels[platform]}</strong><small>{state.reason}</small></span>
-                  <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformAccounts.length : '—'}</i>
+                  <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformDestinations.length : '—'}</i>
                 </button>
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
-                  {platformAccounts.map(account => <label key={account.id} className={accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
+                  {platformAccounts.map(account => <div className={`composer-account-group ${account.platform === 'linkedin' ? 'linkedin-destinations' : ''}`} key={account.id}>
+                    {composerDestinationChoices(account).map(destination => <label key={destination.key} className={accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedDestinationKeys.includes(destination.key)} onChange={() => toggleDestination(destination.key)} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
+                  </div>)}
+                </div>}
+                {platform === 'linkedin' && selectedCount > 0 && <div className='composer-linkedin-copy-list'>
+                  {selectedDestinations.filter(destination => destination.account.platform === 'linkedin').map(destination => {
+                    const destinationText = destinationDescriptions[destination.key] ?? platformText;
+                    const destinationError = platformDescriptionError('linkedin', destinationText);
+                    return <label key={destination.key} className={`composer-platform-copy ${destinationError ? 'error' : ''}`}><span><strong>{destination.displayName} post text</strong><small>{destinationText.length}/{platformPostRules.linkedin.descriptionLimit.toLocaleString()}</small></span><textarea value={destinationText} onChange={event => setDestinationDescriptions(current => ({ ...current, [destination.key]: event.target.value }))} rows={4} />{destinationDescriptions[destination.key] !== undefined && <button type='button' onClick={() => setDestinationDescriptions(current => { const next = { ...current }; delete next[destination.key]; return next; })}>Use LinkedIn default text</button>}{destinationError && <em>{destinationError}</em>}</label>;
+                  })}
                 </div>}
                 {platform === 'youtube' && postFormat === 'video' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
                   <legend><span><CustomIcon platform='youtube' size={16} /></span><span><strong>YouTube video details</strong><small>Required only for the selected YouTube destination.</small></span></legend>
@@ -1497,13 +1550,14 @@ function UnifiedComposer({
             {sharedSchedule.mode === 'exact' && <label><span>Date and time</span><input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={sharedSchedule.exactAt} onChange={event => updateSharedSchedule({ exactAt: event.target.value })} /></label>}
             {sharedSchedule.mode === 'template' && <label><span>Template</span><select value={sharedSchedule.scheduleId} onChange={event => updateSharedSchedule({ scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
           </div>
-          {selectedAccounts.length > 0 && <div className='composer-destination-timing'>
-            {selectedAccounts.map(account => {
-              const override = scheduleOverrides[account.id];
-              return <article key={account.id}>
-                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{account.displayName}</strong><small>{publishingEngineLabels[accountPublishingEngine(account)]} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
-                <label className='composer-override-toggle'><input type='checkbox' checked={Boolean(override)} onChange={() => toggleOverride(account.id)} /><SlidersHorizontal size={14} />Override</label>
-                {override && <div className='composer-override-fields'><select value={override.mode} onChange={event => updateOverride(account.id, { mode: event.target.value as ComposerScheduleMode })}><option value='now'>Queue now</option><option value='exact'>Exact time</option><option value='template'>Template</option></select>{override.mode === 'exact' && <input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={override.exactAt} onChange={event => updateOverride(account.id, { exactAt: event.target.value })} />}{override.mode === 'template' && <select value={override.scheduleId} onChange={event => updateOverride(account.id, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.time}</option>)}</select>}</div>}
+          {selectedDestinations.length > 0 && <div className='composer-destination-timing'>
+            {selectedDestinations.map(destination => {
+              const account = destination.account;
+              const override = scheduleOverrides[destination.key];
+              return <article key={destination.key}>
+                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
+                <label className='composer-override-toggle'><input type='checkbox' checked={Boolean(override)} onChange={() => toggleOverride(destination.key)} /><SlidersHorizontal size={14} />Override</label>
+                {override && <div className='composer-override-fields'><select value={override.mode} onChange={event => updateOverride(destination.key, { mode: event.target.value as ComposerScheduleMode })}><option value='now'>Queue now</option><option value='exact'>Exact time</option><option value='template'>Template</option></select>{override.mode === 'exact' && <input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={override.exactAt} onChange={event => updateOverride(destination.key, { exactAt: event.target.value })} />}{override.mode === 'template' && <select value={override.scheduleId} onChange={event => updateOverride(destination.key, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.time}</option>)}</select>}</div>}
               </article>;
             })}
           </div>}
@@ -1514,7 +1568,7 @@ function UnifiedComposer({
         <div>{submitting && preparationProgress?.percent !== undefined
           ? <div className='composer-upload-progress' role='progressbar' aria-valuemin={0} aria-valuemax={100} aria-valuenow={preparationProgress.percent}><span>{preparationProgress.label}</span><i><b style={{ width: `${preparationProgress.percent}%` }} /></i></div>
           : message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !destinationsReady} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !destinationsReady} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );
@@ -1813,7 +1867,7 @@ function Workboard({
               const outcome = getDeliveryOutcome(upload, account);
               return <button type='button' className={`delivery-ledger-row tone-${outcome.tone}`} key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <span className='delivery-ledger-media'><PostMediaPreview upload={upload} compact /></span>
-                <span className='delivery-ledger-destination'><CustomIcon platform={upload.platform} size={20} /><span><strong>{account?.displayName || platformLabels[upload.platform]}</strong><small>{account?.handle || platformLabels[upload.platform]}</small></span></span>
+                <span className='delivery-ledger-destination'><CustomIcon platform={upload.platform} size={20} /><span><strong>{upload.linkedinTarget?.name || account?.displayName || platformLabels[upload.platform]}</strong><small>{upload.linkedinTarget ? `Managed Page · ${account?.displayName || 'LinkedIn'}` : account?.handle || platformLabels[upload.platform]}</small></span></span>
                 <span className='delivery-ledger-content'><strong>{upload.title || upload.originalName}</strong><small title={outcome.detail}>{outcome.detail}</small><WaitingForCompanionTimeline upload={upload} account={account} /></span>
                 <span className={`delivery-outcome tone-${outcome.tone}`}><StatusStateIcon state={outcome.tone} size={15} /><span><strong>{outcome.label}</strong><small>{upload.attemptCount ? `${upload.attemptCount} ${upload.attemptCount === 1 ? 'attempt' : 'attempts'}` : formatEventTime(outcome.timestamp)}</small></span></span>
                 {canEditPosts && <ChevronRight size={16} />}
@@ -2031,52 +2085,63 @@ function ScheduleSubmissionModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const destinationsLocked = submission.selectedAccountIds.length > 0;
-  const compatibleAccounts = useMemo(() => accounts.filter(account => {
-    if (destinationsLocked && !submission.selectedAccountIds.includes(account.id)) return false;
-    if (!account.enabled) return false;
+  const requestedDestinations = useMemo<Array<{ accountId: string; linkedinPageId?: string; description?: string }>>(() => submission.selectedDestinations?.length
+    ? submission.selectedDestinations
+    : submission.selectedAccountIds.map(accountId => ({ accountId })), [submission]);
+  const destinationsLocked = requestedDestinations.length > 0;
+  const compatibleDestinations = useMemo(() => requestedDestinations.flatMap(requested => {
+    const account = accounts.find(candidate => candidate.id === requested.accountId);
+    if (!account?.enabled) return [];
+    const linkedinPage = requested.linkedinPageId
+      ? account.linkedinManagedPages?.find(page => page.id === requested.linkedinPageId)
+      : undefined;
+    if (requested.linkedinPageId && !linkedinPage) return [];
     const rules = platformPostRules[account.platform];
-    if (!rules.formats.includes(submission.postFormat)) return false;
-    if (submission.description.length > rules.descriptionLimit) return false;
+    const destinationDescription = requested.description?.trim() || submission.description;
+    if (!rules.formats.includes(submission.postFormat) || destinationDescription.length > rules.descriptionLimit) return [];
     const needsTitle = rules.titleRequired || rules.titleRequiredFor?.includes(submission.postFormat);
-    if (needsTitle && !submission.title?.trim()) return false;
-    return !(rules.titleLimit && (submission.title?.length ?? 0) > rules.titleLimit);
-  }), [accounts, destinationsLocked, submission]);
+    if (needsTitle && !submission.title?.trim()) return [];
+    if (rules.titleLimit && (submission.title?.length ?? 0) > rules.titleLimit) return [];
+    return [{
+      key: composerDestinationKey(account.id, linkedinPage?.id),
+      account,
+      linkedinPage,
+      displayName: linkedinPage?.name || account.displayName,
+      detail: linkedinPage ? `Managed Page · ${account.displayName}` : account.platform === 'linkedin' ? 'Personal profile' : account.handle,
+      description: destinationDescription,
+    }];
+  }), [accounts, requestedDestinations, submission]);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
-  const [selectedAccountIds] = useState<string[]>(() => destinationsLocked
-    ? submission.selectedAccountIds
-    : compatibleAccounts.map(account => account.id));
+  const selectedDestinationKeys = requestedDestinations.map(destination => composerDestinationKey(destination.accountId, destination.linkedinPageId));
   const [destinationTimings, setDestinationTimings] = useState<Record<string, ComposerScheduleDraft>>(() => Object.fromEntries(
-    selectedAccountIds.map(accountId => [accountId, defaultSchedulerTiming()]),
+    selectedDestinationKeys.map(key => [key, defaultSchedulerTiming()]),
   ));
   const [minimumSchedule] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60_000)));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
-  const schedulingAccounts = useMemo(() => selectedAccountIds
-    .map(accountId => compatibleAccounts.find(account => account.id === accountId))
-    .filter((account): account is PlatformAccount => Boolean(account)), [compatibleAccounts, selectedAccountIds]);
 
-  const updateDestinationTiming = (accountId: string, patch: Partial<ComposerScheduleDraft>) => {
+  const updateDestinationTiming = (destinationKey: string, patch: Partial<ComposerScheduleDraft>) => {
     setDestinationTimings(current => ({
       ...current,
-      [accountId]: { ...(current[accountId] ?? defaultSchedulerTiming()), ...patch },
+      [destinationKey]: { ...(current[destinationKey] ?? defaultSchedulerTiming()), ...patch },
     }));
     setPendingPreflightWarnings([]);
   };
 
   const submit = async (confirmWarnings = false) => {
     setError('');
-    if (!selectedAccountIds.length) return setError('Choose at least one compatible publishing account.');
-    if (schedulingAccounts.length !== selectedAccountIds.length) {
+    if (!selectedDestinationKeys.length) return setError('Choose at least one compatible publishing destination.');
+    if (compatibleDestinations.length !== selectedDestinationKeys.length) {
       return setError('One or more locked destinations are no longer available. Ask a Publishing Manager to reconnect or enable them.');
     }
     const destinations: UnifiedPostDestinationInput[] = [];
-    for (const account of schedulingAccounts) {
-      const scheduleDraft = destinationTimings[account.id];
+    for (const destination of compatibleDestinations) {
+      const account = destination.account;
+      const scheduleDraft = destinationTimings[destination.key];
       const timingError = scheduleDraft ? scheduleDraftError(scheduleDraft, schedules) : 'Choose a publish time.';
-      if (timingError) return setError(`${platformLabels[account.platform]} · ${account.displayName}: ${timingError}`);
-      destinations.push({ accountId: account.id, ...destinationSchedule(scheduleDraft) });
+      if (timingError) return setError(`${platformLabels[account.platform]} · ${destination.displayName}: ${timingError}`);
+      destinations.push({ accountId: account.id, linkedinPageId: destination.linkedinPage?.id, description: destination.description, ...destinationSchedule(scheduleDraft) });
     }
     setLoading(true);
     try {
@@ -2114,34 +2179,35 @@ function ScheduleSubmissionModal({
             <span><strong>{submission.title || submission.originalName}</strong><small>{submission.description}</small></span>
           </div>
           <section className='submission-destination-section'>
-            <div className='workboard-section-head'><div><p className='section-kicker'>Destinations</p><h2>{destinationsLocked ? 'Selected by uploader' : 'Compatible legacy destinations'}</h2></div><span>{selectedAccountIds.length} {destinationsLocked ? 'locked' : 'selected'}</span></div>
+            <div className='workboard-section-head'><div><p className='section-kicker'>Destinations</p><h2>{destinationsLocked ? 'Selected by uploader' : 'Compatible legacy destinations'}</h2></div><span>{selectedDestinationKeys.length} {destinationsLocked ? 'locked' : 'selected'}</span></div>
             <div className='submission-account-grid'>
-              {compatibleAccounts.length === 0 ? <div className='handoff-empty'><CircleAlert size={22} /><span><strong>No compatible enabled accounts</strong><small>An operations manager must configure an account that supports this content.</small></span></div> : compatibleAccounts.map(account => (
-                <label key={account.id} className={selectedAccountIds.includes(account.id) ? 'selected' : ''}>
+              {compatibleDestinations.length === 0 ? <div className='handoff-empty'><CircleAlert size={22} /><span><strong>No compatible enabled destinations</strong><small>A Publishing Manager may need to reconnect LinkedIn to refresh managed Pages.</small></span></div> : compatibleDestinations.map(destination => (
+                <label key={destination.key} className='selected'>
                   <input type='checkbox' checked readOnly disabled />
-                  <CustomIcon platform={account.platform} size={22} />
-                  <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {publishingEngineLabels[accountPublishingEngine(account)]}</small></span>
+                  <CustomIcon platform={destination.account.platform} size={22} />
+                  <span><strong>{destination.displayName}</strong><small>{platformLabels[destination.account.platform]} · {destination.detail}</small></span>
                 </label>
               ))}
             </div>
           </section>
           <section className='submission-timing-section'>
-            <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Set each destination separately</h2></div><span>{schedulingAccounts.length} individual {schedulingAccounts.length === 1 ? 'time' : 'times'}</span></div>
+            <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Set each destination separately</h2></div><span>{compatibleDestinations.length} individual {compatibleDestinations.length === 1 ? 'time' : 'times'}</span></div>
             <div className='submission-timing-grid'>
-              {schedulingAccounts.map(account => {
-                const timing = destinationTimings[account.id] ?? defaultSchedulerTiming();
-                return <article className='submission-destination-timing' key={account.id}>
-                  <div className='submission-timing-account'><CustomIcon platform={account.platform} size={22} /><span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span></div>
-                  <label className='submission-timing-field'><span>Timing type</span><select aria-label={`${account.displayName} timing type`} value={timing.mode} onChange={event => updateDestinationTiming(account.id, { mode: event.target.value as 'exact' | 'template' })}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
+              {compatibleDestinations.map(destination => {
+                const account = destination.account;
+                const timing = destinationTimings[destination.key] ?? defaultSchedulerTiming();
+                return <article className='submission-destination-timing' key={destination.key}>
+                  <div className='submission-timing-account'><CustomIcon platform={account.platform} size={22} /><span><strong>{destination.displayName}</strong><small>{platformLabels[account.platform]} · {destination.detail}</small></span></div>
+                  <label className='submission-timing-field'><span>Timing type</span><select aria-label={`${destination.displayName} timing type`} value={timing.mode} onChange={event => updateDestinationTiming(destination.key, { mode: event.target.value as 'exact' | 'template' })}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
                   {timing.mode === 'exact'
-                    ? <label className='submission-timing-field'><span>Date and time</span><input aria-label={`${account.displayName} date and time`} type='datetime-local' min={minimumSchedule} value={timing.exactAt} onChange={event => updateDestinationTiming(account.id, { exactAt: event.target.value })} /></label>
-                    : <label className='submission-timing-field'><span>Schedule template</span><select aria-label={`${account.displayName} schedule template`} value={timing.scheduleId} onChange={event => updateDestinationTiming(account.id, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
+                    ? <label className='submission-timing-field'><span>Date and time</span><input aria-label={`${destination.displayName} date and time`} type='datetime-local' min={minimumSchedule} value={timing.exactAt} onChange={event => updateDestinationTiming(destination.key, { exactAt: event.target.value })} /></label>
+                    : <label className='submission-timing-field'><span>Schedule template</span><select aria-label={`${destination.displayName} schedule template`} value={timing.scheduleId} onChange={event => updateDestinationTiming(destination.key, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
                 </article>;
               })}
             </div>
           </section>
           {error && <div className='workspace-error' role='alert'><CircleAlert size={17} /><span><strong>Cannot schedule this content</strong><small>{error}</small></span></div>}
-          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || schedulingAccounts.length !== selectedAccountIds.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedAccountIds.length || ''} ${selectedAccountIds.length === 1 ? 'destination' : 'destinations'}`}</button></div>
+          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || compatibleDestinations.length !== selectedDestinationKeys.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedDestinationKeys.length || ''} ${selectedDestinationKeys.length === 1 ? 'destination' : 'destinations'}`}</button></div>
         </div>
       </div>
     </div>

@@ -17,6 +17,7 @@ import {
   pausePlatformAccountForSafety,
   requeueAccountSessionFailures,
   updatePlatformAccountCredentialState,
+  updateLinkedInManagedPages,
   updateUploadPublishActionState,
   updateUploadStatus,
   type AutomationInputMode,
@@ -28,7 +29,7 @@ import { claimPublishingExecution, releasePublishingExecution, type PublishingEx
 import { publishingCompanionId } from "../companion-identity.js";
 import { loginToFacebook, postToFacebook } from "./publishers/facebook.js";
 import { loginToInstagram, postToInstagram } from "./publishers/instagram.js";
-import { loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
+import { discoverLinkedInManagedPages, loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
 import type { AccountLogin } from "./publishers/manual-login.js";
 import { loginToYouTube, postToYouTube } from "./publishers/youtube.js";
 import { loginToX, postToX } from "./publishers/x.js";
@@ -691,7 +692,13 @@ async function loginOnly(page: Page, account: PublishingAccount, options: Accoun
   const login = accountLogin(options);
   switch (account.platform) {
     case "youtube": return loginToYouTube(page, login);
-    case "linkedin": return loginToLinkedIn(page, undefined, login);
+    case "linkedin": {
+      const result = await loginToLinkedIn(page, undefined, login);
+      const pages = await discoverLinkedInManagedPages(page);
+      await updateLinkedInManagedPages(account.id, pages);
+      console.log(`Discovered ${pages.length} managed LinkedIn Page${pages.length === 1 ? "" : "s"} for ${account.handle}.`);
+      return result;
+    }
     case "instagram": return loginToInstagram(page, undefined, false, login);
     case "facebook": return loginToFacebook(page, undefined, false, login);
     case "x": return loginToX(page, undefined, false, login);
@@ -744,6 +751,10 @@ async function runAccountQueue(
   let browser: PublishingBrowserSession | null = null;
   let hadFailure = false;
   let sessionInvalidated = false;
+  const sameLinkedInDestination = (candidate: PlatformUpload, upload: PlatformUpload) => (
+    candidate.platform !== "linkedin"
+    || (candidate.linkedinTarget?.id ?? "personal") === (upload.linkedinTarget?.id ?? "personal")
+  );
 
   async function failUnfinishedPosts(message: string) {
     const currentUploads = await listUploads(account.platform, account.id);
@@ -779,7 +790,8 @@ async function runAccountQueue(
 
   try {
     signal.throwIfAborted();
-    const initialHistory = await listUploads(account.platform, account.id);
+    const initialHistory = (await listUploads(account.platform, account.id))
+      .filter(candidate => sameLinkedInDestination(candidate, uploads[0]));
     const initialAssessment = assessPublishingSafety(uploads[0], initialHistory, Date.now(), account.safetyMode ?? "standard");
     if (!initialAssessment.allowed) {
       await deferRemainingPosts(0, initialAssessment);
@@ -791,7 +803,8 @@ async function runAccountQueue(
     for (const [uploadIndex, upload] of uploads.entries()) {
       signal.throwIfAborted();
       if (uploadIndex > 0) {
-        const accountHistory = await listUploads(account.platform, account.id);
+        const accountHistory = (await listUploads(account.platform, account.id))
+          .filter(candidate => sameLinkedInDestination(candidate, upload));
         const assessment = assessPublishingSafety(upload, accountHistory, Date.now(), account.safetyMode ?? "standard");
         if (!assessment.allowed) {
           await deferRemainingPosts(uploadIndex, assessment);

@@ -587,7 +587,8 @@ export const api = {
         method: "POST",
         body: JSON.stringify({
           description: payload.description,
-          selectedAccountIds: payload.destinations.map(destination => destination.accountId),
+          selectedAccountIds: [...new Set(payload.destinations.map(destination => destination.accountId))],
+          selectedDestinations: payload.destinations,
           confirmWarnings: payload.confirmWarnings,
         }),
       });
@@ -621,7 +622,8 @@ export const api = {
           title: payload.title,
           platformOptions: payload.platformOptions,
           description: payload.description,
-          selectedAccountIds: payload.destinations.map(destination => destination.accountId),
+          selectedAccountIds: [...new Set(payload.destinations.map(destination => destination.accountId))],
+          selectedDestinations: payload.destinations,
           rightsConfirmed: payload.rightsConfirmed,
           confirmWarnings: payload.confirmWarnings,
         }),

@@ -26,7 +26,7 @@ Get-ChildItem -LiteralPath $extensionRoot -Force | Where-Object { $_.Name -notin
 # exposes the dashboard bridge only to the production dashboard.
 $stagedManifestPath = Join-Path $stagingRoot "manifest.json"
 $stagedManifest = Get-Content -LiteralPath $stagedManifestPath -Raw | ConvertFrom-Json
-$productionMatch = "https://agentic-that.netlify.app/*"
+$productionMatch = "https://agenticthat.com/*"
 foreach ($contentScript in $stagedManifest.content_scripts) {
   $contentScript.matches = @($productionMatch)
 }

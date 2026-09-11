@@ -35,7 +35,7 @@ if (process.platform === "win32") {
 }
 
 function configuredDashboardUrl() {
-  const fallback = "https://agentic-that.netlify.app/publishing";
+  const fallback = "https://agenticthat.com/publishing";
   const configured = process.env.AGENTICTHAT_DASHBOARD_URL?.trim();
   if (!configured) return fallback;
   try {

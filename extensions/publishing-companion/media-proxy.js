@@ -1,6 +1,6 @@
 const COMPANION_ORIGIN = "http://127.0.0.1:8792";
 const TRUSTED_ORIGINS_KEY = "trustedDashboardOrigins";
-const PRODUCTION_ORIGIN = "https://agentic-that.netlify.app";
+const PRODUCTION_ORIGIN = "https://agenticthat.com";
 const container = document.querySelector("#media");
 
 async function assertTrustedParent() {

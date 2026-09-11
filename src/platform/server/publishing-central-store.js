@@ -29,7 +29,7 @@ const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
-const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.8";
+const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.16";
 const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const CENTRAL_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -41,6 +41,26 @@ function companionPublishingEngine(platformName, requestedEngine = "companion") 
   return platformName === "facebook" || platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
+}
+
+function normalizedCentralLinkedInManagedPages(value) {
+  if (!Array.isArray(value)) return [];
+  const pages = [];
+  const seen = new Set();
+  for (const candidate of value.slice(0, 100)) {
+    const pageId = String(candidate?.id || "").trim().slice(0, 180);
+    const name = String(candidate?.name || "").replace(/\s+/g, " ").trim().slice(0, 200);
+    if (!pageId || !name || seen.has(pageId) || !/^[A-Za-z0-9._~-]+$/.test(pageId)) continue;
+    seen.add(pageId);
+    const encodedId = encodeURIComponent(pageId);
+    pages.push({
+      id: pageId,
+      name,
+      pageUrl: `https://www.linkedin.com/company/${encodedId}/admin/`,
+      pagePostsUrl: `https://www.linkedin.com/company/${encodedId}/admin/page-posts/published/`,
+    });
+  }
+  return pages;
 }
 
 function now() {
@@ -86,6 +106,9 @@ function documentValue(value) {
   empty.accounts = empty.accounts.map((account) => ({
     ...account,
     executionEngine: companionPublishingEngine(account.platform, account.executionEngine),
+    linkedinManagedPages: account.platform === "linkedin"
+      ? normalizedCentralLinkedInManagedPages(account.linkedinManagedPages)
+      : undefined,
   }));
   return empty;
 }
@@ -646,7 +669,12 @@ export async function heartbeatCentralCompanion(token, input = {}) {
           loginIdentifier: incoming.loginIdentifier || "", credentialConfigured: Boolean(incoming.credentialConfigured),
           enabled: incoming.enabled !== false,
           executionEngine: companionPublishingEngine(incoming.platform, incoming.executionEngine),
-          companionId: companion.id, safetyStatus: incoming.safetyStatus || "healthy", createdAt: timestamp, updatedAt: timestamp,
+          companionId: companion.id, safetyStatus: incoming.safetyStatus || "healthy",
+          linkedinManagedPages: incoming.platform === "linkedin" && Array.isArray(incoming.linkedinManagedPages)
+            ? normalizedCentralLinkedInManagedPages(incoming.linkedinManagedPages)
+            : undefined,
+          linkedinManagedPagesUpdatedAt: incoming.platform === "linkedin" ? incoming.linkedinManagedPagesUpdatedAt || undefined : undefined,
+          createdAt: timestamp, updatedAt: timestamp,
         };
         document.accounts.push(account);
       } else {
@@ -654,6 +682,10 @@ export async function heartbeatCentralCompanion(token, input = {}) {
         account.enabled = incoming.enabled !== false;
         account.executionEngine = companionPublishingEngine(incoming.platform, incoming.executionEngine);
         account.safetyStatus = incoming.safetyStatus || account.safetyStatus || "healthy";
+        if (incoming.platform === "linkedin" && Array.isArray(incoming.linkedinManagedPages)) {
+          account.linkedinManagedPages = normalizedCentralLinkedInManagedPages(incoming.linkedinManagedPages);
+          account.linkedinManagedPagesUpdatedAt = incoming.linkedinManagedPagesUpdatedAt || timestamp;
+        }
         account.companionId = companion.id;
         account.updatedAt = timestamp;
       }
@@ -756,12 +788,15 @@ function createUploadInDocument(document, principal, input = {}) {
   const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
   if (scheduledAt && input.scheduleId) throw new Error("Choose an exact time or a schedule template, not both.");
   const sourceSubmissionId = String(input.sourceSubmissionId || "").trim() || null;
+  const linkedinPageId = input.linkedinTarget?.id || null;
   if (sourceSubmissionId) {
     const existing = document.uploads.find((item) => item.workspaceId === principal.workspaceId
-      && item.accountId === account.id && item.sourceSubmissionId === sourceSubmissionId);
+      && item.accountId === account.id && item.sourceSubmissionId === sourceSubmissionId
+      && (item.linkedinTarget?.id || null) === linkedinPageId);
     if (existing) return uploadPublic(document, existing);
   }
   if (document.uploads.some((item) => item.workspaceId === principal.workspaceId && item.accountId === account.id && item.status === "queued"
+    && (item.linkedinTarget?.id || null) === linkedinPageId
     && item.caption === caption && item.originalName === (input.originalName || "Text post") && item.size === Number(input.size || 0)
     && (item.scheduledAt || null) === scheduledAt && Number(item.scheduleId || 0) === Number(input.scheduleId || 0))) {
     throw new Error("This exact post is already queued for the same account and time.");
@@ -773,6 +808,7 @@ function createUploadInDocument(document, principal, input = {}) {
     fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
     size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
     platformOptions: requireYouTubeOptions(account.platform, format, input.platformOptions),
+    linkedinTarget: account.platform === "linkedin" ? input.linkedinTarget || undefined : undefined,
     caption, status: "queued", publishActionState: "not_started",
     uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
     createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
@@ -1119,6 +1155,10 @@ function normalizeCentralSubmission(submission) {
       ? submission.selectedAccountIds
       : [],
 
+    selectedDestinations: Array.isArray(submission.selectedDestinations)
+      ? submission.selectedDestinations
+      : (Array.isArray(submission.selectedAccountIds) ? submission.selectedAccountIds.map(accountId => ({ accountId })) : []),
+
     destinationUploadIds: Array.isArray(submission.destinationUploadIds)
       ? submission.destinationUploadIds
       : [],
@@ -1143,9 +1183,13 @@ export async function createCentralSubmission(principal, input = {}) {
   return mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
     const timestamp = now();
-    const selectedAccountIds = Array.isArray(input.selectedAccountIds) ? input.selectedAccountIds : [];
-    if (!selectedAccountIds.length) throw new Error("Choose at least one workspace account.");
-    if (new Set(selectedAccountIds).size !== selectedAccountIds.length) throw new Error("Each publishing account can be selected only once.");
+    const selectedDestinations = Array.isArray(input.selectedDestinations) && input.selectedDestinations.length
+      ? input.selectedDestinations
+      : (Array.isArray(input.selectedAccountIds) ? input.selectedAccountIds.map(accountId => ({ accountId })) : []);
+    if (!selectedDestinations.length) throw new Error("Choose at least one publishing destination.");
+    const destinationKeys = selectedDestinations.map(destination => `${destination.accountId}::${destination.linkedinPageId || "personal"}`);
+    if (new Set(destinationKeys).size !== destinationKeys.length) throw new Error("Each publishing destination can be selected only once.");
+    const selectedAccountIds = [...new Set(selectedDestinations.map(destination => destination.accountId))];
     const format = input.postFormat || postFormat(input.mimeType, input.originalName);
     const description = String(
   input.description ??
@@ -1154,10 +1198,11 @@ export async function createCentralSubmission(principal, input = {}) {
 ).trim();
     if (!description) throw new Error("Post text or description is required.");
     if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
-    for (const accountId of selectedAccountIds) {
-      const account = findOwned(document, "accounts", principal.workspaceId, accountId, "Account");
+    for (const destination of selectedDestinations) {
+      const account = findOwned(document, "accounts", principal.workspaceId, destination.accountId, "Account");
+      const destinationDescription = String(destination.description || description).trim();
       if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
-      if (description.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
+      if (destinationDescription.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
       if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
       if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
       requireYouTubeOptions(account.platform, format, input.platformOptions);
@@ -1166,7 +1211,7 @@ export async function createCentralSubmission(principal, input = {}) {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
       originalName: input.originalName || "Text post", fileName: input.fileName || "", mimeType: input.mimeType || "text/plain",
       extension: input.extension || "", size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
-      artifact: input.artifact || null, description, selectedAccountIds, destinationUploadIds: [], status: "awaiting_schedule", createdAt: timestamp,
+      artifact: input.artifact || null, description, selectedAccountIds, selectedDestinations, destinationUploadIds: [], status: "awaiting_schedule", createdAt: timestamp,
       platformOptions: input.platformOptions, rightsConfirmed: format === "text" ? true : Boolean(input.rightsConfirmed),
       updatedAt: timestamp, createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
     };
@@ -1182,15 +1227,24 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
     const submission = findOwned(document, "submissions", principal.workspaceId, submissionId, "Submission");
     if (submission.status !== "awaiting_schedule") throw new Error("This submission has already been scheduled.");
     if (!Array.isArray(destinations) || !destinations.length) throw new Error("Choose a schedule for every selected account.");
-    const requestedIds = destinations.map((destination) => destination.accountId);
-    if (new Set(requestedIds).size !== requestedIds.length || requestedIds.length !== submission.selectedAccountIds.length
-      || requestedIds.some((accountId) => !submission.selectedAccountIds.includes(accountId))) {
-      throw new Error("The scheduler can set timing only for the accounts selected by the content uploader.");
+    const selectedDestinations = Array.isArray(submission.selectedDestinations) && submission.selectedDestinations.length
+      ? submission.selectedDestinations
+      : submission.selectedAccountIds.map(accountId => ({ accountId }));
+    const selectedDestinationByKey = new Map(selectedDestinations.map(destination => [
+      `${destination.accountId}::${destination.linkedinPageId || "personal"}`,
+      destination,
+    ]));
+    const selectedKeys = new Set(selectedDestinations.map(destination => `${destination.accountId}::${destination.linkedinPageId || "personal"}`));
+    const requestedKeys = destinations.map(destination => `${destination.accountId}::${destination.linkedinPageId || "personal"}`);
+    if (new Set(requestedKeys).size !== requestedKeys.length || requestedKeys.length !== selectedKeys.size
+      || requestedKeys.some(key => !selectedKeys.has(key))) {
+      throw new Error("The scheduler can set timing only for the destinations selected by the content uploader.");
     }
     const timestamp = now();
     const uploads = [];
     for (const destination of destinations) {
       const account = findOwned(document, "accounts", principal.workspaceId, destination.accountId, "Account");
+      const selectedDestination = selectedDestinationByKey.get(`${destination.accountId}::${destination.linkedinPageId || "personal"}`);
       const scheduledTimestamp = destination.scheduledAt ? Date.parse(destination.scheduledAt) : null;
       if (scheduledTimestamp !== null && (!Number.isFinite(scheduledTimestamp) || scheduledTimestamp <= Date.now())) throw new Error("Scheduled publishing time must be in the future.");
       const scheduledAt = scheduledTimestamp === null ? null : new Date(scheduledTimestamp).toISOString();
@@ -1211,8 +1265,9 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
         postFormat: submission.postFormat, originalName: submission.originalName, fileName: submission.fileName,
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
         artifact: submission.artifact || null,
-        title: submission.title, caption: submission.description, status: "queued", publishActionState: "not_started",
+        title: submission.title, caption: String(selectedDestination?.description || submission.description).trim(), status: "queued", publishActionState: "not_started",
         platformOptions: requireYouTubeOptions(account.platform, submission.postFormat, submission.platformOptions),
+        linkedinTarget: account.platform === "linkedin" ? destination.linkedinTarget || undefined : undefined,
         uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId,
         sourceSubmissionId: submission.id, createdByUserId: submission.createdByUserId, createdByName: submission.createdByName,
         scheduledByUserId: principal.userId, scheduledByName: principal.name || principal.email || principal.userId,

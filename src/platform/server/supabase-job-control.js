@@ -31,6 +31,26 @@ function publishingEngineForPlatform(platform, requestedEngine = "companion") {
     : "companion";
 }
 
+function normalizedLinkedInManagedPages(metadata) {
+  const pages = Array.isArray(metadata?.linkedinManagedPages) ? metadata.linkedinManagedPages : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const candidate of pages.slice(0, 100)) {
+    const id = safeText(candidate?.id, 180);
+    const name = safeText(candidate?.name, 200);
+    if (!id || !name || seen.has(id) || !/^[A-Za-z0-9._~-]+$/.test(id)) continue;
+    seen.add(id);
+    const encodedId = encodeURIComponent(id);
+    normalized.push({
+      id,
+      name,
+      pageUrl: `https://www.linkedin.com/company/${encodedId}/admin/`,
+      pagePostsUrl: `https://www.linkedin.com/company/${encodedId}/admin/page-posts/published/`,
+    });
+  }
+  return normalized;
+}
+
 function camelJob(row) {
   if (!row) return null;
   return {
@@ -84,6 +104,12 @@ function camelAccount(row, companion) {
     readiness,
     companionStatus,
     executionEngine: publishingEngineForPlatform(row.platform, row.metadata?.executionEngine),
+    linkedinManagedPages: row.platform === "linkedin"
+      ? normalizedLinkedInManagedPages(row.metadata)
+      : undefined,
+    linkedinManagedPagesUpdatedAt: row.platform === "linkedin"
+      ? row.metadata?.linkedinManagedPagesUpdatedAt || undefined
+      : undefined,
     metadata: row.metadata || {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -527,7 +553,13 @@ export async function upsertSupabaseAccount(account) {
       ${account.displayName}, ${account.handle || ""}, ${account.loginIdentifier || ""},
       ${account.enabled !== false}, ${Boolean(account.credentialConfigured)},
       ${account.credentialConfigured ? "connected" : "reconnect_required"}, ${account.safetyStatus || "healthy"},
-      ${sql.json({ executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine) })}, ${account.createdAt || new Date().toISOString()}, now()
+      ${sql.json({
+        executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
+        ...(account.platform === "linkedin" ? {
+          linkedinManagedPages: account.linkedinManagedPages || [],
+          linkedinManagedPagesUpdatedAt: account.linkedinManagedPagesUpdatedAt || null,
+        } : {}),
+      })}, ${account.createdAt || new Date().toISOString()}, now()
     ) ON CONFLICT (id) DO UPDATE SET
       companion_device_id = coalesce(EXCLUDED.companion_device_id, public.social_accounts.companion_device_id),
       display_name = EXCLUDED.display_name, handle = EXCLUDED.handle,
@@ -653,7 +685,13 @@ async function synchronizePublishingJobsWithSql(sql, plan) {
     credential_configured: Boolean(account.credentialConfigured),
     session_status: account.credentialConfigured ? "connected" : "reconnect_required",
     safety_status: account.safetyStatus || "healthy",
-    metadata: { executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine) },
+    metadata: {
+      executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
+      ...(account.platform === "linkedin" ? {
+        linkedinManagedPages: account.linkedinManagedPages || [],
+        linkedinManagedPagesUpdatedAt: account.linkedinManagedPagesUpdatedAt || null,
+      } : {}),
+    },
     created_at: account.createdAt || new Date().toISOString(),
   }));
   await sql`
@@ -864,7 +902,7 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
   const sql = await getDatabaseSql();
   const [row] = await sql`
     SELECT
-      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.8') AS minimum_version,
+      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.16') AS minimum_version,
       (SELECT to_jsonb(device_row) FROM (
         SELECT * FROM public.companion_devices
          WHERE workspace_id = ${workspaceId} AND revoked_at IS NULL
@@ -881,7 +919,7 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
          WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 500
       ) job_row), '[]'::jsonb) AS jobs
   `;
-  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.8");
+  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.16");
   const companion = companionValue
     ? { ...companionValue, accountHealth: { loginRequired: Number(row?.login_required) || 0 } }
     : null;

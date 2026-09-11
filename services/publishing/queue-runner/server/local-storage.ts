@@ -14,6 +14,7 @@ import {
   type ContentSubmission,
   type CreateUserProfileInput,
   type DashboardSummary,
+  type LinkedInManagedPage,
   type Platform,
   type PlatformAccount,
   type PlatformUpload,
@@ -54,6 +55,7 @@ type BlobStore = {
 
 type StoredFileInput = {
   platformOptions?: PlatformUpload["platformOptions"];
+  linkedinTarget?: LinkedInManagedPage;
   originalName: string;
   fileName: string;
   mimeType: string;
@@ -78,6 +80,7 @@ type StoredSubmissionInput = {
   description: string;
   rightsConfirmed: boolean;
   selectedAccountIds: string[];
+  selectedDestinations?: Array<{ accountId: string; linkedinPageId?: string; description?: string }>;
 };
 
 type BootstrapUser = {
@@ -291,6 +294,9 @@ function normalizeStore(value: unknown): Store {
       safetyStatus: account.safetyStatus || (account.enabled ? "healthy" : "paused"),
       safetyMode: account.safetyMode ?? "standard",
       twoFactorEnabled: account.twoFactorEnabled ?? false,
+      linkedinManagedPages: account.platform === "linkedin" && Array.isArray(account.linkedinManagedPages)
+        ? account.linkedinManagedPages
+        : undefined,
     }))
     : [];
   const accountWorkspaces = new Map(accounts.map(account => [account.id, account.workspaceId]));
@@ -323,6 +329,7 @@ function normalizeStore(value: unknown): Store {
         workspaceId: submission.workspaceId || legacyWorkspaceId,
         rightsConfirmed: submission.rightsConfirmed ?? true,
         selectedAccountIds: Array.isArray(submission.selectedAccountIds) ? submission.selectedAccountIds : [],
+        selectedDestinations: Array.isArray(submission.selectedDestinations) ? submission.selectedDestinations : undefined,
         destinationUploadIds: Array.isArray(submission.destinationUploadIds) ? submission.destinationUploadIds : [],
       }))
       : [],
@@ -1111,6 +1118,7 @@ export async function createContentSubmission(
       status: "awaiting_schedule",
       createdByUserId: actorUserId,
       selectedAccountIds: [...new Set(input.selectedAccountIds)],
+      selectedDestinations: input.selectedDestinations,
       destinationUploadIds: [],
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -1330,6 +1338,26 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
   });
 }
 
+export async function updateLinkedInManagedPages(accountId: string, pages: LinkedInManagedPage[]) {
+  return mutateStore(store => {
+    const index = store.accounts.findIndex(account => account.id === accountId);
+    if (index < 0) return null;
+    const existing = store.accounts[index];
+    if (existing.platform !== "linkedin") throw new Error("Managed LinkedIn Pages can only be saved for a LinkedIn account.");
+    const uniquePages = [...new Map(pages.map(page => [page.id, page])).values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, 100);
+    const updated: PlatformAccount = {
+      ...existing,
+      linkedinManagedPages: uniquePages,
+      linkedinManagedPagesUpdatedAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+}
+
 export async function bindPublishingAccountsToCompanion(companionId: string) {
   const normalizedCompanionId = companionId.trim();
   if (!normalizedCompanionId) throw new Error("A Companion instance ID is required.");
@@ -1411,6 +1439,8 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
         safetyStatus: input.enabled === false ? "paused" : "healthy",
         safetyMode: input.safetyMode || "protected",
         twoFactorEnabled: Boolean(input.twoFactorEnabled),
+        linkedinManagedPages: input.platform === "linkedin" ? input.linkedinManagedPages : undefined,
+        linkedinManagedPagesUpdatedAt: input.platform === "linkedin" ? input.linkedinManagedPagesUpdatedAt : undefined,
         createdAt: input.createdAt || timestamp,
         updatedAt: timestamp,
       };
@@ -1433,6 +1463,12 @@ export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
         ? false
         : Boolean(input.credentialConfigured) || existing.credentialConfigured,
       safetyStatus: input.enabled === false ? "paused" : existing.safetyStatus === "paused" ? "healthy" : existing.safetyStatus,
+      linkedinManagedPages: input.platform === "linkedin" && input.linkedinManagedPages !== undefined
+        ? input.linkedinManagedPages
+        : existing.linkedinManagedPages,
+      linkedinManagedPagesUpdatedAt: input.platform === "linkedin" && input.linkedinManagedPagesUpdatedAt
+        ? input.linkedinManagedPagesUpdatedAt
+        : existing.linkedinManagedPagesUpdatedAt,
       updatedAt: timestamp,
     };
     store.accounts[index] = updated;
@@ -1866,6 +1902,14 @@ export async function createUpload(
     const account = store.accounts.find(item => item.id === accountId && (!workspaceId || item.workspaceId === workspaceId));
     if (!account) throw new Error("Publishing account not found.");
     if (!account.enabled) throw new Error("This publishing account is disabled.");
+    const linkedinTarget = file.linkedinTarget
+      ? account.platform === "linkedin"
+        ? account.linkedinManagedPages?.find(page => page.id === file.linkedinTarget?.id)
+        : undefined
+      : undefined;
+    if (file.linkedinTarget && !linkedinTarget) {
+      throw new Error("The selected managed LinkedIn Page is no longer available. Reconnect LinkedIn and choose it again.");
+    }
     if (file.scheduleId && !store.schedules.some(schedule =>
       schedule.id === file.scheduleId && schedule.workspaceId === account.workspaceId
     )) {
@@ -1883,6 +1927,7 @@ export async function createUpload(
       accountId,
       platform: account.platform,
       description: file.caption,
+      linkedinPageId: file.linkedinTarget?.id,
       scheduledAt: file.scheduledAt,
       scheduleId: file.scheduleId,
     }, existing));
@@ -1914,6 +1959,7 @@ export async function createUpload(
       url: file.url,
       title: displayTitle,
       platformOptions: requireYouTubeOptions(account.platform, file.postFormat, file.platformOptions) as PlatformUpload["platformOptions"],
+      linkedinTarget,
       caption: file.caption,
       status: "queued",
       attemptCount: 0,

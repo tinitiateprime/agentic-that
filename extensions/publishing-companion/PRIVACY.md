@@ -1,7 +1,7 @@
 # AgenticThat Companion extension privacy policy
 
 The extension connects the AgenticThat publishing dashboard at
-`https://agentic-that.netlify.app`, or one HTTPS origin explicitly approved by
+`https://agenticthat.com`, or one HTTPS origin explicitly approved by
 the user, to AgenticThat Companion on `http://127.0.0.1:8792`.
 
 ## Data handled for the extension's single purpose

@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright-core";
-import type { PlatformUpload } from "../../../shared/schema.js";
+import type { LinkedInManagedPage, PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
@@ -48,6 +48,110 @@ export function isLinkedInPublishResponse(method: string, url: string, status: n
     && status < 300
     && /linkedin\.com\/voyager\/api\//i.test(url)
     && /contentcreation|dashshares|ugcposts|(?:^|[/?])shares(?:[/?#&=]|$)|(?:^|[/?])posts(?:[/?#&=]|$)/i.test(url);
+}
+
+export function linkedInManagedPageFromLink(nameInput: string, hrefInput: string): LinkedInManagedPage | null {
+  try {
+    const url = new URL(hrefInput, LINKEDIN_FEED_URL);
+    if (!/(?:^|\.)linkedin\.com$/i.test(url.hostname)) return null;
+    const match = /^\/company\/([^/]+)(?:\/|$)/i.exec(url.pathname);
+    const id = match?.[1] ? decodeURIComponent(match[1]).trim() : "";
+    const name = nameInput.replace(/\s+/g, " ").trim();
+    if (!id || !name || !/^[A-Za-z0-9._~-]+$/.test(id) || /^Manage$/i.test(name)) return null;
+    const encodedId = encodeURIComponent(id);
+    return {
+      id,
+      name: name.slice(0, 200),
+      pageUrl: `https://www.linkedin.com/company/${encodedId}/admin/`,
+      pagePostsUrl: `https://www.linkedin.com/company/${encodedId}/admin/page-posts/published/`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function discoverLinkedInManagedPages(page: Page): Promise<LinkedInManagedPage[]> {
+  if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+    await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+  }
+
+  // Authentication is confirmed as soon as LinkedIn reaches /feed, while the
+  // left rail (including Manage) is rendered later. Wait specifically for the
+  // card instead of treating that short loading window as an empty Page list.
+  await page.getByText(/^Manage$/i).first().waitFor({ state: "visible", timeout: 12000 }).catch(() => undefined);
+  const adminLinks = page.locator('a[href*="/company/"][href*="/admin"]');
+  const manageHeading = await firstVisible([
+    page.getByText(/^Manage$/i),
+    page.locator("h2, h3, [role='heading']").filter({ hasText: /^Manage$/i }),
+  ]);
+  if (manageHeading) {
+    await manageHeading.evaluate((element: HTMLElement) => element.scrollIntoView({ block: "center" })).catch(() => undefined);
+    const toggle = manageHeading.locator("xpath=ancestor-or-self::*[self::button or @role='button'][1]");
+    const toggleCount = await toggle.count().catch(() => 0);
+    if (toggleCount) {
+      const expanded = await toggle.first().getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") await clickIfVisible(toggle.first(), 2000);
+    } else if (await adminLinks.count().catch(() => 0) === 0) {
+      // LinkedIn sometimes binds the collapse action to a non-button card
+      // heading. Clicking it is safe when no managed Page links are present.
+      await clickIfVisible(manageHeading, 2000);
+    }
+    await page.waitForTimeout(750);
+
+    const manageRegion = manageHeading.locator("xpath=ancestor::*[.//a[contains(@href, '/company/')]][1]");
+    if (await manageRegion.count().catch(() => 0)) {
+      // Some accounts initially render only a subset of their administered
+      // Pages. Expand the in-card list without touching unrelated feed panels.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const showMore = await firstVisible([
+          manageRegion.first().getByRole("button", { name: /^(?:Show more|See all)$/i }),
+        ]);
+        if (!showMore) break;
+        const before = await adminLinks.count().catch(() => 0);
+        if (!await clickIfVisible(showMore, 2000)) break;
+        await page.waitForTimeout(400);
+        const after = await adminLinks.count().catch(() => 0);
+        if (after <= before) break;
+      }
+    }
+    await adminLinks.first().waitFor({ state: "attached", timeout: 3000 }).catch(() => undefined);
+  }
+
+  const adminPageLinks = await adminLinks.evaluateAll((anchors) => anchors.map(anchor => {
+    const element = anchor as HTMLAnchorElement;
+    const labelled = element.getAttribute("aria-label") || element.getAttribute("title") || "";
+    const lines = (element.innerText || element.textContent || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const imageAlt = element.querySelector("img")?.getAttribute("alt") || "";
+    return { href: element.href, name: labelled || lines[0] || imageAlt };
+  })).catch(() => [] as Array<{ href: string; name: string }>);
+
+  // Some LinkedIn layouts use the public company URL in the Manage card and
+  // switch to admin view through client-side state. Scope this fallback to the
+  // nearest Manage card so company mentions in the feed are never collected.
+  const managedCardLinks = manageHeading
+    ? await manageHeading.evaluate((heading) => {
+      let region: Element | null = heading;
+      for (let depth = 0; region && depth < 10; depth += 1, region = region.parentElement) {
+        const anchors = [...region.querySelectorAll<HTMLAnchorElement>('a[href*="/company/"]')];
+        if (!anchors.length) continue;
+        return anchors.map(element => {
+          const labelled = element.getAttribute("aria-label") || element.getAttribute("title") || "";
+          const lines = (element.innerText || element.textContent || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+          const imageAlt = element.querySelector("img")?.getAttribute("alt") || "";
+          return { href: element.href, name: labelled || lines[0] || imageAlt };
+        });
+      }
+      return [] as Array<{ href: string; name: string }>;
+    }).catch(() => [] as Array<{ href: string; name: string }>)
+    : [];
+
+  const pages = [...adminPageLinks, ...managedCardLinks]
+    .map(link => linkedInManagedPageFromLink(link.name, link.href))
+    .filter((candidate): candidate is LinkedInManagedPage => Boolean(candidate));
+  return [...new Map(pages.map(candidate => [candidate.id, candidate])).values()]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, 100);
 }
 
 async function clickIfVisible(locator: Locator, timeout = 1500) {
@@ -244,6 +348,53 @@ async function clickStartPost(page: Page) {
   }
 
   throw new Error("LinkedIn Start a post control did not open the post editor after three verified attempts.");
+}
+
+async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedPage) {
+  const expectedPrefix = `/company/${encodeURIComponent(target.id).toLowerCase()}/admin/page-posts`;
+  const onExpectedPage = () => {
+    try {
+      return new URL(page.url()).pathname.toLowerCase().startsWith(expectedPrefix);
+    } catch {
+      return false;
+    }
+  };
+
+  console.log(`Opening managed LinkedIn Page posts for ${target.name}...`);
+  await page.goto(target.pagePostsUrl, { timeout: 60000 });
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForTimeout(1500);
+  await dismissCookiePrompt(page);
+
+  if (!onExpectedPage()) {
+    await page.goto(target.pageUrl, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(1000);
+    const pagePostsControl = await firstVisible([
+      page.getByRole("link", { name: /^Page posts$/i }),
+      page.getByRole("button", { name: /^Page posts$/i }),
+      page.locator('a[href*="/admin/page-posts"]'),
+    ]);
+    if (!pagePostsControl) {
+      throw new Error(`LinkedIn no longer shows Page posts for ${target.name}. Reconnect LinkedIn to refresh managed Pages.`);
+    }
+    await pagePostsControl.click({ timeout: 10000 });
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    await page.waitForTimeout(1000);
+  }
+
+  if (!onExpectedPage()) {
+    throw new Error(`LinkedIn did not open the selected managed Page ${target.name}. Nothing was published.`);
+  }
+  const pagePostsReady = await firstVisible([
+    page.getByRole("heading", { name: /^Page posts$/i }),
+    page.getByText(/^Page posts$/i),
+    page.getByRole("button", { name: /Start a post/i }),
+  ]);
+  if (!pagePostsReady) {
+    throw new Error(`LinkedIn Page posts did not finish loading for ${target.name}. Nothing was published.`);
+  }
+  console.log(`Managed LinkedIn Page ${target.name} is ready.`);
 }
 
 async function typeLinkedInPostText(page: Page, text: string) {
@@ -568,6 +719,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   }
 
   await loginToLinkedIn(page, upload, accountLogin);
+  if (upload.linkedinTarget) await openLinkedInManagedPagePosts(page, upload.linkedinTarget);
   await clickStartPost(page);
   if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());

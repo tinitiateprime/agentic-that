@@ -34,6 +34,14 @@ export const publishingEngineSchema = z.enum(publishingEngines);
 export const publishActionStateSchema = z.enum(publishActionStates);
 export const scheduleIdSchema = z.coerce.number().int().positive();
 
+export const linkedinManagedPageSchema = z.object({
+  id: z.string().trim().min(1).max(180),
+  name: z.string().trim().min(1).max(200),
+  pageUrl: z.string().url().refine(value => /^https:\/\/(?:www\.)?linkedin\.com\/company\/[^/]+\/admin(?:\/|$)/i.test(value), "Use a LinkedIn Page admin URL"),
+  pagePostsUrl: z.string().url().refine(value => /^https:\/\/(?:www\.)?linkedin\.com\/company\/[^/]+\/admin\/page-posts(?:\/|$)/i.test(value), "Use a LinkedIn Page posts URL"),
+});
+export type LinkedInManagedPage = z.infer<typeof linkedinManagedPageSchema>;
+
 export type Platform = (typeof platforms)[number];
 export type PostFormat = (typeof postFormats)[number];
 export type UploadStatus = (typeof uploadStatuses)[number];
@@ -125,6 +133,8 @@ export const platformAccountSchema = z.object({
   safetyStatus: accountSafetyStatusSchema.optional(),
   safetyMode: accountSafetyModeSchema.optional(),
   twoFactorEnabled: z.boolean().optional(),
+  linkedinManagedPages: z.array(linkedinManagedPageSchema).max(100).optional(),
+  linkedinManagedPagesUpdatedAt: z.string().optional(),
   safetyReason: z.string().optional(),
   safetyPausedAt: z.string().optional(),
   createdAt: z.string(),
@@ -207,6 +217,7 @@ export const platformPostRules: Record<Platform, {
 
 export const unifiedPostDestinationSchema = z.object({
   accountId: z.string().trim().min(1, "Choose a publishing account"),
+  linkedinPageId: z.string().trim().min(1).max(180).optional(),
   description: z.string().trim().max(100_000).optional(),
   scheduledAt: z.string().trim().optional(),
   scheduleId: scheduleIdSchema.optional()
@@ -219,6 +230,12 @@ export const unifiedPostDestinationSchema = z.object({
 export const unifiedPostDestinationsSchema = z.array(unifiedPostDestinationSchema)
   .min(1, "Choose at least one publishing destination")
   .max(100, "Choose no more than 100 publishing destinations");
+
+export const contentSubmissionDestinationSchema = z.object({
+  accountId: z.string().trim().min(1, "Choose a publishing account"),
+  linkedinPageId: z.string().trim().min(1).max(180).optional(),
+  description: z.string().trim().max(100_000).optional()
+});
 
 export const platformHandles: Record<Platform, string> = {
   instagram: "@instagram",
@@ -262,6 +279,7 @@ export const platformUploadSchema = z.object({
   url: z.string(),
   title: z.string().optional(),
   platformOptions: platformOptionsSchema.optional(),
+  linkedinTarget: linkedinManagedPageSchema.optional(),
 
   caption: z.string().min(1, "Caption is required"),
 
@@ -319,6 +337,7 @@ export const contentSubmissionSchema = z.object({
   createdByUserId: z.string(),
   createdByName: z.string().optional(),
   selectedAccountIds: z.array(z.string()).min(1),
+  selectedDestinations: z.array(contentSubmissionDestinationSchema).max(100).optional(),
   scheduledByUserId: z.string().optional(),
   scheduledByName: z.string().optional(),
 

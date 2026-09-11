@@ -1,5 +1,5 @@
 (() => {
-  const PRODUCTION_ORIGIN = "https://agentic-that.netlify.app";
+  const PRODUCTION_ORIGIN = "https://agenticthat.com";
 
   function normalizeDashboardOrigin(value) {
     const url = new URL(String(value || "").trim());

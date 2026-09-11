@@ -7,6 +7,7 @@ import {
   LINKEDIN_POST_ACCEPTED_TEXT,
   LINKEDIN_UPLOAD_ACTIVE_TEXT,
   isLinkedInPublishResponse,
+  linkedInManagedPageFromLink,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
@@ -86,6 +87,41 @@ test("video composer reveals YouTube-only details inside the selected destinatio
   assert.match(appSource, /platform === 'youtube' && postFormat === 'video' && selectedCount > 0/);
   assert.match(appSource, /YouTube video details/);
   assert.match(appSource, /App character limits/);
+});
+
+test("LinkedIn composer exposes personal and managed Page destinations with independent copy", async () => {
+  const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /Personal profile/);
+  assert.match(appSource, /account\.linkedinManagedPages/);
+  assert.match(appSource, /composer-linkedin-copy-list/);
+  assert.match(appSource, /linkedinPageId: destination\.linkedinPage\?\.id/);
+  assert.match(appSource, /destinationDescriptions\[destination\.key\]/);
+});
+
+test("LinkedIn managed Page links become stable direct Page-post destinations", () => {
+  assert.deepEqual(
+    linkedInManagedPageFromLink(
+      "Tinitiate AI Solutions",
+      "https://www.linkedin.com/company/117884053/admin/dashboard/",
+    ),
+    {
+      id: "117884053",
+      name: "Tinitiate AI Solutions",
+      pageUrl: "https://www.linkedin.com/company/117884053/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/117884053/admin/page-posts/published/",
+    },
+  );
+  assert.equal(linkedInManagedPageFromLink("Other", "https://example.com/company/117884053/admin/"), null);
+  assert.equal(linkedInManagedPageFromLink("Manage", "https://www.linkedin.com/company/117884053/admin/"), null);
+  assert.deepEqual(
+    linkedInManagedPageFromLink("Public-link Page", "https://www.linkedin.com/company/public-link-page/"),
+    {
+      id: "public-link-page",
+      name: "Public-link Page",
+      pageUrl: "https://www.linkedin.com/company/public-link-page/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/public-link-page/admin/page-posts/published/",
+    },
+  );
 });
 
 test("normal CI and Companion releases share the complete verification suite", async () => {
@@ -194,9 +230,9 @@ test("scheduler handoffs expose and submit independent timing for every destinat
     appSource.indexOf("function PlatformScheduleModal"),
   );
   assert.match(modalSource, /const \[destinationTimings, setDestinationTimings\]/);
-  assert.match(modalSource, /schedulingAccounts\.map\(account =>/);
-  assert.match(modalSource, /destinationTimings\[account\.id\]/);
-  assert.match(modalSource, /destinations\.push\(\{ accountId: account\.id, \.\.\.destinationSchedule\(scheduleDraft\) \}\)/);
+  assert.match(modalSource, /compatibleDestinations\.map\(destination =>/);
+  assert.match(modalSource, /destinationTimings\[destination\.key\]/);
+  assert.match(modalSource, /linkedinPageId: destination\.linkedinPage\?\.id/);
   assert.match(modalSource, /Set each destination separately/);
   assert.doesNotMatch(modalSource, /const \[timingMode, setTimingMode\]/);
 });

@@ -140,6 +140,7 @@ test("publishing API supports login, role-scoped handoffs, scheduling, and failu
     getPlatformAccount,
     migrateLegacyPlatformAccounts,
     pausePlatformAccountForSafety,
+    updateLinkedInManagedPages,
     updatePlatformAccountCredentialState,
   } = await import("./local-storage.js");
   const legacyStorePath = path.join(temporaryRoot, "legacy-store.json");
@@ -832,6 +833,49 @@ test("publishing API supports login, role-scoped handoffs, scheduling, and failu
   const editedVideo = await api(`/api/uploads/${queuedVideo.id}`, { method: "PATCH", body: JSON.stringify({ title: "Updated video", caption: "Updated metadata", platformOptions: editedOptions }) });
   assert.equal(editedVideo.status, 200, await editedVideo.clone().text());
   assert.deepEqual((await editedVideo.json() as { platformOptions: unknown }).platformOptions, editedOptions);
+
+  const linkedInAccountResponse = await api("/api/platforms/linkedin/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "LinkedIn test profile", handle: "linkedin-test", enabled: true }),
+  });
+  assert.equal(linkedInAccountResponse.status, 201);
+  const linkedInAccount = await linkedInAccountResponse.json() as { id: string };
+  await updateLinkedInManagedPages(linkedInAccount.id, [
+    {
+      id: "page-one",
+      name: "Page One",
+      pageUrl: "https://www.linkedin.com/company/page-one/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/page-one/admin/page-posts/published/",
+    },
+    {
+      id: "page-two",
+      name: "Page Two",
+      pageUrl: "https://www.linkedin.com/company/page-two/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/page-two/admin/page-posts/published/",
+    },
+  ]);
+  const linkedInDestinationsResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "LinkedIn default copy",
+      confirmWarnings: true,
+      destinations: [
+        { accountId: linkedInAccount.id, description: "Personal profile copy" },
+        { accountId: linkedInAccount.id, linkedinPageId: "page-one", description: "Page One copy" },
+        { accountId: linkedInAccount.id, linkedinPageId: "page-two", description: "Page Two copy" },
+      ],
+    }),
+  });
+  assert.equal(linkedInDestinationsResponse.status, 201, await linkedInDestinationsResponse.clone().text());
+  const linkedInUploads = await linkedInDestinationsResponse.json() as Array<{
+    caption: string;
+    linkedinTarget?: { id: string; name: string };
+  }>;
+  assert.deepEqual(linkedInUploads.map(upload => [upload.linkedinTarget?.id || "personal", upload.caption]), [
+    ["personal", "Personal profile copy"],
+    ["page-one", "Page One copy"],
+    ["page-two", "Page Two copy"],
+  ]);
 
   await fs.writeFile(process.env.PUBLISH_QUEUE_DATA_PATH!, "{corrupt", "utf8");
   const durableRecoveryResponse = await api("/api/uploads");

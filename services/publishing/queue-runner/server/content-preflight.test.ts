@@ -92,6 +92,28 @@ test("an identical queued post for the same account and timing is blocked", () =
   assert.equal(issues.find(issue => issue.code === "exact_queued_duplicate")?.severity, "block");
 });
 
+test("different managed LinkedIn Pages under one login are separate destinations", () => {
+  const linkedInUpload = upload({
+    platform: "linkedin",
+    accountId: "linkedin-login",
+    linkedinTarget: {
+      id: "page-one",
+      name: "Page One",
+      pageUrl: "https://www.linkedin.com/company/page-one/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/page-one/admin/page-posts/published/",
+    },
+  });
+  const issues = evaluateContentPreflight(input({
+    destinations: [{
+      accountId: "linkedin-login",
+      platform: "linkedin",
+      linkedinPageId: "page-two",
+      description: "A useful product update",
+    }],
+  }), [linkedInUpload]);
+  assert.equal(issues.some(issue => issue.code === "exact_queued_duplicate"), false);
+});
+
 test("a recent published repeat is a warning rather than a block", () => {
   const now = Date.parse("2026-07-28T10:00:00.000Z");
   const issues = evaluateContentPreflight(input(), [upload({ status: "posted", postedAt: "2026-07-28T09:30:00.000Z" })], now);

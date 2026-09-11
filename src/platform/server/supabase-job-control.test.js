@@ -113,6 +113,27 @@ test("Supabase account metadata preserves provider-safe publishing engines", () 
   assert.equal(account.executionEngine, "external_browser");
 });
 
+test("LinkedIn managed Page metadata is normalized to safe direct admin URLs", () => {
+  const account = supabaseJobControlTestHelpers.camelAccount({
+    platform: "linkedin",
+    enabled: true,
+    credential_configured: true,
+    metadata: {
+      linkedinManagedPages: [
+        { id: "117884053", name: "Tinitiate AI Solutions", pageUrl: "https://evil.example/page", pagePostsUrl: "https://evil.example/posts" },
+        { id: "../unsafe", name: "Unsafe" },
+      ],
+      linkedinManagedPagesUpdatedAt: "2026-09-10T10:00:00.000Z",
+    },
+  }, { status: "online" });
+  assert.deepEqual(account.linkedinManagedPages, [{
+    id: "117884053",
+    name: "Tinitiate AI Solutions",
+    pageUrl: "https://www.linkedin.com/company/117884053/admin/",
+    pagePostsUrl: "https://www.linkedin.com/company/117884053/admin/page-posts/published/",
+  }]);
+});
+
 test("normalized job rows preserve durable lease and outcome fields", () => {
   const job = supabaseJobControlTestHelpers.camelJob({
     id: "job_1",

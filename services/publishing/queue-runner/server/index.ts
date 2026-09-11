@@ -36,6 +36,7 @@ import {
 } from "../../../scraping/companion-resource-scheduler.js";
 import {
   createUserProfileSchema,
+  contentSubmissionDestinationSchema,
   loginInputSchema,
   platformLabels,
   platformPostRules,
@@ -751,12 +752,25 @@ function postFormatForFile(file: StoredUploadFile): PostFormat {
 
 type PublishingScheduleSafetyIssue = {
   accountId: string;
+  destinationKey: string;
   platform: Platform;
   accountName: string;
   requestedAt: string;
   earliestAt: string;
   message: string;
 };
+
+function publishingDestinationKey(accountId: string, linkedinPageId?: string) {
+  return `${accountId}::${linkedinPageId || "personal"}`;
+}
+
+function resolveLinkedInTarget(account: PlatformAccount, linkedinPageId?: string) {
+  if (!linkedinPageId) return undefined;
+  if (account.platform !== "linkedin") throw new Error("A managed LinkedIn Page can only be selected below a LinkedIn account.");
+  const target = account.linkedinManagedPages?.find(page => page.id === linkedinPageId);
+  if (!target) throw new Error("The selected managed LinkedIn Page is no longer available. Reconnect LinkedIn and choose it again.");
+  return target;
+}
 
 async function assessDestinationPublishingSafety(
   user: UserProfile,
@@ -782,6 +796,8 @@ async function assessDestinationPublishingSafety(
   const assessments = destinations.map(destination => {
     const account = accountById.get(destination.accountId);
     if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
+    resolveLinkedInTarget(account, destination.linkedinPageId);
+    const destinationKey = publishingDestinationKey(account.id, destination.linkedinPageId);
     let requestedAt = Date.now();
     if (destination.scheduledAt) {
       requestedAt = Date.parse(normalizeScheduledAt(destination.scheduledAt)!);
@@ -795,8 +811,11 @@ async function assessDestinationPublishingSafety(
     }
 
     const assessment = assessScheduledPublishingSafety(
-      { id: excludeUploadId ?? `preview_${account.id}`, platform: account.platform, postFormat },
-      safetyUploads.filter(upload => upload.accountId === account.id && upload.id !== excludeUploadId),
+      { id: excludeUploadId ?? `preview_${destinationKey}`, platform: account.platform, postFormat },
+      safetyUploads.filter(upload => (
+        publishingDestinationKey(upload.accountId, upload.linkedinTarget?.id) === destinationKey
+        && upload.id !== excludeUploadId
+      )),
       requestedAt,
       account.safetyMode ?? "standard",
     );
@@ -804,6 +823,7 @@ async function assessDestinationPublishingSafety(
       const earliest = new Date(assessment.earliestAt);
       issues.push({
         accountId: account.id,
+        destinationKey,
         platform: account.platform,
         accountName: account.displayName,
         requestedAt: assessment.requestedAt,
@@ -811,7 +831,7 @@ async function assessDestinationPublishingSafety(
         message: `${account.displayName} will wait until ${earliest.toLocaleString()}. ${assessment.reason ?? "A publishing safety limit is active."} Other selected accounts can continue.`,
       });
     }
-    return { accountId: account.id, platform: account.platform, ...assessment };
+    return { accountId: account.id, destinationKey, platform: account.platform, ...assessment };
   });
   return { allowed: true, issues, assessments };
 }
@@ -820,10 +840,10 @@ async function applyPublishingSafetyDeferrals(
   uploads: PlatformUpload[],
   issues: PublishingScheduleSafetyIssue[],
 ) {
-  const issueByAccountId = new Map(issues.map(issue => [issue.accountId, issue]));
+  const issueByDestination = new Map(issues.map(issue => [issue.destinationKey, issue]));
   const updated: PlatformUpload[] = [];
   for (const upload of uploads) {
-    const issue = issueByAccountId.get(upload.accountId);
+    const issue = issueByDestination.get(publishingDestinationKey(upload.accountId, upload.linkedinTarget?.id));
     if (!issue) {
       updated.push(upload);
       continue;
@@ -949,6 +969,7 @@ const stagedSubmissionSchema = z.object({
   title: z.string().trim().max(500).optional().default(""),
   description: z.string().trim().min(1, "Enter a post description."),
   selectedAccountIds: z.array(z.string().trim().min(1)).min(1, "Choose at least one publishing account").max(100),
+  selectedDestinations: z.array(contentSubmissionDestinationSchema).min(1).max(100).optional(),
   rightsConfirmed: z.boolean().optional().default(false),
   confirmWarnings: z.boolean().optional().default(false)
 });
@@ -956,6 +977,7 @@ const stagedSubmissionSchema = z.object({
 const textSubmissionSchema = z.object({
   description: z.string().trim().min(1, "Write your post text."),
   selectedAccountIds: z.array(z.string().trim().min(1)).min(1, "Choose at least one publishing account").max(100),
+  selectedDestinations: z.array(contentSubmissionDestinationSchema).min(1).max(100).optional(),
   confirmWarnings: z.boolean().optional().default(false)
 });
 
@@ -1308,8 +1330,8 @@ async function createUnifiedPosts(
 
   try {
     const destinations = unifiedPostDestinationsSchema.parse(destinationsInput);
-    const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
-    if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
+    const uniqueDestinationKeys = new Set(destinations.map(destination => publishingDestinationKey(destination.accountId, destination.linkedinPageId)));
+    if (uniqueDestinationKeys.size !== destinations.length) throw new Error("Each publishing destination can be selected only once.");
     if (user.role === "post_uploader" && destinations.some(destination => destination.scheduledAt || destination.scheduleId)) {
       throw new Error("Post uploaders can create queued posts but cannot assign schedules.");
     }
@@ -1324,7 +1346,7 @@ async function createUnifiedPosts(
       const account = accountById.get(destination.accountId);
       if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
       if (request) assertCentralPlatformAccess(request, account.platform, "operate");
-      return { destination, account };
+      return { destination, account, linkedinTarget: resolveLinkedInTarget(account, destination.linkedinPageId) };
     });
 
     const youtubeVideoSelected = postFormat === "video" && destinationAccounts.some(({ account }) => account.platform === "youtube");
@@ -1355,13 +1377,14 @@ async function createUnifiedPosts(
         accountId: account.id,
         platform: account.platform,
         description: destination.description?.trim() || description,
+        linkedinPageId: destination.linkedinPageId,
         scheduledAt: destination.scheduledAt,
         scheduleId: destination.scheduleId,
       })),
     }, await listUploads(undefined, undefined, user.workspaceId));
     assertContentPreflight(preflightIssues, preflightOptions.confirmWarnings);
 
-    for (const { destination, account } of destinationAccounts) {
+    for (const { destination, account, linkedinTarget } of destinationAccounts) {
       const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
       createdUploads.push(await createUpload(destination.accountId, {
         originalName: file.originalname,
@@ -1372,6 +1395,7 @@ async function createUnifiedPosts(
         url: postFormat === "text" ? "" : `/uploads/${file.filename}`,
         title: account.platform === "youtube" && postFormat === "video" ? title : undefined,
         platformOptions: preflightOptions.platformOptions,
+        linkedinTarget,
         caption: destination.description?.trim() || description,
         scheduledAt,
         scheduleId: destination.scheduleId,
@@ -1411,11 +1435,18 @@ async function scheduleContentSubmission(
   const title = submission.title?.trim() || "";
   try {
     const destinations = scheduleSubmissionSchema.parse({ destinations: destinationsInput }).destinations;
-    const uniqueAccountIds = new Set(destinations.map(destination => destination.accountId));
-    if (uniqueAccountIds.size !== destinations.length) throw new Error("Each publishing account can be selected only once.");
-    const selectedAccountIds = new Set(submission.selectedAccountIds);
-    if (selectedAccountIds.size > 0 && (uniqueAccountIds.size !== selectedAccountIds.size || [...uniqueAccountIds].some(accountId => !selectedAccountIds.has(accountId)))) {
-      throw new Error("The Scheduler must use exactly the publishing accounts selected by the uploader.");
+    const destinationKeys = new Set(destinations.map(destination => publishingDestinationKey(destination.accountId, destination.linkedinPageId)));
+    if (destinationKeys.size !== destinations.length) throw new Error("Each publishing destination can be selected only once.");
+    const selectedDestinations: Array<{ accountId: string; linkedinPageId?: string; description?: string }> = submission.selectedDestinations?.length
+      ? submission.selectedDestinations
+      : submission.selectedAccountIds.map(accountId => ({ accountId }));
+    const selectedKeys = new Set(selectedDestinations.map(destination => publishingDestinationKey(destination.accountId, destination.linkedinPageId)));
+    const selectedDestinationByKey = new Map(selectedDestinations.map(destination => [
+      publishingDestinationKey(destination.accountId, destination.linkedinPageId),
+      destination,
+    ]));
+    if (destinationKeys.size !== selectedKeys.size || [...destinationKeys].some(key => !selectedKeys.has(key))) {
+      throw new Error("The Scheduler must use exactly the publishing destinations selected by the uploader.");
     }
     const [allAccounts, allSchedules] = await Promise.all([
       listPlatformAccounts(undefined, user.workspaceId),
@@ -1426,12 +1457,18 @@ async function scheduleContentSubmission(
     const destinationAccounts = destinations.map(destination => {
       const account = accountById.get(destination.accountId);
       if (!account) throw new Error("One of the selected publishing accounts no longer exists.");
-      return { destination, account };
+      const selectedDestination = selectedDestinationByKey.get(publishingDestinationKey(destination.accountId, destination.linkedinPageId));
+      return {
+        destination,
+        account,
+        description: selectedDestination?.description?.trim() || submission.description,
+        linkedinTarget: resolveLinkedInTarget(account, destination.linkedinPageId),
+      };
     });
 
-    for (const { destination, account } of destinationAccounts) {
+    for (const { destination, account, description } of destinationAccounts) {
       if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
-      assertPlatformPostCompatible(account.platform, file, title, submission.description);
+      assertPlatformPostCompatible(account.platform, file, title, description);
       if (destination.scheduleId) {
         const schedule = scheduleById.get(destination.scheduleId);
         if (!schedule) throw new Error(`Schedule #${destination.scheduleId} was not found.`);
@@ -1448,17 +1485,18 @@ async function scheduleContentSubmission(
       originalName: submission.originalName,
       size: submission.size,
       rightsConfirmed: submission.rightsConfirmed,
-      destinations: destinationAccounts.map(({ destination, account }) => ({
+      destinations: destinationAccounts.map(({ destination, account, description }) => ({
         accountId: account.id,
         platform: account.platform,
-        description: submission.description,
+        description,
+        linkedinPageId: destination.linkedinPageId,
         scheduledAt: destination.scheduledAt,
         scheduleId: destination.scheduleId,
       })),
     }, await listUploads(undefined, undefined, user.workspaceId));
     assertContentPreflight(preflightIssues, confirmWarnings);
 
-    for (const { destination, account } of destinationAccounts) {
+    for (const { destination, account, description, linkedinTarget } of destinationAccounts) {
       const scheduledAt = destination.scheduledAt ? normalizeScheduledAt(destination.scheduledAt) : undefined;
       createdUploads.push(await createUpload(destination.accountId, {
         originalName: submission.originalName,
@@ -1469,7 +1507,8 @@ async function scheduleContentSubmission(
         url: submission.url,
         title: account.platform === "youtube" && submission.postFormat === "video" ? title : undefined,
         platformOptions: submission.platformOptions,
-        caption: submission.description,
+        linkedinTarget,
+        caption: description,
         scheduledAt,
         scheduleId: destination.scheduleId,
       }, user.id, user.workspaceId, {
@@ -1501,21 +1540,22 @@ async function validateSubmissionAccounts(
   file: StoredUploadFile,
   title: string,
   description: string,
-  selectedAccountIds: string[],
+  destinations: Array<{ accountId: string; linkedinPageId?: string; description?: string }>,
 ) {
   assertCentralCapability(req, "publishing.destinations.select");
-  const uniqueIds = [...new Set(selectedAccountIds)];
-  if (uniqueIds.length !== selectedAccountIds.length) throw new Error("Each publishing account can be selected only once.");
+  const uniqueKeys = new Set(destinations.map(destination => publishingDestinationKey(destination.accountId, destination.linkedinPageId)));
+  if (uniqueKeys.size !== destinations.length) throw new Error("Each publishing destination can be selected only once.");
   const accounts = await listPlatformAccounts(undefined, user.workspaceId);
   const accountById = new Map(accounts.map(account => [account.id, account]));
-  for (const accountId of uniqueIds) {
-    const account = accountById.get(accountId);
+  return destinations.map(destination => {
+    const account = accountById.get(destination.accountId);
     if (!account) throw new Error("One of the selected publishing accounts is unavailable in this workspace.");
     if (!account.enabled) throw new Error(`${account.displayName} is disabled and cannot receive new posts.`);
+    resolveLinkedInTarget(account, destination.linkedinPageId);
     assertCentralPlatformAccess(req, account.platform, "operate");
-    assertPlatformPostCompatible(account.platform, file, title, description);
-  }
-  return uniqueIds;
+    assertPlatformPostCompatible(account.platform, file, title, destination.description?.trim() || description);
+    return { ...destination, platform: account.platform };
+  });
 }
 
 app.use(
@@ -2472,18 +2512,23 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
     const user = currentUser(req);
     const payload = textSubmissionSchema.parse(req.body);
     assertCentralCapability(req, "publishing.submissions.create");
-    const selectedAccountIds = await validateSubmissionAccounts(req, user, {
+    const requestedDestinations = payload.selectedDestinations ?? payload.selectedAccountIds.map(accountId => ({ accountId }));
+    const selectedDestinations = await validateSubmissionAccounts(req, user, {
       originalname: "Text post",
       filename: "",
       mimetype: "text/plain",
       size: Buffer.byteLength(payload.description, "utf8"),
-    }, "", payload.description, payload.selectedAccountIds);
+    }, "", payload.description, requestedDestinations);
     const preflightIssues = evaluateContentPreflight({
       postFormat: "text",
       description: payload.description,
       originalName: "Text post",
       size: Buffer.byteLength(payload.description, "utf8"),
       rightsConfirmed: true,
+      destinations: selectedDestinations.map(destination => ({
+        ...destination,
+        description: destination.description?.trim() || payload.description,
+      })),
     });
     assertContentPreflight(preflightIssues, payload.confirmWarnings);
     const submission = await createContentSubmission({
@@ -2495,7 +2540,8 @@ app.post("/api/submissions/text", requireRoles("operations_manager", "post_uploa
       url: "",
       description: payload.description,
       rightsConfirmed: true,
-      selectedAccountIds,
+      selectedAccountIds: [...new Set(selectedDestinations.map(destination => destination.accountId))],
+      selectedDestinations,
     }, user.workspaceId, user.id);
     res.status(201).json(submission);
   } catch (error) {
@@ -2529,6 +2575,13 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       throw new Error("Enter a video title so the scheduler can choose any supported platform.");
     }
 
+    const requestedDestinations = payload.selectedDestinations ?? payload.selectedAccountIds.map(accountId => ({ accountId }));
+    const selectedDestinations = await validateSubmissionAccounts(req, user, {
+      originalname: record.originalName,
+      filename: record.fileName,
+      mimetype: record.mimeType,
+      size: record.size,
+    }, payload.title, payload.description, requestedDestinations);
     const preflightIssues = evaluateContentPreflight({
       postFormat,
       title: payload.title,
@@ -2536,14 +2589,12 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       originalName: record.originalName,
       size: record.size,
       rightsConfirmed: payload.rightsConfirmed,
+      destinations: selectedDestinations.map(destination => ({
+        ...destination,
+        description: destination.description?.trim() || payload.description,
+      })),
     });
     assertContentPreflight(preflightIssues, payload.confirmWarnings);
-    const selectedAccountIds = await validateSubmissionAccounts(req, user, {
-      originalname: record.originalName,
-      filename: record.fileName,
-      mimetype: record.mimeType,
-      size: record.size,
-    }, payload.title, payload.description, payload.selectedAccountIds);
 
     finalFileName = record.fileName;
     finalWorkspaceId = user.workspaceId;
@@ -2559,7 +2610,8 @@ app.post("/api/submissions/staged", requireRoles("operations_manager", "post_upl
       title: payload.title,
       description: payload.description,
       rightsConfirmed: payload.rightsConfirmed,
-      selectedAccountIds,
+      selectedAccountIds: [...new Set(selectedDestinations.map(destination => destination.accountId))],
+      selectedDestinations,
       platformOptions: payload.platformOptions,
     }, user.workspaceId, user.id);
     await fs.promises.unlink(stagedMetadataPath(record.id)).catch(() => undefined);
