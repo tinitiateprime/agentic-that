@@ -191,10 +191,10 @@ jobs:
           npm ci
           npm ci --prefix apps/publishing-companion-desktop
           npm install --prefix apps/publishing-companion-desktop --no-save --ignore-scripts --force \
-            @img/sharp-darwin-x64@0.35.3 \
-            @img/sharp-libvips-darwin-x64@1.3.2 \
-            @img/sharp-darwin-arm64@0.35.3 \
-            @img/sharp-libvips-darwin-arm64@1.3.2
+            @img/sharp-darwin-x64@0.35.4 \
+            @img/sharp-libvips-darwin-x64@1.3.3 \
+            @img/sharp-darwin-arm64@0.35.4 \
+            @img/sharp-libvips-darwin-arm64@1.3.3
 
       - name: Import macOS signing certificate
         id: macos_signing

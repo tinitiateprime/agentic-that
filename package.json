@@ -74,7 +74,7 @@
     "framer-motion": "^13.0.0",
     "lucide-react": "^0.468.0",
     "nanoid": "^5.1.16",
-    "next": "^15.5.21",
+    "next": "^15.5.25",
     "node-cron": "^4.6.0",
     "playwright-core": "^1.61.1",
     "postgres": "^3.4.9",
@@ -90,7 +90,7 @@
     "@opentelemetry/sdk-trace-base": "^2.8.0",
     "@opentelemetry/sdk-trace-node": "^2.8.0",
     "postcss": "^8.5.10",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.15.12",
@@ -100,7 +100,7 @@
     "@types/node": "^26.1.1",
     "@types/react": "19.2.17",
     "concurrently": "^9.2.4",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.4",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.23.0",
     "typescript": "5.8.2"

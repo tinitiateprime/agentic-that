@@ -25,7 +25,7 @@
   "dependencies": {
     "electron-squirrel-startup": "1.0.1",
     "playwright-core": "1.61.1",
-    "sharp": "0.35.3",
+    "sharp": "0.35.4",
     "update-electron-app": "^3.1.1"
   },
   "devDependencies": {
