@@ -149,6 +149,14 @@ test("LinkedIn managed Page navigation avoids ambiguous direct admin URLs for pu
   assert.equal(shouldOpenLinkedInManagedPageFromManage("117884053"), false);
 });
 
+test("LinkedIn managed Page selection verifies navigation and retains the exact Manage destination", async () => {
+  const source = await readFile(new URL("./services/publishers/linkedin.ts", import.meta.url), "utf8");
+  assert.match(source, /const previousUrl = page\.url\(\)/);
+  assert.match(source, /link\.click\(\{ force: true/);
+  assert.match(source, /if \(page\.url\(\) === previousUrl\)/);
+  assert.match(source, /page\.goto\(candidate!\.href/);
+});
+
 test("normal CI and Companion releases share the complete verification suite", async () => {
   const [ciWorkflow, releaseWorkflow] = await Promise.all([
     readFile(new URL("../../../../.github/workflows/ci.yml", import.meta.url), "utf8"),

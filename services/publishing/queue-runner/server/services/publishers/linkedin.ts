@@ -434,7 +434,22 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
       })).catch(() => null);
       const managedPage = candidate ? linkedInManagedPageFromLink(candidate.name, candidate.href) : null;
       if (!managedPage || (managedPage.id !== target.id && managedPage.name !== target.name)) continue;
-      if (!await clickIfVisible(link, 10000)) return false;
+      const previousUrl = page.url();
+      const clicked = await link.scrollIntoViewIfNeeded({ timeout: 5000 })
+        .then(() => link.click({ force: true, timeout: 10000 }))
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) {
+        await page.waitForTimeout(750);
+      }
+      if (page.url() === previousUrl) {
+        // Some LinkedIn Manage cards suppress HTMLElement.click() and even a
+        // trusted pointer click on their first Page. The href came from the
+        // exact, validated Manage item above, so opening it directly preserves
+        // destination identity without trying another administered Page.
+        console.log(`LinkedIn kept the selected Manage link on ${previousUrl}; opening its verified destination directly.`);
+        await page.goto(candidate!.href, { timeout: 60000 });
+      }
       trustedCanonicalNavigation = true;
       await page.waitForLoadState("domcontentloaded").catch(() => undefined);
       await page.waitForTimeout(1500);
