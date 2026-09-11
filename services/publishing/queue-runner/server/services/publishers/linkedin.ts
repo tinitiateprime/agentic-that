@@ -82,6 +82,13 @@ export function isLinkedInManagedPagePostsUrl(urlInput: string, expectedId?: str
   }
 }
 
+export function shouldOpenLinkedInManagedPageFromManage(targetId: string) {
+  // LinkedIn's admin URLs are stable for numeric organization IDs. Public
+  // slugs can instead redirect to the first Page the member administers, so
+  // those Pages must be selected through the exact link in the Manage card.
+  return !/^\d+$/.test(targetId.trim());
+}
+
 export async function discoverLinkedInManagedPages(page: Page): Promise<LinkedInManagedPage[]> {
   if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
     await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
@@ -384,15 +391,37 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
   };
 
   const openFromManageCard = async () => {
-    await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
-    await page.waitForLoadState("domcontentloaded");
+    if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+      await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+      await page.waitForLoadState("domcontentloaded");
+    }
     const manageHeading = page.getByText(/^Manage$/i).first();
     await manageHeading.waitFor({ state: "visible", timeout: 15000 }).catch(() => undefined);
     if (!await manageHeading.isVisible().catch(() => false)) return false;
     await manageHeading.evaluate((element: HTMLElement) => element.scrollIntoView({ block: "center" })).catch(() => undefined);
 
+    const toggle = manageHeading.locator("xpath=ancestor-or-self::*[self::button or @role='button'][1]");
+    if (await toggle.count().catch(() => 0)) {
+      const expanded = await toggle.first().getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") {
+        await clickIfVisible(toggle.first(), 2000);
+        await page.waitForTimeout(500);
+      }
+    }
+
     const manageRegion = manageHeading.locator("xpath=ancestor::*[.//a[contains(@href, '/company/')]][1]");
     if (!await manageRegion.count().catch(() => 0)) return false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const showMore = await firstVisible([
+        manageRegion.first().getByRole("button", { name: /^(?:Show more|See all)$/i }),
+      ]);
+      if (!showMore) break;
+      const before = await manageRegion.locator('a[href*="/company/"]').count().catch(() => 0);
+      if (!await clickIfVisible(showMore, 2000)) break;
+      await page.waitForTimeout(400);
+      const after = await manageRegion.locator('a[href*="/company/"]').count().catch(() => 0);
+      if (after <= before) break;
+    }
     const links = manageRegion.locator('a[href*="/company/"]');
     const linkCount = await links.count().catch(() => 0);
     for (let index = 0; index < Math.min(linkCount, 100); index += 1) {
@@ -416,13 +445,36 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
   };
 
   console.log(`Opening managed LinkedIn Page posts for ${target.name}...`);
-  await page.goto(target.pagePostsUrl, { timeout: 60000 });
-  await page.waitForLoadState("domcontentloaded");
-  await page.waitForTimeout(1500);
-  await dismissCookiePrompt(page);
-  // LinkedIn may replace a public Page slug with its numeric organization ID.
-  // A page-posts redirect from this exact saved destination is still trusted.
-  if (isLinkedInManagedPagePostsUrl(page.url())) trustedCanonicalNavigation = true;
+  const openPagePostsControl = async (pagePostsControl: Locator) => {
+    const href = await pagePostsControl.getAttribute("href").catch(() => null);
+    if (href) {
+      await page.goto(new URL(href, page.url()).href, { timeout: 60000 });
+    } else {
+      await pagePostsControl.click({ timeout: 10000 });
+    }
+    trustedCanonicalNavigation = true;
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    await page.waitForTimeout(1500);
+  };
+
+  if (shouldOpenLinkedInManagedPageFromManage(target.id)) {
+    if (!await openFromManageCard()) {
+      throw new Error(`LinkedIn could not find ${target.name} in the Manage card. Nothing was published.`);
+    }
+    const pagePostsControl = await waitForPagePostsControl();
+    if (!pagePostsControl) {
+      throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
+    }
+    await openPagePostsControl(pagePostsControl);
+  } else {
+    await page.goto(target.pagePostsUrl, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(1500);
+    await dismissCookiePrompt(page);
+    // LinkedIn may preserve or canonicalize a numeric organization ID after
+    // opening the exact saved Page-posts destination.
+    if (isLinkedInManagedPagePostsUrl(page.url(), target.id)) trustedCanonicalNavigation = true;
+  }
 
   if (!onExpectedPage()) {
     await page.goto(target.pageUrl, { timeout: 60000 });
@@ -435,15 +487,7 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
     if (!pagePostsControl) {
       throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
     }
-    const href = await pagePostsControl.getAttribute("href").catch(() => null);
-    if (href) {
-      await page.goto(new URL(href, page.url()).href, { timeout: 60000 });
-    } else {
-      await pagePostsControl.click({ timeout: 10000 });
-    }
-    trustedCanonicalNavigation = true;
-    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    await page.waitForTimeout(1500);
+    await openPagePostsControl(pagePostsControl);
   }
 
   if (!onExpectedPage()) {
@@ -764,7 +808,9 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
     await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
-  await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+  if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+    await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+  }
   await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
 
   console.log("LinkedIn ready.");

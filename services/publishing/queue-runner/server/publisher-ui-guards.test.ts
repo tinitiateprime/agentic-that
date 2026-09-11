@@ -9,6 +9,7 @@ import {
   isLinkedInPublishResponse,
   isLinkedInManagedPagePostsUrl,
   linkedInManagedPageFromLink,
+  shouldOpenLinkedInManagedPageFromManage,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
 import { hasReadyXMedia } from "./services/publishers/x.js";
@@ -139,6 +140,12 @@ test("LinkedIn managed Page navigation accepts a canonical numeric admin redirec
   ), true);
   assert.equal(isLinkedInManagedPagePostsUrl("https://example.com/company/117884053/admin/page-posts/published/"), false);
   assert.equal(isLinkedInManagedPagePostsUrl("https://www.linkedin.com/company/117884053/admin/dashboard/"), false);
+});
+
+test("LinkedIn managed Page navigation avoids ambiguous direct admin URLs for public slugs", () => {
+  assert.equal(shouldOpenLinkedInManagedPageFromManage("tinitiateit"), true);
+  assert.equal(shouldOpenLinkedInManagedPageFromManage("tinitiate-ai"), true);
+  assert.equal(shouldOpenLinkedInManagedPageFromManage("117884053"), false);
 });
 
 test("normal CI and Companion releases share the complete verification suite", async () => {
