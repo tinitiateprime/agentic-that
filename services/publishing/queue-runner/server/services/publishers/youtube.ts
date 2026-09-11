@@ -510,49 +510,32 @@ async function fillCommunityPostDescription(page: Page, description: string) {
 }
 
 async function clickVisibleCommunityImageControl(page: Page) {
-  const target = await page.evaluate(() => {
-    const isVisible = (element: HTMLElement) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      return rect.width > 0
-        && rect.height > 0
-        && style.display !== "none"
-        && style.visibility !== "hidden";
-    };
+  const composer = await getCommunityComposer(page);
+  const controls = [
+    composer.locator('button[aria-label="Add an image"]').filter({ visible: true }).last(),
+    composer.locator("ytd-button-renderer#image-button button").filter({ visible: true }).last(),
+    composer.locator("#image-button button").filter({ visible: true }).last(),
+    composer.getByRole("button", { name: /^Image$/i }).filter({ visible: true }).last(),
+  ];
 
-    const roots = Array.from(document.querySelectorAll<HTMLElement>(
-      "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
-    )).filter((root) => {
-      const text = root.textContent ?? "";
-      return /Image|Image poll|Text poll|Quiz|Video|Post|Visibility/i.test(text) && isVisible(root);
-    });
+  for (const control of controls) {
+    if ((await control.count().catch(() => 0)) === 0) continue;
+    try {
+      // A long description pushes the attachment controls below the browser
+      // viewport. Locator.click scrolls the composer before clicking, whereas
+      // a raw mouse coordinate silently misses an off-screen Image button.
+      await control.scrollIntoViewIfNeeded({ timeout: 5000 });
+      console.log("Clicking YouTube Community Image control...");
+      await control.click({ timeout: 5000 });
+      await page.waitForTimeout(700);
+      return true;
+    } catch {
+      // YouTube keeps hidden duplicate controls in the composer; try the next
+      // concrete button before using the position fallback.
+    }
+  }
 
-    const candidates = roots.flatMap((root) => Array.from(root.querySelectorAll<HTMLElement>("*")))
-      .filter((element) => element.textContent?.trim() === "Image" && isVisible(element))
-      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-    const label = candidates[0];
-    if (!label) return null;
-
-    const clickable =
-      label.closest<HTMLElement>("button, [role='button'], ytd-button-renderer, tp-yt-paper-button, ytd-backstage-image-upload-renderer, ytd-backstage-attachment-upload-renderer")
-      ?? label.parentElement
-      ?? label;
-    const rect = clickable.getBoundingClientRect();
-    const labelRect = label.getBoundingClientRect();
-
-    return {
-      x: rect.width > 10 ? rect.left + rect.width / 2 : labelRect.left + labelRect.width / 2,
-      y: rect.height > 10 ? rect.top + rect.height / 2 : labelRect.top + labelRect.height / 2,
-    };
-  });
-
-  if (!target) return false;
-
-  console.log("Clicking visible YouTube Image control by mouse fallback...");
-  await page.mouse.click(target.x, target.y);
-  await page.waitForTimeout(700);
-  return true;
+  return false;
 }
 
 async function setCommunityImageInputFiles(page: Page, composer: Locator, imagePath: string, previousInputCount: number) {
@@ -576,12 +559,12 @@ async function setCommunityImageInputFiles(page: Page, composer: Locator, imageP
   console.log(`YouTube Community image inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
-    await setLocalInputFile(page, composerInputs.last(), imagePath, { dispatchEvents: true });
+    await setLocalInputFile(page, composerInputs.last(), imagePath);
     return true;
   }
 
   if (pageCount > 0) {
-    await setLocalInputFile(page, pageInputs.last(), imagePath, { dispatchEvents: true });
+    await setLocalInputFile(page, pageInputs.last(), imagePath);
     return true;
   }
 
@@ -663,7 +646,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string, previewTi
   let attached = false;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
-    await setLocalFileChooserFile(fileChooser, imagePath, { dispatchEvents: true });
+    await setLocalFileChooserFile(fileChooser, imagePath);
     attached = true;
   } else {
     attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
@@ -674,7 +657,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string, previewTi
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
-        await setLocalFileChooserFile(retryChooser, imagePath, { dispatchEvents: true });
+        await setLocalFileChooserFile(retryChooser, imagePath);
         attached = true;
       } else {
         attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);

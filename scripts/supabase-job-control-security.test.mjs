@@ -4,6 +4,7 @@ import test from "node:test";
 
 const migrationUrl = new URL("../supabase/migrations/202609020001_companion_job_control.sql", import.meta.url);
 const duplicateAccountRecoveryUrl = new URL("../supabase/migrations/202609050002_companion_duplicate_account_recovery.sql", import.meta.url);
+const terminalStatusGuardUrl = new URL("../supabase/migrations/202609110009_companion_terminal_status_guard.sql", import.meta.url);
 const runnerUrl = new URL("../services/publishing/queue-runner/server/index.ts", import.meta.url);
 const instagramClientUrl = new URL("../services/scraping/instagram/console/src/companionClient.js", import.meta.url);
 const facebookClientUrl = new URL("../services/scraping/facebook/console/src/companionClient.js", import.meta.url);
@@ -45,6 +46,13 @@ test("duplicate account handles cannot block Companion heartbeat session updates
   assert.match(schema, /create index if not exists social_accounts_workspace_platform_handle_lookup_idx/i);
   assert.match(recovery, /drop index if exists public\.social_accounts_workspace_platform_handle_nonempty_idx/i);
   assert.match(recovery, /create index if not exists social_accounts_workspace_platform_handle_lookup_idx/i);
+});
+
+test("delayed Companion heartbeats cannot regress terminal publishing jobs", async () => {
+  const sql = await readFile(terminalStatusGuardUrl, "utf8");
+  assert.match(sql, /job\.status in \('success', 'cancelled', 'reconnect_required'\)/i);
+  assert.match(sql, /job\.status in \('failed', 'uncertain'\) and p_status <> 'success'/i);
+  assert.match(sql, /job\.status in \('failed', 'uncertain'\) and p_status = 'success'/i);
 });
 
 test("scraping clients no longer require the Chrome extension or loopback transport", async () => {

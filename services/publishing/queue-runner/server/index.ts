@@ -432,8 +432,22 @@ export function centralDeliveryFailure(upload?: PlatformUpload) {
 
 async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
   let leaseHeartbeat: NodeJS.Timeout | null = null;
+  let leaseHeartbeatUpdate: Promise<unknown> | null = null;
   let cancellationRequested = false;
   const { account: remoteAccount, upload } = job.payload;
+  const runLeaseHeartbeat = (operation: () => Promise<unknown>) => {
+    if (leaseHeartbeatUpdate) return;
+    leaseHeartbeatUpdate = operation()
+      .catch(() => undefined)
+      .finally(() => {
+        leaseHeartbeatUpdate = null;
+      });
+  };
+  const stopLeaseHeartbeat = async () => {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    leaseHeartbeat = null;
+    if (leaseHeartbeatUpdate) await leaseHeartbeatUpdate;
+  };
   try {
     const account = await upsertSyncedPlatformAccount({
       ...remoteAccount,
@@ -449,12 +463,15 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     if (upload.fileName) {
       await updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.");
       leaseHeartbeat = setInterval(() => {
-        void updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.")
-          .catch(() => undefined);
+        runLeaseHeartbeat(() => updateCentralJobStatus(
+          pairing,
+          job.id,
+          "opening_platform",
+          "Downloading protected publishing media.",
+        ));
       }, 30_000);
       await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
-      clearInterval(leaseHeartbeat);
-      leaseHeartbeat = null;
+      await stopLeaseHeartbeat();
     }
     await upsertSyncedUpload(upload);
     await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
@@ -464,7 +481,7 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     // lease while this Companion owns the browser so another process cannot
     // pick up the same post and submit it twice.
     leaseHeartbeat = setInterval(() => {
-      void listUploads(undefined, remoteAccount.id, pairing.workspaceId)
+      runLeaseHeartbeat(() => listUploads(undefined, remoteAccount.id, pairing.workspaceId)
         .then((items) => items.find((item) => item.id === upload.id))
         .then((current) => updateCentralJobStatus(
           pairing,
@@ -482,10 +499,13 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
             cancellationRequested = true;
             await cancelAutomation("Publishing cancellation was requested from the workspace.");
           }
-        })
-        .catch(() => undefined);
+        }));
     }, 1_000);
     await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: [upload.id] });
+    // Drain any in-flight lease refresh before writing a terminal state. This
+    // prevents a slower publishing heartbeat from arriving after failed or
+    // successful completion and making the workspace look stuck.
+    await stopLeaseHeartbeat();
     const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId)).find((item) => item.id === upload.id);
     if (localUpload?.status === "posted") {
       await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, {}, null, null, true);
@@ -494,6 +514,7 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     const failure = centralDeliveryFailure(localUpload);
     await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry, {}, null, null, failure.state === "uncertain");
   } catch (error) {
+    await stopLeaseHeartbeat();
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);
     const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId).catch(() => []))
@@ -528,7 +549,7 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
       failure.state === "uncertain",
     ).catch(() => undefined);
   } finally {
-    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    await stopLeaseHeartbeat();
   }
 }
 

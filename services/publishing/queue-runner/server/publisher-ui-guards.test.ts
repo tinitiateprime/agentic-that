@@ -220,15 +220,22 @@ test("all publishers attach Companion-local media through CDP without Playwright
   }
 });
 
-test("YouTube Community image assignment emits the browser events its composer requires", async () => {
+test("YouTube Community clicks its real image control and assigns each file once", async () => {
   const publisherDirectory = new URL("./services/publishers/", import.meta.url);
-  const [helper, youtube] = await Promise.all([
-    readFile(new URL("local-file-input.ts", publisherDirectory), "utf8"),
-    readFile(new URL("youtube.ts", publisherDirectory), "utf8"),
-  ]);
-  assert.match(helper, /new Event\("input", \{ bubbles: true, composed: true \}\)/);
-  assert.match(helper, /new Event\("change", \{ bubbles: true, composed: true \}\)/);
-  assert.equal((youtube.match(/\{ dispatchEvents: true \}/g) || []).length, 4);
+  const youtube = await readFile(new URL("youtube.ts", publisherDirectory), "utf8");
+  assert.doesNotMatch(youtube, /dispatchEvents: true/);
+  assert.match(youtube, /aria-label=\"Add an image\"[\s\S]{0,80}filter\(\{ visible: true \}\)/);
+  assert.match(youtube, /control\.scrollIntoViewIfNeeded/);
+  assert.match(youtube, /await control\.click/);
+  assert.doesNotMatch(youtube, /page\.mouse\.click\(target\.x, target\.y\)/);
+});
+
+test("central publishing drains its lease heartbeat before a terminal update", async () => {
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(source, /let leaseHeartbeatUpdate: Promise<unknown> \| null = null/);
+  assert.match(source, /if \(leaseHeartbeatUpdate\) await leaseHeartbeatUpdate/);
+  assert.match(source, /await runAutomation[\s\S]{0,700}await stopLeaseHeartbeat\(\)[\s\S]{0,700}status === "posted"/);
+  assert.match(source, /catch \(error\) \{\s*await stopLeaseHeartbeat\(\)/);
 });
 
 test("large website media batches gateway authorization and completion requests", async () => {

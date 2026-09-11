@@ -5,15 +5,10 @@ import type { ElementHandle, FileChooser, Locator, Page } from "playwright-core"
 
 const FILE_INPUT_MARKER = "data-agenticthat-local-file-input";
 
-type LocalFileInputOptions = {
-  dispatchEvents?: boolean;
-};
-
 async function setLocalFileInputElement(
   page: Page,
   element: ElementHandle,
   filePath: string,
-  options: LocalFileInputOptions = {},
 ) {
   const resolvedPath = path.resolve(filePath);
   const file = await fs.promises.stat(resolvedPath);
@@ -47,19 +42,6 @@ async function setLocalFileInputElement(
       files: [resolvedPath],
     });
 
-    // Chromium's CDP file assignment does not consistently emit the DOM
-    // events used by YouTube's Community composer. Keep the low-memory local
-    // path transfer, but allow that publisher to request the same input/change
-    // events produced by a normal browser file selection.
-    if (options.dispatchEvents) {
-      await element.evaluate((input) => {
-        if (!(input instanceof HTMLInputElement) || !input.files?.length) {
-          throw new Error("The publishing file was not assigned to the browser input.");
-        }
-        input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-      });
-    }
   } finally {
     if (objectId) await session.send("Runtime.releaseObject", { objectId }).catch(() => undefined);
     await session.detach().catch(() => undefined);
@@ -76,18 +58,16 @@ export async function setLocalInputFile(
   page: Page,
   locator: Locator,
   filePath: string,
-  options: LocalFileInputOptions = {},
 ) {
   await locator.waitFor({ state: "attached" });
   const element = await locator.elementHandle();
   if (!element) throw new Error("The publishing file input is unavailable.");
-  await setLocalFileInputElement(page, element, filePath, options);
+  await setLocalFileInputElement(page, element, filePath);
 }
 
 export async function setLocalFileChooserFile(
   fileChooser: FileChooser,
   filePath: string,
-  options: LocalFileInputOptions = {},
 ) {
-  await setLocalFileInputElement(fileChooser.page(), fileChooser.element(), filePath, options);
+  await setLocalFileInputElement(fileChooser.page(), fileChooser.element(), filePath);
 }
