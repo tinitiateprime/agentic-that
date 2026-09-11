@@ -576,12 +576,12 @@ async function setCommunityImageInputFiles(page: Page, composer: Locator, imageP
   console.log(`YouTube Community image inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
-    await setLocalInputFile(page, composerInputs.last(), imagePath);
+    await setLocalInputFile(page, composerInputs.last(), imagePath, { dispatchEvents: true });
     return true;
   }
 
   if (pageCount > 0) {
-    await setLocalInputFile(page, pageInputs.last(), imagePath);
+    await setLocalInputFile(page, pageInputs.last(), imagePath, { dispatchEvents: true });
     return true;
   }
 
@@ -663,7 +663,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string, previewTi
   let attached = false;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
-    await setLocalFileChooserFile(fileChooser, imagePath);
+    await setLocalFileChooserFile(fileChooser, imagePath, { dispatchEvents: true });
     attached = true;
   } else {
     attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
@@ -674,7 +674,7 @@ async function attachCommunityPostImage(page: Page, imagePath: string, previewTi
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
-        await setLocalFileChooserFile(retryChooser, imagePath);
+        await setLocalFileChooserFile(retryChooser, imagePath, { dispatchEvents: true });
         attached = true;
       } else {
         attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);

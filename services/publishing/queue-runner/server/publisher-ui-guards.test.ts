@@ -220,6 +220,17 @@ test("all publishers attach Companion-local media through CDP without Playwright
   }
 });
 
+test("YouTube Community image assignment emits the browser events its composer requires", async () => {
+  const publisherDirectory = new URL("./services/publishers/", import.meta.url);
+  const [helper, youtube] = await Promise.all([
+    readFile(new URL("local-file-input.ts", publisherDirectory), "utf8"),
+    readFile(new URL("youtube.ts", publisherDirectory), "utf8"),
+  ]);
+  assert.match(helper, /new Event\("input", \{ bubbles: true, composed: true \}\)/);
+  assert.match(helper, /new Event\("change", \{ bubbles: true, composed: true \}\)/);
+  assert.equal((youtube.match(/\{ dispatchEvents: true \}/g) || []).length, 4);
+});
+
 test("large website media batches gateway authorization and completion requests", async () => {
   const [clientSource, routeSource, storeSource] = await Promise.all([
     readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8"),
