@@ -247,12 +247,15 @@ test("staged publishing finalization is idempotent per account", () => {
   const input = {
     accountId: "account_1", postFormat: "image", originalName: "release.jpg", mimeType: "image/jpeg",
     caption: "Retry-safe release", rightsConfirmed: true, sourceSubmissionId: "stage_1",
+    previewArtifact: { bucket: "job-artifacts", path: "workspace_1/release.preview.webp", byteSize: 24_000 },
   };
   const first = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
   const retried = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
   assert.equal(retried.id, first.id);
   assert.equal(document.uploads.length, 1);
   assert.equal(document.jobs.length, 1);
+  assert.equal(document.uploads[0].previewArtifact.path, "workspace_1/release.preview.webp");
+  assert.equal(Object.hasOwn(first, "previewArtifact"), false);
 });
 
 test("large media parts advance in one contiguous batch", () => {
@@ -296,6 +299,7 @@ test("admin publishing monitoring preserves final destination copy without expos
     postFormat: "image", originalName: "launch.jpg", fileName: "private-launch.jpg", mimeType: "image/jpeg",
     size: 9_856_614, title: "Launch day", caption: "The exact LinkedIn copy", status: "posted",
     artifact: { bucket: "private", path: "do-not-expose", downloadUrl: "https://example.invalid/private" },
+    previewArtifact: { bucket: "job-artifacts", path: "do-not-expose-preview", byteSize: 42_000 },
     createdByUserId: "user_1", createdByName: "Asha", updatedAt: "2026-09-12T10:00:00.000Z",
   });
 
@@ -303,7 +307,10 @@ test("admin publishing monitoring preserves final destination copy without expos
   assert.equal(monitored.account.displayName, "Acme Company");
   assert.equal(monitored.statusDetail, "published");
   assert.equal(monitored.mediaPreviewAvailable, true);
+  assert.equal(monitored.optimizedPreviewAvailable, true);
+  assert.equal(monitored.previewUrl, "/api/admin-center/publishing/media/upload_1?variant=preview");
   assert.equal(monitored.mediaUrl, "/api/admin-center/publishing/media/upload_1");
   assert.equal(Object.hasOwn(monitored, "artifact"), false);
   assert.equal(JSON.stringify(monitored).includes("do-not-expose"), false);
+  assert.equal(JSON.stringify(monitored).includes("do-not-expose-preview"), false);
 });

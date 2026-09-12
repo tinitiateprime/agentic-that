@@ -36,6 +36,7 @@ import {
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
+import { storePublishingPreviewInput } from "@platform/server/publishing-media-preview";
 import {
   authorizeSupabaseJobArtifactPartUploads,
   deleteSupabaseJobArtifactParts,
@@ -201,9 +202,18 @@ async function removeStageBytes(stage) {
   await Promise.all(Array.from({ length: Math.ceil(stage.size / stage.chunkSize) }, (_, index) => store.delete(stageChunkKey(stage, index * stage.chunkSize)).catch(() => undefined)));
 }
 
-async function finishStagedMedia(principalValue, stagedUploadId) {
+async function finishStagedMedia(principalValue, stagedUploadId, previewInput = null) {
   let stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
+  const previewArtifact = previewInput ? await storePublishingPreviewInput({
+    workspaceId: principalValue.workspaceId,
+    fileName: stage.fileName,
+    originalName: stage.originalName,
+    preview: previewInput,
+  }).then((result) => result?.artifact || null).catch((error) => {
+    console.warn("Publishing preview generation failed", error instanceof Error ? error.message : error);
+    return null;
+  }) : null;
   if (stage.artifactManifest) {
     return {
       originalName: stage.originalName,
@@ -213,6 +223,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       extension: path.extname(stage.originalName),
       url: "",
       artifact: stage.artifactManifest,
+      previewArtifact,
     };
   }
   if (stage.uploadStrategy === "signed_parts" || stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
@@ -233,6 +244,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
       extension: path.extname(stage.originalName),
       url: "",
       artifact: stage.artifactManifest,
+      previewArtifact,
     };
   }
   const bytes = await readStageBytes(stage);
@@ -256,6 +268,7 @@ async function finishStagedMedia(principalValue, stagedUploadId) {
     extension: path.extname(stage.originalName),
     url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
     artifact: stage.artifactManifest,
+    previewArtifact,
   };
 }
 
@@ -522,7 +535,7 @@ export async function POST(request, context) {
     }
     if (parts[0] === "posts" && parts[1] === "unified" && parts[2] === "staged") {
       const user = await principal("publishing.execute");
-      const media = await finishStagedMedia(user, body.stagedUploadId);
+      const media = await finishStagedMedia(user, body.stagedUploadId, body.preview);
       return Response.json(await createPosts(user, {
         ...body,
         ...media,
@@ -554,7 +567,7 @@ export async function POST(request, context) {
         user,
         body.selectedDestinations || (body.selectedAccountIds || []).map(accountId => ({ accountId })),
       );
-      const media = await finishStagedMedia(user, body.stagedUploadId);
+      const media = await finishStagedMedia(user, body.stagedUploadId, body.preview);
       return Response.json(await createCentralSubmission(user, {
         ...body,
         ...media,

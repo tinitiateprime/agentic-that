@@ -108,23 +108,33 @@ function accountHandle(post) {
 function MonitorMedia({ post }) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     setFailed(false);
     setLoaded(false);
+    setPlaying(false);
+    setPreviewFailed(false);
     setRetry(0);
-  }, [post.mediaUrl]);
+  }, [post.mediaUrl, post.previewUrl]);
 
   if (!post.hasMedia) return null;
   if (!post.mediaPreviewAvailable || !post.mediaUrl || failed) {
     const Icon = post.postFormat === "video" ? Video : FileImage;
     return <div className="monitor-media-fallback"><Icon size={28} /><strong>Original media unavailable</strong><span>{post.originalName} · {formatBytes(post.size)}</span>{failed && <button type="button" onClick={() => { setFailed(false); setRetry((current) => current + 1); }}>Retry media</button>}</div>;
   }
-  const source = retry ? `${post.mediaUrl}?retry=${retry}` : post.mediaUrl;
+  const versionedSource = (value) => retry ? `${value}${value.includes("?") ? "&" : "?"}retry=${retry}` : value;
+  const originalSource = versionedSource(post.mediaUrl);
+  const previewSource = post.previewUrl && !previewFailed ? versionedSource(post.previewUrl) : null;
   if (post.postFormat === "video" || String(post.mimeType).startsWith("video/")) {
-    return <><video className={loaded ? "monitor-media-ready" : "monitor-media-pending"} src={`${source}#t=0.1`} controls preload="metadata" playsInline onLoadedData={() => setLoaded(true)} onError={() => setFailed(true)} />{!loaded && <span className="monitor-media-progress"><Loader2 className="spin" size={20} />Preparing video preview…</span>}</>;
+    if (previewSource && !playing) {
+      return <button className="monitor-video-poster" type="button" onClick={() => { setLoaded(false); setPlaying(true); }} aria-label={`Play ${post.originalName}`}><img className={loaded ? "monitor-media-ready" : "monitor-media-pending"} src={previewSource} alt={`Video preview for ${post.originalName}`} loading="eager" decoding="async" fetchPriority="high" onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); setPreviewFailed(true); }} />{!loaded && <span className="monitor-media-progress"><Loader2 className="spin" size={20} />Loading video preview…</span>}{loaded && <span className="monitor-video-play"><Play size={20} fill="currentColor" />Play original video</span>}</button>;
+    }
+    return <><video className={loaded ? "monitor-media-ready" : "monitor-media-pending"} src={`${originalSource}#t=0.1`} controls preload="metadata" playsInline autoPlay={playing} onLoadedData={() => setLoaded(true)} onError={() => setFailed(true)} />{!loaded && <span className="monitor-media-progress"><Loader2 className="spin" size={20} />Preparing video preview…</span>}</>;
   }
-  return <><img className={loaded ? "monitor-media-ready" : "monitor-media-pending"} src={source} alt={`Original ${PLATFORM_LABELS[post.platform] || "social"} post media`} loading="eager" decoding="async" fetchPriority="high" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />{!loaded && <span className="monitor-media-progress"><Loader2 className="spin" size={20} />Loading original image…</span>}</>;
+  const imageSource = previewSource || originalSource;
+  return <><img className={loaded ? "monitor-media-ready" : "monitor-media-pending"} src={imageSource} alt={`Original ${PLATFORM_LABELS[post.platform] || "social"} post media`} loading="eager" decoding="async" fetchPriority="high" onLoad={() => setLoaded(true)} onError={() => { setLoaded(false); if (previewSource) setPreviewFailed(true); else setFailed(true); }} />{!loaded && <span className="monitor-media-progress"><Loader2 className="spin" size={20} />Loading media preview…</span>}</>;
 }
 
 function PreviewProfile({ post, detail }) {
@@ -200,7 +210,7 @@ function PlatformPreview({ post }) {
     {post.platform === "youtube" && <YouTubePreview post={post} />}
     <div className="monitor-post-meta">
       <span><strong>{post.linkedinTarget?.name || accountName(post)}</strong><small>{post.linkedinTarget ? `Managed Page · ${accountName(post)}` : accountHandle(post)} · {post.originalName} · {formatBytes(post.size)}</small></span>
-      <time>{formatMoment(post.postedAt || post.scheduledAt || post.updatedAt)}</time>
+      <span className="monitor-post-meta-actions"><time>{formatMoment(post.postedAt || post.scheduledAt || post.updatedAt)}</time>{post.mediaUrl && <a href={post.mediaUrl} target="_blank" rel="noreferrer">Open original</a>}</span>
     </div>
     {post.failureReason && <div className="monitor-failure"><AlertTriangle size={13} /><span>{post.failureReason}</span></div>}
   </article>;
@@ -275,9 +285,9 @@ export default function AdminPublishingMonitor() {
         const submissionKey = post.sourceSubmissionId
           || [post.createdByUserId, String(post.uploadedAt || post.updatedAt || "").slice(0, 19), post.originalName].join(":");
         const mediaKey = [post.workspaceId, submissionKey, post.mimeType, post.size].join(":");
-        const mediaUrl = mediaUrls.get(mediaKey) || post.mediaUrl;
-        mediaUrls.set(mediaKey, mediaUrl);
-        return { ...post, mediaUrl };
+        const sharedUrls = mediaUrls.get(mediaKey) || { mediaUrl: post.mediaUrl, previewUrl: post.previewUrl };
+        mediaUrls.set(mediaKey, sharedUrls);
+        return { ...post, ...sharedUrls };
       });
   }, [posts, query, workspaceId, platform, status]);
 

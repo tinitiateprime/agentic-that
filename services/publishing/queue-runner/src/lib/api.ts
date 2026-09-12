@@ -105,6 +105,11 @@ type SignedUploadPart = {
   byteSize: number;
 };
 
+type PublishingMediaPreview = {
+  mimeType: string;
+  base64: string;
+};
+
 export class PublishingSafetyApiError extends Error {
   readonly code = "PUBLISHING_SAFETY_SCHEDULE" as const;
   readonly issues: PublishingSafetyApiIssue[];
@@ -277,6 +282,117 @@ function uploadSignedMediaPart(
     xhr.onabort = () => reject(new Error("The private media upload was cancelled."));
     xhr.send(body);
   });
+}
+
+function previewDimensions(width: number, height: number) {
+  const maximum = 960;
+  const scale = Math.min(1, maximum / Math.max(width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function canvasPreviewBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error("The browser could not create a media preview."));
+    }, "image/webp", 0.72);
+  });
+}
+
+function previewBase64(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const encoded = String(reader.result || "").split(",")[1];
+      if (encoded) resolve(encoded);
+      else reject(new Error("The browser returned an invalid media preview."));
+    };
+    reader.onerror = () => reject(reader.error || new Error("The browser could not read the media preview."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function waitForMediaEvent(element: HTMLImageElement | HTMLVideoElement, readyEvent: "load" | "loadedmetadata" | "seeked", timeoutMs = 12_000) {
+  return new Promise<void>((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => finish(new Error("Media preview preparation timed out.")), timeoutMs);
+    const finish = (error?: Error) => {
+      globalThis.clearTimeout(timeout);
+      element.removeEventListener(readyEvent, ready);
+      element.removeEventListener("error", failed);
+      if (error) reject(error); else resolve();
+    };
+    const ready = () => finish();
+    const failed = () => finish(new Error("The browser could not read this media for preview."));
+    element.addEventListener(readyEvent, ready, { once: true });
+    element.addEventListener("error", failed, { once: true });
+  });
+}
+
+async function publishingImagePreview(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = objectUrl;
+    if (!image.complete) await waitForMediaEvent(image, "load");
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error("The selected image has no preview dimensions.");
+    const dimensions = previewDimensions(image.naturalWidth, image.naturalHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = dimensions.width;
+    canvas.height = dimensions.height;
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) throw new Error("The browser could not create an image preview.");
+    context.drawImage(image, 0, 0, dimensions.width, dimensions.height);
+    return canvasPreviewBlob(canvas);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function publishingVideoPreview(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = objectUrl;
+    await waitForMediaEvent(video, "loadedmetadata", 15_000);
+    if (!video.videoWidth || !video.videoHeight) throw new Error("The selected video has no preview dimensions.");
+    const seeked = waitForMediaEvent(video, "seeked", 15_000);
+    video.currentTime = Number.isFinite(video.duration) && video.duration > 0.2
+      ? Math.min(1, Math.max(0.1, video.duration * 0.05))
+      : 0.1;
+    await seeked;
+    const dimensions = previewDimensions(video.videoWidth, video.videoHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = dimensions.width;
+    canvas.height = dimensions.height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("The browser could not create a video preview.");
+    context.fillStyle = "#111315";
+    context.fillRect(0, 0, dimensions.width, dimensions.height);
+    context.drawImage(video, 0, 0, dimensions.width, dimensions.height);
+    return canvasPreviewBlob(canvas);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function createPublishingMediaPreview(file: File, postFormat: PostFormat): Promise<PublishingMediaPreview | null> {
+  try {
+    const blob = postFormat === "video"
+      ? await publishingVideoPreview(file)
+      : await publishingImagePreview(file);
+    if (!blob.size || blob.size > 1_500_000) return null;
+    return { mimeType: blob.type || "image/webp", base64: await previewBase64(blob) };
+  } catch {
+    // Preview generation is an acceleration layer; it must never prevent publishing.
+    return null;
+  }
 }
 
 async function uploadStagedFile(
@@ -532,6 +648,7 @@ export const api = {
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
     let finalizationStarted = false;
+    const previewPromise = createPublishingMediaPreview(payload.file, payload.postFormat);
     try {
       const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
@@ -550,10 +667,12 @@ export const api = {
         body: "{}",
       }), 3);
 
+      const preview = await previewPromise;
       const uploads = await retryUploadStep(() => request<PlatformUpload[]>("/api/posts/unified/staged", {
         method: "POST",
         body: JSON.stringify({
           stagedUploadId: session.id,
+          preview,
           title: payload.title,
           platformOptions: payload.platformOptions,
           description: payload.description,
@@ -597,6 +716,7 @@ export const api = {
     if (!payload.file) throw new Error(`Choose a ${payload.postFormat} file.`);
     let stagedUploadId: string | null = null;
     let finalizationStarted = false;
+    const previewPromise = createPublishingMediaPreview(payload.file, payload.postFormat);
     try {
       const session = await request<StagedUploadSession>("/api/staged-uploads", {
         method: "POST",
@@ -615,10 +735,12 @@ export const api = {
         body: "{}",
       }), 3);
 
+      const preview = await previewPromise;
       const submission = await retryUploadStep(() => request<ContentSubmission>("/api/submissions/staged", {
         method: "POST",
         body: JSON.stringify({
           stagedUploadId: session.id,
+          preview,
           title: payload.title,
           platformOptions: payload.platformOptions,
           description: payload.description,

@@ -1,5 +1,6 @@
 import { accessErrorResponse, authorizeGlobalAdminApi } from "@platform/server/access-control";
-import { publishingAdminMediaRecord } from "@platform/server/publishing-central-store";
+import { attachPublishingAdminPreview, publishingAdminMediaRecord } from "@platform/server/publishing-central-store";
+import { storePublishingPreview } from "@platform/server/publishing-media-preview";
 import { readSupabaseJobArtifactBytes, readSupabaseJobArtifactRange } from "@platform/server/supabase-job-control";
 import { readPublishingMedia, readPublishingMediaRange } from "../../../../../../services/publishing/queue-runner/server/media-storage.ts";
 
@@ -13,6 +14,36 @@ function safeMediaType(value) {
 
 const MAX_RANGE_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_IMAGE_BYTES = 64 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+async function readOriginalBytes(media) {
+  if (media.artifact) {
+    return readSupabaseJobArtifactBytes(media.artifact, MAX_INLINE_IMAGE_BYTES)
+      .catch((artifactError) => readPublishingMedia(media.fileName, media.workspaceId)
+        .catch(() => { throw artifactError; }));
+  }
+  return readPublishingMedia(media.fileName, media.workspaceId);
+}
+
+async function readOriginalRange(media, start, end) {
+  if (media.artifact) {
+    return readSupabaseJobArtifactRange(media.artifact, start, end, MAX_RANGE_BYTES)
+      .catch((artifactError) => readPublishingMediaRange(media.fileName, media.workspaceId, start, end)
+        .catch(() => { throw artifactError; }));
+  }
+  return readPublishingMediaRange(media.fileName, media.workspaceId, start, end);
+}
+
+function previewResponse(bytes) {
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "image/webp",
+      "Content-Length": String(bytes.length),
+      "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
 
 function requestedMediaRange(value, size) {
   if (!value) return null;
@@ -39,6 +70,25 @@ export async function GET(request, context) {
     const params = await context.params;
     const media = await publishingAdminMediaRecord(params?.id);
     const mimeType = safeMediaType(media.mimeType);
+    const wantsPreview = new URL(request.url).searchParams.get("variant") === "preview";
+    if (wantsPreview) {
+      if (media.previewArtifact) {
+        const stored = await readSupabaseJobArtifactBytes(media.previewArtifact, MAX_PREVIEW_BYTES).catch(() => null);
+        if (stored) return previewResponse(stored);
+      }
+      if (!mimeType.startsWith("image/")) {
+        return Response.json({ error: "A video preview is not available for this older post." }, { status: 404 });
+      }
+      const originalBytes = await readOriginalBytes(media);
+      const generated = await storePublishingPreview({
+        workspaceId: media.workspaceId,
+        fileName: media.fileName,
+        originalName: media.originalName,
+        inputBytes: originalBytes,
+      });
+      await attachPublishingAdminPreview(media.workspaceId, params?.id, generated.artifact);
+      return previewResponse(generated.bytes);
+    }
     let range;
     try {
       range = requestedMediaRange(request.headers.get("range"), media.size);
@@ -49,14 +99,7 @@ export async function GET(request, context) {
       range = { start: 0, end: Math.min(media.size - 1, MAX_RANGE_BYTES - 1) };
     }
     if (range) {
-      let bytes;
-      if (media.artifact) {
-        bytes = await readSupabaseJobArtifactRange(media.artifact, range.start, range.end, MAX_RANGE_BYTES)
-          .catch((artifactError) => readPublishingMediaRange(media.fileName, media.workspaceId, range.start, range.end)
-            .catch(() => { throw artifactError; }));
-      } else {
-        bytes = await readPublishingMediaRange(media.fileName, media.workspaceId, range.start, range.end);
-      }
+      const bytes = await readOriginalRange(media, range.start, range.end);
       return new Response(bytes, {
         status: 206,
         headers: {
@@ -69,14 +112,7 @@ export async function GET(request, context) {
         },
       });
     }
-    let bytes;
-    if (media.artifact) {
-      bytes = await readSupabaseJobArtifactBytes(media.artifact, MAX_INLINE_IMAGE_BYTES)
-        .catch((artifactError) => readPublishingMedia(media.fileName, media.workspaceId)
-          .catch(() => { throw artifactError; }));
-    } else {
-      bytes = await readPublishingMedia(media.fileName, media.workspaceId);
-    }
+    const bytes = await readOriginalBytes(media);
     return new Response(bytes, {
       headers: {
         "Content-Type": mimeType,

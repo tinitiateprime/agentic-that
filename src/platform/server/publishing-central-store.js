@@ -270,7 +270,7 @@ function uploadPublic(document, upload) {
     : (job?.state === "queued" && jobIsDue && accountState?.companionStatus !== "online") || (scheduledWithoutJobIsDue && accountState?.companionStatus !== "online")
       ? "waiting_for_companion"
       : job?.state || (upload.status === "posted" ? "published" : upload.status);
-  const { artifact, ...safeUpload } = upload;
+  const { artifact, previewArtifact: _previewArtifact, ...safeUpload } = upload;
   return {
     ...safeUpload,
     artifact: artifact ? {
@@ -808,7 +808,8 @@ function createUploadInDocument(document, principal, input = {}) {
     id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
     postFormat: format, originalName: input.originalName || "Text post",
     fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
-    size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null, title: String(input.title || "").trim(),
+    size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null,
+    previewArtifact: input.previewArtifact || null, title: String(input.title || "").trim(),
     platformOptions: requireYouTubeOptions(account.platform, format, input.platformOptions),
     linkedinTarget: account.platform === "linkedin" ? input.linkedinTarget || undefined : undefined,
     caption, status: "queued", publishActionState: "not_started",
@@ -1213,7 +1214,8 @@ export async function createCentralSubmission(principal, input = {}) {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
       originalName: input.originalName || "Text post", fileName: input.fileName || "", mimeType: input.mimeType || "text/plain",
       extension: input.extension || "", size: Number(input.size || 0), url: input.url || "", title: String(input.title || "").trim(),
-      artifact: input.artifact || null, description, selectedAccountIds, selectedDestinations, destinationUploadIds: [], status: "awaiting_schedule", createdAt: timestamp,
+      artifact: input.artifact || null, previewArtifact: input.previewArtifact || null,
+      description, selectedAccountIds, selectedDestinations, destinationUploadIds: [], status: "awaiting_schedule", createdAt: timestamp,
       platformOptions: input.platformOptions, rightsConfirmed: format === "text" ? true : Boolean(input.rightsConfirmed),
       updatedAt: timestamp, createdByUserId: principal.userId, createdByName: principal.name || principal.email || principal.userId,
     };
@@ -1266,7 +1268,7 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
         id: id("upload"), workspaceId: principal.workspaceId, platform: account.platform, accountId: account.id,
         postFormat: submission.postFormat, originalName: submission.originalName, fileName: submission.fileName,
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
-        artifact: submission.artifact || null,
+        artifact: submission.artifact || null, previewArtifact: submission.previewArtifact || null,
         title: submission.title, caption: String(selectedDestination?.description || submission.description).trim(), status: "queued", publishActionState: "not_started",
         platformOptions: requireYouTubeOptions(account.platform, submission.postFormat, submission.platformOptions),
         linkedinTarget: account.platform === "linkedin" ? destination.linkedinTarget || undefined : undefined,
@@ -1562,6 +1564,10 @@ function adminMonitorPost(document, upload) {
     },
     hasMedia,
     mediaPreviewAvailable: hasMedia,
+    optimizedPreviewAvailable: hasMedia && Boolean(upload.previewArtifact),
+    previewUrl: hasMedia && (postFormatValue === "image" || upload.previewArtifact)
+      ? `/api/admin-center/publishing/media/${encodeURIComponent(publicUpload.id)}?variant=preview`
+      : null,
     mediaUrl: hasMedia
       ? `/api/admin-center/publishing/media/${encodeURIComponent(publicUpload.id)}`
       : null,
@@ -1621,10 +1627,26 @@ export async function publishingAdminMediaRecord(uploadId) {
   return {
     workspaceId: upload.workspaceId,
     fileName: upload.fileName,
+    originalName: upload.originalName || upload.fileName,
     mimeType: upload.mimeType || "application/octet-stream",
     size: Number(upload.size || 0),
     artifact: upload.artifact || null,
+    previewArtifact: upload.previewArtifact || null,
   };
+}
+
+/** Persist an immutable, private monitor rendition without changing post ordering. */
+export async function attachPublishingAdminPreview(workspaceId, uploadId, previewArtifact) {
+  if (!previewArtifact || typeof previewArtifact !== "object") throw new Error("The publishing preview is invalid.");
+  return mutateWorkspaceDocument(String(workspaceId || ""), async (value) => {
+    const document = documentValue(value);
+    const upload = findOwned(document, "uploads", String(workspaceId || ""), String(uploadId || ""), "Post");
+    const relatedUploads = upload.sourceSubmissionId
+      ? document.uploads.filter((item) => item.workspaceId === upload.workspaceId && item.sourceSubmissionId === upload.sourceSubmissionId)
+      : [upload];
+    relatedUploads.forEach((item) => { item.previewArtifact = previewArtifact; });
+    return { document, result: { ok: true } };
+  });
 }
 
 export function centralMediaFileName(originalName) {
