@@ -502,16 +502,13 @@ export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumByt
   }
   const configuration = supabaseServiceConfiguration();
   const urls = await signedArtifactUrls(configuration, paths);
-  const chunks = [];
-  let receivedSize = 0;
-  for (const url of urls) {
+  const chunks = await Promise.all(urls.map(async (url) => {
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(`Private publishing media could not be read (${response.status}).`);
-    const chunk = Buffer.from(await response.arrayBuffer());
-    receivedSize += chunk.length;
-    if (receivedSize > maximumBytes) throw new Error("This publishing media is too large for an in-browser preview.");
-    chunks.push(chunk);
-  }
+    return Buffer.from(await response.arrayBuffer());
+  }));
+  const receivedSize = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (receivedSize > maximumBytes) throw new Error("This publishing media is too large for an in-browser preview.");
   if (receivedSize !== declaredSize) throw new Error("The private publishing media is incomplete.");
   return Buffer.concat(chunks, receivedSize);
 }

@@ -49,10 +49,14 @@ export async function GET(request, context) {
       range = { start: 0, end: Math.min(media.size - 1, MAX_RANGE_BYTES - 1) };
     }
     if (range) {
-      const bytes = await readPublishingMediaRange(media.fileName, media.workspaceId, range.start, range.end).catch((localError) => {
-        if (!media.artifact) throw localError;
-        return readSupabaseJobArtifactRange(media.artifact, range.start, range.end, MAX_RANGE_BYTES);
-      });
+      let bytes;
+      if (media.artifact) {
+        bytes = await readSupabaseJobArtifactRange(media.artifact, range.start, range.end, MAX_RANGE_BYTES)
+          .catch((artifactError) => readPublishingMediaRange(media.fileName, media.workspaceId, range.start, range.end)
+            .catch(() => { throw artifactError; }));
+      } else {
+        bytes = await readPublishingMediaRange(media.fileName, media.workspaceId, range.start, range.end);
+      }
       return new Response(bytes, {
         status: 206,
         headers: {
@@ -65,10 +69,14 @@ export async function GET(request, context) {
         },
       });
     }
-    const bytes = await readPublishingMedia(media.fileName, media.workspaceId).catch((localError) => {
-      if (!media.artifact) throw localError;
-      return readSupabaseJobArtifactBytes(media.artifact, MAX_INLINE_IMAGE_BYTES);
-    });
+    let bytes;
+    if (media.artifact) {
+      bytes = await readSupabaseJobArtifactBytes(media.artifact, MAX_INLINE_IMAGE_BYTES)
+        .catch((artifactError) => readPublishingMedia(media.fileName, media.workspaceId)
+          .catch(() => { throw artifactError; }));
+    } else {
+      bytes = await readPublishingMedia(media.fileName, media.workspaceId);
+    }
     return new Response(bytes, {
       headers: {
         "Content-Type": mimeType,
