@@ -82,7 +82,7 @@ try {
     "auth_security_ready", "notification_templates_ready", "notification_deliveries_ready", "companion_rpc_ready",
   ];
   const missing = required.filter((key) => !status?.[key]);
-  if (missing.length || status?.minimum_companion_version !== "2.1.24") {
+  if (missing.length || status?.minimum_companion_version !== "2.1.25") {
     throw new Error(`Database verification failed${missing.length ? `: ${missing.join(", ")}` : "."}`);
   }
   process.stdout.write("All platform, messaging, and Companion database migrations are ready.\n");

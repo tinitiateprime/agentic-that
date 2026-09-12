@@ -19,6 +19,8 @@ import {
   YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT,
   youtubeVideoDialogState,
   youtubeVideoCompletionTimeout,
+  youtubeVideoUploadCanFinish,
+  youtubeVideoUploadPercent,
 } from "./services/publishers/youtube.js";
 
 test("LinkedIn publishing ignores role-button duplicates outside the current viewport", () => {
@@ -81,8 +83,18 @@ test("Facebook and YouTube recognize accepted long-running video publishing", t 
   assert.match("Video processing", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
   assert.match("Processing will begin shortly", YOUTUBE_PUBLISH_CONFIRMATION_TEXT);
   assert.match("Uploading 17%", YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT);
+  assert.equal(youtubeVideoUploadPercent("Uploading 57% ... 46 seconds left"), 57);
+  assert.equal(youtubeVideoUploadPercent("Uploading 100%"), 100);
+  assert.equal(youtubeVideoUploadPercent("Processing will begin shortly"), null);
   assert.equal(youtubeVideoDialogState("Video uploading. Uploading 57% ... 46 seconds left. Keep this browser tab open until uploading completes."), "uploading");
+  assert.equal(youtubeVideoDialogState("Video uploading. Uploading 100%."), "uploaded");
   assert.equal(youtubeVideoDialogState("test Processing will begin shortly Checks starting Pending"), "confirmed");
+  assert.equal(youtubeVideoUploadCanFinish("uploading", true, 0, 60_000), false);
+  assert.equal(youtubeVideoUploadCanFinish("uploaded", true, 0, 1_999), false);
+  assert.equal(youtubeVideoUploadCanFinish("uploaded", true, 0, 2_000), true);
+  assert.equal(youtubeVideoUploadCanFinish("confirmed", false, 9_999, 10_000), false);
+  assert.equal(youtubeVideoUploadCanFinish("confirmed", false, 10_000, 9_999), false);
+  assert.equal(youtubeVideoUploadCanFinish("confirmed", false, 10_000, 10_000), true);
   assert.match("Processing abandoned", YOUTUBE_VIDEO_REJECTION_TEXT);
   assert.ok(youtubeVideoCompletionTimeout(126_716_294) > 30 * 60_000);
 });
@@ -100,6 +112,9 @@ test("YouTube video completion ignores stale failures outside the active upload 
   assert.doesNotMatch(waitSource, /page\.getByText\(YOUTUBE_VIDEO_REJECTION_TEXT/);
   assert.doesNotMatch(waitSource, /locator\(['"]ytcp-video-share-dialog['"]\)\.first\(\)/);
   assert.match(waitSource, /rowState === "confirmed"/);
+  assert.match(waitSource, /sawFullUploadProgress/);
+  assert.match(waitSource, /youtubeVideoUploadCanFinish/);
+  assert.doesNotMatch(waitSource, /sawCurrentUploadProgress\s*\|\|/);
   assert.match(waitSource, /Keeping Studio open/);
 });
 

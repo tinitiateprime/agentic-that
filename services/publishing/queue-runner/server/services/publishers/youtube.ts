@@ -256,13 +256,32 @@ export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|proce
 export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i;
 export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Video uploading|still uploading|Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress|Keep this browser tab open until uploading completes/i;
 
+export function youtubeVideoUploadPercent(text: string) {
+  const match = text.match(/Uploading\s+(\d{1,3}(?:\.\d+)?)\s*%/i);
+  if (!match) return null;
+  const percent = Number(match[1]);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : null;
+}
+
 export function youtubeVideoDialogState(text: string) {
   if (YOUTUBE_VIDEO_REJECTION_TEXT.test(text)) return "rejected" as const;
+  if (youtubeVideoUploadPercent(text) === 100) return "uploaded" as const;
   // The active-upload dialog can also mention that processing will happen
   // later. Uploading must therefore win over any broader confirmation copy.
   if (YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT.test(text)) return "uploading" as const;
   if (YOUTUBE_PUBLISH_CONFIRMATION_TEXT.test(text)) return "confirmed" as const;
   return "unknown" as const;
+}
+
+export function youtubeVideoUploadCanFinish(
+  state: ReturnType<typeof youtubeVideoDialogState>,
+  hasVisibleUploadDialog: boolean,
+  uploadDialogGoneMs: number,
+  finishedStateStableMs: number,
+) {
+  if (state !== "uploaded" && state !== "confirmed") return false;
+  if (hasVisibleUploadDialog) return finishedStateStableMs >= 2_000;
+  return uploadDialogGoneMs >= 10_000 && finishedStateStableMs >= 10_000;
 }
 
 export function youtubeVideoCompletionTimeout(sizeBytes: number) {
@@ -291,6 +310,8 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
   const deadline = Date.now() + timeout;
   let uploadDialogGoneAt: number | null = null;
   let sawCurrentUploadProgress = false;
+  let sawFullUploadProgress = false;
+  let finishedStateStableAt: number | null = null;
   let lastProgress = "";
   let confirmed: Locator | null = null;
   while (Date.now() < deadline) {
@@ -306,12 +327,23 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         const detail = dialogText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
         throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
       }
-      if (dialogState === "confirmed") {
-        confirmed = currentDialog;
-        break;
+      if (dialogState === "uploaded" || dialogState === "confirmed") {
+        if (dialogState === "uploaded") {
+          sawCurrentUploadProgress = true;
+          sawFullUploadProgress = true;
+        }
+        finishedStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(dialogState, true, 0, Date.now() - finishedStateStableAt)) {
+          confirmed = currentDialog;
+          break;
+        }
+        await page.waitForTimeout(250);
+        continue;
       }
       if (dialogState === "uploading") {
-        const progress = dialogText.match(/Uploading\s+\d{1,3}(?:\.\d+)?%/i)?.[0] || "the video";
+        finishedStateStableAt = null;
+        const uploadPercent = youtubeVideoUploadPercent(dialogText);
+        const progress = uploadPercent === null ? "the video" : `Uploading ${uploadPercent}%`;
         sawCurrentUploadProgress = true;
         if (progress !== lastProgress) {
           lastProgress = progress;
@@ -344,8 +376,10 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         const detail = rowText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
         throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
       }
-      const progress = rowText.match(/Uploading\s+\d{1,3}(?:\.\d+)?%/i)?.[0] || "";
+      const uploadPercent = youtubeVideoUploadPercent(rowText);
+      const progress = uploadPercent === null ? "" : `Uploading ${uploadPercent}%`;
       if (rowState === "uploading") {
+        finishedStateStableAt = null;
         sawCurrentUploadProgress = true;
         if (progress && progress !== lastProgress) {
           lastProgress = progress;
@@ -354,17 +388,35 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         await page.waitForTimeout(750);
         continue;
       }
-      if (rowState === "confirmed") {
-        console.log("YouTube finished transferring the video. Processing will continue in Studio.");
-        return;
+      if (rowState === "uploaded") {
+        sawCurrentUploadProgress = true;
+        sawFullUploadProgress = true;
       }
-      if (sawCurrentUploadProgress || Date.now() - uploadDialogGoneAt >= 5_000) {
-        console.log("YouTube finished transferring the video. Studio can continue server-side processing.");
-        return;
+      if (rowState === "uploaded" || rowState === "confirmed") {
+        finishedStateStableAt ??= Date.now();
+        // YouTube can replace Uploading 100% with its processing state between
+        // DOM polls. Require the upload dialog to remain absent and the finished
+        // row state to remain stable before closing the browser.
+        if (youtubeVideoUploadCanFinish(
+          rowState,
+          false,
+          Date.now() - uploadDialogGoneAt,
+          Date.now() - finishedStateStableAt,
+        )) {
+          console.log(sawFullUploadProgress
+            ? "YouTube reached 100% upload. Processing will continue in Studio."
+            : "YouTube removed the upload progress after completion and kept the processing state stable. Processing will continue in Studio.");
+          return;
+        }
+        await page.waitForTimeout(500);
+        continue;
       }
     }
 
-    if (Date.now() - uploadDialogGoneAt >= 30_000) {
+    // Once this run has shown upload progress, never close on a transiently
+    // missing dialog or an unrecognized row. Continue waiting for the explicit
+    // 100%/processing transition until the size-aware upload timeout expires.
+    if (!sawCurrentUploadProgress && Date.now() - uploadDialogGoneAt >= 30_000) {
       throw new Error("YouTube accepted Publish, but the current video could not be verified in Studio. Check YouTube Studio before retrying.");
     }
     await page.waitForTimeout(500);
@@ -375,7 +427,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
 
   console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
 
-  const confirmationDialog = await firstVisible([
+  const confirmationDialog = confirmed && await confirmed.isVisible().catch(() => false) ? confirmed : await firstVisible([
     page.locator("ytcp-video-share-dialog").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
     page.locator("ytcp-uploads-dialog").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
   ]);
