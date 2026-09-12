@@ -486,6 +486,81 @@ export async function storeSupabaseJobArtifact(bytes, { workspaceId, fileName, o
   };
 }
 
+export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES));
+  const declaredSize = Number(artifact.byteSize || 0);
+  if (!Number.isInteger(declaredSize) || declaredSize < 1 || declaredSize > maximumBytes) {
+    throw new Error("This publishing media is too large for an in-browser preview.");
+  }
+  const paths = Array.isArray(artifact.parts) && artifact.parts.length
+    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index)).map((part) => part?.path)
+    : [artifact.path];
+  if (!paths.length || paths.some((value) => !value || String(value).startsWith("/") || String(value).includes(".."))) {
+    throw new Error("The private publishing artifact path is invalid.");
+  }
+  const configuration = supabaseServiceConfiguration();
+  const urls = await signedArtifactUrls(configuration, paths);
+  const chunks = [];
+  let receivedSize = 0;
+  for (const url of urls) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Private publishing media could not be read (${response.status}).`);
+    const chunk = Buffer.from(await response.arrayBuffer());
+    receivedSize += chunk.length;
+    if (receivedSize > maximumBytes) throw new Error("This publishing media is too large for an in-browser preview.");
+    chunks.push(chunk);
+  }
+  if (receivedSize !== declaredSize) throw new Error("The private publishing media is incomplete.");
+  return Buffer.concat(chunks, receivedSize);
+}
+
+export async function readSupabaseJobArtifactRange(artifact, start, end, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  const declaredSize = Number(artifact.byteSize || 0);
+  const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES));
+  if (!Number.isInteger(declaredSize) || declaredSize < 1 || !Number.isInteger(start) || !Number.isInteger(end)
+    || start < 0 || end < start || end >= declaredSize || end - start + 1 > maximumBytes) {
+    throw new Error("The private publishing media range is invalid.");
+  }
+  const parts = Array.isArray(artifact.parts) && artifact.parts.length
+    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index))
+    : [{ index: 0, offset: 0, byteSize: declaredSize, path: artifact.path }];
+  if (parts.some((part) => !part?.path || String(part.path).startsWith("/") || String(part.path).includes("..")
+    || !Number.isInteger(Number(part.offset)) || !Number.isInteger(Number(part.byteSize)) || Number(part.byteSize) < 1)) {
+    throw new Error("The private publishing artifact path is invalid.");
+  }
+  const selected = parts.filter((part) => Number(part.offset) <= end && Number(part.offset) + Number(part.byteSize) - 1 >= start);
+  if (!selected.length) throw new Error("The private publishing media range is unavailable.");
+  const configuration = supabaseServiceConfiguration();
+  const urls = await signedArtifactUrls(configuration, selected.map((part) => part.path));
+  const chunks = [];
+  for (let index = 0; index < selected.length; index += 1) {
+    const part = selected[index];
+    const partOffset = Number(part.offset);
+    const partSize = Number(part.byteSize);
+    const localStart = Math.max(0, start - partOffset);
+    const localEnd = Math.min(partSize - 1, end - partOffset);
+    const response = await fetch(urls[index], {
+      cache: "no-store",
+      headers: { Range: `bytes=${localStart}-${localEnd}` },
+    });
+    if (!response.ok) throw new Error(`Private publishing media could not be read (${response.status}).`);
+    const received = Buffer.from(await response.arrayBuffer());
+    const expectedLength = localEnd - localStart + 1;
+    const chunk = response.status === 200 && received.length === partSize
+      ? received.subarray(localStart, localEnd + 1)
+      : received;
+    if (chunk.length !== expectedLength) throw new Error("The private publishing media range is incomplete.");
+    chunks.push(chunk);
+  }
+  const expectedSize = end - start + 1;
+  const receivedSize = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (receivedSize !== expectedSize) throw new Error("The private publishing media range is incomplete.");
+  const result = Buffer.concat(chunks, expectedSize);
+  return result;
+}
+
 export async function createSupabasePairing(principal, input = {}) {
   const sql = await getDatabaseSql();
   const pairingCode = `${randomUUID()}${randomUUID().replaceAll("-", "")}`;
@@ -896,6 +971,19 @@ export async function supabaseJobDashboard(workspaceId) {
     listSupabaseJobs(workspaceId, { limit: 200 }),
   ]);
   return { companion, jobs };
+}
+
+export async function listSupabasePublishingJobsForAdmin(requestedLimit = 1000) {
+  const sql = await getDatabaseSql();
+  const [availability] = await sql`SELECT to_regclass('public.jobs') IS NOT NULL AS ready`;
+  if (!availability?.ready) return [];
+  const limit = Math.max(1, Math.min(Number(requestedLimit) || 1000, 5000));
+  const rows = await sql`
+    SELECT * FROM public.jobs
+     WHERE job_type = 'publish'
+     ORDER BY updated_at DESC
+     LIMIT ${limit}`;
+  return rows.map(camelJob);
 }
 
 export async function supabasePublishingWorkspaceSnapshot(workspaceId) {

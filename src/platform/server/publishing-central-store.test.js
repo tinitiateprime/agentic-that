@@ -280,3 +280,28 @@ test("large media parts advance in one contiguous batch", () => {
     document, "workspace_1", "stage_1", [{ index: 5, offset: chunkSize * 5, byteSize: chunkSize }],
   ), /does not match/);
 });
+
+test("admin publishing monitoring preserves final destination copy without exposing artifacts", () => {
+  const document = {
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", platform: "linkedin",
+      displayName: "Acme Company", handle: "acme", enabled: true, credentialConfigured: true,
+    }],
+    companions: [],
+    jobs: [{ id: "job_1", uploadId: "upload_1", state: "published", updatedAt: "2026-09-12T10:00:00.000Z" }],
+  };
+  const monitored = centralPublishingTestHelpers.adminMonitorPost(document, {
+    id: "upload_1", workspaceId: "workspace_1", accountId: "account_1", platform: "linkedin",
+    postFormat: "image", originalName: "launch.jpg", fileName: "private-launch.jpg", mimeType: "image/jpeg",
+    size: 1024, title: "Launch day", caption: "The exact LinkedIn copy", status: "posted",
+    artifact: { bucket: "private", path: "do-not-expose", downloadUrl: "https://example.invalid/private" },
+    createdByUserId: "user_1", createdByName: "Asha", updatedAt: "2026-09-12T10:00:00.000Z",
+  });
+
+  assert.equal(monitored.caption, "The exact LinkedIn copy");
+  assert.equal(monitored.account.displayName, "Acme Company");
+  assert.equal(monitored.statusDetail, "published");
+  assert.equal(monitored.mediaUrl, "/api/admin-center/publishing/media/upload_1");
+  assert.equal(Object.hasOwn(monitored, "artifact"), false);
+  assert.equal(JSON.stringify(monitored).includes("do-not-expose"), false);
+});

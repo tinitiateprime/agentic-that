@@ -56,6 +56,31 @@ export async function readPublishingMedia(fileName: string, workspaceId: string)
   return fs.readFile(path.join(publishingUploadDirectory(), safeName));
 }
 
+export async function readPublishingMediaRange(fileName: string, workspaceId: string, start: number, end: number) {
+  const safeName = safeFileName(fileName);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+    throw new Error("The publishing media range is invalid.");
+  }
+  if (sharedMediaEnabled()) {
+    const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
+      .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
+    if (bytes) {
+      const range = Buffer.from(bytes).subarray(start, end + 1);
+      if (range.length !== end - start + 1) throw new Error("The publishing media range is incomplete.");
+      return range;
+    }
+  }
+  const handle = await fs.open(path.join(publishingUploadDirectory(), safeName), "r");
+  try {
+    const buffer = Buffer.alloc(end - start + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    if (bytesRead !== buffer.length) throw new Error("The publishing media range is incomplete.");
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function ensurePublishingMediaLocal(fileName: string, workspaceId: string) {
   const safeName = safeFileName(fileName);
   const localPath = path.join(publishingUploadDirectory(), safeName);

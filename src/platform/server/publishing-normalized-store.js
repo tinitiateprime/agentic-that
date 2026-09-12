@@ -74,6 +74,79 @@ async function readNormalizedDocument(transaction, initialValue, workspaceId = "
   return document;
 }
 
+function monitoringTotals(uploads) {
+  return {
+    posts: uploads.length,
+    published: uploads.filter((upload) => upload.status === "posted").length,
+    active: uploads.filter((upload) => upload.status === "processing").length,
+    scheduled: uploads.filter((upload) => upload.status === "queued").length,
+    needsAttention: uploads.filter((upload) => upload.status === "failed").length,
+    workspaces: new Set(uploads.map((upload) => upload.workspaceId)).size,
+  };
+}
+
+function decodedRecord(value) {
+  if (typeof value !== "string") return value && typeof value === "object" ? value : null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+export async function readPublishingMonitoringState(key, initialValue, requestedLimit = 250) {
+  const sql = await getDatabaseSql();
+  const limit = Math.max(1, Math.min(Number(requestedLimit) || 250, 250));
+  if (!await hasNormalizedTables(sql)) {
+    const document = await readDatabaseDocument(key || LEGACY_KEY) || await emptyDocument(initialValue);
+    const uploads = Array.isArray(document.uploads) ? document.uploads : [];
+    document.uploads = [...uploads]
+      .sort((left, right) => Date.parse(right.updatedAt || right.uploadedAt || 0) - Date.parse(left.updatedAt || left.uploadedAt || 0))
+      .slice(0, limit);
+    return { document, totals: monitoringTotals(uploads) };
+  }
+
+  const document = await emptyDocument(initialValue);
+  for (const collection of Object.keys(TABLES)) document[collection] = [];
+  document.stagedUploads = [];
+  const uploadRows = await sql`
+    SELECT record FROM agentic_that.publishing_uploads
+     ORDER BY updated_at DESC
+     LIMIT ${limit}`;
+  document.uploads = uploadRows.map((row) => decodedRecord(row.record)).filter(Boolean);
+
+  const accountIds = [...new Set(document.uploads.map((upload) => upload.accountId).filter(Boolean))];
+  const uploadIds = document.uploads.map((upload) => upload.id).filter(Boolean);
+  const workspaceIds = [...new Set(document.uploads.map((upload) => upload.workspaceId).filter(Boolean))];
+  if (accountIds.length) {
+    const rows = await sql`SELECT record FROM agentic_that.publishing_accounts WHERE id = ANY(${accountIds})`;
+    document.accounts = rows.map((row) => decodedRecord(row.record)).filter(Boolean);
+  }
+  if (uploadIds.length) {
+    const rows = await sql`SELECT record FROM agentic_that.publishing_legacy_jobs WHERE record->>'uploadId' = ANY(${uploadIds})`;
+    document.jobs = rows.map((row) => decodedRecord(row.record)).filter(Boolean);
+  }
+  if (workspaceIds.length) {
+    const rows = await sql`SELECT record FROM agentic_that.publishing_legacy_companions WHERE workspace_id = ANY(${workspaceIds})`;
+    document.companions = rows.map((row) => decodedRecord(row.record)).filter(Boolean);
+  }
+  const [counts] = await sql`
+    SELECT count(*)::integer AS posts,
+           count(*) FILTER (WHERE record->>'status' = 'posted')::integer AS published,
+           count(*) FILTER (WHERE record->>'status' = 'processing')::integer AS active,
+           count(*) FILTER (WHERE record->>'status' = 'queued')::integer AS scheduled,
+           count(*) FILTER (WHERE record->>'status' = 'failed')::integer AS needs_attention,
+           count(DISTINCT workspace_id)::integer AS workspaces
+      FROM agentic_that.publishing_uploads`;
+  return {
+    document,
+    totals: {
+      posts: counts?.posts || 0,
+      published: counts?.published || 0,
+      active: counts?.active || 0,
+      scheduled: counts?.scheduled || 0,
+      needsAttention: counts?.needs_attention || 0,
+      workspaces: counts?.workspaces || 0,
+    },
+  };
+}
+
 function recordTimestamp(record, field = "updatedAt") {
   const parsed = new Date(record?.[field] || Date.now());
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : new Date().toISOString();

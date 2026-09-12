@@ -9,6 +9,7 @@ import {
   initializePublishingDocument as initializeDatabaseDocument,
   mutatePublishingDocument as mutateDatabaseDocument,
   readPublishingDocument as readDatabaseDocument,
+  readPublishingMonitoringState,
 } from "./publishing-normalized-store.js";
 import {
   cancelSupabaseJob,
@@ -17,6 +18,7 @@ import {
   latestSupabaseCompanion,
   listSupabaseAccounts,
   listSupabaseJobs,
+  listSupabasePublishingJobsForAdmin,
   revokeSupabaseCompanions,
   supabaseJobDashboard,
   supabasePublishingWorkspaceSnapshot,
@@ -1514,6 +1516,120 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
   };
 }
 
+const ADMIN_MONITOR_LIMIT = 250;
+const ADMIN_MEDIA_PREVIEW_LIMIT_BYTES = 5 * 1024 * 1024;
+
+function adminMonitorTimestamp(upload) {
+  return upload.postedAt || upload.updatedAt || upload.uploadedAt || upload.scheduledAt || new Date(0).toISOString();
+}
+
+function adminMonitorPost(document, upload) {
+  const account = document.accounts.find((item) => item.id === upload.accountId && item.workspaceId === upload.workspaceId);
+  const publicUpload = uploadPublic(document, upload);
+  const postFormatValue = publicUpload.postFormat || postFormat(publicUpload.mimeType, publicUpload.originalName);
+  const hasMedia = postFormatValue !== "text" && Boolean(publicUpload.fileName);
+  const mediaPreviewAvailable = hasMedia && (postFormatValue === "video" || Number(publicUpload.size || 0) <= ADMIN_MEDIA_PREVIEW_LIMIT_BYTES);
+  return {
+    id: publicUpload.id,
+    workspaceId: publicUpload.workspaceId,
+    sourceSubmissionId: publicUpload.sourceSubmissionId || null,
+    platform: publicUpload.platform,
+    postFormat: postFormatValue,
+    originalName: publicUpload.originalName || (postFormatValue === "text" ? "Text post" : "Media post"),
+    mimeType: publicUpload.mimeType || "application/octet-stream",
+    size: Number(publicUpload.size || 0),
+    title: publicUpload.title || "",
+    caption: publicUpload.caption || "",
+    status: publicUpload.status,
+    statusDetail: publicUpload.statusDetail,
+    outcome: publicUpload.outcome,
+    failureReason: publicUpload.failureReason || null,
+    scheduledAt: publicUpload.scheduledAt || null,
+    uploadedAt: publicUpload.uploadedAt || null,
+    updatedAt: publicUpload.updatedAt || null,
+    postedAt: publicUpload.postedAt || null,
+    createdByUserId: publicUpload.createdByUserId || null,
+    createdByName: publicUpload.createdByName || "Workspace member",
+    scheduledByUserId: publicUpload.scheduledByUserId || null,
+    scheduledByName: publicUpload.scheduledByName || null,
+    platformOptions: publicUpload.platformOptions || {},
+    linkedinTarget: publicUpload.linkedinTarget || null,
+    account: account ? {
+      id: account.id,
+      displayName: account.displayName || account.handle || account.platform,
+      handle: account.handle || "",
+    } : {
+      id: publicUpload.accountId,
+      displayName: publicUpload.platform,
+      handle: "",
+    },
+    hasMedia,
+    mediaPreviewAvailable,
+    mediaUrl: mediaPreviewAvailable
+      ? `/api/admin-center/publishing/media/${encodeURIComponent(publicUpload.id)}`
+      : null,
+  };
+}
+
+/**
+ * Returns a deliberately narrow, credential-free view of publishing activity.
+ * The caller is responsible for enforcing Global Admin authorization.
+ */
+export async function publishingAdminMonitoringSnapshot(requestedLimit = ADMIN_MONITOR_LIMIT) {
+  const limit = Math.max(1, Math.min(Number(requestedLimit) || ADMIN_MONITOR_LIMIT, ADMIN_MONITOR_LIMIT));
+  const monitoringState = await readPublishingMonitoringState(DOCUMENT_KEY, blankDocument(), limit);
+  const document = documentValue(monitoringState.document);
+  const remoteJobs = await listSupabasePublishingJobsForAdmin();
+  const workspaceIds = new Set(document.uploads.map((upload) => upload.workspaceId));
+  for (const workspaceId of workspaceIds) applyRemotePublishingJobs(document, workspaceId, remoteJobs);
+  const allPosts = document.uploads
+    .map((upload) => adminMonitorPost(document, upload))
+    .sort((left, right) => Date.parse(adminMonitorTimestamp(right)) - Date.parse(adminMonitorTimestamp(left)));
+  const needsAttention = (post) => post.status === "failed"
+    || ["failed", "uncertain", "reconnect_required"].includes(post.statusDetail);
+
+  return {
+    generatedAt: now(),
+    totals: monitoringState.totals || {
+      posts: allPosts.length,
+      published: allPosts.filter((post) => post.status === "posted" || post.statusDetail === "published").length,
+      active: allPosts.filter((post) => post.status === "processing" || ["claimed", "running", "opening_platform", "uploading", "publishing"].includes(post.statusDetail)).length,
+      scheduled: allPosts.filter((post) => post.status === "queued" || ["queued", "waiting_for_companion"].includes(post.statusDetail)).length,
+      needsAttention: allPosts.filter(needsAttention).length,
+      workspaces: new Set(allPosts.map((post) => post.workspaceId)).size,
+    },
+    posts: allPosts.slice(0, limit),
+  };
+}
+
+/** Resolve private media by opaque upload id without exposing storage details. */
+export async function publishingAdminMediaRecord(uploadId) {
+  const requestedId = String(uploadId || "");
+  const sql = await getDatabaseSql();
+  const [availability] = await sql`SELECT to_regclass('agentic_that.publishing_uploads') IS NOT NULL AS ready`;
+  let upload = null;
+  if (availability?.ready) {
+    const [row] = await sql`SELECT record FROM agentic_that.publishing_uploads WHERE id = ${requestedId} LIMIT 1`;
+    upload = row?.record || null;
+    if (typeof upload === "string") {
+      try { upload = JSON.parse(upload); } catch { upload = null; }
+    }
+  } else {
+    const document = await getPublishingSnapshot();
+    upload = document.uploads.find((item) => item.id === requestedId) || null;
+  }
+  if (!upload || !upload.fileName || (upload.postFormat || postFormat(upload.mimeType, upload.originalName)) === "text") {
+    throw new Error("Publishing media was not found.");
+  }
+  return {
+    workspaceId: upload.workspaceId,
+    fileName: upload.fileName,
+    mimeType: upload.mimeType || "application/octet-stream",
+    size: Number(upload.size || 0),
+    artifact: upload.artifact || null,
+  };
+}
+
 export function centralMediaFileName(originalName) {
   return cleanFileName(originalName);
 }
@@ -1522,6 +1638,7 @@ export function centralMediaFileName(originalName) {
 // without connecting a test run to a production document store.
 export const centralPublishingTestHelpers = {
   accountReadiness,
+  adminMonitorPost,
   advanceStagedUploadPartsInDocument,
   applyRemotePublishingJobs,
   centralJobUpdateIsAllowed,

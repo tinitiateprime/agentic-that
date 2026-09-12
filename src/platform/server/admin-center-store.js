@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { getPlatformSql } from "./auth-store.js";
 import { validateGrantInput } from "./access-policy.js";
+import { publishingAdminMonitoringSnapshot } from "./publishing-central-store.js";
 
 function text(value, name, max = 160) {
   const normalized = String(value || "").trim();
@@ -117,6 +118,35 @@ export async function adminCenterSnapshot() {
       createdAt: item.created_at,
       resolvedAt: item.resolved_at,
     })),
+  };
+}
+
+export async function adminPublishingMonitoringSnapshot() {
+  const publishing = await publishingAdminMonitoringSnapshot();
+  const sql = await getPlatformSql();
+  const workspaces = await sql`SELECT id, name FROM platform_workspaces`;
+  const users = await sql`SELECT id, name, email FROM platform_users`;
+  const workspaceById = new Map(workspaces.map((workspace) => [String(workspace.id), workspace]));
+  const userById = new Map(users.map((user) => [String(user.id), user]));
+
+  return {
+    ...publishing,
+    posts: publishing.posts.map((post) => {
+      const workspace = workspaceById.get(String(post.workspaceId));
+      const user = post.createdByUserId ? userById.get(String(post.createdByUserId)) : null;
+      return {
+        ...post,
+        workspace: {
+          id: post.workspaceId,
+          name: workspace?.name || "Unknown workspace",
+        },
+        author: {
+          id: post.createdByUserId,
+          name: user?.name || post.createdByName || "Workspace member",
+          email: user?.email || "",
+        },
+      };
+    }),
   };
 }
 
