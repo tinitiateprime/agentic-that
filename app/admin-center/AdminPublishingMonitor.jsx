@@ -107,17 +107,22 @@ function accountHandle(post) {
 
 function MonitorMedia({ post }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [post.mediaUrl]);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    setFailed(false);
+    setRetry(0);
+  }, [post.mediaUrl]);
 
   if (!post.hasMedia) return null;
   if (!post.mediaPreviewAvailable || !post.mediaUrl || failed) {
     const Icon = post.postFormat === "video" ? Video : FileImage;
-    return <div className="monitor-media-fallback"><Icon size={28} /><strong>{failed ? "Preview unavailable" : "Original media"}</strong><span>{post.originalName} · {formatBytes(post.size)}</span></div>;
+    return <div className="monitor-media-fallback"><Icon size={28} /><strong>Original media unavailable</strong><span>{post.originalName} · {formatBytes(post.size)}</span>{failed && <button type="button" onClick={() => { setFailed(false); setRetry((current) => current + 1); }}>Retry media</button>}</div>;
   }
+  const source = retry ? `${post.mediaUrl}?retry=${retry}` : post.mediaUrl;
   if (post.postFormat === "video" || String(post.mimeType).startsWith("video/")) {
-    return <video src={post.mediaUrl} controls preload="metadata" playsInline onError={() => setFailed(true)} />;
+    return <video src={source} controls preload="metadata" playsInline onError={() => setFailed(true)} />;
   }
-  return <img src={post.mediaUrl} alt={`Original ${PLATFORM_LABELS[post.platform] || "social"} post media`} loading="lazy" onError={() => setFailed(true)} />;
+  return <img src={source} alt={`Original ${PLATFORM_LABELS[post.platform] || "social"} post media`} loading="lazy" onError={() => setFailed(true)} />;
 }
 
 function PreviewProfile({ post, detail }) {
@@ -192,7 +197,7 @@ function PlatformPreview({ post }) {
     {post.platform === "linkedin" && <LinkedInPreview post={post} />}
     {post.platform === "youtube" && <YouTubePreview post={post} />}
     <div className="monitor-post-meta">
-      <span><strong>{post.linkedinTarget?.name || accountName(post)}</strong><small>{post.linkedinTarget ? `Managed Page · ${accountName(post)}` : accountHandle(post)}</small></span>
+      <span><strong>{post.linkedinTarget?.name || accountName(post)}</strong><small>{post.linkedinTarget ? `Managed Page · ${accountName(post)}` : accountHandle(post)} · {post.originalName} · {formatBytes(post.size)}</small></span>
       <time>{formatMoment(post.postedAt || post.scheduledAt || post.updatedAt)}</time>
     </div>
     {post.failureReason && <div className="monitor-failure"><AlertTriangle size={13} /><span>{post.failureReason}</span></div>}
@@ -225,7 +230,7 @@ export default function AdminPublishingMonitor() {
   const [workspaceId, setWorkspaceId] = useState("all");
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
-  const [visibleCount, setVisibleCount] = useState(12);
+  const [visibleCount, setVisibleCount] = useState(8);
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (silent) setRefreshing(true); else setLoading(true);
@@ -249,7 +254,7 @@ export default function AdminPublishingMonitor() {
     return () => window.clearInterval(interval);
   }, [load]);
 
-  useEffect(() => setVisibleCount(12), [query, workspaceId, platform, status]);
+  useEffect(() => setVisibleCount(8), [query, workspaceId, platform, status]);
 
   const posts = snapshot?.posts || [];
   const workspaces = useMemo(() => {
@@ -283,7 +288,19 @@ export default function AdminPublishingMonitor() {
       byGroup.set(key, current);
     });
     return [...byGroup.values()]
-      .map((group) => ({ ...group, posts: group.posts.sort((left, right) => PLATFORM_ORDER.indexOf(left.platform) - PLATFORM_ORDER.indexOf(right.platform)) }))
+      .map((group) => {
+        const sharedMediaUrls = new Map();
+        const orderedPosts = group.posts
+          .sort((left, right) => PLATFORM_ORDER.indexOf(left.platform) - PLATFORM_ORDER.indexOf(right.platform))
+          .map((post) => {
+            if (!post.mediaUrl) return post;
+            const mediaKey = [post.workspaceId, post.sourceSubmissionId || group.id, post.originalName, post.mimeType, post.size].join(":");
+            const mediaUrl = sharedMediaUrls.get(mediaKey) || post.mediaUrl;
+            sharedMediaUrls.set(mediaKey, mediaUrl);
+            return { ...post, mediaUrl };
+          });
+        return { ...group, posts: orderedPosts };
+      })
       .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
   }, [posts, query, workspaceId, platform, status]);
 
@@ -291,7 +308,7 @@ export default function AdminPublishingMonitor() {
 
   return <div className="admin-publishing-monitor">
     <header className="monitor-hero">
-      <div className="monitor-hero-copy"><span className="monitor-hero-icon"><MonitorUp size={22} /></span><div><span className="monitor-kicker">Global visibility</span><h1>Publishing monitor</h1><small>See the original content your users send to every social app, side by side.</small></div></div>
+      <div className="monitor-hero-copy"><span className="monitor-hero-icon"><MonitorUp size={22} /></span><div><span className="monitor-kicker">Global publishing activity</span><h1>Publishing monitor</h1><small>Every user, original asset and destination-specific post in one review surface.</small></div></div>
       <div className="monitor-live-card"><span><i />Monitoring live</span><small>{snapshot?.generatedAt ? `Updated ${formatMoment(snapshot.generatedAt)}` : "Waiting for activity"}</small><button className="monitor-refresh" type="button" onClick={() => load({ silent: true })} disabled={refreshing} aria-label="Refresh publishing activity"><RefreshCw className={refreshing ? "spin" : ""} size={16} />Refresh</button></div>
     </header>
 
@@ -314,7 +331,7 @@ export default function AdminPublishingMonitor() {
         <div className="monitor-platform-filters"><button type="button" className={platform === "all" ? "active" : ""} onClick={() => setPlatform("all")}>All <small>{posts.length}</small></button>{PLATFORM_ORDER.map((item) => <button type="button" className={platform === item ? `active platform-${item}` : `platform-${item}`} onClick={() => setPlatform(item)} key={item}><PlatformIcon platform={item} size={16} /><span>{PLATFORM_LABELS[item]}</span><small>{platformCounts[item] || 0}</small></button>)}</div>
       </section>
 
-      <div className="monitor-results-heading"><span><strong>{groups.length}</strong> publishing {groups.length === 1 ? "event" : "events"}</span><small>Latest {posts.length} destination posts · refreshes every 30 seconds</small></div>
+      <div className="monitor-results-heading"><span><strong>{groups.length}</strong> publishing {groups.length === 1 ? "event" : "events"}</span><small>Original media and final copy · latest {posts.length} destination posts</small></div>
 
       <section className="monitor-feed">
         {groups.length === 0 && <div className="monitor-empty"><span><Search size={23} /></span><strong>No publishing activity matches these filters</strong><small>Clear a filter or wait for users to submit a new post.</small></div>}
@@ -322,19 +339,20 @@ export default function AdminPublishingMonitor() {
           const first = group.posts[0];
           const state = groupState(group.posts);
           const platformNames = [...new Set(group.posts.map((post) => PLATFORM_LABELS[post.platform] || post.platform))];
+          const platforms = [...new Set(group.posts.map((post) => post.platform))];
           return <article className="monitor-event" key={group.id}>
-            <div className="monitor-event-head">
-              <div className="monitor-author-avatar">{String(first.author.name || first.author.email || "U").charAt(0).toUpperCase()}</div>
-              <div className="monitor-event-identity"><strong>{first.author.name}</strong><span>{first.author.email || "Account email unavailable"}</span><small>{first.workspace.name} · {formatMoment(group.timestamp)}</small></div>
-              <div className="monitor-destinations"><span>{group.posts.length} {group.posts.length === 1 ? "destination" : "destinations"}</span><small>{platformNames.join(" · ")}</small></div>
-              <span className={`monitor-group-state status-${state}`}>{STATE_LABELS[state]}</span>
-            </div>
-            <div className="monitor-preview-strip">{group.posts.map((post) => <PlatformPreview post={post} key={post.id} />)}</div>
+            <aside className="monitor-event-summary">
+              <div className="monitor-event-summary-top"><div className="monitor-author-avatar">{String(first.author.name || first.author.email || "U").charAt(0).toUpperCase()}</div><span className={`monitor-group-state status-${state}`}>{STATE_LABELS[state]}</span></div>
+              <div className="monitor-event-identity"><small>Created by</small><strong>{first.author.name}</strong><span>{first.author.email || "Account email unavailable"}</span></div>
+              <dl className="monitor-event-facts"><div><dt>Workspace</dt><dd>{first.workspace.name}</dd></div><div><dt>Activity time</dt><dd>{formatMoment(group.timestamp)}</dd></div><div><dt>Destinations</dt><dd>{group.posts.length} {group.posts.length === 1 ? "app" : "apps"}</dd></div></dl>
+              <div className="monitor-destinations"><span>{platforms.map((platformId) => <i title={PLATFORM_LABELS[platformId] || platformId} key={platformId}><PlatformIcon platform={platformId} size={15} /></i>)}</span><small>{platformNames.join(" · ")}</small></div>
+            </aside>
+            <div className="monitor-preview-grid">{group.posts.map((post) => <PlatformPreview post={post} key={post.id} />)}</div>
           </article>;
         })}
       </section>
 
-      {visibleCount < groups.length && <button className="monitor-load-more" type="button" onClick={() => setVisibleCount((current) => current + 12)}>Show 12 more events</button>}
+      {visibleCount < groups.length && <button className="monitor-load-more" type="button" onClick={() => setVisibleCount((current) => current + 8)}>Show 8 more events</button>}
     </>}
   </div>;
 }

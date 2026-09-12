@@ -1517,8 +1517,6 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
 }
 
 const ADMIN_MONITOR_LIMIT = 250;
-const ADMIN_MEDIA_PREVIEW_LIMIT_BYTES = 5 * 1024 * 1024;
-
 function adminMonitorTimestamp(upload) {
   return upload.postedAt || upload.updatedAt || upload.uploadedAt || upload.scheduledAt || new Date(0).toISOString();
 }
@@ -1528,7 +1526,6 @@ function adminMonitorPost(document, upload) {
   const publicUpload = uploadPublic(document, upload);
   const postFormatValue = publicUpload.postFormat || postFormat(publicUpload.mimeType, publicUpload.originalName);
   const hasMedia = postFormatValue !== "text" && Boolean(publicUpload.fileName);
-  const mediaPreviewAvailable = hasMedia && (postFormatValue === "video" || Number(publicUpload.size || 0) <= ADMIN_MEDIA_PREVIEW_LIMIT_BYTES);
   return {
     id: publicUpload.id,
     workspaceId: publicUpload.workspaceId,
@@ -1564,8 +1561,8 @@ function adminMonitorPost(document, upload) {
       handle: "",
     },
     hasMedia,
-    mediaPreviewAvailable,
-    mediaUrl: mediaPreviewAvailable
+    mediaPreviewAvailable: hasMedia,
+    mediaUrl: hasMedia
       ? `/api/admin-center/publishing/media/${encodeURIComponent(publicUpload.id)}`
       : null,
   };

@@ -294,7 +294,7 @@ test("admin publishing monitoring preserves final destination copy without expos
   const monitored = centralPublishingTestHelpers.adminMonitorPost(document, {
     id: "upload_1", workspaceId: "workspace_1", accountId: "account_1", platform: "linkedin",
     postFormat: "image", originalName: "launch.jpg", fileName: "private-launch.jpg", mimeType: "image/jpeg",
-    size: 1024, title: "Launch day", caption: "The exact LinkedIn copy", status: "posted",
+    size: 9_856_614, title: "Launch day", caption: "The exact LinkedIn copy", status: "posted",
     artifact: { bucket: "private", path: "do-not-expose", downloadUrl: "https://example.invalid/private" },
     createdByUserId: "user_1", createdByName: "Asha", updatedAt: "2026-09-12T10:00:00.000Z",
   });
@@ -302,6 +302,7 @@ test("admin publishing monitoring preserves final destination copy without expos
   assert.equal(monitored.caption, "The exact LinkedIn copy");
   assert.equal(monitored.account.displayName, "Acme Company");
   assert.equal(monitored.statusDetail, "published");
+  assert.equal(monitored.mediaPreviewAvailable, true);
   assert.equal(monitored.mediaUrl, "/api/admin-center/publishing/media/upload_1");
   assert.equal(Object.hasOwn(monitored, "artifact"), false);
   assert.equal(JSON.stringify(monitored).includes("do-not-expose"), false);

@@ -6,6 +6,7 @@ const PAIRING_TTL_MS = 5 * 60_000;
 const ARTIFACT_BUCKET = "job-artifacts";
 const ARTIFACT_URL_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES = 5 * 1024 * 1024;
+const MAX_INLINE_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const JOB_TYPES = new Set(["publish", "scrape.instagram", "scrape.facebook"]);
 const JOB_PLATFORMS = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
 const ACTIVE_JOB_STATES = new Set([
@@ -488,7 +489,7 @@ export async function storeSupabaseJobArtifact(bytes, { workspaceId, fileName, o
 
 export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
   if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
-  const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES));
+  const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, MAX_INLINE_ARTIFACT_BYTES));
   const declaredSize = Number(artifact.byteSize || 0);
   if (!Number.isInteger(declaredSize) || declaredSize < 1 || declaredSize > maximumBytes) {
     throw new Error("This publishing media is too large for an in-browser preview.");

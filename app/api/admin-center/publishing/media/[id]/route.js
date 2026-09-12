@@ -12,6 +12,7 @@ function safeMediaType(value) {
 }
 
 const MAX_RANGE_BYTES = 5 * 1024 * 1024;
+const MAX_INLINE_IMAGE_BYTES = 64 * 1024 * 1024;
 
 function requestedMediaRange(value, size) {
   if (!value) return null;
@@ -66,7 +67,7 @@ export async function GET(request, context) {
     }
     const bytes = await readPublishingMedia(media.fileName, media.workspaceId).catch((localError) => {
       if (!media.artifact) throw localError;
-      return readSupabaseJobArtifactBytes(media.artifact);
+      return readSupabaseJobArtifactBytes(media.artifact, MAX_INLINE_IMAGE_BYTES);
     });
     return new Response(bytes, {
       headers: {
