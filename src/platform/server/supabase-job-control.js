@@ -988,7 +988,7 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
   const sql = await getDatabaseSql();
   const [row] = await sql`
     SELECT
-      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.25') AS minimum_version,
+      coalesce((SELECT value FROM public.job_control_settings WHERE key = 'minimum_companion_version'), '2.1.26') AS minimum_version,
       (SELECT to_jsonb(device_row) FROM (
         SELECT * FROM public.companion_devices
          WHERE workspace_id = ${workspaceId} AND revoked_at IS NULL
@@ -1005,7 +1005,7 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
          WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 500
       ) job_row), '[]'::jsonb) AS jobs
   `;
-  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.25");
+  const companionValue = publicDevice(row?.companion, row?.minimum_version || "2.1.26");
   const companion = companionValue
     ? { ...companionValue, accountHealth: { loginRequired: Number(row?.login_required) || 0 } }
     : null;
