@@ -8,7 +8,7 @@ import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.j
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
 export const LINKEDIN_POST_ACCEPTED_TEXT = /Post successful|Your post (?:has been shared|was published)|Post published|View post/i;
-export const LINKEDIN_UPLOAD_ACTIVE_TEXT = /^(?:Uploading(?:\.{3}|…)?(?:\s+Keep the page open to finish uploading)?|Keep the page open to finish uploading|Processing(?:\.{3}|…)?(?:\s+(?:video|post))?|Posting(?:\.{3}|…)?|Your (?:video|post) is (?:being processed|processing)|Processing will begin shortly)(?:\s*\d{1,3}%)?$/i;
+export const LINKEDIN_UPLOAD_ACTIVE_TEXT = /^(?:Uploading(?:\.{3}|…)?(?:\s+(?:video|post))?(?:\.{3}|…)?(?:\s*[·:—-]?\s*\d{1,3}(?:\.\d+)?%)?(?:\s+Keep the page open to finish uploading)?|Keep the page open to finish uploading|Processing(?:\.{3}|…)?(?:\s+(?:video|post))?|Posting(?:\.{3}|…)?|Your (?:video|post) is (?:being processed|processing)|Processing will begin shortly)(?:\s*[·:—-]?\s*\d{1,3}(?:\.\d+)?%)?$/i;
 
 export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
   '[role="dialog"] [contenteditable="true"]',
@@ -40,6 +40,12 @@ function getUploadCompletionTimeoutMs() {
   return Number.isFinite(configured)
     ? Math.max(300_000, Math.min(14_400_000, configured))
     : 7_200_000;
+}
+
+export function linkedinMediaSettleMs(configured = Number(process.env.LINKEDIN_MEDIA_SETTLE_MS)) {
+  return Number.isFinite(configured)
+    ? Math.max(30_000, Math.min(300_000, configured))
+    : 90_000;
 }
 
 export function isLinkedInPublishResponse(method: string, url: string, status: number) {
@@ -680,7 +686,8 @@ async function linkedInBackgroundWork(page: Page) {
   ]);
 }
 
-async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000) {
+async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000, minimumSettleMs = 0) {
+  const startedAt = Date.now();
   const deadline = Date.now() + getUploadCompletionTimeoutMs();
   let quietSince: number | null = Date.now();
   let backgroundWorkSeen = false;
@@ -698,7 +705,7 @@ async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000) {
     } else {
       quietSince ??= Date.now();
       const requiredQuietMs = backgroundWorkSeen ? Math.max(15_000, initialQuietMs) : initialQuietMs;
-      if (Date.now() - quietSince >= requiredQuietMs) return;
+      if (Date.now() - quietSince >= requiredQuietMs && Date.now() - startedAt >= minimumSettleMs) return;
     }
 
     await page.waitForTimeout(500);
@@ -707,7 +714,7 @@ async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000) {
   throw new Error(`LinkedIn upload or processing did not finish within ${Math.round(getUploadCompletionTimeoutMs() / 60_000)} minutes.`);
 }
 
-async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvidence, longUploadExpected = false) {
+async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvidence, mediaUploadExpected = false) {
   console.log("Waiting for LinkedIn post to finish...");
   const deadline = Date.now() + getPostConfirmationTimeoutMs();
   let networkAccepted = false;
@@ -724,7 +731,11 @@ async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvide
       page.locator('.artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
     ]);
     if (success || networkAccepted) {
-      await waitForLinkedInSettle(page, longUploadExpected ? 30_000 : 5000);
+      const minimumSettleMs = mediaUploadExpected ? linkedinMediaSettleMs() : 0;
+      if (minimumSettleMs > 0) {
+        console.log(`LinkedIn accepted the post. Keeping the browser open for a ${minimumSettleMs / 1000}-second media-upload safety window.`);
+      }
+      await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
       console.log("LinkedIn confirmed the post was accepted.");
       return;
     }
@@ -735,7 +746,11 @@ async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvide
     } else {
       composerHiddenSince ??= Date.now();
       if (Date.now() - composerHiddenSince >= 12_000) {
-        await waitForLinkedInSettle(page, longUploadExpected ? 30_000 : 5000);
+        const minimumSettleMs = mediaUploadExpected ? linkedinMediaSettleMs() : 0;
+        if (minimumSettleMs > 0) {
+          console.log(`LinkedIn closed the composer. Keeping the browser open for a ${minimumSettleMs / 1000}-second media-upload safety window.`);
+        }
+        await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
         console.log("LinkedIn finished uploading and kept the composer closed after accepting the post.");
         return;
       }
@@ -834,7 +849,6 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
 
 export async function postToLinkedIn(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
   const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
-  const isVideo = upload.postFormat === "video" || upload.mimeType.startsWith("video/");
   const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
   if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
 
@@ -848,7 +862,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
   const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
-  await waitForPostComplete(page, submissionEvidence, isVideo);
+  await waitForPostComplete(page, submissionEvidence, !isTextOnly);
 
   const holdTime = getPostHoldMs();
   if (holdTime > 0) {

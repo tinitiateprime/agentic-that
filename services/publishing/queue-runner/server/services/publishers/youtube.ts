@@ -256,6 +256,8 @@ export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|proce
 export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i;
 export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Video uploading|still uploading|Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress|Keep this browser tab open until uploading completes/i;
 export const YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT = /Uploading\s+100(?:\.0+)?\s*%|Upload complete(?:d)?|Finished uploading|Video uploaded/i;
+const YOUTUBE_UPLOAD_COMPLETE_STABLE_MS = 2_000;
+export const YOUTUBE_PROCESSING_FALLBACK_STABLE_MS = 90_000;
 
 export function youtubeVideoUploadPercent(text: string) {
   const match = text.match(/Uploading\s+(\d{1,3}(?:\.\d+)?)\s*%/i);
@@ -277,9 +279,19 @@ export function youtubeVideoDialogState(text: string) {
 export function youtubeVideoUploadCanFinish(
   uploadCompleted: boolean,
   state: ReturnType<typeof youtubeVideoDialogState>,
-  processingStateStableMs: number,
+  completionStateStableMs: number,
+  sawCurrentUploadProgress = false,
 ) {
-  return uploadCompleted && state === "confirmed" && processingStateStableMs >= 2_000;
+  if (uploadCompleted && (state === "uploaded" || state === "confirmed")) {
+    return completionStateStableMs >= YOUTUBE_UPLOAD_COMPLETE_STABLE_MS;
+  }
+
+  // Studio can replace the final percentage between DOM polls. Only use this
+  // fallback after this run showed upload progress and then kept a processing
+  // confirmation visible for a full 90 seconds.
+  return sawCurrentUploadProgress
+    && state === "confirmed"
+    && completionStateStableMs >= YOUTUBE_PROCESSING_FALLBACK_STABLE_MS;
 }
 
 export function youtubeVideoCompletionTimeout(sizeBytes: number) {
@@ -303,14 +315,15 @@ async function currentYouTubeVideoRow(page: Page, title: string) {
 }
 
 async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes: number) {
-  console.log("Waiting for YouTube video upload to reach 100% before processing...");
+  console.log("Waiting for YouTube video upload to complete...");
   const timeout = youtubeVideoCompletionTimeout(sizeBytes);
   const deadline = Date.now() + timeout;
   let sawCurrentUploadProgress = false;
   let uploadCompleted = false;
-  let processingStateStableAt: number | null = null;
+  let completionStateStableAt: number | null = null;
   let lastProgress = "";
   let loggedPrematureProcessing = false;
+  let loggedProcessingFallback = false;
   let confirmed: Locator | null = null;
   while (Date.now() < deadline) {
     const currentDialog = await firstVisible([
@@ -326,39 +339,42 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
       }
       if (dialogState === "uploaded") {
         sawCurrentUploadProgress = true;
-        if (!uploadCompleted) console.log("YouTube video upload reached 100%. Waiting for the processing screen...");
+        if (!uploadCompleted) console.log("YouTube confirmed that the video upload is complete.");
         uploadCompleted = true;
-        processingStateStableAt = null;
-
-        // At 100% it is safe to dismiss the upload-only overlay so Studio can
-        // expose the processing row. This button must never be used below 100%.
-        const uploadCloseButtons = [
-          currentDialog.getByRole("button", { name: /^Close$/i }).last(),
-          currentDialog.locator('button:has-text("Close")').last(),
-          currentDialog.locator('ytcp-button:has-text("Close")').last(),
-          currentDialog.locator("#close-button").last(),
-        ];
-        for (const closeButton of uploadCloseButtons) {
-          if (await clickIfVisible(closeButton, 1000)) {
-            console.log("Closed YouTube's completed 100% upload overlay.");
-            break;
-          }
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          uploadCompleted,
+          dialogState,
+          Date.now() - completionStateStableAt,
+          sawCurrentUploadProgress,
+        )) {
+          confirmed = currentDialog;
+          break;
         }
         await page.waitForTimeout(250);
         continue;
       }
       if (dialogState === "confirmed") {
-        if (!uploadCompleted) {
-          processingStateStableAt = null;
+        if (!uploadCompleted && !sawCurrentUploadProgress) {
+          completionStateStableAt = null;
           if (!loggedPrematureProcessing) {
             loggedPrematureProcessing = true;
-            console.log("YouTube processing text appeared before 100% upload proof. Ignoring it and keeping Studio open.");
+            console.log("YouTube processing text appeared without current-upload evidence. Ignoring it and keeping Studio open.");
           }
           await page.waitForTimeout(250);
           continue;
         }
-        processingStateStableAt ??= Date.now();
-        if (youtubeVideoUploadCanFinish(uploadCompleted, dialogState, Date.now() - processingStateStableAt)) {
+        if (!uploadCompleted && !loggedProcessingFallback) {
+          loggedProcessingFallback = true;
+          console.log("YouTube moved from upload progress to processing without exposing 100%. Keeping Studio open for a 90-second safety window.");
+        }
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          uploadCompleted,
+          dialogState,
+          Date.now() - completionStateStableAt,
+          sawCurrentUploadProgress,
+        )) {
           confirmed = currentDialog;
           break;
         }
@@ -366,7 +382,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         continue;
       }
       if (dialogState === "uploading") {
-        processingStateStableAt = null;
+        completionStateStableAt = null;
         const uploadPercent = youtubeVideoUploadPercent(dialogText);
         const progress = uploadPercent === null ? "the video" : `Uploading ${uploadPercent}%`;
         sawCurrentUploadProgress = true;
@@ -390,9 +406,14 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
     const confirmationToast = await waitForVisible([
       page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
     ], 100);
-    if (confirmationToast && uploadCompleted) {
-      processingStateStableAt ??= Date.now();
-      if (youtubeVideoUploadCanFinish(true, "confirmed", Date.now() - processingStateStableAt)) {
+    if (confirmationToast && (uploadCompleted || sawCurrentUploadProgress)) {
+      completionStateStableAt ??= Date.now();
+      if (youtubeVideoUploadCanFinish(
+        uploadCompleted,
+        "confirmed",
+        Date.now() - completionStateStableAt,
+        sawCurrentUploadProgress,
+      )) {
         confirmed = confirmationToast;
         break;
       }
@@ -409,7 +430,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
       const uploadPercent = youtubeVideoUploadPercent(rowText);
       const progress = uploadPercent === null ? "" : `Uploading ${uploadPercent}%`;
       if (rowState === "uploading") {
-        processingStateStableAt = null;
+        completionStateStableAt = null;
         sawCurrentUploadProgress = true;
         if (progress && progress !== lastProgress) {
           lastProgress = progress;
@@ -420,25 +441,45 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
       }
       if (rowState === "uploaded") {
         sawCurrentUploadProgress = true;
-        if (!uploadCompleted) console.log("YouTube video upload reached 100%. Waiting for the processing screen...");
+        if (!uploadCompleted) console.log("YouTube confirmed that the video upload is complete.");
         uploadCompleted = true;
-        processingStateStableAt = null;
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          uploadCompleted,
+          rowState,
+          Date.now() - completionStateStableAt,
+          sawCurrentUploadProgress,
+        )) {
+          console.log("YouTube upload is complete. Server-side processing can continue after the browser closes.");
+          return;
+        }
         await page.waitForTimeout(250);
         continue;
       }
       if (rowState === "confirmed") {
-        if (!uploadCompleted) {
-          processingStateStableAt = null;
+        if (!uploadCompleted && !sawCurrentUploadProgress) {
+          completionStateStableAt = null;
           if (!loggedPrematureProcessing) {
             loggedPrematureProcessing = true;
-            console.log("YouTube processing row appeared before 100% upload proof. Ignoring it and keeping Studio open.");
+            console.log("YouTube processing row appeared without current-upload evidence. Ignoring it and keeping Studio open.");
           }
           await page.waitForTimeout(250);
           continue;
         }
-        processingStateStableAt ??= Date.now();
-        if (youtubeVideoUploadCanFinish(uploadCompleted, rowState, Date.now() - processingStateStableAt)) {
-          console.log("YouTube upload reached 100% and the processing screen is visible. The browser can now close safely.");
+        if (!uploadCompleted && !loggedProcessingFallback) {
+          loggedProcessingFallback = true;
+          console.log("YouTube moved from upload progress to processing without exposing 100%. Keeping Studio open for a 90-second safety window.");
+        }
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          uploadCompleted,
+          rowState,
+          Date.now() - completionStateStableAt,
+          sawCurrentUploadProgress,
+        )) {
+          console.log(uploadCompleted
+            ? "YouTube upload is complete. Server-side processing can continue after the browser closes."
+            : "YouTube processing remained stable for 90 seconds after upload progress. The browser can now close safely.");
           return;
         }
         await page.waitForTimeout(500);
@@ -450,14 +491,14 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
   }
   if (!confirmed) {
     const stage = uploadCompleted
-      ? "the processing screen did not appear after the upload reached 100%"
+      ? "the completed-upload confirmation did not remain stable"
       : sawCurrentUploadProgress
-        ? "the video upload did not reach 100%"
+        ? "the video upload did not reach a stable completion or processing handoff"
         : "the current video upload could not be verified";
     throw new Error(`YouTube accepted Publish, but ${stage} within ${Math.round(timeout / 60_000)} minutes. Check YouTube Studio before retrying.`);
   }
 
-  console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
+  console.log("YouTube upload completion is visible. Closing the completed upload dialog...");
 
   const confirmationDialog = confirmed && await confirmed.isVisible().catch(() => false) ? confirmed : await firstVisible([
     page.locator("ytcp-video-share-dialog").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),

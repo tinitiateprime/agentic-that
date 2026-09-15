@@ -9,6 +9,7 @@ import {
   isLinkedInPublishResponse,
   isLinkedInManagedPagePostsUrl,
   linkedInManagedPageFromLink,
+  linkedinMediaSettleMs,
   shouldOpenLinkedInManagedPageFromManage,
   visibleIntersectionPoint,
 } from "./services/publishers/linkedin.js";
@@ -18,6 +19,7 @@ import {
   YOUTUBE_VIDEO_REJECTION_TEXT,
   YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT,
   YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT,
+  YOUTUBE_PROCESSING_FALLBACK_STABLE_MS,
   youtubeVideoDialogState,
   youtubeVideoCompletionTimeout,
   youtubeVideoUploadCanFinish,
@@ -56,8 +58,18 @@ test("LinkedIn publishing waits for durable provider acceptance", () => {
   assert.match("Post successful", LINKEDIN_POST_ACCEPTED_TEXT);
   assert.match("Uploading... Keep the page open to finish uploading", LINKEDIN_UPLOAD_ACTIVE_TEXT);
   assert.match("Uploading... Keep the page open to finish uploading 18%", LINKEDIN_UPLOAD_ACTIVE_TEXT);
+  assert.match("Uploading video... 18% Keep the page open to finish uploading", LINKEDIN_UPLOAD_ACTIVE_TEXT);
   assert.match("Processing video", LINKEDIN_UPLOAD_ACTIVE_TEXT);
   assert.match("Posting...", LINKEDIN_UPLOAD_ACTIVE_TEXT);
+  assert.equal(linkedinMediaSettleMs(Number.NaN), 90_000);
+  assert.equal(linkedinMediaSettleMs(5_000), 30_000);
+  assert.equal(linkedinMediaSettleMs(600_000), 300_000);
+});
+
+test("LinkedIn media publishing retains the browser for its upload safety window", async () => {
+  const linkedin = await readFile(new URL("./services/publishers/linkedin.ts", import.meta.url), "utf8");
+  assert.match(linkedin, /waitForPostComplete\(page, submissionEvidence, !isTextOnly\)/);
+  assert.match(linkedin, /Date\.now\(\) - startedAt >= minimumSettleMs/);
 });
 
 test("Facebook publishing recognizes delayed Lexical composer editors", () => {
@@ -91,12 +103,15 @@ test("Facebook and YouTube recognize accepted long-running video publishing", t 
   assert.equal(youtubeVideoUploadPercent("Processing will begin shortly"), null);
   assert.equal(youtubeVideoDialogState("Video uploading. Uploading 57% ... 46 seconds left. Keep this browser tab open until uploading completes."), "uploading");
   assert.equal(youtubeVideoDialogState("Video uploading. Uploading 100%."), "uploaded");
+  assert.equal(youtubeVideoDialogState("Upload complete ... Processing will begin shortly"), "uploaded");
   assert.equal(youtubeVideoDialogState("test Processing will begin shortly Checks starting Pending"), "confirmed");
   assert.equal(youtubeVideoUploadCanFinish(false, "uploading", 60_000), false);
   assert.equal(youtubeVideoUploadCanFinish(false, "confirmed", 60_000), false);
-  assert.equal(youtubeVideoUploadCanFinish(true, "uploaded", 60_000), false);
-  assert.equal(youtubeVideoUploadCanFinish(true, "confirmed", 1_999), false);
+  assert.equal(youtubeVideoUploadCanFinish(true, "uploaded", 1_999), false);
+  assert.equal(youtubeVideoUploadCanFinish(true, "uploaded", 2_000), true);
   assert.equal(youtubeVideoUploadCanFinish(true, "confirmed", 2_000), true);
+  assert.equal(youtubeVideoUploadCanFinish(false, "confirmed", YOUTUBE_PROCESSING_FALLBACK_STABLE_MS - 1, true), false);
+  assert.equal(youtubeVideoUploadCanFinish(false, "confirmed", YOUTUBE_PROCESSING_FALLBACK_STABLE_MS, true), true);
   assert.match("Processing abandoned", YOUTUBE_VIDEO_REJECTION_TEXT);
   assert.ok(youtubeVideoCompletionTimeout(126_716_294) > 30 * 60_000);
 });
@@ -114,10 +129,9 @@ test("YouTube video completion ignores stale failures outside the active upload 
   assert.doesNotMatch(waitSource, /page\.getByText\(YOUTUBE_VIDEO_REJECTION_TEXT/);
   assert.doesNotMatch(waitSource, /locator\(['"]ytcp-video-share-dialog['"]\)\.first\(\)/);
   assert.match(waitSource, /rowState === "confirmed"/);
-  assert.match(waitSource, /if \(confirmationToast && uploadCompleted\)/);
-  assert.match(waitSource, /if \(!uploadCompleted\)/);
+  assert.match(waitSource, /if \(confirmationToast && \(uploadCompleted \|\| sawCurrentUploadProgress\)\)/);
+  assert.match(waitSource, /if \(!uploadCompleted && !sawCurrentUploadProgress\)/);
   assert.match(waitSource, /youtubeVideoUploadCanFinish/);
-  assert.doesNotMatch(waitSource, /sawCurrentUploadProgress\s*\|\||state === "confirmed" && !uploadCompleted/);
   assert.match(waitSource, /Keeping Studio open/);
 });
 
