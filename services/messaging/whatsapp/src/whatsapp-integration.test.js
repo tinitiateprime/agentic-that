@@ -76,6 +76,42 @@ test("the WhatsApp workspace loads the session's business, but only when entitle
   assert.equal((auth.match(/return resolveWorkspaceUser\(principal, platformUser/g) || []).length, 2);
 });
 
+test("the Store exposes the saved WhatsApp login without exposing credentials", async () => {
+  const statusRoute = await source("app/api/apps/status/route.js");
+  const sessionRoute = await source("app/api/whatsapp/auth/session/route.js");
+  const registerRoute = await source("app/api/whatsapp/auth/register/route.js");
+  const statusHook = await source("src/platform/use-product-status.js");
+  const store = await source("src/platform/AppsExplorer.jsx");
+  const detail = await source("src/platform/WhatsAppServiceDetail.jsx");
+  const modal = await source("src/platform/WhatsAppLoginModal.jsx");
+
+  // A cookie only counts when it belongs to the workspace selected by the
+  // AgenticThat principal; a stale cross-workspace cookie must prompt login.
+  assert.match(statusRoute, /Number\(workspaceSession\.business_id\) === Number\(workspaceUser\.business_id\)/);
+  assert.match(statusRoute, /workspaceAuthenticated/);
+  assert.match(sessionRoute, /Number\(sessionUser\.business_id\) === Number\(workspaceUser\.business_id\)/);
+
+  // Members with view access can sign in, while creating/replacing shared
+  // credentials remains an administrator action.
+  assert.equal((sessionRoute.match(/getCurrentUser\("view"\)/g) || []).length, 2);
+  assert.match(registerRoute, /getCurrentUser\("configure"\)/);
+  assert.match(sessionRoute, /enforceAuthRateLimit\("whatsapp-login-username"/);
+
+  // The app page, rather than only Connections, owns the login prompt and the
+  // Store status makes that requirement visible before dashboard launch.
+  assert.match(statusHook, /state: !service\.workspaceAuthenticated\s*\? "login"/);
+  assert.match(store, /opensWhatsAppWorkspace/);
+  assert.match(store, /opensWhatsAppWorkspace\s*\? service\.dashboardHref/);
+  assert.match(detail, /<WhatsAppLoginModal/);
+  assert.match(detail, /data\.whatsapp\?\.connected && data\.whatsapp\?\.onboarded/);
+  assert.match(detail, /window\.location\.assign\(destination\)/);
+
+  // The browser persists only the HTTP-only cookie set by the server. The
+  // modal sends credentials directly and never writes them into web storage.
+  assert.match(modal, /credentials: "include"/);
+  assert.doesNotMatch(modal, /localStorage|sessionStorage/);
+});
+
 test("WATI recovery sync remains operator-only", async () => {
   const route = await source("app/api/wati/messages/sync/route.js");
   const component = await source("services/messaging/whatsapp/src/components/WatiMessageAutoSync.jsx");

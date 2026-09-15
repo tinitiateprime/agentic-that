@@ -1,5 +1,11 @@
+import { cookies } from "next/headers";
 import { getCurrentPlatformUser } from "@platform/server/auth-store";
-import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
+import {
+  COOKIE_NAME,
+  getCurrentUser,
+  sessionWorkspaceRow,
+  whatsappAccessErrorResponse,
+} from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { credsForProvider, listTenantNumbers } from "@whatsapp/lib/tenant";
 
@@ -13,6 +19,12 @@ export async function GET() {
   if (!workspaceUser) return whatsappAccessErrorResponse("view");
 
   const sql = await getSql();
+  const cookieStore = await cookies();
+  const workspaceSession = await sessionWorkspaceRow(cookieStore.get(COOKIE_NAME)?.value);
+  const workspaceAuthenticated = Boolean(
+    workspaceSession
+    && Number(workspaceSession.business_id) === Number(workspaceUser.business_id)
+  );
   const [business] = await sql`
     SELECT name, provider, active_wa_provider, onboarded_at
       FROM businesses WHERE id = ${workspaceUser.business_id}`;
@@ -35,6 +47,7 @@ export async function GET() {
     whatsapp: {
       connected,
       onboarded: Boolean(business?.onboarded_at),
+      workspaceAuthenticated,
       provider: connected ? (activeProvider === "wati" && watiReady ? "wati" : metaReady ? "meta" : "wati") : null,
       senderCount: numbers.length,
     },

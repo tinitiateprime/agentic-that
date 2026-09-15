@@ -168,7 +168,7 @@ function StandardServiceDetail({ user, service, category, related }) {
 
 export default function ServiceDetail(props) {
   if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
-    return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
+    return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} accessLevel={props.accessLevel} />;
   }
   if (props.service?.availability === "live" && props.category?.id !== "engagement") {
     return <PremiumServiceDetail {...props} />;

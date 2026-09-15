@@ -85,11 +85,22 @@ function ServiceStatus({ status }) {
 
 function ServiceCard({ service, status, allowed }) {
   const capabilities = serviceCapabilities(service);
+  const opensWhatsAppWorkspace = Boolean(
+    allowed
+    && service.connectionKind === "whatsapp"
+    && status.state === "connected"
+    && service.dashboardHref
+  );
+  const href = !allowed && service.availability === "live"
+    ? `/access-denied?resource=${encodeURIComponent(accessResourceForService(service))}`
+    : opensWhatsAppWorkspace
+      ? service.dashboardHref
+      : serviceDetailHref(service);
 
   return (
     <Link
       className={styles.serviceCard}
-      href={allowed || service.availability !== "live" ? serviceDetailHref(service) : `/access-denied?resource=${encodeURIComponent(accessResourceForService(service))}`}
+      href={href}
       aria-label={!allowed && service.availability === "live" ? `${service.name}: access required` : undefined}
       style={{ "--service-accent": service.accent, "--service-tint": service.tint }}
     >
@@ -118,7 +129,7 @@ function ServiceCard({ service, status, allowed }) {
               );
             })}
           </span>
-          <strong>{service.availability === "live" ? "View details" : "Preview"}<ArrowRight size={15} /></strong>
+          <strong>{opensWhatsAppWorkspace ? "Open workspace" : service.availability === "live" ? "View details" : "Preview"}<ArrowRight size={15} /></strong>
         </div>
       </div>
     </Link>

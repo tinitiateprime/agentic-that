@@ -566,11 +566,13 @@
   background: #099d7e;
 }
 
-.status_continue {
+.status_continue,
+.status_login {
   color: #97640c;
 }
 
-.status_continue i {
+.status_continue i,
+.status_login i {
   background: #d89117;
 }
 

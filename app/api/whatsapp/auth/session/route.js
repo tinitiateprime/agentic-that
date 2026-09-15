@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { getCurrentPlatformUser, PlatformAuthError } from "@platform/server/auth-store";
+import { clearAuthRateLimit, enforceAuthRateLimit, requestClientAddress } from "@platform/server/auth-abuse";
 import { getSql } from "@whatsapp/lib/db";
 import {
   COOKIE_NAME,
@@ -16,7 +17,9 @@ import {
 // legacy /api/whatsapp/auth/login route (retired under RBAC enforce mode),
 // every method here is authorized by the AgenticThat session first and only
 // then touches the WhatsApp-local `users` table — the same shape Telegram uses
-// for its dashboard login.
+// for its dashboard login. Viewing and signing in are available to every
+// workspace member who can open WhatsApp; creating or changing the shared
+// login remains configure-only in /auth/register.
 //
 //   GET    -> is a WhatsApp workspace session open, and what should the form prefill?
 //   POST   -> sign in to an existing WhatsApp workspace login
@@ -36,11 +39,15 @@ async function whatsappSessionUser() {
 }
 
 export async function GET() {
-  const workspaceUser = await getCurrentUser("configure");
-  if (!workspaceUser) return whatsappAccessErrorResponse("configure");
+  const workspaceUser = await getCurrentUser("view");
+  if (!workspaceUser) return whatsappAccessErrorResponse("view");
 
   const sql = await getSql();
   const sessionUser = await whatsappSessionUser();
+  const authenticatedUser = sessionUser
+    && Number(sessionUser.business_id) === Number(workspaceUser.business_id)
+    ? sessionUser
+    : null;
   const platformUser = await getCurrentPlatformUser();
   const [business] = await sql`SELECT name FROM businesses WHERE id = ${workspaceUser.business_id}`;
 
@@ -53,8 +60,8 @@ export async function GET() {
 
   return Response.json({
     ok: true,
-    authenticated: Boolean(sessionUser),
-    user: sessionUser ? { id: sessionUser.id, name: sessionUser.name, email: sessionUser.email } : null,
+    authenticated: Boolean(authenticatedUser),
+    user: authenticatedUser ? { id: authenticatedUser.id, name: authenticatedUser.name, email: authenticatedUser.email } : null,
     // Prefill hints for the sign-in and register forms. Never a password.
     workspace: {
       businessName: business?.name || platformUser?.businessName || "",
@@ -65,14 +72,26 @@ export async function GET() {
 }
 
 export async function POST(req) {
-  const workspaceUser = await getCurrentUser("configure");
-  if (!workspaceUser) return whatsappAccessErrorResponse("configure");
+  const workspaceUser = await getCurrentUser("view");
+  if (!workspaceUser) return whatsappAccessErrorResponse("view");
 
   const body = await req.json().catch(() => ({}));
   const username = String(body.username || "").trim().toLowerCase();
   const password = String(body.password || "");
   if (!username || !password) {
     return Response.json({ error: "Enter your WhatsApp workspace username and password" }, { status: 400 });
+  }
+
+  const rateLimitSubject = `${workspaceUser.business_id}:${username}`;
+  try {
+    const address = requestClientAddress(req);
+    await enforceAuthRateLimit("whatsapp-login-ip", address, 40, 15 * 60, 30 * 60);
+    await enforceAuthRateLimit("whatsapp-login-username", rateLimitSubject, 8, 15 * 60, 30 * 60);
+  } catch (error) {
+    if (error instanceof PlatformAuthError && error.code === "RATE_LIMITED") {
+      return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
+    throw error;
   }
 
   const sql = await getSql();
@@ -105,6 +124,7 @@ export async function POST(req) {
 
   const token = await createSession(user.id);
   await setSessionCookie(token);
+  await clearAuthRateLimit("whatsapp-login-username", rateLimitSubject);
   return Response.json({ ok: true, user: { id: user.id, name: user.name, email: user.email } });
 }
 

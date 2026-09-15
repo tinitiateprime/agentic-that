@@ -339,13 +339,15 @@
   box-shadow: 0 0 8px rgba(45, 212, 168, 0.6);
 }
 
-.status_continue {
+.status_continue,
+.status_login {
   border-color: rgba(250, 190, 80, 0.35);
   background: rgba(250, 190, 80, 0.1);
   color: #8a5900;
 }
 
-.status_continue i {
+.status_continue i,
+.status_login i {
   background: #fabe50;
 }
 

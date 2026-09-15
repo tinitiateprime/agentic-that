@@ -141,19 +141,22 @@
 }
 
 .heroActions > a:hover,
+.heroActions > button:hover:not(:disabled),
 .launchSection > a:hover {
   border-color: var(--green-dark);
   background: var(--green-dark);
   transform: translateY(-1px);
 }
 
-.heroActions > a + a {
+.heroActions > a + a,
+.heroActions > button + a {
   border-color: var(--line);
   background: #fff;
   color: #34413c;
 }
 
-.heroActions > a + a:hover {
+.heroActions > a + a:hover,
+.heroActions > button + a:hover {
   border-color: #b9d5ca;
   background: #f5faf8;
   color: var(--green);
@@ -3205,7 +3208,8 @@
   margin-top: 24px;
 }
 
-.connectionCta > a {
+.connectionCta > a,
+.connectionCta > button {
   display: inline-flex;
   min-height: 50px;
   align-items: center;
@@ -3217,10 +3221,12 @@
   color: #fff;
   font-size: 13px;
   font-weight: 750;
+  cursor: pointer;
   transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
-.connectionCta > a:hover {
+.connectionCta > a:hover,
+.connectionCta > button:hover {
   border-color: var(--green-dark);
   background: var(--green-dark);
   transform: translateY(-1px);

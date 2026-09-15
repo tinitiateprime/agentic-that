@@ -111,6 +111,7 @@ enables signature verification for incoming webhook requests.
 - Inbound and outbound message reactions with live updates
 - Read/unread and replied/unreplied views
 - Self-serve workspace signup and encrypted tenant credentials
+- Store-native WhatsApp workspace login with a hashed password and a reusable HTTP-only session
 - Meta Embedded Signup/coexistence onboarding
 - WhatsApp calling events and call settings
 - WATI onboarding and authenticated webhooks

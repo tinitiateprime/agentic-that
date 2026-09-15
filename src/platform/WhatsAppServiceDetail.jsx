@@ -39,6 +39,7 @@ import {
 } from "react-icons/pi";
 import { useEffect, useState } from "react";
 import ProductShell from "./ProductShell";
+import WhatsAppLoginModal from "./WhatsAppLoginModal";
 import { useProductStatus } from "./use-product-status";
 import styles from "./whatsapp-service-detail.module.css";
 
@@ -86,14 +87,22 @@ const connectionModes = [
 // account gets a clear instruction instead of a button that leads nowhere.
 const SETUP_INSTRUCTION = "Set up your WhatsApp account first. Add the connection in Connections — the workspace opens as soon as Meta or WATI is linked.";
 const CONTINUE_INSTRUCTION = "Your WhatsApp connection is not finished yet. Complete it in Connections, then open the workspace from here.";
+const LOGIN_INSTRUCTION = "Sign in to the saved WhatsApp workspace login first. Your secure session will be remembered, then you can continue setup or open the dashboard directly from the Store.";
 
 function actionFor(status, service) {
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
+  if (status.state === "login") {
+    return {
+      label: status.connected && status.onboarded ? "Sign in to open workspace" : "Sign in to WhatsApp",
+      modal: true,
+    };
+  }
   if (status.state === "connected") return { label: "Open WhatsApp workspace", href: service.dashboardHref };
   return { label: "Open WhatsApp workspace", disabled: true };
 }
 
 function setupInstructionFor(status) {
+  if (status.state === "login") return LOGIN_INSTRUCTION;
   return status.state === "continue" ? CONTINUE_INSTRUCTION : SETUP_INSTRUCTION;
 }
 
@@ -362,7 +371,7 @@ function AudienceGuide() {
   );
 }
 
-function ConnectionSection({ configHref, ctaLabel }) {
+function ConnectionSection({ configHref, ctaLabel, needsLogin, onLogin }) {
   const [modeId, setModeId] = useState("cloud");
   const mode = connectionModes.find((item) => item.id === modeId) || connectionModes[0];
 
@@ -380,7 +389,9 @@ function ConnectionSection({ configHref, ctaLabel }) {
         </article>
       </div>
       <div className={styles.connectionCta}>
-        <Link href={configHref}>{ctaLabel}<ArrowRight size={18} /></Link>
+        {needsLogin
+          ? <button type="button" onClick={onLogin}>{ctaLabel}<ArrowRight size={18} /></button>
+          : <Link href={configHref}>{ctaLabel}<ArrowRight size={18} /></Link>}
       </div>
     </section>
   );
@@ -396,14 +407,39 @@ function SecuritySection() {
   );
 }
 
-export default function WhatsAppServiceDetail({ user, service }) {
+export default function WhatsAppServiceDetail({ user, service, accessLevel = "view" }) {
   const { statusFor } = useProductStatus();
+  const [loginOpen, setLoginOpen] = useState(false);
   const status = statusFor(service);
   const action = actionFor(status, service);
-  const connected = status.state === "connected";
-  const needsConnection = !connected && status.state !== "checking";
+  const needsLogin = status.state === "login";
+  const connected = Boolean(status.connected);
+  const workspaceReady = Boolean(status.connected && status.onboarded);
+  const needsConnection = !workspaceReady && status.state !== "checking";
   const setupInstruction = setupInstructionFor(status);
-  const setupLabel = status.state === "continue" ? "Continue setup" : "Set up WhatsApp account";
+  const setupLabel = needsLogin ? "Sign in and continue" : status.state === "continue" ? "Continue setup" : "Set up WhatsApp account";
+  const canRegister = accessLevel === "configure" && user?.capabilities?.includes("messaging.configure");
+
+  const openLogin = () => setLoginOpen(true);
+  const completeLogin = async () => {
+    setLoginOpen(false);
+    let destination = workspaceReady ? service.dashboardHref : service.configHref;
+    try {
+      // Signing in can link a pre-existing WhatsApp-only workspace. Recheck
+      // after the cookie is saved so an already-connected workspace opens the
+      // dashboard immediately instead of taking an unnecessary setup detour.
+      const response = await fetch("/api/apps/status", { cache: "no-store", credentials: "include" });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.whatsapp?.connected && data.whatsapp?.onboarded) {
+        destination = service.dashboardHref;
+      }
+    } catch {
+      // The saved session is already authoritative. If the readiness refresh
+      // is temporarily unavailable, Connections is the safe fallback.
+    } finally {
+      window.location.assign(destination);
+    }
+  };
 
   return (
     <ProductShell user={user} active="apps">
@@ -418,10 +454,18 @@ export default function WhatsAppServiceDetail({ user, service }) {
             <h1>WhatsApp <em>Messaging</em></h1>
             <p>Answer customers, send updates, organize contacts, and follow up from one simple workspace. No technical knowledge is needed.</p>
             <div className={styles.heroActions}>
-              {action.disabled ? <button type="button" disabled title={needsConnection ? setupInstruction : undefined}>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
-              {needsConnection ? <Link href={service.configHref}>{setupLabel}<ChevronRight size={18} /></Link> : <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>}
+              {action.modal
+                ? <button type="button" onClick={openLogin}>{action.label}<ArrowRight size={19} /></button>
+                : action.disabled
+                  ? <button type="button" disabled title={needsConnection ? setupInstruction : undefined}>{action.label}</button>
+                  : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+              {needsLogin
+                ? <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>
+                : needsConnection
+                  ? <Link href={service.configHref}>{setupLabel}<ChevronRight size={18} /></Link>
+                  : <a href="#capabilities">See how it helps<ChevronRight size={18} /></a>}
             </div>
-            {needsConnection && (
+            {(needsConnection || needsLogin) && (
               <p className={styles.setupNote} role="status">
                 <CircleAlert size={17} strokeWidth={2} aria-hidden="true" />
                 <span>{setupInstruction}</span>
@@ -439,18 +483,32 @@ export default function WhatsAppServiceDetail({ user, service }) {
         <ConnectionSection
           configHref={service.configHref}
           ctaLabel={needsConnection ? setupLabel : "Manage WhatsApp connection"}
+          needsLogin={needsLogin}
+          onLogin={openLogin}
         />
 
         <SecuritySection />
 
         <section className={styles.launchSection}>
           <div>
-            <h2>{connected ? "Continue where your WhatsApp work happens." : "Bring WhatsApp into a workspace your whole team can understand."}</h2>
-            {needsConnection && <p>{setupInstruction}</p>}
+            <h2>{workspaceReady ? "Continue where your WhatsApp work happens." : connected ? "Finish your WhatsApp workspace setup." : "Bring WhatsApp into a workspace your whole team can understand."}</h2>
+            {(needsConnection || needsLogin) && <p>{setupInstruction}</p>}
           </div>
-          {needsConnection ? <Link href={service.configHref}>{setupLabel}<ArrowRight size={19} /></Link> : action.disabled ? <button type="button" disabled>{action.label}</button> : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
+          {action.modal
+            ? <button type="button" onClick={openLogin}>{action.label}<ArrowRight size={19} /></button>
+            : needsConnection
+              ? <Link href={service.configHref}>{setupLabel}<ArrowRight size={19} /></Link>
+              : action.disabled
+                ? <button type="button" disabled>{action.label}</button>
+                : <Link href={action.href}>{action.label}<ArrowRight size={19} /></Link>}
         </section>
       </main>
+      <WhatsAppLoginModal
+        open={loginOpen}
+        canRegister={canRegister}
+        onClose={() => setLoginOpen(false)}
+        onAuthenticated={completeLogin}
+      />
     </ProductShell>
   );
 }
