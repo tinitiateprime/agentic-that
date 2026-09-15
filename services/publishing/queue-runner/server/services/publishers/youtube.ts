@@ -253,6 +253,7 @@ async function clickNextWhenReady(page: Page) {
 
 
 export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|processing)|Your video has been published|Processing will begin shortly/i;
+export const YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT = /\bVideo processing\b/i;
 export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i;
 export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Video uploading|still uploading|Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress|Keep this browser tab open until uploading completes/i;
 export const YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT = /Uploading\s+100(?:\.0+)?\s*%|Upload complete(?:d)?|Finished uploading|Video uploaded/i;
@@ -327,6 +328,10 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
       if (dialogState === "rejected") {
         const detail = dialogText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
         throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
+      }
+      if (YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT.test(dialogText)) {
+        console.log("YouTube Video processing dialog is visible. Publishing is complete; closing the browser.");
+        return;
       }
       if (dialogState === "uploaded") {
         sawCurrentUploadProgress = true;

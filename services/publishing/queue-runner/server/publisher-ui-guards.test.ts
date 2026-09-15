@@ -19,6 +19,7 @@ import {
   YOUTUBE_VIDEO_REJECTION_TEXT,
   YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT,
   YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT,
+  YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT,
   youtubeVideoDialogState,
   youtubeVideoCompletionTimeout,
   youtubeVideoUploadCanFinish,
@@ -97,6 +98,7 @@ test("Facebook and YouTube recognize accepted long-running video publishing", t 
   assert.match("Uploading 17%", YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT);
   assert.match("Uploading 100%", YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT);
   assert.match("Upload complete", YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT);
+  assert.match("Video processing", YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT);
   assert.equal(youtubeVideoUploadPercent("Uploading 57% ... 46 seconds left"), 57);
   assert.equal(youtubeVideoUploadPercent("Uploading 100%"), 100);
   assert.equal(youtubeVideoUploadPercent("Processing will begin shortly"), null);
@@ -121,6 +123,7 @@ test("YouTube video completion ignores stale failures outside the active upload 
   );
   assert.match(waitSource, /page\.locator\("ytcp-video-share-dialog"\)[\s\S]{0,100}page\.locator\("ytcp-uploads-dialog"\)/);
   assert.match(waitSource, /const dialogState = youtubeVideoDialogState\(dialogText\)/);
+  assert.match(waitSource, /if \(YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT\.test\(dialogText\)\)[\s\S]{0,180}return;/);
   assert.match(waitSource, /ytcp-toast, tp-yt-paper-toast/);
   assert.match(waitSource, /currentYouTubeVideoRow/);
   assert.doesNotMatch(waitSource, /page\.getByText\(YOUTUBE_VIDEO_REJECTION_TEXT/);
