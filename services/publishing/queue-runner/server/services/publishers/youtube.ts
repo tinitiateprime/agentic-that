@@ -257,7 +257,6 @@ export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily u
 export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Video uploading|still uploading|Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress|Keep this browser tab open until uploading completes/i;
 export const YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT = /Uploading\s+100(?:\.0+)?\s*%|Upload complete(?:d)?|Finished uploading|Video uploaded/i;
 const YOUTUBE_UPLOAD_COMPLETE_STABLE_MS = 2_000;
-export const YOUTUBE_PROCESSING_FALLBACK_STABLE_MS = 90_000;
 
 export function youtubeVideoUploadPercent(text: string) {
   const match = text.match(/Uploading\s+(\d{1,3}(?:\.\d+)?)\s*%/i);
@@ -277,21 +276,14 @@ export function youtubeVideoDialogState(text: string) {
 }
 
 export function youtubeVideoUploadCanFinish(
-  uploadCompleted: boolean,
   state: ReturnType<typeof youtubeVideoDialogState>,
   completionStateStableMs: number,
-  sawCurrentUploadProgress = false,
 ) {
-  if (uploadCompleted && (state === "uploaded" || state === "confirmed")) {
-    return completionStateStableMs >= YOUTUBE_UPLOAD_COMPLETE_STABLE_MS;
-  }
-
-  // Studio can replace the final percentage between DOM polls. Only use this
-  // fallback after this run showed upload progress and then kept a processing
-  // confirmation visible for a full 90 seconds.
-  return sawCurrentUploadProgress
-    && state === "confirmed"
-    && completionStateStableMs >= YOUTUBE_PROCESSING_FALLBACK_STABLE_MS;
+  // Both states are post-upload evidence on the active Studio surface. The
+  // classifier checks active uploading text first, so a dialog that still
+  // says to keep the tab open can never finish through this path.
+  return (state === "uploaded" || state === "confirmed")
+    && completionStateStableMs >= YOUTUBE_UPLOAD_COMPLETE_STABLE_MS;
 }
 
 export function youtubeVideoCompletionTimeout(sizeBytes: number) {
@@ -322,8 +314,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
   let uploadCompleted = false;
   let completionStateStableAt: number | null = null;
   let lastProgress = "";
-  let loggedPrematureProcessing = false;
-  let loggedProcessingFallback = false;
+  let loggedProcessingHandoff = false;
   let confirmed: Locator | null = null;
   while (Date.now() < deadline) {
     const currentDialog = await firstVisible([
@@ -343,10 +334,8 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         uploadCompleted = true;
         completionStateStableAt ??= Date.now();
         if (youtubeVideoUploadCanFinish(
-          uploadCompleted,
           dialogState,
           Date.now() - completionStateStableAt,
-          sawCurrentUploadProgress,
         )) {
           confirmed = currentDialog;
           break;
@@ -355,25 +344,14 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         continue;
       }
       if (dialogState === "confirmed") {
-        if (!uploadCompleted && !sawCurrentUploadProgress) {
-          completionStateStableAt = null;
-          if (!loggedPrematureProcessing) {
-            loggedPrematureProcessing = true;
-            console.log("YouTube processing text appeared without current-upload evidence. Ignoring it and keeping Studio open.");
-          }
-          await page.waitForTimeout(250);
-          continue;
-        }
-        if (!uploadCompleted && !loggedProcessingFallback) {
-          loggedProcessingFallback = true;
-          console.log("YouTube moved from upload progress to processing without exposing 100%. Keeping Studio open for a 90-second safety window.");
+        if (!loggedProcessingHandoff) {
+          loggedProcessingHandoff = true;
+          console.log("YouTube confirmed the video is processing. The upload has safely handed off to Studio.");
         }
         completionStateStableAt ??= Date.now();
         if (youtubeVideoUploadCanFinish(
-          uploadCompleted,
           dialogState,
           Date.now() - completionStateStableAt,
-          sawCurrentUploadProgress,
         )) {
           confirmed = currentDialog;
           break;
@@ -390,6 +368,8 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
           lastProgress = progress;
           console.log(`YouTube video is still ${progress.toLowerCase()}. Keeping Studio open.`);
         }
+      } else {
+        completionStateStableAt = null;
       }
       await page.waitForTimeout(500);
       continue;
@@ -406,13 +386,11 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
     const confirmationToast = await waitForVisible([
       page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
     ], 100);
-    if (confirmationToast && (uploadCompleted || sawCurrentUploadProgress)) {
+    if (confirmationToast) {
       completionStateStableAt ??= Date.now();
       if (youtubeVideoUploadCanFinish(
-        uploadCompleted,
         "confirmed",
         Date.now() - completionStateStableAt,
-        sawCurrentUploadProgress,
       )) {
         confirmed = confirmationToast;
         break;
@@ -445,10 +423,8 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         uploadCompleted = true;
         completionStateStableAt ??= Date.now();
         if (youtubeVideoUploadCanFinish(
-          uploadCompleted,
           rowState,
           Date.now() - completionStateStableAt,
-          sawCurrentUploadProgress,
         )) {
           console.log("YouTube upload is complete. Server-side processing can continue after the browser closes.");
           return;
@@ -457,34 +433,24 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         continue;
       }
       if (rowState === "confirmed") {
-        if (!uploadCompleted && !sawCurrentUploadProgress) {
-          completionStateStableAt = null;
-          if (!loggedPrematureProcessing) {
-            loggedPrematureProcessing = true;
-            console.log("YouTube processing row appeared without current-upload evidence. Ignoring it and keeping Studio open.");
-          }
-          await page.waitForTimeout(250);
-          continue;
-        }
-        if (!uploadCompleted && !loggedProcessingFallback) {
-          loggedProcessingFallback = true;
-          console.log("YouTube moved from upload progress to processing without exposing 100%. Keeping Studio open for a 90-second safety window.");
+        if (!loggedProcessingHandoff) {
+          loggedProcessingHandoff = true;
+          console.log("YouTube confirmed the video is processing. The upload has safely handed off to Studio.");
         }
         completionStateStableAt ??= Date.now();
         if (youtubeVideoUploadCanFinish(
-          uploadCompleted,
           rowState,
           Date.now() - completionStateStableAt,
-          sawCurrentUploadProgress,
         )) {
           console.log(uploadCompleted
             ? "YouTube upload is complete. Server-side processing can continue after the browser closes."
-            : "YouTube processing remained stable for 90 seconds after upload progress. The browser can now close safely.");
+            : "YouTube processing is confirmed. Server-side processing can continue after the browser closes.");
           return;
         }
         await page.waitForTimeout(500);
         continue;
       }
+      completionStateStableAt = null;
     }
 
     await page.waitForTimeout(500);
