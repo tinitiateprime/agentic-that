@@ -319,6 +319,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
   let confirmed: Locator | null = null;
   while (Date.now() < deadline) {
     const currentDialog = await firstVisible([
+      page.locator('tp-yt-paper-dialog[aria-labelledby="uploads-still-processing-dialog-title"]'),
       page.locator("ytcp-video-share-dialog"),
       page.locator("ytcp-uploads-dialog"),
     ]);

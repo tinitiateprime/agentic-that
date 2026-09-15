@@ -121,7 +121,7 @@ test("YouTube video completion ignores stale failures outside the active upload 
     youtube.indexOf("async function waitForPublishComplete"),
     youtube.indexOf("async function openYouTubeCreateMenu"),
   );
-  assert.match(waitSource, /page\.locator\("ytcp-video-share-dialog"\)[\s\S]{0,100}page\.locator\("ytcp-uploads-dialog"\)/);
+  assert.match(waitSource, /page\.locator\('tp-yt-paper-dialog\[aria-labelledby="uploads-still-processing-dialog-title"\]'\)[\s\S]{0,100}page\.locator\("ytcp-video-share-dialog"\)[\s\S]{0,100}page\.locator\("ytcp-uploads-dialog"\)/);
   assert.match(waitSource, /const dialogState = youtubeVideoDialogState\(dialogText\)/);
   assert.match(waitSource, /if \(YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT\.test\(dialogText\)\)[\s\S]{0,180}return;/);
   assert.match(waitSource, /ytcp-toast, tp-yt-paper-toast/);
