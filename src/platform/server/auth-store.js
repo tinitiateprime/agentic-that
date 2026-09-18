@@ -59,18 +59,22 @@ function publicUser(user) {
   if (!id) throw new Error("Platform user data is missing a valid ID.");
 
   const name = safeText(user.name);
+  const status = safeText(user.status) || "active";
   const testingFullAccess = teamTestingFullAccessEnabled();
+  const ownerFullAccess = status === "active"
+    && (user.isWorkspaceOwner !== false || user.assignedRoleIds?.includes("role_workspace_owner"));
+  const fullAccess = testingFullAccess || ownerFullAccess;
   return {
     id,
     workspaceId: safeText(user.workspaceId) || `workspace_${id}`,
     name: name || "Workspace user",
     businessName: safeText(user.businessName) || name || "Workspace",
     email: safeText(user.email),
-    status: safeText(user.status) || "active",
+    status,
     isGlobalAdmin: Boolean(user.isGlobalAdmin),
-    billingStatus: testingFullAccess ? "exempt" : safeText(user.billingStatus) || "active",
-    trialStartsAt: testingFullAccess ? null : user.trialStartsAt || null,
-    trialEndsAt: testingFullAccess ? null : user.trialEndsAt || null,
+    billingStatus: fullAccess ? "exempt" : safeText(user.billingStatus) || "active",
+    trialStartsAt: fullAccess ? null : user.trialStartsAt || null,
+    trialEndsAt: fullAccess ? null : user.trialEndsAt || null,
     selectedRoleIds: Array.isArray(user.selectedRoleIds) ? user.selectedRoleIds.map(String) : [],
     assignedRoleIds: Array.isArray(user.assignedRoleIds) ? user.assignedRoleIds.map(String) : [],
     isWorkspaceOwner: user.isWorkspaceOwner !== false,
@@ -214,20 +218,14 @@ function configuredGlobalAdminEmails() {
 
 export async function listSignupPlanOptions() {
   return {
-    testingFullAccess: teamTestingFullAccessEnabled(),
-    trialDays: configuredFreeTrialDays(),
-    plans: [
-      { id: "free", status: "coming_soon" },
-      { id: "trial", status: "available" },
-      { id: "premium", status: "coming_soon" },
-    ],
+    plans: [{ id: "full", status: "available" }],
   };
 }
 
 async function validateSelectableRoleIds(sql, roleIdsInput, allowEmpty = false) {
   const roleIds = normalizedRoleIds(roleIdsInput);
   if (!roleIds.length && !allowEmpty) {
-    throw new PlatformAuthError("ROLE_REQUIRED", "Choose at least one access role for your free trial.");
+    throw new PlatformAuthError("ROLE_REQUIRED", "Choose at least one access role.");
   }
   if (!roleIds.length) return [];
   const rows = await sql`
@@ -714,7 +712,7 @@ export class PlatformAuthError extends Error {
   }
 }
 
-export async function registerPlatformUser({ name, businessName, email, password, plan = "trial" }) {
+export async function registerPlatformUser({ name, businessName, email, password, plan = "full" }) {
   const normalizedName = String(name || "").trim();
   const normalizedBusiness = String(businessName || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
@@ -732,8 +730,8 @@ export async function registerPlatformUser({ name, businessName, email, password
   if (normalizedPassword.length < 8 || normalizedPassword.length > 128) {
     throw new PlatformAuthError("INVALID_PASSWORD", "Password must contain 8 to 128 characters.");
   }
-  if (plan !== "trial") {
-    throw new PlatformAuthError("PLAN_UNAVAILABLE", "Only the Trial plan is currently available.");
+  if (plan !== "full" && plan !== "trial") {
+    throw new PlatformAuthError("PLAN_UNAVAILABLE", "Only full workspace access is currently available.");
   }
 
   if (useDatabaseAuth) {
@@ -748,9 +746,6 @@ export async function registerPlatformUser({ name, businessName, email, password
           throw new PlatformAuthError("ACCOUNT_EXISTS", "An account already exists for this email.");
         }
 
-        const roleIds = isGlobalAdmin
-          ? []
-          : await validateSelectableRoleIds(tx, ["role_self_full_access"]);
         const id = crypto.randomUUID();
         const workspaceId = `workspace_${crypto.randomUUID()}`;
         const [user] = await tx`
@@ -764,7 +759,7 @@ export async function registerPlatformUser({ name, businessName, email, password
              ${normalizedName}, ${normalizedBusiness}, ${normalizedEmail},
              ${hashPlatformPassword(normalizedPassword)}, 'active',
              ${isGlobalAdmin}, ${normalizedBusiness},
-             ${isGlobalAdmin ? "exempt" : "trialing"},
+             'exempt',
              NULL,
              NULL)
           RETURNING *`;
@@ -784,20 +779,13 @@ export async function registerPlatformUser({ name, businessName, email, password
           INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
           VALUES (${user.id}, 'role_workspace_owner', ${user.id})
           ON CONFLICT DO NOTHING`;
-        for (const roleId of roleIds) {
-          await tx`
-            INSERT INTO user_role_entitlements
-              (user_id, role_id, source, status, starts_at, expires_at)
-            VALUES
-              (${user.id}, ${roleId}, 'trial', 'active', now(), NULL)`;
-        }
         if (!isGlobalAdmin) {
           await tx`
             INSERT INTO rbac_audit_events
               (id, actor_user_id, target_type, target_id, action, after_value)
             VALUES
-              (${crypto.randomUUID()}, ${user.id}, 'billing', ${user.id}, 'trial.ready',
-               ${tx.json({ roleIds, startsOn: "first_service_use" })})`;
+              (${crypto.randomUUID()}, ${user.id}, 'workspace', ${workspaceId}, 'workspace.full_access.created',
+               ${tx.json({ ownerUserId: user.id })})`;
         }
         if (securityReady) {
           const verificationToken = crypto.randomBytes(32).toString("base64url");
@@ -844,7 +832,6 @@ export async function registerPlatformUser({ name, businessName, email, password
     }
 
     const isGlobalAdmin = configuredGlobalAdminEmails().has(normalizedEmail);
-    const roleIds = isGlobalAdmin ? [] : ["role_self_full_access"];
     const now = new Date();
     const user = {
       id: crypto.randomUUID(),
@@ -857,10 +844,10 @@ export async function registerPlatformUser({ name, businessName, email, password
       createdAt: now.toISOString(),
       status: "active",
       isGlobalAdmin,
-      billingStatus: isGlobalAdmin ? "exempt" : "trialing",
+      billingStatus: "exempt",
       trialStartsAt: null,
       trialEndsAt: null,
-      selectedRoleIds: roleIds,
+      selectedRoleIds: [],
       assignedRoleIds: ["role_workspace_owner"],
       isWorkspaceOwner: true,
     };
@@ -951,13 +938,33 @@ async function expireTrials(userId = "") {
         UPDATE user_role_entitlements
            SET status = 'inactive', updated_at = now()
          WHERE user_id = ${userId} AND source = 'trial' AND status = 'active'
-           AND expires_at IS NOT NULL AND expires_at <= now()`;
+           AND expires_at IS NOT NULL AND expires_at <= now()
+           AND NOT EXISTS (
+             SELECT 1 FROM workspace_memberships member
+             JOIN workspace_memberships owner_member ON owner_member.workspace_id = member.workspace_id
+               AND owner_member.status = 'active'
+             JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
+               AND owner_role.role_id = 'role_workspace_owner'
+             JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
+               AND owner_user.status = 'active'
+             WHERE member.user_id = user_role_entitlements.user_id AND member.status = 'active'
+           )`;
     } else {
       await tx`
         UPDATE user_role_entitlements
            SET status = 'inactive', updated_at = now()
          WHERE source = 'trial' AND status = 'active'
-           AND expires_at IS NOT NULL AND expires_at <= now()`;
+           AND expires_at IS NOT NULL AND expires_at <= now()
+           AND NOT EXISTS (
+             SELECT 1 FROM workspace_memberships member
+             JOIN workspace_memberships owner_member ON owner_member.workspace_id = member.workspace_id
+               AND owner_member.status = 'active'
+             JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
+               AND owner_role.role_id = 'role_workspace_owner'
+             JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
+               AND owner_user.status = 'active'
+             WHERE member.user_id = user_role_entitlements.user_id AND member.status = 'active'
+           )`;
     }
     const expired = userId
       ? await tx`
@@ -971,6 +978,16 @@ async function expireTrials(userId = "") {
                 WHERE entitlement.user_id = platform_users.id
                   AND entitlement.source = 'payment' AND entitlement.status = 'active'
              )
+             AND NOT EXISTS (
+               SELECT 1 FROM workspace_memberships member
+               JOIN workspace_memberships owner_member ON owner_member.workspace_id = member.workspace_id
+                 AND owner_member.status = 'active'
+               JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
+                 AND owner_role.role_id = 'role_workspace_owner'
+               JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
+                 AND owner_user.status = 'active'
+               WHERE member.user_id = platform_users.id AND member.status = 'active'
+             )
           RETURNING id, trial_ends_at`
       : await tx`
           UPDATE platform_users
@@ -981,6 +998,16 @@ async function expireTrials(userId = "") {
                SELECT 1 FROM user_role_entitlements entitlement
                 WHERE entitlement.user_id = platform_users.id
                   AND entitlement.source = 'payment' AND entitlement.status = 'active'
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM workspace_memberships member
+               JOIN workspace_memberships owner_member ON owner_member.workspace_id = member.workspace_id
+                 AND owner_member.status = 'active'
+               JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
+                 AND owner_role.role_id = 'role_workspace_owner'
+               JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
+                 AND owner_user.status = 'active'
+               WHERE member.user_id = platform_users.id AND member.status = 'active'
              )
           RETURNING id, trial_ends_at`;
     for (const row of expired) {
@@ -1063,7 +1090,7 @@ export async function applyPlatformPaymentEvent({
          )`;
       roleIds = selected.map((row) => String(row.role_id));
     }
-    if (status === "active") {
+    if (status === "active" && billingUser.billing_status !== "exempt") {
       roleIds = await validateSelectableRoleIds(tx, roleIds);
       for (const roleId of roleIds) {
         await tx`
@@ -1079,7 +1106,7 @@ export async function applyPlatformPaymentEvent({
          WHERE source = 'trial' AND user_id IN (
            SELECT user_id FROM workspace_memberships WHERE workspace_id = ${requestedUser.workspace_id}
          )`;
-    } else if (["past_due", "canceled", "expired"].includes(status)) {
+    } else if (billingUser.billing_status !== "exempt" && ["past_due", "canceled", "expired"].includes(status)) {
       await tx`
         UPDATE user_role_entitlements SET status = 'inactive', updated_at = now()
          WHERE source = 'payment' AND user_id IN (
@@ -1087,7 +1114,12 @@ export async function applyPlatformPaymentEvent({
          )`;
     }
 
-    await tx`UPDATE platform_users SET billing_status = ${status} WHERE id = ${billingUserId}`;
+    // Workspace owners keep full product access regardless of later payment
+    // notifications; the event is still recorded for billing history.
+    await tx`
+      UPDATE platform_users
+         SET billing_status = CASE WHEN billing_status = 'exempt' THEN 'exempt' ELSE ${status} END
+       WHERE id = ${billingUserId}`;
     await tx`
       INSERT INTO platform_billing_events
         (event_id, user_id, provider, payment_status, details)

@@ -82,7 +82,7 @@ export async function POST(request) {
     }, { status: 503 });
   }
 
-  if (!consumeRateLimit(principal.userId)) {
+  if (principal.billingStatus !== "exempt" && !consumeRateLimit(principal.userId)) {
     return Response.json({
       error: "Too many AI requests. Wait a few minutes and try again.",
       code: "AI_APP_RATE_LIMITED"

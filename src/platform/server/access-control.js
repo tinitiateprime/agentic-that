@@ -73,7 +73,10 @@ export async function getPrincipalForUser(inputUser) {
     const status = inputUser.status || "active";
     const isGlobalAdmin = Boolean(inputUser.isGlobalAdmin);
     const testingAccessActive = testingFullAccess && activeStatus(status);
-    const billingStatus = testingAccessActive
+    const ownerAccessActive = activeStatus(status) && Boolean(inputUser.workspaceId)
+      && (inputUser.isWorkspaceOwner === true || inputUser.assignedRoleIds?.includes("role_workspace_owner"));
+    const fullWorkspaceAccess = testingAccessActive || ownerAccessActive;
+    const billingStatus = fullWorkspaceAccess
       ? "exempt"
       : resolveBillingStatus(inputUser.billingStatus, inputUser.trialEndsAt);
     const roleGrants = selfServiceRoleGrants({
@@ -82,7 +85,7 @@ export async function getPrincipalForUser(inputUser) {
       trialEndsAt: inputUser.trialEndsAt,
     });
     const operationalRoleGrants = localOperationalRoleGrants(inputUser);
-    const access = testingAccessActive
+    const access = fullWorkspaceAccess
       ? fullAccessMap()
       : evaluateAccess({ roleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
     const operationalCapabilities = evaluateCapabilities({ roleGrants: operationalRoleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
@@ -98,8 +101,8 @@ export async function getPrincipalForUser(inputUser) {
       mfaVerified: Boolean(inputUser.mfaVerified),
       mfaRequired: Boolean(inputUser.mfaRequired),
       billingStatus,
-      trialStartsAt: testingAccessActive ? null : inputUser.trialStartsAt || null,
-      trialEndsAt: testingAccessActive ? null : inputUser.trialEndsAt || null,
+      trialStartsAt: fullWorkspaceAccess ? null : inputUser.trialStartsAt || null,
+      trialEndsAt: fullWorkspaceAccess ? null : inputUser.trialEndsAt || null,
       access,
       capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
       roleIds: [...new Set(operationalRoleGrants.map((grant) => grant.roleId))],
@@ -147,7 +150,8 @@ export async function getPrincipalForUser(inputUser) {
               membership.created_at
      LIMIT 1` : [];
   const billingUserId = workspaceBillingCandidate?.id || workspaceOwner?.id || user.id;
-  if (!testingFullAccess) await refreshPlatformBillingState(billingUserId);
+  const ownerAccessActive = Boolean(workspaceOwner);
+  if (!testingFullAccess && !ownerAccessActive) await refreshPlatformBillingState(billingUserId);
   const [workspaceBillingUser] = await sql`
     SELECT id, billing_status, trial_starts_at, trial_ends_at
       FROM platform_users
@@ -183,7 +187,8 @@ export async function getPrincipalForUser(inputUser) {
   const isGlobalAdmin = Boolean(user.is_global_admin);
   const billingUser = workspaceBillingUser || workspaceOwner || user;
   const testingAccessActive = testingFullAccess && activeStatus(status);
-  const access = testingAccessActive
+  const fullWorkspaceAccess = (testingAccessActive || ownerAccessActive) && activeStatus(status);
+  const access = fullWorkspaceAccess
     ? fullAccessMap()
     : evaluateAccess({
         roleGrants: moduleRoleGrants,
@@ -206,9 +211,9 @@ export async function getPrincipalForUser(inputUser) {
     mfaEnabled: Boolean(user.mfa_enabled),
     mfaVerified: Boolean(inputUser.mfaVerified),
     mfaRequired: Boolean(inputUser.mfaRequired),
-    billingStatus: testingAccessActive ? "exempt" : String(billingUser.billing_status || "active"),
-    trialStartsAt: testingAccessActive ? null : billingUser.trial_starts_at || null,
-    trialEndsAt: testingAccessActive ? null : billingUser.trial_ends_at || null,
+    billingStatus: fullWorkspaceAccess ? "exempt" : String(billingUser.billing_status || "active"),
+    trialStartsAt: fullWorkspaceAccess ? null : billingUser.trial_starts_at || null,
+    trialEndsAt: fullWorkspaceAccess ? null : billingUser.trial_ends_at || null,
     access,
     capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
     roleIds: [...new Set(operationalRoleGrants.map((grant) => String(grant.role_id)))],

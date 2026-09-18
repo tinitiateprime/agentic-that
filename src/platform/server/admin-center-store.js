@@ -29,12 +29,20 @@ export async function adminCenterSnapshot() {
   const users = await sql`
       SELECT u.id, u.name, u.email, u.business_name, u.requested_business_name,
              u.status, u.is_global_admin, u.billing_status, u.trial_starts_at, u.trial_ends_at, u.created_at,
-             m.workspace_id, w.name AS workspace_name
+             m.workspace_id, m.status AS membership_status, w.name AS workspace_name
         FROM platform_users u
         LEFT JOIN workspace_memberships m ON m.user_id = u.id
         LEFT JOIN platform_workspaces w ON w.id = m.workspace_id
        ORDER BY CASE u.status WHEN 'pending' THEN 0 ELSE 1 END, u.created_at DESC`;
   const workspaces = await sql`SELECT id, name, status, created_at, updated_at FROM platform_workspaces ORDER BY name`;
+  const ownerWorkspaces = await sql`
+      SELECT DISTINCT membership.workspace_id
+        FROM workspace_memberships membership
+        JOIN user_role_assignments assignment
+          ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
+        JOIN platform_users owner_user ON owner_user.id = membership.user_id
+       WHERE membership.status = 'active' AND owner_user.status = 'active'`;
+  const fullAccessWorkspaceIds = new Set(ownerWorkspaces.map((row) => String(row.workspace_id)));
   const roles = await sql`SELECT id, name, description, is_system, is_self_selectable, created_at, updated_at FROM rbac_roles ORDER BY is_system DESC, name`;
   const roleGrants = await sql`SELECT role_id, resource_key, access_level FROM rbac_role_grants ORDER BY resource_key`;
   const entitlements = await sql`
@@ -54,30 +62,36 @@ export async function adminCenterSnapshot() {
        LIMIT 200`;
 
   return {
-    users: users.map((user) => ({
-      id: String(user.id),
-      name: user.name,
-      email: user.email,
-      businessName: user.business_name,
-      requestedBusinessName: user.requested_business_name || user.business_name,
-      status: user.status,
-      isGlobalAdmin: Boolean(user.is_global_admin),
-      billingStatus: user.billing_status,
-      trialStartsAt: user.trial_starts_at,
-      trialEndsAt: user.trial_ends_at,
-      workspaceId: user.workspace_id || null,
-      workspaceName: user.workspace_name || null,
-      entitlements: entitlements
-        .filter((row) => row.user_id === user.id)
-        .map((row) => ({
-          roleId: row.role_id,
-          source: row.source,
-          status: row.status,
-          startsAt: row.starts_at,
-          expiresAt: row.expires_at,
-        })),
-      createdAt: user.created_at,
-    })),
+    users: users.map((user) => {
+      const fullWorkspaceAccess = user.status === "active"
+        && user.membership_status === "active"
+        && fullAccessWorkspaceIds.has(String(user.workspace_id));
+      return {
+        id: String(user.id),
+        name: user.name,
+        email: user.email,
+        businessName: user.business_name,
+        requestedBusinessName: user.requested_business_name || user.business_name,
+        status: user.status,
+        isGlobalAdmin: Boolean(user.is_global_admin),
+        billingStatus: fullWorkspaceAccess ? "exempt" : user.billing_status,
+        trialStartsAt: fullWorkspaceAccess ? null : user.trial_starts_at,
+        trialEndsAt: fullWorkspaceAccess ? null : user.trial_ends_at,
+        fullWorkspaceAccess,
+        workspaceId: user.workspace_id || null,
+        workspaceName: user.workspace_name || null,
+        entitlements: entitlements
+          .filter((row) => row.user_id === user.id)
+          .map((row) => ({
+            roleId: row.role_id,
+            source: row.source,
+            status: row.status,
+            startsAt: row.starts_at,
+            expiresAt: row.expires_at,
+          })),
+        createdAt: user.created_at,
+      };
+    }),
     workspaces: workspaces.map((workspace) => ({
       id: workspace.id,
       name: workspace.name,

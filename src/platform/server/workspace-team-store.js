@@ -346,7 +346,7 @@ export async function acceptWorkspaceInvitation({ token, name, password }) {
           UPDATE platform_users
              SET workspace_id = ${workspace.id}, name = ${normalizedName}, business_name = ${workspace.name},
                  password_hash = ${hashPlatformPassword(normalizedPassword)}, status = 'active',
-                 billing_status = 'active', trial_starts_at = NULL, trial_ends_at = NULL
+                 billing_status = 'exempt', trial_starts_at = NULL, trial_ends_at = NULL
            WHERE id = ${userId}
           RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
                     billing_status, trial_starts_at, trial_ends_at`
@@ -357,7 +357,7 @@ export async function acceptWorkspaceInvitation({ token, name, password }) {
           VALUES
             (${userId}, ${workspace.id}, ${crypto.randomBytes(32).toString("base64url")},
              ${normalizedName}, ${workspace.name}, ${invitation.email},
-             ${hashPlatformPassword(normalizedPassword)}, 'active', 'active')
+             ${hashPlatformPassword(normalizedPassword)}, 'active', 'exempt')
           RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
                     billing_status, trial_starts_at, trial_ends_at`;
     await tx`
@@ -402,6 +402,13 @@ export async function updateWorkspaceMember(principal, userId, input) {
     await tx`
       UPDATE workspace_memberships SET status = ${status}
        WHERE user_id = ${userId} AND workspace_id = ${principal.workspaceId}`;
+    if (status === "active") {
+      await tx`
+        UPDATE platform_users
+           SET billing_status = 'exempt', trial_starts_at = NULL, trial_ends_at = NULL
+         WHERE id = ${userId}
+           AND billing_status IN ('trialing', 'payment_pending', 'past_due', 'canceled', 'expired')`;
+    }
     await tx`
       DELETE FROM user_role_assignments
        WHERE user_id = ${userId} AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;

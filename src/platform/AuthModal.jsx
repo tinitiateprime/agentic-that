@@ -1,9 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { teamTestingFullAccessEnabled } from "../../lib/team-testing-access.js";
-
-const TESTING_FULL_ACCESS = teamTestingFullAccessEnabled();
 
 const EMPTY_FORM = {
   name: "",
@@ -11,20 +8,14 @@ const EMPTY_FORM = {
   email: "",
   password: "",
   confirmPassword: "",
-  plan: "trial",
+  plan: "full",
 };
 
-const SIGNUP_STEPS = TESTING_FULL_ACCESS
-  ? [
-      { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
-      { id: 2, shortLabel: "Access", eyebrow: "Step 2 of 3", title: "Activate testing access", description: "Every AgenticThat app is unlocked for the current team-testing phase." },
-      { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available for testing." },
-    ]
-  : [
-      { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
-      { id: 2, shortLabel: "Plan", eyebrow: "Step 2 of 3", title: "Choose your plan", description: "Start the Trial plan now. Free and Premium plans are coming later." },
-      { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available during your trial." },
-    ];
+const SIGNUP_STEPS = [
+  { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
+  { id: 2, shortLabel: "Access", eyebrow: "Step 2 of 3", title: "Activate full access", description: "Every AgenticThat service is available to your workspace without a trial clock." },
+  { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available to your workspace." },
+];
 
 export default function AuthModal({ open, initialMode = "login", onClose, onAuthenticated }) {
   const firstInputRef = useRef(null);
@@ -38,7 +29,6 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   const [error, setError] = useState("");
   const [errorCode, setErrorCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [trialDays, setTrialDays] = useState(7);
   const [signupStep, setSignupStep] = useState(1);
   const [completedUser, setCompletedUser] = useState(null);
   const [verificationRequired, setVerificationRequired] = useState(false);
@@ -84,21 +74,6 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [open, initialMode]);
-
-  useEffect(() => {
-    if (TESTING_FULL_ACCESS || !open || mode !== "signup") return;
-    let active = true;
-    fetch("/api/platform-auth/signup-options", { cache: "no-store" })
-      .then(async (response) => {
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "Plan options are unavailable.");
-        if (active) {
-          setTrialDays(Number(data.trialDays) || 7);
-        }
-      })
-      .catch((loadError) => { if (active) setError(loadError.message); })
-    return () => { active = false; };
-  }, [open, mode]);
 
   useEffect(() => {
     if (!open || mode !== "signup" || signupStep === 1) return;
@@ -336,50 +311,19 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
             {isSignup && signupStep === 2 && (
               <div className="auth-plan-step">
-                {!TESTING_FULL_ACCESS && (
-                  <div className="auth-plan-card disabled" aria-disabled="true">
-                    <div className="auth-plan-card-head">
-                      <span className="auth-plan-payment-icon" aria-hidden="true">F</span>
-                      <div><strong>Free plan</strong><small>Coming soon</small></div>
-                    </div>
-                    <p>A permanent limited plan will be added later.</p>
-                  </div>
-                )}
                 <div className="auth-plan-card selected">
                   <div className="auth-plan-card-head">
                     <span className="auth-plan-check">✓</span>
-                    <div><strong>{TESTING_FULL_ACCESS ? "Team testing access" : `${trialDays}-day Trial plan`}</strong><small>Available now · no card required</small></div>
+                    <div><strong>Full workspace access</strong><small>Available now · no card required</small></div>
                   </div>
-                  {TESTING_FULL_ACCESS ? (
-                    <>
-                      <p>Includes every Messaging, Publishing, and Scraping service with no trial clock or product usage quotas.</p>
-                      <ul className="auth-trial-limits">
-                        <li>All app modules are unlocked.</li>
-                        <li>Trial action limits are paused.</li>
-                        <li>Provider safety controls remain active.</li>
-                      </ul>
-                    </>
-                  ) : (
-                    <>
-                      <p>Includes every Messaging, Publishing, and Scraping service. The workspace clock starts only when someone first opens a service.</p>
-                      <ul className="auth-trial-limits">
-                        <li>Publishing uses built-in safe posting intervals.</li>
-                        <li>Scraping allows 2 runs per platform each hour.</li>
-                        <li>Telegram allows 20 messages per hour and 100 per day.</li>
-                      </ul>
-                    </>
-                  )}
+                  <p>Includes every Messaging, Publishing, and Scraping service with no trial clock or trial usage quotas.</p>
+                  <ul className="auth-trial-limits">
+                    <li>All app modules are unlocked.</li>
+                    <li>Trial usage quotas do not apply.</li>
+                    <li>Provider safety controls remain active.</li>
+                  </ul>
                 </div>
-                {!TESTING_FULL_ACCESS && (
-                  <div className="auth-plan-card disabled" aria-disabled="true">
-                    <div className="auth-plan-card-head">
-                      <span className="auth-plan-payment-icon" aria-hidden="true">P</span>
-                      <div><strong>Premium plan</strong><small>Coming soon</small></div>
-                    </div>
-                    <p>Higher limits and paid access will be enabled later.</p>
-                  </div>
-                )}
-                <p className="auth-plan-note"><span>✓</span> {TESTING_FULL_ACCESS ? "Testing access is shared by the whole workspace." : "Trial limits are shared by the whole workspace."}</p>
+                <p className="auth-plan-note"><span>✓</span> Full service access is shared by the whole workspace.</p>
               </div>
             )}
 
@@ -393,9 +337,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                   ? emailDeliveryFailed
                     ? "Your account was created, but the verification email could not be delivered. Use resend below."
                     : "Check your inbox and verify your work email before signing in."
-                  : TESTING_FULL_ACCESS
-                  ? "Every service is ready with full testing access and no trial usage quotas."
-                  : `Every service is ready. Your ${trialDays}-day trial clock starts when your workspace first uses any service.`}</p>
+                  : "Every service is ready with full access and no trial usage quotas."}</p>
                 <span>{verificationRequired ? "The secure link expires in 24 hours." : "No payment method is required."}</span>
                 {verificationRequired && emailDeliveryFailed && (
                   <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>
@@ -422,9 +364,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                   : !isSignup
                     ? "Continue to AgenticThat"
                     : signupStep === 1
-                      ? "Continue to plans"
+                      ? "Continue to access"
                       : signupStep === 2
-                        ? (TESTING_FULL_ACCESS ? "Activate full testing access" : `Start ${trialDays}-day Trial plan`)
+                        ? "Activate full access"
                         : verificationRequired ? "Done" : "Open my workspace"}</span>
                 {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
               </button>
