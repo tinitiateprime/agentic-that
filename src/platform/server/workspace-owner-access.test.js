@@ -53,3 +53,42 @@ test("an inactive owner and an expired non-owner do not inherit owner access", a
   assert.equal(principalHasAccess(member, "publishing.youtube"), false);
   assert.equal(member.billingStatus, "expired");
 });
+
+test("a member with a full plan can only use their assigned role", async () => {
+  const member = await getPrincipalForUser({
+    id: "publishing-viewer",
+    workspaceId: "workspace",
+    status: "active",
+    isWorkspaceOwner: false,
+    assignedRoleIds: ["role_publishing_viewer"],
+    selectedRoleIds: ["role_self_full_access"],
+    billingStatus: "active",
+  });
+
+  assert.equal(principalHasAccess(member, "publishing.youtube", "view"), true);
+  assert.equal(principalHasAccess(member, "publishing.youtube", "operate"), false);
+  assert.equal(principalHasAccess(member, "scraping.instagram", "view"), false);
+  assert.equal(principalHasAccess(member, "messaging.telegram", "view"), false);
+  assert.equal(principalHasCapability(member, "publishing.view"), true);
+  assert.equal(principalHasCapability(member, "publishing.execute"), false);
+  assert.equal(principalHasCapability(member, "workspace.team.manage"), false);
+  const token = await issueServiceToken(member, "publishing");
+  const identity = verifyServiceAccessToken(token, "publishing");
+  assert.deepEqual(identity?.capabilities, ["publishing.view"]);
+  assert.equal(identity?.grants?.["publishing.youtube"], "view");
+  assert.equal(identity?.grants?.["publishing.instagram"], "view");
+});
+
+test("app-specific access keeps a matching capability available", () => {
+  const principal = {
+    userId: "member",
+    workspaceId: "workspace",
+    status: "active",
+    capabilities: ["publishing.view", "publishing.execute"],
+    access: { publishing: "none", "publishing.youtube": "view" },
+  };
+  assert.equal(principalHasCapability(principal, "publishing.view"), true);
+  assert.equal(principalHasCapability(principal, "publishing.execute"), false);
+  principal.access["publishing.youtube"] = "operate";
+  assert.equal(principalHasCapability(principal, "publishing.execute"), true);
+});

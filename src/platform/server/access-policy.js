@@ -18,6 +18,36 @@ function grantMap(rows = []) {
   return result;
 }
 
+const CONFIGURE_CAPABILITIES = new Set([
+  "messaging.configure",
+  "publishing.accounts.configure",
+  "scraping.configure",
+]);
+
+export function capabilityAccessLevel(capability) {
+  if (String(capability).endsWith(".view")) return "view";
+  return CONFIGURE_CAPABILITIES.has(capability) ? "configure" : "operate";
+}
+
+// The workspace plan determines which modules are available. Operational
+// roles determine how much of each available module a member may use.
+export function restrictAccessToCapabilities(access = {}, capabilities = []) {
+  const roleLevels = Object.fromEntries(Object.keys(LIVE_ACCESS_CATALOG).map((category) => [category, "none"]));
+  for (const capability of capabilities) {
+    const category = String(capability).split(".")[0];
+    if (!Object.hasOwn(roleLevels, category)) continue;
+    const level = capabilityAccessLevel(capability);
+    if (accessLevelRank(level) > accessLevelRank(roleLevels[category])) roleLevels[category] = level;
+  }
+  const result = {};
+  for (const key of ACCESS_RESOURCE_KEYS) {
+    const planLevel = normalizeAccessLevel(access[key]);
+    const roleLevel = roleLevels[accessCategory(key)];
+    result[key] = ACCESS_LEVELS[Math.min(accessLevelRank(planLevel), accessLevelRank(roleLevel))];
+  }
+  return result;
+}
+
 export function evaluateCapabilities({ roleGrants = [], active = true, globalAdmin = false } = {}) {
   if (!active) return [];
   if (globalAdmin) return [...CAPABILITY_KEYS];

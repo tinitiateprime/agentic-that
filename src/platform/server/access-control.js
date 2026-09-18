@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { redirect } from "next/navigation";
 import {
   OPERATIONAL_ROLE_CATALOG,
+  LIVE_ACCESS_CATALOG,
   SERVICE_AUDIENCE_CAPABILITIES,
   SERVICE_AUDIENCE_RESOURCES,
   accessCategory,
@@ -10,7 +11,12 @@ import {
   fullAccessMap,
   isKnownAccessResource,
 } from "../access-catalog.js";
-import { evaluateAccess, evaluateCapabilities } from "./access-policy.js";
+import {
+  capabilityAccessLevel,
+  evaluateAccess,
+  evaluateCapabilities,
+  restrictAccessToCapabilities,
+} from "./access-policy.js";
 import { resolveBillingStatus, selfServiceRoleGrants } from "./billing-policy.js";
 import {
   getCurrentPlatformUser,
@@ -45,10 +51,15 @@ function localOperationalRoleGrants(inputUser) {
     .flatMap((role) => role.grants.map((grant) => ({ ...grant, roleId: role.id })));
 }
 
+function moduleHasAccess(access, module, level) {
+  return [module, ...(LIVE_ACCESS_CATALOG[module] || [])]
+    .some((resource) => accessSatisfies(access?.[resource] || "none", level));
+}
+
 function capabilitiesWithinAccess(capabilities, access) {
   return capabilities.filter((capability) => {
     const module = capabilityModule(capability);
-    return module === "workspace" || accessSatisfies(access?.[module] || "none", "view");
+    return module === "workspace" || moduleHasAccess(access, module, capabilityAccessLevel(capability));
   });
 }
 
@@ -85,10 +96,13 @@ export async function getPrincipalForUser(inputUser) {
       trialEndsAt: inputUser.trialEndsAt,
     });
     const operationalRoleGrants = localOperationalRoleGrants(inputUser);
-    const access = fullWorkspaceAccess
+    const operationalCapabilities = evaluateCapabilities({ roleGrants: operationalRoleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
+    const planAccess = fullWorkspaceAccess
       ? fullAccessMap()
       : evaluateAccess({ roleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
-    const operationalCapabilities = evaluateCapabilities({ roleGrants: operationalRoleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
+    const access = testingAccessActive
+      ? planAccess
+      : restrictAccessToCapabilities(planAccess, operationalCapabilities);
     return {
       userId: String(inputUser.id),
       workspaceId: inputUser.workspaceId || null,
@@ -188,18 +202,21 @@ export async function getPrincipalForUser(inputUser) {
   const billingUser = workspaceBillingUser || workspaceOwner || user;
   const testingAccessActive = testingFullAccess && activeStatus(status);
   const fullWorkspaceAccess = (testingAccessActive || ownerAccessActive) && activeStatus(status);
-  const access = fullWorkspaceAccess
+  const operationalCapabilities = evaluateCapabilities({
+    roleGrants: operationalRoleGrants,
+    active: activeStatus(status),
+    globalAdmin: isGlobalAdmin,
+  });
+  const planAccess = fullWorkspaceAccess
     ? fullAccessMap()
     : evaluateAccess({
         roleGrants: moduleRoleGrants,
         active: activeStatus(status),
         globalAdmin: isGlobalAdmin,
       });
-  const operationalCapabilities = evaluateCapabilities({
-    roleGrants: operationalRoleGrants,
-    active: activeStatus(status),
-    globalAdmin: isGlobalAdmin,
-  });
+  const access = testingAccessActive
+    ? planAccess
+    : restrictAccessToCapabilities(planAccess, operationalCapabilities);
   return {
     userId: String(user.id),
     workspaceId: user.workspace_id ? String(user.workspace_id) : null,
@@ -235,7 +252,7 @@ export function principalHasCapability(principal, capability) {
   if (!Array.isArray(principal.capabilities) || !principal.capabilities.includes(capability)) return false;
   const module = capabilityModule(capability);
   if (!module || module === "workspace") return true;
-  return accessSatisfies(principal.access?.[module] || "none", "view");
+  return moduleHasAccess(principal.access, module, capabilityAccessLevel(capability));
 }
 
 export async function recordAccessAudit({ actorUserId = null, targetType, targetId = null, action, before = null, after = null }) {
