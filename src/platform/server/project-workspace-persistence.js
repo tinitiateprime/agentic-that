@@ -12,7 +12,11 @@ let hydration;
 let persistenceQueue = Promise.resolve();
 
 function usesNetlifyBlobs() {
-  return process.env.NETLIFY === "true";
+  return Boolean(
+    globalThis.netlifyBlobsContext
+      || process.env.NETLIFY_BLOBS_CONTEXT?.trim()
+      || process.env.NETLIFY === "true",
+  );
 }
 
 function blobStore() {
