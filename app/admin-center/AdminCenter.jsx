@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ACCESS_LEVELS, LIVE_ACCESS_CATALOG } from "@platform/access-catalog";
 import AdminEmailStudio from "./AdminEmailStudio";
 import AdminPublishingMonitor from "./AdminPublishingMonitor";
+import AdminProjectManagement from "./AdminProjectManagement";
 
 async function request(path, init) {
   const response = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(init?.headers || {}) } });
@@ -127,10 +128,11 @@ export default function AdminCenter({ initialData, principal }) {
   const createWorkspace = async () => { setBusy(true); setWorkspaceError(""); try { await request("/api/admin-center/workspaces", { method: "POST", body: JSON.stringify({ name: workspaceName }) }); setWorkspaceName(""); await refresh(); } catch (error) { setWorkspaceError(error.message); } finally { setBusy(false); } };
   const updateReview = async (id, status) => { await request(`/api/admin-center/identity-reviews/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) }); await refresh(); };
   const reviewCount = (data.identityReviews || []).filter((item) => item.status === "pending").length;
-  return <main className="admin-center-shell"><aside className="admin-sidebar"><a href="/apps" className="admin-brand"><span>AT</span>AgenticThat</a><p>Global Admin Center</p>{[["users", `Users${pending ? ` (${pending})` : ""}`], ["publishing", "Publishing monitor"], ["email-studio", "Email Studio"], ["roles", "Roles & permissions"], ["workspaces", "Workspaces"], ["reviews", `Identity reviews${reviewCount ? ` (${reviewCount})` : ""}`], ["audit", "Audit history"]].map(([id, label]) => <button className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}<div className="admin-identity"><strong>{principal.name}</strong><small>{principal.email}</small></div></aside>
-    <section className={`admin-main${tab === "email-studio" ? " email-studio-main" : tab === "publishing" ? " monitor-main" : ""}`}>{tab !== "email-studio" && tab !== "publishing" && <header><p>Centralized access control</p><h1>{tab === "roles" ? "Roles and permissions" : tab.charAt(0).toUpperCase() + tab.slice(1)}</h1></header>}
+  return <main className={tab === "project-management" ? "admin-center-project-shell" : "admin-center-shell"}><aside className="admin-sidebar"><a href="/apps" className="admin-brand"><span>AT</span>AgenticThat</a><p>Global Admin Center</p>{[["users", `Users${pending ? ` (${pending})` : ""}`], ["project-management", "Project management"], ["publishing", "Publishing monitor"], ["email-studio", "Email Studio"], ["roles", "Roles & permissions"], ["workspaces", "Workspaces"], ["reviews", `Identity reviews${reviewCount ? ` (${reviewCount})` : ""}`], ["audit", "Audit history"]].map(([id, label]) => <button className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}<div className="admin-identity"><strong>{principal.name}</strong><small>{principal.email}</small></div></aside>
+    <section className={`admin-main${tab === "email-studio" ? " email-studio-main" : tab === "publishing" ? " monitor-main" : tab === "project-management" ? " project-management-main" : ""}`}>{!["email-studio", "publishing", "project-management"].includes(tab) && <header><p>Centralized access control</p><h1>{tab === "roles" ? "Roles and permissions" : tab.charAt(0).toUpperCase() + tab.slice(1)}</h1></header>}
       {loading && <p>Loading Admin Center…</p>}
       {loadError && <p className="admin-error">{loadError} Please try refreshing this page.</p>}
+      {tab === "project-management" && <AdminProjectManagement principal={principal} />}
       {tab === "publishing" && <AdminPublishingMonitor />}
       {tab === "email-studio" && <AdminEmailStudio />}
       {tab === "users" && <div className="admin-list">{data.users.map((user) => <UserEditor user={user} roles={data.roles} workspaces={data.workspaces} onSaved={refresh} key={user.id} />)}</div>}

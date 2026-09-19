@@ -29,6 +29,7 @@ PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
 AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
 RESEND_API_KEY=<server-only-resend-api-key>
 AUTH_RATE_LIMIT_PEPPER=<new-random-32-byte-base64url-secret>
+PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=<new-random-32-byte-hex-or-base64-secret>
 NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false
 RBAC_ENFORCEMENT_MODE=enforce
 
@@ -97,6 +98,8 @@ accepted during migration. All Supabase variables and `DATABASE_URL` must point
 to the same project.
 `CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after
 deployment because changing it makes stored workspace credentials unreadable.
+`PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` follows the same stability requirement
+and encrypts the GitHub tokens used only by Global Admin Center project management.
 `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per connection in Config
 Manager when no shared credentials are configured. They may instead be set as
 Functions-scoped variables to keep the connection form phone-only for every
