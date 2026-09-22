@@ -1,5 +1,4 @@
 const PEXELS_ENDPOINT = "https://api.pexels.com/v1/search";
-const MAX_SERVICE_SEARCHES = 12;
 const SEARCH_CONCURRENCY = 4;
 
 const cleanText = (value, max = 300) => (
@@ -119,7 +118,7 @@ export function websiteImageConfiguration() {
   return {
     provider: "pexels",
     configured: Boolean(cleanText(process.env.PEXELS_API_KEY, 1000)),
-    serviceSearchLimit: MAX_SERVICE_SEARCHES,
+    serviceSearchLimit: null,
   };
 }
 
@@ -170,7 +169,7 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
     gallery.push(selected);
   }
 
-  const servicesToSearch = (spec?.services || []).slice(0, MAX_SERVICE_SEARCHES);
+  const servicesToSearch = spec?.services || [];
   const serviceResults = await mapWithConcurrency(servicesToSearch, SEARCH_CONCURRENCY, async (service) => {
     try {
       const matches = await searchPexels(service.imageQuery, { apiKey, fetchImpl, perPage: 8 });
@@ -188,11 +187,6 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
     if (photo?.src) usedSources.add(photo.src);
     return [slug, photo];
   }));
-  (spec?.services || []).slice(MAX_SERVICE_SEARCHES).forEach((service, index) => {
-    servicePhotos[service.slug] = selectPhoto(broadPhotos, service.imageQuery, usedSources, usedPhotographers)
-      || broadPhotos[(index + 2) % Math.max(broadPhotos.length, 1)]
-      || null;
-  });
   return {
     provider: "pexels",
     hero,

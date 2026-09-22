@@ -59,3 +59,24 @@ test("uses supplied photography without an image-provider key", async () => {
   assert.equal(media.hero.src, "https://example.com/hero.jpg");
   assert.equal(media.gallery.length, 1);
 });
+
+test("searches every service rather than reusing generic photos after twelve", async () => {
+  const manyServices = Array.from({ length: 14 }, (_, index) => ({
+    slug: `service-${index + 1}`,
+    imageQuery: `specific service ${index + 1}`,
+    imageAlt: `Service ${index + 1} at work`,
+  }));
+  const queries = [];
+  const fetchImpl = async (url) => {
+    const query = url.searchParams.get("query");
+    queries.push(query);
+    const id = queries.length + 100;
+    return new Response(JSON.stringify({ photos: [photo(id)] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const media = await resolveWebsiteMedia({ ...spec, services: manyServices }, profile, { apiKey: "pexels-test", fetchImpl });
+  assert.equal(manyServices.every((service) => queries.includes(service.imageQuery)), true);
+  assert.equal(manyServices.every((service) => Boolean(media.services[service.slug]?.src)), true);
+});

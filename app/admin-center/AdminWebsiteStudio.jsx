@@ -69,6 +69,7 @@ function ProjectRow({ project, onRetry, retrying }) {
   const total = project.qaReport?.checks?.length || 0;
   const failed = project.status === "failed";
   const generating = project.status === "generating";
+  const needsV3Refresh = project.status === "awaiting_selection" && Number(project.siteSpec?.schemaVersion || 0) < 3;
   const deliveryLabel = failed
     ? "Not sent"
     : project.selectedTheme
@@ -92,6 +93,7 @@ function ProjectRow({ project, onRetry, retrying }) {
             ? <button type="button" onClick={() => onRetry(project)} disabled={retrying} aria-label={`Retry ${project.businessName}`}>{retrying ? <LoaderCircle className="waas-spin" size={17} /> : <RefreshCw size={17} />}</button>
             : <span><Clock3 size={17} /></span>}
       </div>
+      {needsV3Refresh && <p className="waas-project-upgrade"><WandSparkles size={16} /><span>This preview was created with the older design engine. Generate fresh V3 copy, layouts and photos from the saved brief; the new previews will be emailed automatically.</span><button type="button" onClick={() => onRetry(project)} disabled={retrying}>{retrying ? "Starting…" : "Generate fresh V3"}</button></p>}
       {(project.failureMessage || project.emailError) && (
         <p className="waas-project-warning">
           <CircleAlert size={16} />

@@ -41,6 +41,7 @@ Apply `supabase/migrations/202609210001_admin_ai_website_studio.sql` through the
 - Published pages expose only projects that have completed client selection.
 - AI output cannot introduce services that were not supplied in the verified brief.
 - Every supplied service is preserved. There is no fixed catalogue-size limit; bounded Gemini batches prevent large briefs from overflowing a single model response.
+- Image search covers every supplied service, not just the first twelve. Existing V2 projects awaiting client selection expose a one-click admin-only V3 replacement action that reuses the saved brief and automatically emails fresh previews.
 - Gemini infers a service-aware multi-page information architecture: homepage, services index, one detail page per service, about, and contact.
 - Pexels photography is ranked from larger AI-directed candidate pools for relevance, landscape composition, resolution, and photographer diversity. Duplicate assets are prevented across hero, story, gallery, and services; client-supplied photos take priority. Credits are available from the discreet footer credits panel rather than covering every image.
 - All navigation, service links, booking/email/phone actions, mobile menus, and the future-ready floating call control use real destinations.

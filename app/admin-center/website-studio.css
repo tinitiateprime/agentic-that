@@ -901,6 +901,39 @@
   font-weight: 750;
 }
 
+.waas-project-upgrade {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #cce5d7;
+  border-radius: 10px;
+  color: #165b3e;
+  background: #f0faf4;
+  font-size: 12px;
+}
+.waas-project-upgrade > svg { flex: 0 0 auto; }
+.waas-project-upgrade > span { flex: 1; }
+.admin-center-shell .waas-project-upgrade button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: #15583d;
+  font-size: 11px;
+  font-weight: 800;
+}
+.admin-center-shell .waas-project-upgrade button:disabled { opacity: .65; cursor: wait; }
+
+@media (max-width: 720px) {
+  .waas-project-upgrade { flex-wrap: wrap; }
+  .admin-center-shell .waas-project-upgrade button { width: 100%; }
+}
+
 .waas-admin-empty {
   min-height: 270px;
   display: flex;
