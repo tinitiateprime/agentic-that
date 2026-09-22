@@ -13,6 +13,7 @@ import {
 } from "./website-studio-ai.js";
 import { getWebsiteStudioSql } from "./website-studio-database.js";
 import { resolveWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
+import { runWebsiteRenderQa } from "./website-studio-render-qa.js";
 
 const PROJECT_PREFIX = "website_";
 
@@ -271,28 +272,47 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
     generated.spec.media = media;
     generated.qa = {
       ...generated.qa,
-      passed: true,
       checks: [
         ...generated.qa.checks,
         { key: "professional-media", passed: true, message: `Professional ${media.provider} photography is attached to the website.` },
       ],
     };
-    const [ready] = await sql`
+    const [staged] = await sql`
       UPDATE ai_website_projects
          SET site_spec = ${sql.json(generated.spec)}, qa_report = ${sql.json(generated.qa)},
-             status = 'awaiting_selection', generation_model = ${generated.model},
+             generation_model = ${generated.model},
              generation_attempts = ${generated.attempts}, prompt_tokens = ${generated.usage.promptTokens || null},
-             output_tokens = ${generated.usage.outputTokens || null}, generated_at = now(),
+             output_tokens = ${generated.usage.outputTokens || null},
              failure_message = null, updated_at = now()
        WHERE id = ${id} AND status = 'generating'
        RETURNING *`;
-    if (!ready) {
+    if (!staged) {
       throw new WebsiteStudioError("Website generation exceeded its allowed processing time.", "GENERATION_EXPIRED", 504);
     }
+
+    const links = previewLinks(token);
+    const renderQa = await runWebsiteRenderQa(links);
+    if (!renderQa.passed) {
+      const details = renderQa.checks.filter((check) => !check.passed).map((check) => `${check.key}: ${check.message}`);
+      throw new WebsiteStudioError("The generated concepts did not pass automated desktop and mobile visual QA.", "RENDER_QA_FAILED", 502, details);
+    }
+    generated.qa = {
+      ...generated.qa,
+      passed: true,
+      checks: [...generated.qa.checks, ...renderQa.checks],
+      renderedAt: renderQa.checkedAt,
+    };
+    const [ready] = await sql`
+      UPDATE ai_website_projects
+         SET qa_report = ${sql.json(generated.qa)}, status = 'awaiting_selection', generated_at = now(), updated_at = now()
+       WHERE id = ${id} AND status = 'generating'
+       RETURNING *`;
+    if (!ready) throw new WebsiteStudioError("Website generation exceeded its allowed processing time.", "GENERATION_EXPIRED", 504);
     await audit(sql, actorUserId, id, "ai_website.generated", {
       model: generated.model,
       attempts: generated.attempts,
       qaPassed: generated.qa.passed,
+      renderedConcepts: renderQa.checks.length,
     });
 
     let delivery;
@@ -313,7 +333,7 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
         UPDATE ai_website_projects
            SET email_status = 'failed', email_error = ${message}, updated_at = now()
          WHERE id = ${id}`;
-      delivery = { links: previewLinks(token), error: message, skipped: false };
+      delivery = { links, error: message, skipped: false };
     }
 
     const [result] = await sql`SELECT * FROM ai_website_projects WHERE id = ${id}`;
@@ -322,9 +342,9 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
     const message = cleanText(error instanceof Error ? error.message : "Website generation failed.", 800);
     const [failed] = await sql`
       UPDATE ai_website_projects
-         SET status = 'failed', failure_message = ${message}, generation_attempts = ${Math.max(1, Number(error?.attempts || 1))},
+         SET status = 'failed', failure_message = ${message}, generation_attempts = GREATEST(generation_attempts, ${Math.max(1, Number(error?.attempts || 1))}),
              updated_at = now()
-       WHERE id = ${id} AND status = 'generating'
+       WHERE id = ${id} AND status IN ('generating', 'awaiting_selection')
        RETURNING *`;
     if (failed) await audit(sql, actorUserId, id, "ai_website.generation_failed", { message });
     return { project: mapProject(failed || claimed), error: message, claimed: true };
@@ -353,7 +373,7 @@ export async function getWebsitePreview(tokenInput, themeInput) {
     SELECT * FROM ai_website_projects
      WHERE preview_token_hash = ${tokenDigest(token)}
        AND site_spec IS NOT NULL
-       AND status IN ('awaiting_selection', 'published')
+       AND status IN ('generating', 'awaiting_selection', 'published')
        AND (preview_expires_at > now() OR status = 'published')
      LIMIT 1`;
   if (!row) throw new WebsiteStudioError("This private preview is unavailable or has expired.", "PREVIEW_NOT_FOUND", 404);

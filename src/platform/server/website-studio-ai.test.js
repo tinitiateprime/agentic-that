@@ -6,6 +6,7 @@ import {
   normalizeWebsiteBusinessProfile,
   normalizeWebsiteSpec,
   runWebsiteQa,
+  websiteStudioModels,
 } from "./website-studio-ai.js";
 
 const profile = {
@@ -27,6 +28,23 @@ function providerSpec(services = profile.services) {
     visual_direction: { industry_group: "appointments", mood: "trustworthy", primary_color: "#173f35", accent_color: "#e5c247" },
     brand: { tagline: "Thoughtful care, clearly delivered", positioning: `${longCopy} ${longCopy}`, logo_concept: "A calm A monogram shaped by a gentle smile", logo_style: "seal" },
     media_plan: { hero_query: "dentist consulting patient modern clinic", gallery_query: "modern dental clinic patient care", hero_alt: "A dentist calmly consulting with a patient", story_alt: "A bright and welcoming dental clinic" },
+    experience: {
+      signature: "Calm dentistry for busy lives",
+      highlights: ["Family-focused care", "Clear treatment guidance", "Serving Hyderabad"],
+      gallery_eyebrow: "Inside Aster",
+      gallery_title: "A calmer setting for every conversation.",
+      gallery_copy: "Explore the setting, tools and thoughtful details that support a comfortable dental visit.",
+      process_eyebrow: "Your visit",
+      process_title: "Know what happens before you arrive.",
+      process_copy: "A simple journey helps patients prepare, ask useful questions and understand what comes next.",
+      faq_eyebrow: "Patient questions",
+      faq_title: "Useful answers for planning your visit.",
+      faq_copy: "Start with practical information about consultations, services and reaching the clinic.",
+      values_eyebrow: "What shapes the care",
+      services_process_title: "From enquiry to a clear care discussion.",
+      about_process_title: "How thoughtful care takes shape.",
+      contact_faq_title: "Plan your conversation with Aster.",
+    },
     seo: { title: "Aster Dental Studio | Family Dental Clinic", description: "Explore preventive care, cosmetic dentistry and dental implant consultations at Aster Dental Studio in Hyderabad." },
     hero: { eyebrow: "Calm, considered dental care", headline: "Feel informed at every step of your dental journey.", subheadline: `${longCopy} ${longCopy}`, primary_cta: "Request a consultation", secondary_cta: "Explore services" },
     services_intro: { eyebrow: "Focused care", title: "Dental services shaped around clear needs.", copy: longCopy },
@@ -76,6 +94,19 @@ test("website prompt explicitly grounds generated facts and all service names", 
   assert.match(prompt, /only factual source/i);
   assert.match(prompt, /Never invent people/i);
   assert.match(prompt, /Preventive dental care/);
+});
+
+test("production model resolution excludes Lite generation models", () => {
+  const previousModels = process.env.GEMINI_WEBSITE_MODELS;
+  process.env.GEMINI_WEBSITE_MODELS = "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash";
+  try {
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash"]);
+    process.env.GEMINI_WEBSITE_MODELS = "gemini-3.5-flash-lite";
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash"]);
+  } finally {
+    if (previousModels === undefined) delete process.env.GEMINI_WEBSITE_MODELS;
+    else process.env.GEMINI_WEBSITE_MODELS = previousModels;
+  }
 });
 
 test("normalizes a complete site and passes deterministic quality checks", () => {

@@ -39,6 +39,8 @@ test("resolves business and service-aware Pexels images once for persisted websi
   assert.equal(media.hero.alt, "Plumber at work");
   assert.equal(media.services["leak-detection"].alt, "A plumber locating a leak");
   assert.equal(media.services["bathroom-installation"].alt, "Modern bathroom installation");
+  const selectedSources = [media.hero, media.story, ...media.gallery, ...Object.values(media.services)].map((item) => item?.src).filter(Boolean);
+  assert.equal(new Set(selectedSources).size, selectedSources.length);
   assert.deepEqual(queries, [
     "plumber repairing kitchen sink",
     "professional plumbing tools",

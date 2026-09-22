@@ -42,6 +42,7 @@ function pexelsPhoto(photo, alt) {
     photographer: cleanText(photo.photographer, 120),
     photographerUrl: safeHttpsUrl(photo.photographer_url),
     sourceUrl: safeHttpsUrl(photo.url),
+    averageColor: /^#[0-9a-f]{6}$/i.test(photo.avg_color || "") ? photo.avg_color.toLowerCase() : "",
     provider: "pexels",
   };
 }
@@ -51,7 +52,7 @@ async function searchPexels(query, { apiKey, fetchImpl, perPage = 8 }) {
   url.searchParams.set("query", cleanText(query, 140));
   url.searchParams.set("orientation", "landscape");
   url.searchParams.set("size", "large");
-  url.searchParams.set("per_page", String(Math.max(1, Math.min(perPage, 20))));
+  url.searchParams.set("per_page", String(Math.max(1, Math.min(perPage, 24))));
   const response = await fetchImpl(url, {
     headers: { Authorization: apiKey },
     signal: AbortSignal.timeout(12_000),
@@ -84,6 +85,36 @@ function uniquePhotos(items) {
   });
 }
 
+function queryWords(value) {
+  return new Set(cleanText(value, 180).toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3));
+}
+
+function photoScore(photo, query, index, usedPhotographers = new Set()) {
+  const width = Number(photo?.width) || 0;
+  const height = Number(photo?.height) || 1;
+  const ratio = width / height;
+  const words = queryWords(query);
+  const searchable = `${photo?.alt || ""} ${photo?.sourceUrl || ""}`.toLowerCase();
+  const relevance = [...words].reduce((score, word) => score + (searchable.includes(word) ? 7 : 0), 0);
+  const landscape = ratio >= 1.25 && ratio <= 2.2 ? 12 : ratio > 1 ? 5 : -10;
+  const resolution = width >= 2200 ? 8 : width >= 1400 ? 4 : 0;
+  const variety = photo?.photographer && usedPhotographers.has(photo.photographer) ? -18 : 0;
+  return relevance + landscape + resolution + variety - (index * .08);
+}
+
+function selectPhoto(candidates, query, usedSources, usedPhotographers) {
+  const available = uniquePhotos(candidates).filter((photo) => photo?.src && !usedSources.has(photo.src));
+  const ranked = available
+    .map((photo, index) => ({ photo, score: photoScore(photo, query, index, usedPhotographers) }))
+    .sort((left, right) => right.score - left.score);
+  const selected = ranked[0]?.photo || null;
+  if (selected) {
+    usedSources.add(selected.src);
+    if (selected.photographer) usedPhotographers.add(selected.photographer);
+  }
+  return selected;
+}
+
 export function websiteImageConfiguration() {
   return {
     provider: "pexels",
@@ -114,42 +145,54 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
   const broadQuery = cleanText(spec?.mediaPlan?.heroQuery || `${profile?.businessType} professional service`, 140);
   const galleryQuery = cleanText(spec?.mediaPlan?.galleryQuery || broadQuery, 140);
   const [heroResults, galleryResults] = await Promise.all([
-    searchPexels(broadQuery, { apiKey, fetchImpl, perPage: 10 }),
-    searchPexels(galleryQuery, { apiKey, fetchImpl, perPage: 10 }),
+    searchPexels(broadQuery, { apiKey, fetchImpl, perPage: 18 }),
+    searchPexels(galleryQuery, { apiKey, fetchImpl, perPage: 18 }),
   ]);
-  const broadPhotos = uniquePhotos([
-    ...heroResults.map((photo, index) => pexelsPhoto(photo, index === 0 ? spec?.mediaPlan?.heroAlt : spec?.mediaPlan?.storyAlt)),
-    ...galleryResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.storyAlt)),
-  ].filter(Boolean));
+  const heroCandidates = uniquePhotos(heroResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.heroAlt)).filter(Boolean));
+  const galleryCandidates = uniquePhotos(galleryResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.storyAlt)).filter(Boolean));
+  const broadPhotos = uniquePhotos([...heroCandidates, ...galleryCandidates]);
+  const usedSources = new Set();
+  const usedPhotographers = new Set();
+  const hero = suppliedHero || selectPhoto(heroCandidates, broadQuery, usedSources, usedPhotographers) || broadPhotos[0] || null;
+  if (hero?.src) usedSources.add(hero.src);
+  const story = suppliedGallery[0]
+    || selectPhoto(galleryCandidates, galleryQuery, usedSources, usedPhotographers)
+    || selectPhoto(broadPhotos, broadQuery, usedSources, usedPhotographers)
+    || hero;
+  if (story?.src) usedSources.add(story.src);
+
+  const gallery = suppliedGallery.filter((photo) => !usedSources.has(photo.src));
+  gallery.forEach((photo) => usedSources.add(photo.src));
+  while (gallery.length < 6) {
+    const selected = selectPhoto(galleryCandidates, galleryQuery, usedSources, usedPhotographers)
+      || selectPhoto(heroCandidates, broadQuery, usedSources, usedPhotographers);
+    if (!selected) break;
+    gallery.push(selected);
+  }
 
   const servicesToSearch = (spec?.services || []).slice(0, MAX_SERVICE_SEARCHES);
   const serviceResults = await mapWithConcurrency(servicesToSearch, SEARCH_CONCURRENCY, async (service) => {
     try {
-      const matches = await searchPexels(service.imageQuery, { apiKey, fetchImpl, perPage: 3 });
+      const matches = await searchPexels(service.imageQuery, { apiKey, fetchImpl, perPage: 8 });
       return [service.slug, matches.map((photo) => pexelsPhoto(photo, service.imageAlt)).filter(Boolean)];
     } catch {
       return [service.slug, []];
     }
   });
-  const usedServiceSources = new Set();
   const servicePhotos = Object.fromEntries(serviceResults.map(([slug, candidates], index) => {
-    const photo = candidates.find((candidate) => !usedServiceSources.has(candidate.src))
-      || broadPhotos.find((candidate) => !usedServiceSources.has(candidate.src))
-      || broadPhotos[(index + 2) % Math.max(broadPhotos.length, 1)]
+    const service = servicesToSearch[index];
+    const photo = selectPhoto(candidates, service?.imageQuery, usedSources, usedPhotographers)
+      || selectPhoto(broadPhotos, service?.imageQuery, usedSources, usedPhotographers)
+      || candidates[0]
       || null;
-    if (photo?.src) usedServiceSources.add(photo.src);
+    if (photo?.src) usedSources.add(photo.src);
     return [slug, photo];
   }));
   (spec?.services || []).slice(MAX_SERVICE_SEARCHES).forEach((service, index) => {
-    servicePhotos[service.slug] = broadPhotos[(index + 2) % Math.max(broadPhotos.length, 1)] || null;
+    servicePhotos[service.slug] = selectPhoto(broadPhotos, service.imageQuery, usedSources, usedPhotographers)
+      || broadPhotos[(index + 2) % Math.max(broadPhotos.length, 1)]
+      || null;
   });
-
-  const hero = suppliedHero || broadPhotos[0] || null;
-  const story = suppliedGallery[0] || broadPhotos[1] || hero;
-  const gallery = uniquePhotos([
-    ...suppliedGallery,
-    ...broadPhotos.slice(2, 8),
-  ]).slice(0, 6);
   return {
     provider: "pexels",
     hero,

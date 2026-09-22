@@ -50,9 +50,20 @@ function initials(name) {
   return String(name || "Business").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
+function BrandMark({ name, style = "monogram" }) {
+  return <span className={`waas-brand-mark style-${style}`} aria-hidden="true">
+    <svg viewBox="0 0 48 48" focusable="false">
+      <rect className="mark-frame" x="6" y="6" width="36" height="36" rx="10" />
+      <circle className="mark-orbit" cx="24" cy="24" r="16" />
+      <path className="mark-stroke" d="M11 34 35 10M28 12h9v9M12 27v10h10" />
+    </svg>
+    <b>{initials(name)}</b>
+  </span>;
+}
+
 function Brand({ profile, site, base }) {
   return <a className="waas-logo" href={base} aria-label={`${profile.businessName} home`}>
-    <span className={`waas-brand-mark style-${site.brand?.logoStyle || "monogram"}`} aria-hidden="true"><i />{initials(profile.businessName)}</span>
+    <BrandMark name={profile.businessName} style={site.brand?.logoStyle || "monogram"} />
     <span className="waas-brand-copy"><strong>{profile.businessName}</strong><small>{site.brand?.tagline}</small></span>
   </a>;
 }
@@ -64,7 +75,6 @@ function Photo({ photo, fallbackLabel, className = "", eager = false }) {
   </div>;
   return <figure className={`waas-photo ${className}`}>
     <img src={photo.src} alt={photo.alt || fallbackLabel} loading={eager ? "eager" : "lazy"} fetchPriority={eager ? "high" : "auto"} referrerPolicy="no-referrer" />
-    {photo.provider === "pexels" && <figcaption>Photo {photo.photographer && <>by {photo.photographer} </>}{photo.sourceUrl ? <a href={photo.sourceUrl} target="_blank" rel="noreferrer">on Pexels</a> : "via Pexels"}</figcaption>}
   </figure>;
 }
 
@@ -110,30 +120,72 @@ function ContactCta({ profile, site }) {
   return <section className="waas-contact" id="contact"><div><p className="waas-eyebrow">{site.contact?.eyebrow || "Start a conversation"}</p><h2>{site.contact?.title}</h2><p>{site.contact?.copy}</p></div><div className="waas-contact-action"><a href={contactHref(profile)}>{site.contact?.ctaLabel || "Get in touch"}<ArrowRight size={18} /></a><ContactDetails profile={profile} /></div></section>;
 }
 
+function SectionHeading({ eyebrow, title, copy, compact = false }) {
+  return <div className={`waas-section-heading${compact ? " compact" : ""}`}><p className="waas-eyebrow">{eyebrow}</p><h2>{title}</h2><p>{copy}</p></div>;
+}
+
+function HeroActions({ profile, site, base }) {
+  return <div className="waas-actions"><a className="primary" href={contactHref(profile)}>{site.hero.primaryCta}<ArrowRight size={18} /></a><a className="secondary" href={pageHref(base, "services")}>{site.hero.secondaryCta}<ArrowDownRight size={17} /></a></div>;
+}
+
+function HighlightRail({ site, profile }) {
+  const highlights = site.experience?.highlights?.length === 3
+    ? site.experience.highlights
+    : [profile.businessType, site.brand.tagline, profile.location || profile.audience || profile.goal].filter(Boolean).slice(0, 3);
+  return <section className="waas-highlight-rail" aria-label="Business highlights">{highlights.map((highlight, index) => <span key={`${highlight}-${index}`}><i>{String(index + 1).padStart(2, "0")}</i><strong>{highlight}</strong></span>)}</section>;
+}
+
 function Gallery({ site, profile }) {
   const gallery = site.media?.gallery || [];
   if (!gallery.length) return null;
-  return <section className="waas-gallery-section"><div className="waas-section-heading compact"><p className="waas-eyebrow">Inside the experience</p><h2>Work that feels considered from every angle.</h2><p>Photography selected around the real environment, craft and customer experience behind {profile.businessType.toLowerCase()}.</p></div><div className="waas-gallery">{gallery.map((photo, index) => <Photo key={photo.id || photo.src} photo={photo} fallbackLabel={`${profile.businessName} ${index + 1}`} className={`item-${index + 1}`} />)}</div></section>;
+  return <section className="waas-gallery-section"><SectionHeading compact eyebrow={site.experience?.galleryEyebrow || site.about.eyebrow} title={site.experience?.galleryTitle || site.about.title} copy={site.experience?.galleryCopy || site.about.body} /><div className="waas-gallery">{gallery.map((photo, index) => <Photo key={photo.id || photo.src} photo={photo} fallbackLabel={`${profile.businessName} ${index + 1}`} className={`item-${index + 1}`} />)}</div></section>;
+}
+
+function StorySection({ site, profile, base, variant = "" }) {
+  return <section className={`waas-section waas-story ${variant}`}><div className="waas-story-media"><Photo photo={site.media?.story || site.media?.gallery?.[0]} fallbackLabel={profile.businessType} /><span>{site.brand.logoConcept}</span></div><div className="waas-story-copy"><p className="waas-eyebrow">{site.about.eyebrow}</p><h2>{site.about.title}</h2><p>{site.about.body}</p><div className="waas-benefit-grid">{site.benefits.map((item) => <article key={item.title}><BadgeCheck size={20} /><h3>{item.title}</h3><p>{item.copy}</p></article>)}</div><a className="waas-text-link" href={pageHref(base, "about")}>About {profile.businessName}<ArrowRight size={16} /></a></div></section>;
+}
+
+function ProcessSection({ site, className = "" }) {
+  return <section className={`waas-section waas-process ${className}`}><SectionHeading eyebrow={site.experience?.processEyebrow || site.servicesIntro.eyebrow} title={site.experience?.processTitle || site.servicesIntro.title} copy={site.experience?.processCopy || site.servicesIntro.copy} /><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section>;
+}
+
+function FaqSection({ site, className = "" }) {
+  return <section className={`waas-section waas-faq ${className}`}><SectionHeading eyebrow={site.experience?.faqEyebrow || site.contact.eyebrow} title={site.experience?.faqTitle || site.contact.title} copy={site.experience?.faqCopy || site.contact.copy} /><FaqList items={site.faq} /></section>;
+}
+
+function EditorialServices({ site, base }) {
+  return <section className="waas-section waas-services waas-editorial-services"><SectionHeading eyebrow={site.servicesIntro.eyebrow} title={site.servicesIntro.title} copy={site.servicesIntro.copy} /><div className="waas-editorial-service-list">{site.services.slice(0, 6).map((service, index) => {
+    const slug = serviceSlug(service, index);
+    return <article key={service.name}><Photo photo={site.media?.services?.[slug]} fallbackLabel={service.name} /><div><span>{String(index + 1).padStart(2, "0")}</span><small>{service.idealFor}</small><h3><a href={pageHref(base, `services/${slug}`)}>{service.name}</a></h3><p>{service.summary}</p><a className="waas-text-link" href={pageHref(base, `services/${slug}`)}>{service.ctaLabel}<ArrowUpRight size={16} /></a></div></article>;
+  })}</div>{site.services.length > 6 && <a className="waas-all-services" href={pageHref(base, "services")}>Explore all {site.services.length} services<ArrowRight size={18} /></a>}</section>;
+}
+
+function AuraServices({ site, base }) {
+  return <section className="waas-section waas-services waas-aura-services"><SectionHeading eyebrow={site.servicesIntro.eyebrow} title={site.servicesIntro.title} copy={site.servicesIntro.copy} /><div className="waas-aura-service-list">{site.services.slice(0, 5).map((service, index) => {
+    const slug = serviceSlug(service, index);
+    return <article key={service.name}><div><span>{String(index + 1).padStart(2, "0")}</span><h3>{service.name}</h3><p>{service.summary}</p><a className="waas-text-link" href={pageHref(base, `services/${slug}`)}>{service.ctaLabel}<ArrowRight size={16} /></a></div><Photo photo={site.media?.services?.[slug]} fallbackLabel={service.name} /></article>;
+  })}</div>{site.services.length > 5 && <a className="waas-all-services" href={pageHref(base, "services")}>See every service<ArrowRight size={18} /></a>}</section>;
+}
+
+function EditorialHome({ project, base }) {
+  const { businessProfile: profile, siteSpec: site } = project;
+  return <main className="waas-home waas-home-editorial"><section className="waas-hero waas-editorial-hero"><div className="waas-hero-copy"><p className="waas-eyebrow"><Sparkles size={14} />{site.hero.eyebrow}</p><h1>{site.hero.headline}</h1><p className="waas-lead">{site.hero.subheadline}</p><HeroActions profile={profile} site={site} base={base} /></div><div className="waas-hero-media"><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /><div className="waas-hero-note"><span>{site.experience?.signature || profile.businessType}</span><strong>{site.brand.tagline}</strong></div></div></section><HighlightRail site={site} profile={profile} /><EditorialServices site={site} base={base} /><StorySection site={site} profile={profile} base={base} variant="waas-story-editorial" /><Gallery site={site} profile={profile} /><ProcessSection site={site} /><FaqSection site={site} /><ContactCta profile={profile} site={site} /></main>;
+}
+
+function MomentumHome({ project, base }) {
+  const { businessProfile: profile, siteSpec: site } = project;
+  return <main className="waas-home waas-home-momentum"><section className="waas-momentum-hero"><div className="waas-momentum-backdrop"><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /></div><div className="waas-momentum-hero-copy"><p className="waas-eyebrow"><Sparkles size={14} />{site.hero.eyebrow}</p><h1>{site.hero.headline}</h1><p className="waas-lead">{site.hero.subheadline}</p><HeroActions profile={profile} site={site} base={base} /></div><span className="waas-momentum-signature">{site.experience?.signature || site.brand.tagline}</span></section><HighlightRail site={site} profile={profile} /><ProcessSection site={site} className="waas-process-momentum" /><section className="waas-section waas-services waas-momentum-services"><SectionHeading eyebrow={site.servicesIntro.eyebrow} title={site.servicesIntro.title} copy={site.servicesIntro.copy} /><div className="waas-service-grid waas-bento-grid">{site.services.slice(0, 6).map((service, index) => <ServiceCard key={service.name} service={service} index={index} base={base} photo={site.media?.services?.[serviceSlug(service, index)]} />)}</div>{site.services.length > 6 && <a className="waas-all-services" href={pageHref(base, "services")}>Explore all {site.services.length} services<ArrowRight size={18} /></a>}</section><Gallery site={site} profile={profile} /><StorySection site={site} profile={profile} base={base} variant="waas-story-momentum" /><FaqSection site={site} className="waas-faq-momentum" /><ContactCta profile={profile} site={site} /></main>;
+}
+
+function AuraHome({ project, base }) {
+  const { businessProfile: profile, siteSpec: site } = project;
+  return <main className="waas-home waas-home-aura"><section className="waas-hero waas-aura-hero"><div className="waas-hero-copy"><p className="waas-eyebrow"><Sparkles size={14} />{site.hero.eyebrow}</p><h1>{site.hero.headline}</h1><p className="waas-lead">{site.hero.subheadline}</p><HeroActions profile={profile} site={site} base={base} /></div><div className="waas-hero-media"><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /><div className="waas-aura-float one">{site.experience?.highlights?.[0] || profile.businessType}</div><div className="waas-aura-float two">{site.experience?.highlights?.[1] || site.brand.tagline}</div></div></section><section className="waas-aura-benefits">{site.benefits.slice(0, 3).map((item) => <article key={item.title}><BadgeCheck size={19} /><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</section><AuraServices site={site} base={base} /><StorySection site={site} profile={profile} base={base} variant="waas-story-aura" /><Gallery site={site} profile={profile} /><FaqSection site={site} className="waas-faq-aura" /><ProcessSection site={site} className="waas-process-aura" /><ContactCta profile={profile} site={site} /></main>;
 }
 
 function HomePage({ project, theme, previewToken }) {
-  const profile = project.businessProfile;
-  const site = project.siteSpec;
   const base = siteBase(project, theme, previewToken);
-  const services = site.services || [];
-  return <>
-    <Header project={project} theme={theme} previewToken={previewToken} active="home" />
-    <main>
-      <section className="waas-hero"><div className="waas-hero-copy"><p className="waas-eyebrow"><Sparkles size={14} />{site.hero.eyebrow}</p><h1>{site.hero.headline}</h1><p className="waas-lead">{site.hero.subheadline}</p><div className="waas-actions"><a className="primary" href={contactHref(profile)}>{site.hero.primaryCta}<ArrowRight size={18} /></a><a className="secondary" href={pageHref(base, "services")}>{site.hero.secondaryCta}<ArrowDownRight size={17} /></a></div><div className="waas-hero-proof"><span><strong>{services.length}</strong><small>Focused services</small></span>{profile.location && <span><MapPin size={18} /><small>Serving<br /><strong>{profile.location}</strong></small></span>}<span><BadgeCheck size={18} /><small>Clear, useful<br /><strong>next steps</strong></small></span></div></div><div className="waas-hero-media"><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /><div className="waas-hero-note"><span>Designed around</span><strong>{site.brand.tagline}</strong></div></div></section>
-      <section className="waas-marquee" aria-label="Business highlights"><span>{profile.businessType}</span><i /><span>{site.brand.tagline}</span><i /><span>{profile.location || "Thoughtful service"}</span><i /><span>Built around real needs</span></section>
-      <section className="waas-section waas-services"><div className="waas-section-heading"><p className="waas-eyebrow">{site.servicesIntro.eyebrow}</p><h2>{site.servicesIntro.title}</h2><p>{site.servicesIntro.copy}</p></div><div className="waas-service-grid">{services.slice(0, 6).map((service, index) => <ServiceCard key={service.name} service={service} index={index} base={base} photo={site.media?.services?.[serviceSlug(service, index)]} />)}</div>{services.length > 6 && <a className="waas-all-services" href={pageHref(base, "services")}>Explore all {services.length} services<ArrowRight size={18} /></a>}</section>
-      <section className="waas-section waas-story"><div className="waas-story-media"><Photo photo={site.media?.story || site.media?.gallery?.[0]} fallbackLabel={profile.businessType} /><span>{site.brand.logoConcept || "A brand built around clarity and confident service."}</span></div><div className="waas-story-copy"><p className="waas-eyebrow">{site.about.eyebrow}</p><h2>{site.about.title}</h2><p>{site.about.body}</p><div className="waas-benefit-grid">{site.benefits.map((item) => <article key={item.title}><BadgeCheck size={20} /><h3>{item.title}</h3><p>{item.copy}</p></article>)}</div><a className="waas-text-link" href={pageHref(base, "about")}>Discover our approach<ArrowRight size={16} /></a></div></section>
-      <Gallery site={site} profile={profile} />
-      <section className="waas-section waas-process"><div className="waas-section-heading"><p className="waas-eyebrow">A clear path forward</p><h2>From first question to the right next step.</h2><p>A straightforward experience shaped around what customers need to understand, decide and do next.</p></div><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section>
-      <section className="waas-section waas-faq"><div className="waas-section-heading"><p className="waas-eyebrow">Useful answers</p><h2>Clarity before you begin.</h2><p>Helpful answers to the questions people naturally ask before taking the next step.</p></div><FaqList items={site.faq} /></section>
-      <ContactCta profile={profile} site={site} />
-    </main>
-  </>;
+  const Home = theme === "momentum" ? MomentumHome : theme === "aura" ? AuraHome : EditorialHome;
+  return <><Header project={project} theme={theme} previewToken={previewToken} active="home" /><Home project={project} base={base} /></>;
 }
 
 function PageHero({ eyebrow, title, copy, photo, profile }) {
@@ -144,7 +196,7 @@ function ServicesPage({ project, theme, previewToken }) {
   const profile = project.businessProfile;
   const site = project.siteSpec;
   const base = siteBase(project, theme, previewToken);
-  return <><Header project={project} theme={theme} previewToken={previewToken} active="services" /><main><PageHero eyebrow={site.servicesIntro.eyebrow} title={site.servicesIntro.title} copy={site.servicesIntro.copy} photo={site.media?.hero} profile={profile} /><section className="waas-section waas-services-page"><div className="waas-service-grid">{site.services.map((service, index) => <ServiceCard key={service.name} service={service} index={index} base={base} photo={site.media?.services?.[serviceSlug(service, index)]} />)}</div></section><section className="waas-section waas-process"><div className="waas-section-heading"><p className="waas-eyebrow">How it works</p><h2>A clear experience, whatever you need.</h2><p>{site.brand.positioning}</p></div><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section><ContactCta profile={profile} site={site} /></main></>;
+  return <><Header project={project} theme={theme} previewToken={previewToken} active="services" /><main><PageHero eyebrow={site.servicesIntro.eyebrow} title={site.servicesIntro.title} copy={site.servicesIntro.copy} photo={site.media?.hero} profile={profile} /><section className="waas-section waas-services-page"><div className="waas-service-grid">{site.services.map((service, index) => <ServiceCard key={service.name} service={service} index={index} base={base} photo={site.media?.services?.[serviceSlug(service, index)]} />)}</div></section><section className="waas-section waas-process"><SectionHeading eyebrow={site.experience?.processEyebrow || site.servicesIntro.eyebrow} title={site.experience?.servicesProcessTitle || site.experience?.processTitle || site.servicesIntro.title} copy={site.experience?.processCopy || site.brand.positioning} /><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section><ContactCta profile={profile} site={site} /></main></>;
 }
 
 function ServicePage({ project, theme, previewToken, service, serviceIndex }) {
@@ -163,20 +215,33 @@ function ServicePage({ project, theme, previewToken, service, serviceIndex }) {
 function AboutPage({ project, theme, previewToken }) {
   const profile = project.businessProfile;
   const site = project.siteSpec;
-  return <><Header project={project} theme={theme} previewToken={previewToken} active="about" /><main><PageHero eyebrow={site.about.eyebrow} title={site.about.title} copy={site.about.body} photo={site.media?.story || site.media?.hero} profile={profile} /><section className="waas-section waas-about-page"><div><p className="waas-eyebrow">What guides the experience</p><h2>{site.brand.positioning}</h2></div><div className="waas-benefit-grid">{site.benefits.map((item) => <article key={item.title}><BadgeCheck size={21} /><h3>{item.title}</h3><p>{item.copy}</p></article>)}</div></section><Gallery site={site} profile={profile} /><section className="waas-section waas-process"><div className="waas-section-heading"><p className="waas-eyebrow">The journey</p><h2>Simple, clear and considered.</h2><p>Every stage is designed to help customers understand what happens next.</p></div><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section><ContactCta profile={profile} site={site} /></main></>;
+  return <><Header project={project} theme={theme} previewToken={previewToken} active="about" /><main><PageHero eyebrow={site.about.eyebrow} title={site.about.title} copy={site.about.body} photo={site.media?.story || site.media?.hero} profile={profile} /><section className="waas-section waas-about-page"><div><p className="waas-eyebrow">{site.experience?.valuesEyebrow || site.about.eyebrow}</p><h2>{site.brand.positioning}</h2></div><div className="waas-benefit-grid">{site.benefits.map((item) => <article key={item.title}><BadgeCheck size={21} /><h3>{item.title}</h3><p>{item.copy}</p></article>)}</div></section><Gallery site={site} profile={profile} /><section className="waas-section waas-process"><SectionHeading eyebrow={site.experience?.processEyebrow || site.about.eyebrow} title={site.experience?.aboutProcessTitle || site.experience?.processTitle || site.about.title} copy={site.experience?.processCopy || site.brand.positioning} /><div className="waas-process-grid">{site.process.map((item, index) => <article key={item.title}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{item.title}</h3><p>{item.copy}</p></div></article>)}</div></section><ContactCta profile={profile} site={site} /></main></>;
 }
 
 function ContactPage({ project, theme, previewToken }) {
   const profile = project.businessProfile;
   const site = project.siteSpec;
-  return <><Header project={project} theme={theme} previewToken={previewToken} active="contact" /><main><section className="waas-contact-page"><div className="waas-contact-page-copy"><p className="waas-eyebrow">{site.contact.eyebrow}</p><h1>{site.contact.title}</h1><p>{site.contact.copy}</p><ContactDetails profile={profile} /><div className="waas-actions"><a className="primary" href={contactHref(profile)}>{site.contact.ctaLabel}<ArrowRight size={17} /></a>{profile.email && <a className="secondary" href={`mailto:${profile.email}`}><Mail size={16} /> Email us</a>}</div></div><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /></section><section className="waas-section waas-contact-faq"><div className="waas-section-heading"><p className="waas-eyebrow">Before you reach out</p><h2>A few helpful answers.</h2><p>Find the essentials, then contact the team when you are ready.</p></div><FaqList items={site.faq} /></section></main></>;
+  return <><Header project={project} theme={theme} previewToken={previewToken} active="contact" /><main><section className="waas-contact-page"><div className="waas-contact-page-copy"><p className="waas-eyebrow">{site.contact.eyebrow}</p><h1>{site.contact.title}</h1><p>{site.contact.copy}</p><ContactDetails profile={profile} /><div className="waas-actions"><a className="primary" href={contactHref(profile)}>{site.contact.ctaLabel}<ArrowRight size={17} /></a>{profile.email && <a className="secondary" href={`mailto:${profile.email}`}><Mail size={16} /> Email us</a>}</div></div><Photo photo={site.media?.hero} fallbackLabel={profile.businessType} eager /></section><section className="waas-section waas-contact-faq"><SectionHeading eyebrow={site.experience?.faqEyebrow || site.contact.eyebrow} title={site.experience?.contactFaqTitle || site.experience?.faqTitle || site.contact.title} copy={site.experience?.faqCopy || site.contact.copy} /><FaqList items={site.faq} /></section></main></>;
+}
+
+function photoCredits(site) {
+  const media = site.media || {};
+  const photos = [media.hero, media.story, ...(media.gallery || []), ...Object.values(media.services || {})].filter((photo) => photo?.provider === "pexels");
+  const seen = new Set();
+  return photos.filter((photo) => {
+    const key = photo.sourceUrl || `${photo.photographer}-${photo.src}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function Footer({ project, theme, previewToken }) {
   const profile = project.businessProfile;
   const site = project.siteSpec;
   const base = siteBase(project, theme, previewToken);
-  return <footer className="waas-footer"><div className="waas-footer-brand"><Brand profile={profile} site={site} base={base} /><p>{site.brand.positioning}</p></div><div><strong>Explore</strong><a href={base}>Home</a><a href={pageHref(base, "services")}>Services</a><a href={pageHref(base, "about")}>About</a><a href={pageHref(base, "contact")}>Contact</a></div><div><strong>Services</strong>{site.services.slice(0, 4).map((service, index) => <a href={pageHref(base, `services/${serviceSlug(service, index)}`)} key={service.name}>{service.name}</a>)}</div><div><strong>Connect</strong>{profile.phone && <a href={`tel:${profile.phone.replace(/[^+\d]/g, "")}`}>{profile.phone}</a>}{profile.email && <a href={`mailto:${profile.email}`}>{profile.email}</a>}{profile.location && <span>{profile.location}</span>}</div><div className="waas-footer-bottom"><span>© {new Date().getFullYear()} {profile.businessName}</span>{site.media?.provider === "pexels" && <a href={site.media.attributionUrl || "https://www.pexels.com"} target="_blank" rel="noreferrer">Photography provided by Pexels</a>}<span>Designed for clarity, trust and action.</span></div></footer>;
+  const credits = photoCredits(site);
+  return <footer className="waas-footer"><div className="waas-footer-brand"><Brand profile={profile} site={site} base={base} /><p>{site.brand.positioning}</p></div><div><strong>Explore</strong><a href={base}>Home</a><a href={pageHref(base, "services")}>Services</a><a href={pageHref(base, "about")}>About</a><a href={pageHref(base, "contact")}>Contact</a></div><div><strong>Services</strong>{site.services.slice(0, 4).map((service, index) => <a href={pageHref(base, `services/${serviceSlug(service, index)}`)} key={service.name}>{service.name}</a>)}</div><div><strong>Connect</strong>{profile.phone && <a href={`tel:${profile.phone.replace(/[^+\d]/g, "")}`}>{profile.phone}</a>}{profile.email && <a href={`mailto:${profile.email}`}>{profile.email}</a>}{profile.location && <span>{profile.location}</span>}</div><div className="waas-footer-bottom"><span>© {new Date().getFullYear()} {profile.businessName}</span>{credits.length > 0 && <details className="waas-photo-credits"><summary>Photography credits</summary><div>{credits.map((photo) => photo.sourceUrl ? <a href={photo.sourceUrl} target="_blank" rel="noreferrer" key={photo.sourceUrl}>{photo.photographer || "Photo"} / Pexels</a> : <span key={photo.src}>{photo.photographer || "Photo"} / Pexels</span>)}</div></details>}<span>{site.experience?.signature || site.brand.tagline}</span></div></footer>;
 }
 
 function FloatingCall({ profile }) {
@@ -191,9 +256,21 @@ export function websiteRouteExists(project, route = []) {
   return false;
 }
 
+function readableTextColor(hex, light = "#ffffff", dark = "#111815") {
+  const match = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!match) return light;
+  const value = Number.parseInt(match[1], 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return ((red * 299) + (green * 587) + (blue * 114)) / 1000 >= 150 ? dark : light;
+}
+
 export default function GeneratedWebsite({ project, theme, previewToken = null, route = [] }) {
   const path = routePath(route);
-  const style = { "--site-primary": project.siteSpec.visualDirection.primaryColor, "--site-accent": project.siteSpec.visualDirection.accentColor };
+  const primary = project.siteSpec.visualDirection.primaryColor;
+  const accent = project.siteSpec.visualDirection.accentColor;
+  const style = { "--site-primary": primary, "--site-accent": accent, "--site-on-primary": readableTextColor(primary), "--site-on-accent": readableTextColor(accent) };
   const serviceIndex = path[0] === "services" && path[1] ? project.siteSpec.services.findIndex((service, index) => serviceSlug(service, index) === path[1]) : -1;
   const content = serviceIndex >= 0
     ? <ServicePage project={project} theme={theme} previewToken={previewToken} service={project.siteSpec.services[serviceIndex]} serviceIndex={serviceIndex} />
