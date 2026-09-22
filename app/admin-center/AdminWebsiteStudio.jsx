@@ -157,6 +157,9 @@ export default function AdminWebsiteStudio() {
     project.status === "generating"
     || (project.status === "awaiting_selection" && project.emailStatus === "pending")
   ));
+  const queuedProjectRunning = result?.queued && snapshot.projects.some((project) => (
+    project.id === result.project?.id && project.status === "generating"
+  ));
   useEffect(() => {
     if (!pipelineActive) return undefined;
     const timer = window.setInterval(refresh, 5_000);
@@ -276,7 +279,7 @@ export default function AdminWebsiteStudio() {
           <div><strong>Generation did not finish</strong><span>{error}</span></div>
         </div>
       )}
-      {result?.queued && (
+      {queuedProjectRunning && (
         <div className="waas-admin-alert">
           <LoaderCircle className="waas-spin" size={20} />
           <div><strong>Website generation is running</strong><span>You can leave this page. The pipeline refreshes automatically and emails the client when all three concepts pass quality checks.</span></div>

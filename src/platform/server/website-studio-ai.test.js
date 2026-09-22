@@ -100,9 +100,9 @@ test("production model resolution excludes Lite generation models", () => {
   const previousModels = process.env.GEMINI_WEBSITE_MODELS;
   process.env.GEMINI_WEBSITE_MODELS = "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash";
   try {
-    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash"]);
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
     process.env.GEMINI_WEBSITE_MODELS = "gemini-3.5-flash-lite";
-    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash"]);
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
   } finally {
     if (previousModels === undefined) delete process.env.GEMINI_WEBSITE_MODELS;
     else process.env.GEMINI_WEBSITE_MODELS = previousModels;
@@ -226,4 +226,55 @@ test("temporary provider demand retries and falls back to another Gemini model",
   assert.equal(result.model, "healthy-fallback");
   assert.equal(result.attempts, 3);
   assert.equal(result.qa.passed, true);
+});
+
+test("daily quota on one model skips its duplicate attempt and tries another full model", async () => {
+  const requestedModels = [];
+  const fetchImpl = async (url) => {
+    const model = String(url).match(/models\/([^:]+):/)?.[1];
+    requestedModels.push(model);
+    if (model === "quota-primary") {
+      return new Response(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "Requests per day quota exceeded." } }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(providerSpec()) }] } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const result = await generateWebsiteSpec(profile, {
+    apiKey: "test-key", models: ["quota-primary", "healthy-fallback"], fetchImpl, retryDelayMs: 0,
+  });
+  assert.deepEqual(requestedModels, ["quota-primary", "healthy-fallback"]);
+  assert.equal(result.attempts, 2);
+  assert.equal(result.model, "healthy-fallback");
+});
+
+test("exhausted daily quota reports quota instead of temporary demand", async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({ error: { status: "quota_exceeded", message: "Daily quota exceeded." } }), {
+    status: 429,
+    headers: { "content-type": "application/json" },
+  });
+  await assert.rejects(
+    generateWebsiteSpec(profile, { apiKey: "test-key", models: ["quota-a", "quota-b"], fetchImpl, retryDelayMs: 0 }),
+    (error) => error.code === "AI_DAILY_QUOTA" && error.attempts === 2 && /daily quota/i.test(error.message),
+  );
+});
+
+test("temporary overload exhausts the bounded full-model fallback sequence", async () => {
+  const requestedModels = [];
+  const fetchImpl = async (url) => {
+    requestedModels.push(String(url).match(/models\/([^:]+):/)?.[1]);
+    return new Response(JSON.stringify({ error: { status: "UNAVAILABLE", message: "High demand" } }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await assert.rejects(
+    generateWebsiteSpec(profile, { apiKey: "test-key", models: ["primary", "fallback"], fetchImpl, retryDelayMs: 0 }),
+    (error) => error.code === "AI_TEMPORARILY_BUSY" && error.attempts === 4 && /HTTP 503/.test(error.message),
+  );
+  assert.deepEqual(requestedModels, ["primary", "primary", "fallback", "fallback"]);
 });

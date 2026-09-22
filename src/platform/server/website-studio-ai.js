@@ -2,7 +2,9 @@ const DEFAULT_MODEL = "gemini-3.8-flash";
 // Lite models are intentionally excluded from client-ready generation. They are
 // useful for high-volume extraction, but the studio needs the stronger writing
 // and art-direction models even when that means waiting for a retry.
-const DEFAULT_FALLBACK_MODELS = Object.freeze(["gemini-3.7-flash"]);
+const DEFAULT_FALLBACK_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
+const MAX_GENERATION_ATTEMPTS = 8;
+const GENERATION_RETRY_BUDGET_MS = 8 * 60_000;
 const THEMES = Object.freeze(["editorial", "momentum", "aura"]);
 const SERVICE_BATCH_SIZE = 12;
 const SERVICE_BATCH_CONCURRENCY = 4;
@@ -239,7 +241,7 @@ function resolveWebsiteModels(options = {}) {
   const configured = String(process.env.GEMINI_WEBSITE_MODELS || "").split(",");
   const primary = cleanText(process.env.GEMINI_WEBSITE_MODEL, 100) || DEFAULT_MODEL;
   const candidates = configured.map((item) => cleanText(item, 100)).filter(Boolean);
-  const models = (candidates.length ? candidates : [primary, ...DEFAULT_FALLBACK_MODELS])
+  const models = [...candidates, primary, ...DEFAULT_FALLBACK_MODELS]
     .filter((model) => !/flash[-_ ]?lite|\blite\b/i.test(model));
   if (!models.length) models.push(DEFAULT_MODEL, ...DEFAULT_FALLBACK_MODELS);
   return [...new Set(models)];
@@ -714,7 +716,7 @@ function addUsage(left, right) {
 
 async function requestGemini(request, client, model) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), client.timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), Math.min(client.timeoutMs, Math.max(1, client.deadlineAt - Date.now())));
   try {
     const response = await client.fetchImpl(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
@@ -728,12 +730,24 @@ async function requestGemini(request, client, model) {
     const payload = await response.json().catch(() => null);
     const providerMessage = cleanText(payload?.error?.message, 500);
     if (!response.ok) {
-      if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        throw new WebsiteStudioError("The AI model is temporarily busy.", "AI_TRANSIENT", 503, providerMessage ? [providerMessage] : []);
+      const providerCode = `${payload?.error?.code || ""} ${payload?.error?.status || ""}`.toLowerCase();
+      const quotaDetails = JSON.stringify(payload?.error?.details || []);
+      if (response.status === 429 && (/quota_exceeded|daily|per.day|requests_per_day|tokens_per_day|\brpd\b|\btpd\b/i.test(`${providerCode} ${providerMessage} ${quotaDetails}`))) {
+        throw new WebsiteStudioError("Gemini's daily quota is exhausted. Check the API project's limits in Google AI Studio or wait for the quota to reset, then retry.", "AI_DAILY_QUOTA", 429);
       }
-      if ([401, 403].includes(response.status)) {
-        throw new WebsiteStudioError("The Gemini API key is invalid or is not allowed to use the configured models.", "AI_AUTH_FAILED", response.status);
+      if (response.status === 408 || response.status === 429 || [500, 502, 503, 504].includes(response.status)) {
+        const error = new WebsiteStudioError("The AI model is temporarily busy.", "AI_TRANSIENT", 503, providerMessage ? [providerMessage] : []);
+        const retryAfter = response.headers?.get?.("retry-after");
+        const retrySeconds = Number(retryAfter);
+        const retryDate = Date.parse(retryAfter || "");
+        error.retryAfterMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
+          ? retrySeconds * 1000
+          : Number.isFinite(retryDate) ? Math.max(0, retryDate - Date.now()) : 0;
+        error.providerStatus = response.status;
+        throw error;
       }
+      if (response.status === 401) throw new WebsiteStudioError("The Gemini API key is invalid.", "AI_AUTH_FAILED", 401);
+      if (response.status === 403) throw new WebsiteStudioError("This Gemini model is not allowed for the API key.", "AI_MODEL_FORBIDDEN", 403);
       throw new WebsiteStudioError(providerMessage || "Gemini could not generate the website.", "AI_PROVIDER_ERROR", response.status);
     }
     return { payload, usage: usageFromPayload(payload) };
@@ -750,32 +764,61 @@ async function runGeminiTask({ buildRequest, parsePayload, client }) {
   let repairDetails = [];
   let lastError = null;
   let usage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
-  const attemptModels = [client.models[0], client.models[0], ...client.models.slice(1)];
+  const attemptModels = [client.models[0], client.models[0], ...client.models.slice(1), ...client.models.slice(1)]
+    .slice(0, MAX_GENERATION_ATTEMPTS);
   let attemptsMade = 0;
+  let transientFailures = 0;
+  let dailyQuotaFailures = 0;
+  let pendingRetryAfterMs = 0;
+  const unavailableModels = new Set();
 
   for (let attemptIndex = 0; attemptIndex < attemptModels.length; attemptIndex += 1) {
-    const attempt = attemptIndex + 1;
-    attemptsMade = attempt;
     const model = attemptModels[attemptIndex];
-    if (attemptIndex > 0 && client.retryDelayMs > 0) {
-      const delay = (client.retryDelayMs * (2 ** Math.min(attemptIndex - 1, 3))) + Math.floor(Math.random() * 200);
+    if (unavailableModels.has(model)) continue;
+    if (Date.now() >= client.deadlineAt) break;
+    if (attemptIndex > 0 && pendingRetryAfterMs > 0) {
+      const delay = Math.min(pendingRetryAfterMs, Math.max(0, client.deadlineAt - Date.now()));
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
+    if (Date.now() >= client.deadlineAt) break;
+    attemptsMade += 1;
     try {
       const result = await requestGemini(buildRequest(repairDetails), client, model);
       usage = addUsage(usage, result.usage);
-      return { value: parsePayload(result.payload), attempts: attempt, usage, model };
+      return { value: parsePayload(result.payload), attempts: attemptsMade, usage, model };
     } catch (error) {
       lastError = error instanceof WebsiteStudioError ? error : new WebsiteStudioError("Gemini could not be reached.", "AI_UNAVAILABLE", 502);
-      if (lastError.code !== "AI_TRANSIENT") {
+      if (lastError.code === "AI_TRANSIENT") {
+        transientFailures += 1;
+        pendingRetryAfterMs = Math.min(60_000, Math.max(
+          lastError.retryAfterMs || 0,
+          client.retryDelayMs > 0
+            ? client.retryDelayMs * (2 ** Math.min(transientFailures - 1, 6)) + Math.floor(Math.random() * 500)
+            : 0,
+        ));
+      } else {
+        pendingRetryAfterMs = 0;
+      }
+      if (lastError.code === "AI_DAILY_QUOTA") {
+        dailyQuotaFailures += 1;
+        unavailableModels.add(model);
+      }
+      if (lastError.code === "AI_MODEL_FORBIDDEN") unavailableModels.add(model);
+      if (lastError.code === "AI_PROVIDER_ERROR" && lastError.status === 404) unavailableModels.add(model);
+      if (["AI_QA_FAILED", "EMPTY_AI_RESPONSE", "INVALID_AI_RESPONSE"].includes(lastError.code)) {
         repairDetails = lastError.details?.length ? lastError.details : [lastError.message];
       }
       if (["AI_NOT_CONFIGURED", "AI_AUTH_FAILED"].includes(lastError.code)) break;
     }
   }
+  if (dailyQuotaFailures > 0 && transientFailures === 0 && dailyQuotaFailures === attemptsMade) {
+    lastError.attempts = attemptsMade;
+    throw lastError;
+  }
   if (lastError?.code === "AI_TRANSIENT") {
+    const providerStatus = lastError.providerStatus ? ` Last provider response: HTTP ${lastError.providerStatus}.` : "";
     const error = new WebsiteStudioError(
-      "All AI models are temporarily busy after automatic retries. Select Retry in the delivery pipeline in a moment.",
+      `Gemini could not complete this website after trying the available full-quality models.${providerStatus} Check Google AI Studio usage and quotas before retrying.`,
       "AI_TEMPORARILY_BUSY",
       503,
     );
@@ -817,7 +860,8 @@ export async function generateWebsiteSpec(inputProfile, options = {}) {
     models: resolveWebsiteModels(options),
     fetchImpl: options.fetchImpl || fetch,
     timeoutMs: Math.max(10_000, Math.min(Number(options.timeoutMs || process.env.GEMINI_WEBSITE_TIMEOUT_MS || 55_000), 110_000)),
-    retryDelayMs: Math.max(0, Math.min(Number(options.retryDelayMs ?? process.env.GEMINI_WEBSITE_RETRY_DELAY_MS ?? 900), 5_000)),
+    retryDelayMs: Math.max(0, Math.min(Number(options.retryDelayMs ?? process.env.GEMINI_WEBSITE_RETRY_DELAY_MS ?? 1_500), 10_000)),
+    deadlineAt: Date.now() + GENERATION_RETRY_BUDGET_MS,
   };
   const batches = serviceBatches(profile.services);
   const coreServices = batches[0];
