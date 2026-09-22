@@ -29,8 +29,10 @@ function suppliedPhoto(url, alt, id) {
   } : null;
 }
 
-function pexelsPhoto(photo, alt) {
-  const src = safeHttpsUrl(photo?.src?.large2x || photo?.src?.large || photo?.src?.landscape);
+function pexelsPhoto(photo, alt, highResolution = false) {
+  const src = safeHttpsUrl(highResolution
+    ? photo?.src?.large2x || photo?.src?.large || photo?.src?.landscape
+    : photo?.src?.large || photo?.src?.landscape || photo?.src?.large2x);
   if (!src) return null;
   return {
     id: `pexels-${Number(photo.id) || cleanText(photo.id, 80)}`,
@@ -147,7 +149,7 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
     searchPexels(broadQuery, { apiKey, fetchImpl, perPage: 18 }),
     searchPexels(galleryQuery, { apiKey, fetchImpl, perPage: 18 }),
   ]);
-  const heroCandidates = uniquePhotos(heroResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.heroAlt)).filter(Boolean));
+  const heroCandidates = uniquePhotos(heroResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.heroAlt, true)).filter(Boolean));
   const galleryCandidates = uniquePhotos(galleryResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.storyAlt)).filter(Boolean));
   const broadPhotos = uniquePhotos([...heroCandidates, ...galleryCandidates]);
   const usedSources = new Set();

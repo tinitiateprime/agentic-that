@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
 
@@ -33,10 +35,20 @@ async function launchQaBrowser() {
   // software renderer. Do not append --disable-gpu: it conflicts with those
   // launch flags and can terminate Chromium before the first page is created.
   chromiumPack.setGraphicsMode = false;
+  const temporaryDirectory = tmpdir();
+  const temporaryEntries = await readdir(temporaryDirectory, { withFileTypes: true }).catch(() => []);
+  await Promise.all(temporaryEntries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("playwright_chromiumdev_profile-"))
+    .map((entry) => rm(path.join(temporaryDirectory, entry.name), { recursive: true, force: true }).catch(() => {})));
+  const serverlessArgs = [
+    ...chromiumPack.args.filter((argument) => !argument.startsWith("--disk-cache-size=")),
+    "--disk-cache-size=1",
+    "--media-cache-size=1",
+  ];
   return chromium.launch({
     executablePath: await chromiumPack.executablePath(),
     headless: true,
-    args: chromiumPack.args,
+    args: serverlessArgs,
   });
 }
 

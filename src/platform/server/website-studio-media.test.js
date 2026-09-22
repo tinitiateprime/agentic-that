@@ -20,7 +20,10 @@ function photo(id) {
     photographer: `Photographer ${id}`,
     photographer_url: `https://www.pexels.com/@person-${id}`,
     url: `https://www.pexels.com/photo/${id}`,
-    src: { large2x: `https://images.pexels.com/photos/${id}/photo.jpeg` },
+    src: {
+      large: `https://images.pexels.com/photos/${id}/photo-large.jpeg`,
+      large2x: `https://images.pexels.com/photos/${id}/photo-large2x.jpeg`,
+    },
   };
 }
 
@@ -37,7 +40,10 @@ test("resolves business and service-aware Pexels images once for persisted websi
   const media = await resolveWebsiteMedia(spec, profile, { apiKey: "pexels-test", fetchImpl });
   assert.equal(media.provider, "pexels");
   assert.equal(media.hero.alt, "Plumber at work");
+  assert.match(media.hero.src, /large2x/);
+  assert.match(media.story.src, /photo-large\.jpeg/);
   assert.equal(media.services["leak-detection"].alt, "A plumber locating a leak");
+  assert.match(media.services["leak-detection"].src, /photo-large\.jpeg/);
   assert.equal(media.services["bathroom-installation"].alt, "Modern bathroom installation");
   const selectedSources = [media.hero, media.story, ...media.gallery, ...Object.values(media.services)].map((item) => item?.src).filter(Boolean);
   assert.equal(new Set(selectedSources).size, selectedSources.length);
