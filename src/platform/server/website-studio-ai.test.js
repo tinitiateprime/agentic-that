@@ -25,11 +25,26 @@ const longCopy = "Clear explanations, thoughtful preparation, comfortable conver
 function providerSpec(services = profile.services) {
   return {
     visual_direction: { industry_group: "appointments", mood: "trustworthy", primary_color: "#173f35", accent_color: "#e5c247" },
-    brand: { tagline: "Thoughtful care, clearly delivered", positioning: `${longCopy} ${longCopy}` },
+    brand: { tagline: "Thoughtful care, clearly delivered", positioning: `${longCopy} ${longCopy}`, logo_concept: "A calm A monogram shaped by a gentle smile", logo_style: "seal" },
+    media_plan: { hero_query: "dentist consulting patient modern clinic", gallery_query: "modern dental clinic patient care", hero_alt: "A dentist calmly consulting with a patient", story_alt: "A bright and welcoming dental clinic" },
     seo: { title: "Aster Dental Studio | Family Dental Clinic", description: "Explore preventive care, cosmetic dentistry and dental implant consultations at Aster Dental Studio in Hyderabad." },
     hero: { eyebrow: "Calm, considered dental care", headline: "Feel informed at every step of your dental journey.", subheadline: `${longCopy} ${longCopy}`, primary_cta: "Request a consultation", secondary_cta: "Explore services" },
     services_intro: { eyebrow: "Focused care", title: "Dental services shaped around clear needs.", copy: longCopy },
-    services: services.map((name) => ({ name, summary: `${longCopy} The ${name.toLowerCase()} experience is explained in clear language.`, details: ["A clear first conversation", "Practical next-step guidance", "A calm patient experience"], cta_label: "Request details" })),
+    services: services.map((name) => ({
+      name,
+      summary: `${longCopy} The ${name.toLowerCase()} experience is explained in clear language.`,
+      details: ["A clear first conversation", "Practical next-step guidance", "A calm patient experience"],
+      cta_label: "Request details",
+      ideal_for: `People exploring ${name.toLowerCase()} with clear guidance.`,
+      image_query: `dentist ${name.toLowerCase()} patient modern clinic`,
+      image_alt: `A dentist discussing ${name.toLowerCase()} with a patient`,
+      page_headline: `${name}, explained with clarity and care.`,
+      page_intro: `${longCopy} ${longCopy}`,
+      page_sections: [
+        { title: "What to expect", copy: longCopy },
+        { title: "A considered next step", copy: longCopy },
+      ],
+    })),
     about: { eyebrow: "The Aster approach", title: "A more considered way to experience dental care.", body: `${longCopy} ${longCopy} ${longCopy}` },
     benefits: [
       { title: "Clarity first", copy: longCopy },
@@ -73,7 +88,7 @@ test("normalizes a complete site and passes deterministic quality checks", () =>
 
 test("rejects services that were not supplied by the admin", () => {
   const value = providerSpec();
-  value.services.push({ name: "Orthodontics", summary: longCopy, details: ["One", "Two"], cta_label: "Learn more" });
+  value.services.push({ ...providerSpec(["Orthodontics"]).services[0], name: "Orthodontics" });
   assert.throws(() => normalizeWebsiteSpec(value, profile), /invented service/i);
 });
 
@@ -81,12 +96,7 @@ test("preserves an arbitrary multi-service catalogue without a built-in service 
   const services = Array.from({ length: 12 }, (_, index) => `Custom capability ${index + 1}`);
   const customProfile = { ...profile, services };
   const value = providerSpec();
-  value.services = services.map((name) => ({
-    name,
-    summary: `${longCopy} This capability is presented using only the supplied business context.`,
-    details: ["Clear scope", "Useful next step"],
-    cta_label: "Request details",
-  }));
+  value.services = providerSpec(services).services;
   const spec = normalizeWebsiteSpec(value, customProfile);
   assert.deepEqual(spec.services.map((service) => service.name), services);
   assert.equal(runWebsiteQa(spec, customProfile).passed, true);

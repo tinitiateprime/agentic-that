@@ -22,6 +22,7 @@ GEMINI_WEBSITE_MODEL=gemini-3.8-flash
 GEMINI_WEBSITE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash-lite
 GEMINI_WEBSITE_TIMEOUT_MS=55000
 GEMINI_WEBSITE_RETRY_DELAY_MS=900
+PEXELS_API_KEY=your-free-pexels-api-key
 PLATFORM_PUBLIC_URL=https://your-domain.example
 AUTH_EMAIL_FROM=AgenticThat <website@your-domain.example>
 RESEND_API_KEY=...
@@ -39,6 +40,9 @@ Apply `supabase/migrations/202609210001_admin_ai_website_studio.sql` through the
 - Published pages expose only projects that have completed client selection.
 - AI output cannot introduce services that were not supplied in the verified brief.
 - Every supplied service is preserved. There is no fixed catalogue-size limit; bounded Gemini batches prevent large briefs from overflowing a single model response.
+- Gemini infers a service-aware multi-page information architecture: homepage, services index, one detail page per service, about, and contact.
+- Pexels photography is selected from AI-generated industry and service search directions, stored with the project, and rendered with source attribution. Client-supplied photos take priority.
+- All navigation, service links, booking/email/phone actions, mobile menus, and the future-ready floating call control use real destinations.
 - Stalled generations fail closed, and administrators are limited to one active generation and ten starts per hour.
 - Failed projects keep their verified brief and expose a one-click Retry action in the admin delivery pipeline.
 - Preview pages are marked `noindex`, `nofollow`, `nocache`, and `no-referrer`.

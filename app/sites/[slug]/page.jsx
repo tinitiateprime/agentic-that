@@ -16,7 +16,9 @@ export async function generateMetadata({ params }) {
         title: project.siteSpec.seo.title,
         description: project.siteSpec.seo.description,
         type: "website",
-        ...(project.businessProfile.heroImage ? { images: [{ url: project.businessProfile.heroImage }] } : {}),
+        ...(project.siteSpec.media?.hero?.src || project.businessProfile.heroImage
+          ? { images: [{ url: project.siteSpec.media?.hero?.src || project.businessProfile.heroImage }] }
+          : {}),
       },
     };
   } catch {

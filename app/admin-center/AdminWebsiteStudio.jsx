@@ -126,6 +126,7 @@ export default function AdminWebsiteStudio() {
     configured: true,
     model: "gemini-3.8-flash",
     fallbackModels: [],
+    imageProvider: { provider: "pexels", configured: false },
     projects: [],
   });
   const [form, setForm] = useState(EMPTY_FORM);
@@ -225,7 +226,7 @@ export default function AdminWebsiteStudio() {
           <span>
             <small>Automatic AI routing</small>
             <strong>{snapshot.model}</strong>
-            <em>{snapshot.fallbackModels?.length || 0} fallback models</em>
+            <em>{snapshot.fallbackModels?.length || 0} fallback models · {snapshot.imageProvider?.configured ? "Pexels photos ready" : "photos need setup"}</em>
           </span>
           <b>{snapshot.configured ? "Ready" : "Setup required"}</b>
         </div>
@@ -247,6 +248,12 @@ export default function AdminWebsiteStudio() {
         <div className="waas-admin-alert">
           <CircleAlert size={20} />
           <div><strong>AI is not configured</strong><span>Add GEMINI_API_KEY to the server environment.</span></div>
+        </div>
+      )}
+      {!loading && snapshot.configured && !snapshot.imageProvider?.configured && (
+        <div className="waas-admin-alert error">
+          <Image size={20} />
+          <div><strong>Professional photos need one-time setup</strong><span>Add the free PEXELS_API_KEY to Netlify. Generation is paused so clients never receive an image-less skeleton.</span></div>
         </div>
       )}
       {error && (
@@ -314,7 +321,7 @@ export default function AdminWebsiteStudio() {
                 <Bot size={22} />
                 <span><strong>Everything after this is automatic</strong><small>Generate → validate → create 3 previews → email the business</small></span>
               </div>
-              <button type="submit" disabled={busy || !snapshot.configured}>
+              <button type="submit" disabled={busy || !snapshot.configured || !snapshot.imageProvider?.configured}>
                 {busy ? <LoaderCircle className="waas-spin" size={19} /> : <WandSparkles size={19} />}
                 {busy ? "Creating websites…" : "Create & deliver"}
                 {!busy && <ArrowUpRight size={18} />}
@@ -327,9 +334,10 @@ export default function AdminWebsiteStudio() {
               <div><span>02</span><div><small>Automatic delivery</small><h2>What happens next</h2></div></div>
             </div>
             {[
-              [Bot, "AI writes the complete website", "The latest Gemini model starts first. Busy models are retried and replaced automatically."],
-              [BadgeCheck, "Quality checks run", "Every service, section and claim is validated before anything reaches the client."],
-              [MonitorSmartphone, "Three designs are created", "Editorial, Momentum and Aura are complete responsive experiences—not colour swaps."],
+              [Bot, "AI architects the complete website", "Gemini understands the services, buyer journey, page plan and conversion copy automatically."],
+              [Image, "Service photography is matched", "Pexels selects licensed hero, gallery and service-specific images with attribution."],
+              [BadgeCheck, "Quality checks run", "Every service, page, image plan and claim is validated before anything reaches the client."],
+              [MonitorSmartphone, "Three designs are created", "Editorial, Momentum and Aura become complete responsive multi-page experiences—not colour swaps."],
               [Mail, "The client receives all previews", "One click selects and publishes the preferred website. No admin approval step."],
             ].map(([Icon, title, copy], index) => (
               <article key={title}>

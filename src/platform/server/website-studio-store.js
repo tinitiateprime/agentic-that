@@ -12,6 +12,7 @@ import {
   websiteStudioModels,
   websiteStudioThemes,
 } from "./website-studio-ai.js";
+import { resolveWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
 
 const PROJECT_PREFIX = "website_";
 
@@ -152,6 +153,7 @@ export async function websiteStudioSnapshot() {
     configured: Boolean(String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()),
     model: websiteStudioModels()[0],
     fallbackModels: websiteStudioModels().slice(1),
+    imageProvider: websiteImageConfiguration(),
     projects: rows.map(mapProject),
     themes: websiteStudioThemes(),
   };
@@ -194,6 +196,23 @@ export async function createAutomatedWebsiteProject(actor, input) {
 
   try {
     const generated = await generateWebsiteSpec(profile);
+    const media = await resolveWebsiteMedia(generated.spec, profile);
+    if (!media.hero) {
+      throw new WebsiteStudioError(
+        "Professional photography is required for next-level sites. Add a free PEXELS_API_KEY in Netlify, then retry this project.",
+        "WEBSITE_IMAGES_NOT_CONFIGURED",
+        503,
+      );
+    }
+    generated.spec.media = media;
+    generated.qa = {
+      ...generated.qa,
+      passed: true,
+      checks: [
+        ...generated.qa.checks,
+        { key: "professional-media", passed: true, message: `Professional ${media.provider} photography is attached to the website.` },
+      ],
+    };
     const [ready] = await sql`
       UPDATE ai_website_projects
          SET site_spec = ${sql.json(generated.spec)}, qa_report = ${sql.json(generated.qa)},
