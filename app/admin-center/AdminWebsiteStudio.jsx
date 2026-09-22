@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -68,6 +68,7 @@ function ProjectRow({ project, onRetry, retrying }) {
   const passed = project.qaReport?.checks?.filter((item) => item.passed).length || 0;
   const total = project.qaReport?.checks?.length || 0;
   const failed = project.status === "failed";
+  const generating = project.status === "generating";
   const deliveryLabel = failed
     ? "Not sent"
     : project.selectedTheme
@@ -82,7 +83,7 @@ function ProjectRow({ project, onRetry, retrying }) {
       </div>
       <div><small>Delivery email</small><strong>{project.clientEmail}</strong><span>{project.clientName}</span></div>
       <div><small>Automation</small><StatusBadge status={project.status} /><span>{project.generationModel || "AI generation"}</span></div>
-      <div><small>Quality</small><strong>{total ? `${passed}/${total} checks passed` : "Not completed"}</strong><span>{project.generationAttempts ? `${project.generationAttempts} AI call${project.generationAttempts === 1 ? "" : "s"}` : "Queued"}</span></div>
+      <div><small>Quality</small><strong>{generating ? "Running automatically" : total ? `${passed}/${total} checks passed` : "Not completed"}</strong><span>{generating ? (project.generationAttempts ? "Working in background" : "Queued") : project.generationAttempts ? `${project.generationAttempts} AI call${project.generationAttempts === 1 ? "" : "s"}` : "Not started"}</span></div>
       <div><small>Delivery</small>{failed ? <StatusBadge status="failed" /> : <StatusBadge status={project.emailStatus} />}<span>{deliveryLabel}</span></div>
       <div className="waas-project-action">
         {project.publishedUrl
@@ -138,7 +139,7 @@ export default function AdminWebsiteStudio() {
   const [copied, setCopied] = useState("");
   const [view, setView] = useState("create");
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setSnapshot(await studioRequest("/api/admin-center/website-studio"));
     } catch (loadError) {
@@ -146,9 +147,19 @@ export default function AdminWebsiteStudio() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const pipelineActive = snapshot.projects.some((project) => (
+    project.status === "generating"
+    || (project.status === "awaiting_selection" && project.emailStatus === "pending")
+  ));
+  useEffect(() => {
+    if (!pipelineActive) return undefined;
+    const timer = window.setInterval(refresh, 5_000);
+    return () => window.clearInterval(timer);
+  }, [pipelineActive, refresh]);
 
   const stats = useMemo(() => ({
     total: snapshot.projects.length,
@@ -172,6 +183,7 @@ export default function AdminWebsiteStudio() {
       setResult(data);
       setForm(EMPTY_FORM);
       await refresh();
+      if (data.queued) setView("projects");
     } catch (generationError) {
       setError(generationError.message);
       await refresh();
@@ -194,7 +206,7 @@ export default function AdminWebsiteStudio() {
         }),
       });
       setResult(data);
-      setView("create");
+      setView(data.queued ? "projects" : "create");
       await refresh();
     } catch (retryError) {
       setError(retryError.message);
@@ -262,6 +274,12 @@ export default function AdminWebsiteStudio() {
           <div><strong>Generation did not finish</strong><span>{error}</span></div>
         </div>
       )}
+      {result?.queued && (
+        <div className="waas-admin-alert">
+          <LoaderCircle className="waas-spin" size={20} />
+          <div><strong>Website generation is running</strong><span>You can leave this page. The pipeline refreshes automatically and emails the client when all three concepts pass quality checks.</span></div>
+        </div>
+      )}
 
       {view === "create" && (
         <div className="waas-create-layout">
@@ -323,7 +341,7 @@ export default function AdminWebsiteStudio() {
               </div>
               <button type="submit" disabled={busy || !snapshot.configured || !snapshot.imageProvider?.configured}>
                 {busy ? <LoaderCircle className="waas-spin" size={19} /> : <WandSparkles size={19} />}
-                {busy ? "Creating websites…" : "Create & deliver"}
+                {busy ? "Starting generation…" : "Create & deliver"}
                 {!busy && <ArrowUpRight size={18} />}
               </button>
             </div>

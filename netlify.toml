@@ -39,3 +39,6 @@
 
 [functions.growth-advisor-background]
   node_bundler = "esbuild"
+
+[functions.website-studio-background]
+  node_bundler = "esbuild"

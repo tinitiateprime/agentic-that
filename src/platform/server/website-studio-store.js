@@ -134,12 +134,20 @@ async function sendPreviewEmail(project, token) {
   return { ...result, links };
 }
 
-export async function websiteStudioSnapshot() {
-  const sql = await getPlatformSql();
+async function expireStaleGenerations(sql) {
   await sql`
     UPDATE ai_website_projects
        SET status = 'failed', failure_message = 'Generation stopped before completion. Start a new automated delivery.', updated_at = now()
-     WHERE status = 'generating' AND updated_at < now() - interval '10 minutes'`;
+     WHERE status = 'generating'
+       AND (
+         (generation_attempts = 0 AND updated_at < now() - interval '5 minutes')
+         OR updated_at < now() - interval '20 minutes'
+       )`;
+}
+
+export async function websiteStudioSnapshot() {
+  const sql = await getPlatformSql();
+  await expireStaleGenerations(sql);
   const rows = await sql`
     SELECT id, business_name, business_type, client_name, client_email, business_profile,
            site_spec, qa_report, status, selected_theme, public_slug, preview_expires_at,
@@ -159,15 +167,26 @@ export async function websiteStudioSnapshot() {
   };
 }
 
-export async function createAutomatedWebsiteProject(actor, input) {
+export async function queueAutomatedWebsiteProject(actor, input) {
   const sql = await getPlatformSql();
   const clientEmail = requiredEmail(input?.clientEmail);
   const profile = normalizeWebsiteBusinessProfile(input?.businessProfile || input);
+  if (!String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()) {
+    throw new WebsiteStudioError("Add GEMINI_API_KEY before generating websites.", "AI_NOT_CONFIGURED", 503);
+  }
+  if (!websiteImageConfiguration().configured && !profile.heroImage) {
+    throw new WebsiteStudioError(
+      "Add PEXELS_API_KEY before generating websites so every delivery includes professional photography.",
+      "WEBSITE_IMAGES_NOT_CONFIGURED",
+      503,
+    );
+  }
   const clientName = cleanText(input?.clientName, 120) || `${profile.businessName} team`;
   const id = `${PROJECT_PREFIX}${crypto.randomUUID()}`;
   const token = previewToken();
   const slug = safeSlug(profile.businessName);
 
+  await expireStaleGenerations(sql);
   const [recentUsage] = await sql`
     SELECT count(*)::int AS count,
            count(*) FILTER (WHERE status = 'generating')::int AS active
@@ -193,6 +212,51 @@ export async function createAutomatedWebsiteProject(actor, input) {
     businessType: profile.businessType,
     clientEmail,
   });
+
+  return { project: mapProject(created), jobToken: token };
+}
+
+export async function failQueuedWebsiteProject(projectIdInput, tokenInput, error) {
+  const id = requiredText(projectIdInput, "Project ID", 100);
+  const token = requiredText(tokenInput, "Generation token", 200);
+  const message = cleanText(error instanceof Error ? error.message : error, 800)
+    || "The background generation job could not be started.";
+  const sql = await getPlatformSql();
+  const [failed] = await sql`
+    UPDATE ai_website_projects
+       SET status = 'failed', failure_message = ${message}, updated_at = now()
+     WHERE id = ${id}
+       AND preview_token_hash = ${tokenDigest(token)}
+       AND status = 'generating'
+       AND generation_attempts = 0
+     RETURNING *`;
+  if (failed) await audit(sql, failed.created_by, id, "ai_website.generation_dispatch_failed", { message });
+  return failed ? mapProject(failed) : null;
+}
+
+export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput) {
+  const id = requiredText(projectIdInput, "Project ID", 100);
+  const token = requiredText(tokenInput, "Generation token", 200);
+  const sql = await getPlatformSql();
+  const [claimed] = await sql`
+    UPDATE ai_website_projects
+       SET generation_attempts = 1, failure_message = null, updated_at = now()
+     WHERE id = ${id}
+       AND preview_token_hash = ${tokenDigest(token)}
+       AND status = 'generating'
+       AND generation_attempts = 0
+     RETURNING *`;
+
+  if (!claimed) {
+    const [existing] = await sql`
+      SELECT * FROM ai_website_projects
+       WHERE id = ${id} AND preview_token_hash = ${tokenDigest(token)}
+       LIMIT 1`;
+    return existing ? { project: mapProject(existing), claimed: false } : null;
+  }
+
+  const profile = normalizeWebsiteBusinessProfile(claimed.business_profile || {});
+  const actorUserId = claimed.created_by || null;
 
   try {
     const generated = await generateWebsiteSpec(profile);
@@ -220,9 +284,12 @@ export async function createAutomatedWebsiteProject(actor, input) {
              generation_attempts = ${generated.attempts}, prompt_tokens = ${generated.usage.promptTokens || null},
              output_tokens = ${generated.usage.outputTokens || null}, generated_at = now(),
              failure_message = null, updated_at = now()
-       WHERE id = ${id}
+       WHERE id = ${id} AND status = 'generating'
        RETURNING *`;
-    await audit(sql, actor.userId, id, "ai_website.generated", {
+    if (!ready) {
+      throw new WebsiteStudioError("Website generation exceeded its allowed processing time.", "GENERATION_EXPIRED", 504);
+    }
+    await audit(sql, actorUserId, id, "ai_website.generated", {
       model: generated.model,
       attempts: generated.attempts,
       qaPassed: generated.qa.passed,
@@ -236,7 +303,7 @@ export async function createAutomatedWebsiteProject(actor, input) {
            SET email_status = ${delivery.skipped ? "skipped" : "sent"},
                email_provider_id = ${delivery.messageId || null}, email_error = null, updated_at = now()
          WHERE id = ${id}`;
-      await audit(sql, actor.userId, id, "ai_website.previews_delivered", {
+      await audit(sql, actorUserId, id, "ai_website.previews_delivered", {
         provider: delivery.provider,
         skipped: delivery.skipped,
       });
@@ -250,21 +317,31 @@ export async function createAutomatedWebsiteProject(actor, input) {
     }
 
     const [result] = await sql`SELECT * FROM ai_website_projects WHERE id = ${id}`;
-    return { project: mapProject(result), previewLinks: delivery.links, deliveryWarning: delivery.error || null };
+    return { project: mapProject(result), previewLinks: delivery.links, deliveryWarning: delivery.error || null, claimed: true };
   } catch (error) {
     const message = cleanText(error instanceof Error ? error.message : "Website generation failed.", 800);
-    await sql`
+    const [failed] = await sql`
       UPDATE ai_website_projects
          SET status = 'failed', failure_message = ${message}, generation_attempts = ${Math.max(1, Number(error?.attempts || 1))},
              updated_at = now()
-       WHERE id = ${id}`;
-    await audit(sql, actor.userId, id, "ai_website.generation_failed", { message });
-    if (error instanceof WebsiteStudioError) {
-      error.projectId = id;
-      throw error;
-    }
-    throw new WebsiteStudioError(message, "GENERATION_FAILED", 502);
+       WHERE id = ${id} AND status = 'generating'
+       RETURNING *`;
+    if (failed) await audit(sql, actorUserId, id, "ai_website.generation_failed", { message });
+    return { project: mapProject(failed || claimed), error: message, claimed: true };
   }
+}
+
+// Kept for local tooling and direct server-side callers. Production requests
+// use queueAutomatedWebsiteProject and the Netlify background worker below.
+export async function createAutomatedWebsiteProject(actor, input) {
+  const queued = await queueAutomatedWebsiteProject(actor, input);
+  const completed = await executeAutomatedWebsiteProject(queued.project.id, queued.jobToken);
+  if (!completed || completed.error) {
+    const failure = new WebsiteStudioError(completed?.error || "Website generation failed.", "GENERATION_FAILED", 502);
+    failure.projectId = queued.project.id;
+    throw failure;
+  }
+  return completed;
 }
 
 export async function getWebsitePreview(tokenInput, themeInput) {
