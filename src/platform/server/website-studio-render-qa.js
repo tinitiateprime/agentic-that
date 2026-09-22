@@ -29,10 +29,14 @@ async function launchQaBrowser() {
     return chromium.launch({ executablePath: localExecutable, headless: true, args: ["--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"] });
   }
   const chromiumPack = (await import("@sparticuz/chromium")).default;
+  // Sparticuz configures its serverless Chromium build with an in-process
+  // software renderer. Do not append --disable-gpu: it conflicts with those
+  // launch flags and can terminate Chromium before the first page is created.
+  chromiumPack.setGraphicsMode = false;
   return chromium.launch({
     executablePath: await chromiumPack.executablePath(),
     headless: true,
-    args: [...chromiumPack.args, "--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox"],
+    args: chromiumPack.args,
   });
 }
 
@@ -129,27 +133,41 @@ async function readPageMetrics(page, theme, response) {
 }
 
 export async function runWebsiteRenderQa(links, options = {}) {
-  const browser = options.browser || await launchQaBrowser();
   const ownsBrowser = !options.browser;
+  let browser = options.browser || null;
   const checks = [];
   try {
     for (const [theme, url] of Object.entries(links || {})) {
       for (const viewport of VIEWPORTS) {
-        const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
-        try {
-          const response = await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
-          const metrics = await readPageMetrics(page, theme, response);
-          const result = assessRenderedWebsite(metrics, viewport);
-          checks.push({ key: `render-${theme}-${viewport.name}`, passed: result.passed, message: result.passed ? `${theme} passes ${viewport.name} visual checks.` : result.details.join(" "), metrics });
-        } catch (error) {
-          checks.push({ key: `render-${theme}-${viewport.name}`, passed: false, message: error instanceof Error ? error.message : "Rendered website QA failed." });
-        } finally {
-          await page.close().catch(() => {});
+        let completed = false;
+        let lastError = null;
+        const maximumAttempts = ownsBrowser ? 2 : 1;
+        for (let attempt = 1; attempt <= maximumAttempts && !completed; attempt += 1) {
+          let context = null;
+          try {
+            if (!browser || !browser.isConnected()) browser = await launchQaBrowser();
+            context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+            const page = await context.newPage();
+            const response = await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+            const metrics = await readPageMetrics(page, theme, response);
+            const result = assessRenderedWebsite(metrics, viewport);
+            checks.push({ key: `render-${theme}-${viewport.name}`, passed: result.passed, message: result.passed ? `${theme} passes ${viewport.name} visual checks.` : result.details.join(" "), metrics });
+            completed = true;
+          } catch (error) {
+            lastError = error;
+            if (ownsBrowser) {
+              await browser?.close().catch(() => {});
+              browser = null;
+            }
+          } finally {
+            await context?.close().catch(() => {});
+          }
         }
+        if (!completed) checks.push({ key: `render-${theme}-${viewport.name}`, passed: false, message: lastError instanceof Error ? lastError.message : "Rendered website QA failed." });
       }
     }
   } finally {
-    if (ownsBrowser) await browser.close().catch(() => {});
+    if (ownsBrowser) await browser?.close().catch(() => {});
   }
   return { passed: checks.length === 6 && checks.every((check) => check.passed), checks, checkedAt: new Date().toISOString() };
 }
