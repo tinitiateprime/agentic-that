@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveWebsiteMedia } from "./website-studio-media.js";
+import { resolveWebsiteMedia, verifyWebsiteMedia } from "./website-studio-media.js";
 
 const profile = { businessName: "Northstar Plumbing", businessType: "Residential plumbing", galleryImages: [] };
 const spec = {
@@ -64,6 +64,25 @@ test("uses supplied photography without an image-provider key", async () => {
   assert.equal(media.provider, "supplied");
   assert.equal(media.hero.src, "https://example.com/hero.jpg");
   assert.equal(media.gallery.length, 1);
+});
+
+test("verifies every unique selected photo without downloading image bodies", async () => {
+  const methods = [];
+  const media = {
+    hero: { id: "hero", src: "https://images.example/hero.jpg" },
+    story: { id: "hero-copy", src: "https://images.example/hero.jpg" },
+    gallery: [{ id: "gallery", src: "https://images.example/gallery.jpg" }],
+    services: {},
+  };
+  const result = await verifyWebsiteMedia(media, {
+    fetchImpl: async (_url, init) => {
+      methods.push(init.method);
+      return new Response(null, { status: 200, headers: { "content-type": "image/jpeg" } });
+    },
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.length, 2);
+  assert.deepEqual(methods, ["HEAD", "HEAD"]);
 });
 
 test("searches every service rather than reusing generic photos after twelve", async () => {

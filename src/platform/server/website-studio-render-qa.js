@@ -8,6 +8,7 @@ const VIEWPORTS = Object.freeze([
   { name: "desktop", width: 1440, height: 960, maxHeading: 96, maxPageHeight: 11_000 },
   { name: "mobile", width: 390, height: 844, maxHeading: 60, maxPageHeight: 15_000 },
 ]);
+const QA_IMAGE_PLACEHOLDER = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640"><rect width="960" height="640" fill="#c8cec9"/></svg>`;
 
 function localChromeCandidates() {
   const candidates = [process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, process.env.CHROME_EXECUTABLE_PATH].filter(Boolean);
@@ -159,6 +160,12 @@ export async function runWebsiteRenderQa(links, options = {}) {
             if (!browser || !browser.isConnected()) browser = await launchQaBrowser();
             context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
             const page = await context.newPage();
+            // Real media availability is checked separately with source HEAD
+            // requests. Layout QA uses a lightweight, correctly sized image so
+            // serverless Chromium does not decode every high-resolution photo.
+            await page.route("**/*", (route) => (route.request().resourceType() === "image"
+              ? route.fulfill({ status: 200, contentType: "image/svg+xml", body: QA_IMAGE_PLACEHOLDER })
+              : route.continue()));
             const response = await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
             const metrics = await readPageMetrics(page, theme, response);
             const result = assessRenderedWebsite(metrics, viewport);

@@ -124,6 +124,31 @@ export function websiteImageConfiguration() {
   };
 }
 
+function resolvedPhotos(media) {
+  return uniquePhotos([
+    media?.hero,
+    media?.story,
+    ...(media?.gallery || []),
+    ...Object.values(media?.services || {}),
+  ].filter(Boolean));
+}
+
+export async function verifyWebsiteMedia(media, options = {}) {
+  const photos = resolvedPhotos(media);
+  const fetchImpl = options.fetchImpl || fetch;
+  const checks = await mapWithConcurrency(photos, 4, async (photo) => {
+    try {
+      const response = await fetchImpl(photo.src, { method: "HEAD", signal: AbortSignal.timeout(12_000) });
+      const contentType = cleanText(response.headers?.get?.("content-type"), 100).toLowerCase();
+      const passed = response.ok && contentType.startsWith("image/");
+      return { id: photo.id, passed, status: response.status, contentType };
+    } catch (error) {
+      return { id: photo.id, passed: false, status: 0, message: error instanceof Error ? error.message : "Image validation failed." };
+    }
+  });
+  return { passed: checks.length > 0 && checks.every((check) => check.passed), checks };
+}
+
 export async function resolveWebsiteMedia(spec, profile, options = {}) {
   const apiKey = cleanText(options.apiKey ?? process.env.PEXELS_API_KEY, 1000);
   const suppliedHero = suppliedPhoto(profile?.heroImage, spec?.mediaPlan?.heroAlt || `${profile?.businessName} featured`, "supplied-hero");

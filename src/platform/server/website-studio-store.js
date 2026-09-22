@@ -12,7 +12,7 @@ import {
   websiteStudioThemes,
 } from "./website-studio-ai.js";
 import { getWebsiteStudioSql } from "./website-studio-database.js";
-import { resolveWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
+import { resolveWebsiteMedia, verifyWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
 import { runWebsiteRenderQa } from "./website-studio-render-qa.js";
 
 const PROJECT_PREFIX = "website_";
@@ -269,12 +269,23 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
         503,
       );
     }
+    const mediaQa = await verifyWebsiteMedia(media);
+    if (!mediaQa.passed) {
+      const unavailable = mediaQa.checks.filter((check) => !check.passed).map((check) => `${check.id || "photo"}: HTTP ${check.status || "error"}`);
+      throw new WebsiteStudioError(
+        "One or more professional photos could not be loaded. The website was not delivered with broken media.",
+        "WEBSITE_IMAGES_UNAVAILABLE",
+        502,
+        unavailable,
+      );
+    }
     generated.spec.media = media;
     generated.qa = {
       ...generated.qa,
       checks: [
         ...generated.qa.checks,
         { key: "professional-media", passed: true, message: `Professional ${media.provider} photography is attached to the website.` },
+        { key: "media-availability", passed: true, message: `${mediaQa.checks.length} selected photos were verified at their source.` },
       ],
     };
     const [staged] = await sql`
