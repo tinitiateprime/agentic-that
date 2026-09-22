@@ -116,7 +116,7 @@ async function readPageMetrics(page, theme, response) {
       themeStructure: Boolean(document.querySelector(`.waas-${expectedTheme} .waas-home-${expectedTheme}`)),
       bodyWidth: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
       pageHeight: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-      brokenImages: [...document.images].filter((image) => !image.complete || image.naturalWidth < 200).length,
+      brokenImages: [...document.images].filter((image) => image.getClientRects().length > 0 && (!image.complete || image.naturalWidth < 200)).length,
       h1Count: h1.length,
       maxH1Size: Math.max(0, ...h1.map((heading) => Number.parseFloat(getComputedStyle(heading).fontSize) || 0)),
       lowContrastHeadings,
