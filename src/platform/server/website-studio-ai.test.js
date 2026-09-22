@@ -157,3 +157,32 @@ test("large catalogues are generated in bounded batches and merged in source ord
   assert.equal(result.usage.totalTokens, 90);
   assert.equal(result.qa.passed, true);
 });
+
+test("temporary provider demand retries and falls back to another Gemini model", async () => {
+  const requestedModels = [];
+  const fetchImpl = async (url) => {
+    requestedModels.push(String(url).match(/models\/([^:]+):/)?.[1]);
+    if (requestedModels.length < 3) {
+      return new Response(JSON.stringify({ error: { message: "The model is experiencing high demand." } }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(providerSpec()) }] } }],
+      usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 100, totalTokenCount: 150 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const result = await generateWebsiteSpec(profile, {
+    apiKey: "test-key",
+    models: ["busy-primary", "healthy-fallback"],
+    fetchImpl,
+    retryDelayMs: 0,
+    timeoutMs: 10_000,
+  });
+  assert.deepEqual(requestedModels, ["busy-primary", "busy-primary", "healthy-fallback"]);
+  assert.equal(result.model, "healthy-fallback");
+  assert.equal(result.attempts, 3);
+  assert.equal(result.qa.passed, true);
+});

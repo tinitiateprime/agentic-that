@@ -1,4 +1,5 @@
-const DEFAULT_MODEL = "gemini-3.6-flash";
+const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_FALLBACK_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.5-flash-lite"]);
 const THEMES = Object.freeze(["editorial", "momentum", "aura"]);
 const SERVICE_BATCH_SIZE = 12;
 const SERVICE_BATCH_CONCURRENCY = 4;
@@ -177,6 +178,18 @@ export class WebsiteStudioError extends Error {
 const cleanText = (value, maxLength = 1200) => (
   typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, maxLength) : ""
 );
+
+function resolveWebsiteModels(options = {}) {
+  const explicit = Array.isArray(options.models)
+    ? options.models
+    : options.model
+      ? [options.model]
+      : String(process.env.GEMINI_WEBSITE_MODELS || "").split(",");
+  const primary = cleanText(process.env.GEMINI_WEBSITE_MODEL, 100) || DEFAULT_MODEL;
+  const candidates = explicit.map((item) => cleanText(item, 100)).filter(Boolean);
+  const models = candidates.length ? candidates : [primary, ...DEFAULT_FALLBACK_MODELS];
+  return [...new Set(models)];
+}
 
 const cleanLongText = (value, maxLength = 4000) => (
   typeof value === "string" ? value.trim().replace(/\r\n?/g, "\n").slice(0, maxLength) : ""
@@ -556,12 +569,12 @@ function addUsage(left, right) {
   };
 }
 
-async function requestGemini(request, client) {
+async function requestGemini(request, client, model) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), client.timeoutMs);
   try {
     const response = await client.fetchImpl(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(client.model)}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": client.apiKey },
@@ -572,19 +585,19 @@ async function requestGemini(request, client) {
     const payload = await response.json().catch(() => null);
     const providerMessage = cleanText(payload?.error?.message, 500);
     if (!response.ok) {
-      const code = response.status === 429 ? "AI_RATE_LIMITED" : [401, 403].includes(response.status) ? "AI_AUTH_FAILED" : "AI_PROVIDER_ERROR";
-      const message = response.status === 429
-        ? "Gemini is busy or the current quota is exhausted. Try again shortly."
-        : [401, 403].includes(response.status)
-          ? "The Gemini API key is invalid or is not allowed to use this model."
-          : providerMessage || "Gemini could not generate the website.";
-      throw new WebsiteStudioError(message, code, response.status >= 500 ? 502 : response.status);
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        throw new WebsiteStudioError("The AI model is temporarily busy.", "AI_TRANSIENT", 503, providerMessage ? [providerMessage] : []);
+      }
+      if ([401, 403].includes(response.status)) {
+        throw new WebsiteStudioError("The Gemini API key is invalid or is not allowed to use the configured models.", "AI_AUTH_FAILED", response.status);
+      }
+      throw new WebsiteStudioError(providerMessage || "Gemini could not generate the website.", "AI_PROVIDER_ERROR", response.status);
     }
     return { payload, usage: usageFromPayload(payload) };
   } catch (error) {
-    if (error?.name === "AbortError") throw new WebsiteStudioError("Gemini took too long to generate the website.", "AI_TIMEOUT", 504);
+    if (error?.name === "AbortError") throw new WebsiteStudioError("The AI model timed out.", "AI_TRANSIENT", 503);
     if (error instanceof WebsiteStudioError) throw error;
-    throw new WebsiteStudioError("Gemini could not be reached.", "AI_UNAVAILABLE", 502);
+    throw new WebsiteStudioError("The AI model could not be reached.", "AI_TRANSIENT", 503);
   } finally {
     clearTimeout(timeout);
   }
@@ -594,18 +607,39 @@ async function runGeminiTask({ buildRequest, parsePayload, client }) {
   let repairDetails = [];
   let lastError = null;
   let usage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const attemptModels = [client.models[0], client.models[0], ...client.models.slice(1)];
+  let attemptsMade = 0;
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attemptIndex = 0; attemptIndex < attemptModels.length; attemptIndex += 1) {
+    const attempt = attemptIndex + 1;
+    attemptsMade = attempt;
+    const model = attemptModels[attemptIndex];
+    if (attemptIndex > 0 && client.retryDelayMs > 0) {
+      const delay = (client.retryDelayMs * (2 ** Math.min(attemptIndex - 1, 3))) + Math.floor(Math.random() * 200);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
     try {
-      const result = await requestGemini(buildRequest(repairDetails), client);
+      const result = await requestGemini(buildRequest(repairDetails), client, model);
       usage = addUsage(usage, result.usage);
-      return { value: parsePayload(result.payload), attempts: attempt, usage };
+      return { value: parsePayload(result.payload), attempts: attempt, usage, model };
     } catch (error) {
       lastError = error instanceof WebsiteStudioError ? error : new WebsiteStudioError("Gemini could not be reached.", "AI_UNAVAILABLE", 502);
-      repairDetails = lastError.details?.length ? lastError.details : [lastError.message];
-      if (["AI_NOT_CONFIGURED", "AI_AUTH_FAILED", "AI_RATE_LIMITED"].includes(lastError.code)) break;
+      if (lastError.code !== "AI_TRANSIENT") {
+        repairDetails = lastError.details?.length ? lastError.details : [lastError.message];
+      }
+      if (["AI_NOT_CONFIGURED", "AI_AUTH_FAILED"].includes(lastError.code)) break;
     }
   }
+  if (lastError?.code === "AI_TRANSIENT") {
+    const error = new WebsiteStudioError(
+      "All AI models are temporarily busy after automatic retries. Select Retry in the delivery pipeline in a moment.",
+      "AI_TEMPORARILY_BUSY",
+      503,
+    );
+    error.attempts = attemptsMade;
+    throw error;
+  }
+  if (lastError) lastError.attempts = attemptsMade;
   throw lastError || new WebsiteStudioError("Website generation failed.", "AI_GENERATION_FAILED", 502);
 }
 
@@ -635,12 +669,12 @@ export async function generateWebsiteSpec(inputProfile, options = {}) {
   const profile = normalizeWebsiteBusinessProfile(inputProfile);
   const apiKey = cleanText(options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY, 500);
   if (!apiKey) throw new WebsiteStudioError("Add GEMINI_API_KEY before generating websites.", "AI_NOT_CONFIGURED", 503);
-  const model = cleanText(options.model || process.env.GEMINI_WEBSITE_MODEL || process.env.GEMINI_MODEL, 100) || DEFAULT_MODEL;
   const client = {
     apiKey,
-    model,
+    models: resolveWebsiteModels(options),
     fetchImpl: options.fetchImpl || fetch,
     timeoutMs: Math.max(10_000, Math.min(Number(options.timeoutMs || process.env.GEMINI_WEBSITE_TIMEOUT_MS || 55_000), 110_000)),
+    retryDelayMs: Math.max(0, Math.min(Number(options.retryDelayMs ?? process.env.GEMINI_WEBSITE_RETRY_DELAY_MS ?? 900), 5_000)),
   };
   const batches = serviceBatches(profile.services);
   const coreServices = batches[0];
@@ -674,13 +708,15 @@ export async function generateWebsiteSpec(inputProfile, options = {}) {
   if (!qa.passed) {
     throw new WebsiteStudioError("The generated website failed final automated quality checks.", "AI_QA_FAILED", 502, qa.checks.filter((check) => !check.passed).map((check) => check.message));
   }
+  const modelsUsed = [...new Set([core.model, ...additional.map((result) => result.model)])];
   return {
     spec,
     qa,
-    model,
+    model: modelsUsed.join(" + "),
     attempts: core.attempts + additional.reduce((total, result) => total + result.attempts, 0),
     usage: additional.reduce((total, result) => addUsage(total, result.usage), core.usage),
   };
 }
 
+export const websiteStudioModels = () => resolveWebsiteModels();
 export const websiteStudioThemes = () => [...THEMES];

@@ -9,6 +9,7 @@ import {
   generateWebsiteSpec,
   normalizeWebsiteBusinessProfile,
   WebsiteStudioError,
+  websiteStudioModels,
   websiteStudioThemes,
 } from "./website-studio-ai.js";
 
@@ -149,7 +150,8 @@ export async function websiteStudioSnapshot() {
      LIMIT 100`;
   return {
     configured: Boolean(String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()),
-    model: String(process.env.GEMINI_WEBSITE_MODEL || process.env.GEMINI_MODEL || "gemini-3.6-flash").trim(),
+    model: websiteStudioModels()[0],
+    fallbackModels: websiteStudioModels().slice(1),
     projects: rows.map(mapProject),
     themes: websiteStudioThemes(),
   };
@@ -157,9 +159,9 @@ export async function websiteStudioSnapshot() {
 
 export async function createAutomatedWebsiteProject(actor, input) {
   const sql = await getPlatformSql();
-  const clientName = requiredText(input?.clientName, "Client name", 120);
   const clientEmail = requiredEmail(input?.clientEmail);
   const profile = normalizeWebsiteBusinessProfile(input?.businessProfile || input);
+  const clientName = cleanText(input?.clientName, 120) || `${profile.businessName} team`;
   const id = `${PROJECT_PREFIX}${crypto.randomUUID()}`;
   const token = previewToken();
   const slug = safeSlug(profile.businessName);
@@ -234,7 +236,7 @@ export async function createAutomatedWebsiteProject(actor, input) {
     const message = cleanText(error instanceof Error ? error.message : "Website generation failed.", 800);
     await sql`
       UPDATE ai_website_projects
-         SET status = 'failed', failure_message = ${message}, generation_attempts = generation_attempts + 1,
+         SET status = 'failed', failure_message = ${message}, generation_attempts = ${Math.max(1, Number(error?.attempts || 1))},
              updated_at = now()
        WHERE id = ${id}`;
     await audit(sql, actor.userId, id, "ai_website.generation_failed", { message });

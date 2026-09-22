@@ -5,7 +5,7 @@ The AI Website Studio is a global-admin-only delivery pipeline for generating, v
 ## Automatic workflow
 
 1. A global administrator supplies verified client and business information once.
-2. Gemini returns a schema-constrained website content system. Large service catalogues are split into bounded parallel batches and merged back into their original order automatically.
+2. Gemini returns a schema-constrained website content system. Temporary overloads are retried with exponential backoff and automatically fail over from Gemini 3.8 Flash to 3.7 Flash and 3.5 Flash-Lite. Large service catalogues are split into bounded parallel batches and merged back into their original order automatically.
 3. The server checks service grounding, section completeness, content depth, placeholders, colours, and unsupported claims.
 4. A failed quality check is sent through one automatic repair attempt. Failed output is never delivered.
 5. The shared website engine renders three independent responsive concepts: Editorial, Momentum, and Aura.
@@ -17,8 +17,11 @@ The AI Website Studio is a global-admin-only delivery pipeline for generating, v
 ```env
 DATABASE_URL=postgresql://...
 GEMINI_API_KEY=...
-GEMINI_WEBSITE_MODEL=gemini-3.6-flash
+GEMINI_WEBSITE_MODEL=gemini-3.8-flash
+# Optional: override the automatic fallback order.
+GEMINI_WEBSITE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash-lite
 GEMINI_WEBSITE_TIMEOUT_MS=55000
+GEMINI_WEBSITE_RETRY_DELAY_MS=900
 PLATFORM_PUBLIC_URL=https://your-domain.example
 AUTH_EMAIL_FROM=AgenticThat <website@your-domain.example>
 RESEND_API_KEY=...
@@ -37,6 +40,7 @@ Apply `supabase/migrations/202609210001_admin_ai_website_studio.sql` through the
 - AI output cannot introduce services that were not supplied in the verified brief.
 - Every supplied service is preserved. There is no fixed catalogue-size limit; bounded Gemini batches prevent large briefs from overflowing a single model response.
 - Stalled generations fail closed, and administrators are limited to one active generation and ten starts per hour.
+- Failed projects keep their verified brief and expose a one-click Retry action in the admin delivery pipeline.
 - Preview pages are marked `noindex`, `nofollow`, `nocache`, and `no-referrer`.
 
 ## Current publishing boundary
