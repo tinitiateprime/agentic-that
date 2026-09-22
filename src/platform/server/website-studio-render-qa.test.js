@@ -28,7 +28,7 @@ test("render QA rejects overflow, broken media, oversized type and accessibility
     status: 200,
     themeStructure: true,
     bodyWidth: 430,
-    pageHeight: 14_500,
+    pageHeight: 16_000,
     brokenImages: 2,
     h1Count: 1,
     maxH1Size: 74,

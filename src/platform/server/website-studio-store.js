@@ -293,6 +293,16 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
     const links = previewLinks(token);
     const renderQa = await runWebsiteRenderQa(links);
     if (!renderQa.passed) {
+      generated.qa = {
+        ...generated.qa,
+        passed: false,
+        checks: [...generated.qa.checks, ...renderQa.checks],
+        renderedAt: renderQa.checkedAt,
+      };
+      await sql`
+        UPDATE ai_website_projects
+           SET qa_report = ${sql.json(generated.qa)}, updated_at = now()
+         WHERE id = ${id} AND status = 'generating'`;
       const details = renderQa.checks.filter((check) => !check.passed).map((check) => `${check.key}: ${check.message}`);
       throw new WebsiteStudioError("The generated concepts did not pass automated desktop and mobile visual QA.", "RENDER_QA_FAILED", 502, details);
     }

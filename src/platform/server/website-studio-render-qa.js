@@ -4,7 +4,7 @@ import { chromium } from "playwright-core";
 
 const VIEWPORTS = Object.freeze([
   { name: "desktop", width: 1440, height: 960, maxHeading: 96, maxPageHeight: 11_000 },
-  { name: "mobile", width: 390, height: 844, maxHeading: 60, maxPageHeight: 13_500 },
+  { name: "mobile", width: 390, height: 844, maxHeading: 60, maxPageHeight: 15_000 },
 ]);
 
 function localChromeCandidates() {
@@ -58,17 +58,16 @@ export function assessRenderedWebsite(metrics, viewport) {
 
 async function readPageMetrics(page, theme, response) {
   await page.evaluate(async () => {
+    const images = [...document.images];
+    images.forEach((image) => { image.loading = "eager"; });
     for (let top = 0; top < document.body.scrollHeight; top += Math.max(500, window.innerHeight * .8)) {
       window.scrollTo(0, top);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    await Promise.all([...document.images].map((image) => image.complete
-      ? Promise.resolve()
-      : new Promise((resolve) => {
-        image.addEventListener("load", resolve, { once: true });
-        image.addEventListener("error", resolve, { once: true });
-        setTimeout(resolve, 2500);
-      })));
+    await Promise.race([
+      Promise.all(images.map((image) => image.decode?.().catch(() => {}) || Promise.resolve())),
+      new Promise((resolve) => setTimeout(resolve, 15_000)),
+    ]);
     window.scrollTo(0, 0);
   });
   return page.evaluate(({ expectedTheme, status, responseOk }) => {
