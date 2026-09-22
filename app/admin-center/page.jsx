@@ -3,6 +3,7 @@ import AdminCenter from "./AdminCenter";
 import "./admin-center.css";
 import "./email-studio.css";
 import "./publishing-monitor.css";
+import "./website-studio.css";
 import "@project-workspace/embedded/styles.css";
 
 export const metadata = { title: "Admin Center - AgenticThat" };
