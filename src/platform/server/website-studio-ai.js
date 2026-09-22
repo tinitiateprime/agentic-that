@@ -2,8 +2,12 @@ const DEFAULT_MODEL = "gemini-3.8-flash";
 // Lite models are intentionally excluded from client-ready generation. They are
 // useful for high-volume extraction, but the studio needs the stronger writing
 // and art-direction models even when that means waiting for a retry.
-const DEFAULT_FALLBACK_MODELS = Object.freeze(["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
-const MAX_GENERATION_ATTEMPTS = 8;
+const DEFAULT_FALLBACK_MODELS = Object.freeze(["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
+// The emergency model is used only after every full Flash model is unavailable.
+// V3's deterministic renderer and both content/render QA gates still apply, so
+// temporary provider demand cannot turn a delivery into an unreviewed template.
+const DEFAULT_EMERGENCY_MODEL = "gemini-3.5-flash-lite";
+const MAX_GENERATION_ATTEMPTS = 12;
 const GENERATION_RETRY_BUDGET_MS = 8 * 60_000;
 const THEMES = Object.freeze(["editorial", "momentum", "aura"]);
 const SERVICE_BATCH_SIZE = 12;
@@ -241,10 +245,15 @@ function resolveWebsiteModels(options = {}) {
   const configured = String(process.env.GEMINI_WEBSITE_MODELS || "").split(",");
   const primary = cleanText(process.env.GEMINI_WEBSITE_MODEL, 100) || DEFAULT_MODEL;
   const candidates = configured.map((item) => cleanText(item, 100)).filter(Boolean);
-  const models = [...candidates, primary, ...DEFAULT_FALLBACK_MODELS]
+  const fullModels = [...candidates, primary, ...DEFAULT_FALLBACK_MODELS]
     .filter((model) => !/flash[-_ ]?lite|\blite\b/i.test(model));
-  if (!models.length) models.push(DEFAULT_MODEL, ...DEFAULT_FALLBACK_MODELS);
-  return [...new Set(models)];
+  const configuredEmergencyModels = candidates.filter((model) => /flash[-_ ]?lite|\blite\b/i.test(model));
+  const emergencyModel = cleanText(process.env.GEMINI_WEBSITE_EMERGENCY_MODEL, 100) || DEFAULT_EMERGENCY_MODEL;
+  return [...new Set([
+    ...(fullModels.length ? fullModels : [DEFAULT_MODEL, ...DEFAULT_FALLBACK_MODELS]),
+    ...configuredEmergencyModels,
+    emergencyModel,
+  ].filter(Boolean))];
 }
 
 const cleanLongText = (value, maxLength = 4000) => (
@@ -764,7 +773,7 @@ async function runGeminiTask({ buildRequest, parsePayload, client }) {
   let repairDetails = [];
   let lastError = null;
   let usage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
-  const attemptModels = [client.models[0], client.models[0], ...client.models.slice(1), ...client.models.slice(1)]
+  const attemptModels = [...client.models, ...client.models]
     .slice(0, MAX_GENERATION_ATTEMPTS);
   let attemptsMade = 0;
   let transientFailures = 0;

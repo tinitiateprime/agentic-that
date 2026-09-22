@@ -96,13 +96,13 @@ test("website prompt explicitly grounds generated facts and all service names", 
   assert.match(prompt, /Preventive dental care/);
 });
 
-test("production model resolution excludes Lite generation models", () => {
+test("production model resolution keeps Lite only as the final emergency model", () => {
   const previousModels = process.env.GEMINI_WEBSITE_MODELS;
   process.env.GEMINI_WEBSITE_MODELS = "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.7-flash";
   try {
-    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]);
     process.env.GEMINI_WEBSITE_MODELS = "gemini-3.5-flash-lite";
-    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]);
+    assert.deepEqual(websiteStudioModels(), ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]);
   } finally {
     if (previousModels === undefined) delete process.env.GEMINI_WEBSITE_MODELS;
     else process.env.GEMINI_WEBSITE_MODELS = previousModels;
@@ -203,7 +203,7 @@ test("temporary provider demand retries and falls back to another Gemini model",
   const requestedModels = [];
   const fetchImpl = async (url) => {
     requestedModels.push(String(url).match(/models\/([^:]+):/)?.[1]);
-    if (requestedModels.length < 3) {
+    if (requestedModels.length < 2) {
       return new Response(JSON.stringify({ error: { message: "The model is experiencing high demand." } }), {
         status: 503,
         headers: { "content-type": "application/json" },
@@ -222,9 +222,9 @@ test("temporary provider demand retries and falls back to another Gemini model",
     retryDelayMs: 0,
     timeoutMs: 10_000,
   });
-  assert.deepEqual(requestedModels, ["busy-primary", "busy-primary", "healthy-fallback"]);
+  assert.deepEqual(requestedModels, ["busy-primary", "healthy-fallback"]);
   assert.equal(result.model, "healthy-fallback");
-  assert.equal(result.attempts, 3);
+  assert.equal(result.attempts, 2);
   assert.equal(result.qa.passed, true);
 });
 
@@ -276,5 +276,5 @@ test("temporary overload exhausts the bounded full-model fallback sequence", asy
     generateWebsiteSpec(profile, { apiKey: "test-key", models: ["primary", "fallback"], fetchImpl, retryDelayMs: 0 }),
     (error) => error.code === "AI_TEMPORARILY_BUSY" && error.attempts === 4 && /HTTP 503/.test(error.message),
   );
-  assert.deepEqual(requestedModels, ["primary", "primary", "fallback", "fallback"]);
+  assert.deepEqual(requestedModels, ["primary", "fallback", "primary", "fallback"]);
 });
