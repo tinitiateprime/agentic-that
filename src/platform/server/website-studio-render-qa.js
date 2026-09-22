@@ -36,11 +36,7 @@ async function launchQaBrowser() {
   // software renderer. Do not append --disable-gpu: it conflicts with those
   // launch flags and can terminate Chromium before the first page is created.
   chromiumPack.setGraphicsMode = false;
-  const temporaryDirectory = tmpdir();
-  const temporaryEntries = await readdir(temporaryDirectory, { withFileTypes: true }).catch(() => []);
-  await Promise.all(temporaryEntries
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith("playwright_chromiumdev_profile-"))
-    .map((entry) => rm(path.join(temporaryDirectory, entry.name), { recursive: true, force: true }).catch(() => {})));
+  await cleanupQaProfiles();
   const serverlessArgs = [
     ...chromiumPack.args.filter((argument) => !argument.startsWith("--disk-cache-size=")),
     "--disk-cache-size=1",
@@ -51,6 +47,14 @@ async function launchQaBrowser() {
     headless: true,
     args: serverlessArgs,
   });
+}
+
+async function cleanupQaProfiles() {
+  const temporaryDirectory = tmpdir();
+  const temporaryEntries = await readdir(temporaryDirectory, { withFileTypes: true }).catch(() => []);
+  await Promise.all(temporaryEntries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("playwright_chromiumdev_profile-"))
+    .map((entry) => rm(path.join(temporaryDirectory, entry.name), { recursive: true, force: true }).catch(() => {})));
 }
 
 export function assessRenderedWebsite(metrics, viewport) {
@@ -173,12 +177,16 @@ export async function runWebsiteRenderQa(links, options = {}) {
             completed = true;
           } catch (error) {
             lastError = error;
-            if (ownsBrowser) {
-              await browser?.close().catch(() => {});
-              browser = null;
-            }
           } finally {
             await context?.close().catch(() => {});
+            if (ownsBrowser) {
+              // Serverless Chromium uses /tmp for shared memory. A fresh process
+              // per viewport prevents six full-page checks from accumulating
+              // enough native memory to terminate the final concept.
+              await browser?.close().catch(() => {});
+              browser = null;
+              await cleanupQaProfiles();
+            }
           }
         }
         if (!completed) checks.push({ key: `render-${theme}-${viewport.name}`, passed: false, message: lastError instanceof Error ? lastError.message : "Rendered website QA failed." });
@@ -186,6 +194,7 @@ export async function runWebsiteRenderQa(links, options = {}) {
     }
   } finally {
     if (ownsBrowser) await browser?.close().catch(() => {});
+    if (ownsBrowser) await cleanupQaProfiles();
   }
   return { passed: checks.length === 6 && checks.every((check) => check.passed), checks, checkedAt: new Date().toISOString() };
 }
