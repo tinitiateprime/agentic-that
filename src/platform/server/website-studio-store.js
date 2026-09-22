@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { getPlatformSql } from "./auth-store.js";
 import {
   platformEmailStudioConfiguration,
   platformPublicLink,
@@ -12,6 +11,7 @@ import {
   websiteStudioModels,
   websiteStudioThemes,
 } from "./website-studio-ai.js";
+import { getWebsiteStudioSql } from "./website-studio-database.js";
 import { resolveWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
 
 const PROJECT_PREFIX = "website_";
@@ -146,7 +146,7 @@ async function expireStaleGenerations(sql) {
 }
 
 export async function websiteStudioSnapshot() {
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   await expireStaleGenerations(sql);
   const rows = await sql`
     SELECT id, business_name, business_type, client_name, client_email, business_profile,
@@ -168,7 +168,7 @@ export async function websiteStudioSnapshot() {
 }
 
 export async function queueAutomatedWebsiteProject(actor, input) {
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   const clientEmail = requiredEmail(input?.clientEmail);
   const profile = normalizeWebsiteBusinessProfile(input?.businessProfile || input);
   if (!String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()) {
@@ -221,7 +221,7 @@ export async function failQueuedWebsiteProject(projectIdInput, tokenInput, error
   const token = requiredText(tokenInput, "Generation token", 200);
   const message = cleanText(error instanceof Error ? error.message : error, 800)
     || "The background generation job could not be started.";
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   const [failed] = await sql`
     UPDATE ai_website_projects
        SET status = 'failed', failure_message = ${message}, updated_at = now()
@@ -237,7 +237,7 @@ export async function failQueuedWebsiteProject(projectIdInput, tokenInput, error
 export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput) {
   const id = requiredText(projectIdInput, "Project ID", 100);
   const token = requiredText(tokenInput, "Generation token", 200);
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   const [claimed] = await sql`
     UPDATE ai_website_projects
        SET generation_attempts = 1, failure_message = null, updated_at = now()
@@ -348,7 +348,7 @@ export async function getWebsitePreview(tokenInput, themeInput) {
   const token = requiredText(tokenInput, "Preview token", 200);
   const theme = cleanText(themeInput, 40).toLowerCase();
   if (!websiteStudioThemes().includes(theme)) throw new WebsiteStudioError("This website concept does not exist.", "PREVIEW_NOT_FOUND", 404);
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   const [row] = await sql`
     SELECT * FROM ai_website_projects
      WHERE preview_token_hash = ${tokenDigest(token)}
@@ -367,7 +367,7 @@ export async function publishSelectedWebsite(tokenInput, themeInput) {
   const token = requiredText(tokenInput, "Preview token", 200);
   const theme = cleanText(themeInput, 40).toLowerCase();
   if (!websiteStudioThemes().includes(theme)) throw new WebsiteStudioError("Choose a valid website concept.", "INVALID_THEME", 400);
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   return sql.begin(async (tx) => {
     const [before] = await tx`
       SELECT * FROM ai_website_projects
@@ -397,7 +397,7 @@ export async function publishSelectedWebsite(tokenInput, themeInput) {
 
 export async function getPublishedWebsite(slugInput) {
   const slug = requiredText(slugInput, "Website slug", 100).toLowerCase();
-  const sql = await getPlatformSql();
+  const sql = await getWebsiteStudioSql();
   const [row] = await sql`
     SELECT * FROM ai_website_projects
      WHERE public_slug = ${slug} AND status = 'published' AND site_spec IS NOT NULL

@@ -48,7 +48,7 @@ export async function POST(request) {
     const actor = await authorizeGlobalAdminApi();
     queued = await queueAutomatedWebsiteProject(actor, await request.json());
 
-    if (process.env.NETLIFY === "true") {
+    if (process.env.NODE_ENV !== "development") {
       await dispatchBackgroundGeneration(request, queued.project.id, queued.jobToken);
       return Response.json({ ok: true, queued: true, project: queued.project }, { status: 202 });
     }
