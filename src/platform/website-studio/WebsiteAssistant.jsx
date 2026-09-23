@@ -20,6 +20,9 @@ function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAYS_MS = [1_000, 2_500, 5_000];
+
 export default function WebsiteAssistant({ source, businessName, phone = "" }) {
   const [panel, setPanel] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -36,6 +39,10 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
   const runRef = useRef(0);
   const endingRef = useRef(false);
   const transcriptRef = useRef(null);
+  const retryTimerRef = useRef(null);
+  const pendingReconnectRef = useRef(null);
+  const retryCountRef = useRef(0);
+  const startRef = useRef(null);
 
   const pushMessage = useCallback((role, value) => {
     const text = cleanText(value);
@@ -50,6 +57,9 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
   const endSession = useCallback(async () => {
     runRef.current += 1;
     endingRef.current = true;
+    pendingReconnectRef.current = null;
+    retryCountRef.current = 0;
+    clearTimeout(retryTimerRef.current);
     const session = sessionRef.current;
     sessionRef.current = null;
     if (session) await session.endSession().catch(() => {});
@@ -61,6 +71,9 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
 
   useEffect(() => () => {
     runRef.current += 1;
+    endingRef.current = true;
+    pendingReconnectRef.current = null;
+    clearTimeout(retryTimerRef.current);
     const session = sessionRef.current;
     sessionRef.current = null;
     if (session) void session.endSession().catch(() => {});
@@ -85,24 +98,83 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
     },
   }), []);
 
-  const start = useCallback(async (mode) => {
+  const attemptPendingReconnect = useCallback(() => {
+    retryTimerRef.current = null;
+    const pending = pendingReconnectRef.current;
+    if (!pending || endingRef.current || runRef.current !== pending.run) return;
+    if (navigator.onLine === false || document.visibilityState === "hidden") {
+      setActivity(navigator.onLine === false ? "Waiting for internet..." : "Waiting for this tab...");
+      return;
+    }
+    pendingReconnectRef.current = null;
+    void startRef.current?.(pending.mode, { reconnecting: true });
+  }, []);
+
+  const queueReconnect = useCallback((mode, run, details) => {
+    if (endingRef.current || runRef.current !== run) return;
+    sessionRef.current = null;
+    setSending(false);
+
+    if (details?.reason === "agent") {
+      setActivity("");
+      setStatus("ended");
+      return;
+    }
+
+    if (retryCountRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      pendingReconnectRef.current = null;
+      setActivity("");
+      setError("The connection was interrupted. Select Try again to reconnect.");
+      setStatus("error");
+      return;
+    }
+
+    const attempt = retryCountRef.current + 1;
+    retryCountRef.current = attempt;
+    pendingReconnectRef.current = { mode, run };
+    setError("");
+    setStatus("reconnecting");
+    setActivity(navigator.onLine === false ? "Waiting for internet..." : `Reconnecting... (${attempt}/${MAX_RECONNECT_ATTEMPTS})`);
+    clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(attemptPendingReconnect, RECONNECT_DELAYS_MS[attempt - 1]);
+  }, [attemptPendingReconnect]);
+
+  useEffect(() => {
+    const resumeReconnect = () => attemptPendingReconnect();
+    const resumeVisibleReconnect = () => {
+      if (document.visibilityState === "visible") attemptPendingReconnect();
+    };
+    window.addEventListener("online", resumeReconnect);
+    document.addEventListener("visibilitychange", resumeVisibleReconnect);
+    return () => {
+      window.removeEventListener("online", resumeReconnect);
+      document.removeEventListener("visibilitychange", resumeVisibleReconnect);
+    };
+  }, [attemptPendingReconnect]);
+
+  const start = useCallback(async (mode, { reconnecting = false } = {}) => {
     const run = runRef.current + 1;
     runRef.current = run;
     endingRef.current = true;
+    pendingReconnectRef.current = null;
+    clearTimeout(retryTimerRef.current);
     const previous = sessionRef.current;
     sessionRef.current = null;
     if (previous) await previous.endSession().catch(() => {});
     endingRef.current = false;
     setPanel(mode);
-    setMessages([]);
+    if (!reconnecting) {
+      retryCountRef.current = 0;
+      setMessages([]);
+      setLeadCaptured(false);
+      setAppointmentCaptured(false);
+    }
     setError("");
-    setActivity("");
-    setLeadCaptured(false);
-    setAppointmentCaptured(false);
-    setStatus("connecting");
+    setActivity(reconnecting ? `Reconnecting... (${retryCountRef.current}/${MAX_RECONNECT_ATTEMPTS})` : "");
+    setStatus(reconnecting ? "reconnecting" : "connecting");
 
     try {
-      if (mode === "voice") {
+      if (mode === "voice" && !reconnecting) {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("Voice conversations are not supported by this browser.");
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -136,11 +208,9 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
           setSending(false);
           setStatus("error");
         },
-        onDisconnect: () => {
+        onDisconnect: (details) => {
           if (!endingRef.current && runRef.current === run) {
-            setActivity("");
-            setSending(false);
-            setStatus("ended");
+            queueReconnect(mode, run, details);
           }
         },
       };
@@ -161,13 +231,22 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
         return;
       }
       sessionRef.current = session;
+      setError("");
+      setActivity("");
       setStatus("live");
     } catch (startError) {
       if (runRef.current !== run) return;
-      setError(startError instanceof Error ? startError.message : "The AI assistant could not connect.");
-      setStatus("error");
+      const message = startError instanceof Error ? startError.message : "The AI assistant could not connect.";
+      if (reconnecting) {
+        queueReconnect(mode, run, { reason: "error", message });
+      } else {
+        setError(message);
+        setStatus("error");
+      }
     }
-  }, [clientTools, pushMessage, source]);
+  }, [clientTools, pushMessage, queueReconnect, source]);
+
+  startRef.current = start;
 
   const close = useCallback(() => {
     void endSession();
@@ -191,6 +270,7 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
   }, [draft, pushMessage, sending, status]);
 
   const reconnect = () => void start(panel || "chat");
+  const isConnecting = status === "connecting" || status === "reconnecting";
   const displayPhone = cleanText(phone);
 
   return (
@@ -206,7 +286,7 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
           {panel === "chat" ? (
             <>
               <div className="waas-assistant-messages" ref={transcriptRef} aria-live="polite">
-                {status === "connecting" && <div className="waas-assistant-connecting"><LoaderCircle className="waas-spin" size={20} /><span>Connecting securely…</span></div>}
+                {isConnecting && <div className="waas-assistant-connecting"><LoaderCircle className="waas-spin" size={20} /><span>{status === "reconnecting" ? activity : "Connecting securely…"}</span></div>}
                 {messages.map((message) => <p className={message.role} key={message.id}><span>{message.text}</span></p>)}
                 {sending && <p className="assistant pending"><span><i /><i /><i /></span></p>}
                 {error && <div className="waas-assistant-error">{error}</div>}
@@ -221,10 +301,10 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
             <div className="waas-assistant-voice">
               <div className={`waas-assistant-orb status-${status}`}><span><Mic size={31} /></span><i /><i /></div>
               <small>{status === "connecting" ? "Connecting securely…" : activity || (status === "live" ? "You can speak now" : "Conversation ended")}</small>
-              <strong>{status === "live" ? `${assistantName} is ready to help` : error || `Talk with ${businessName}`}</strong>
+              <strong>{status === "live" ? `${assistantName} is ready to help` : status === "reconnecting" ? "Restoring your connection" : error || `Talk with ${businessName}`}</strong>
               {status === "live" && <p>Ask about services, opening hours or request an appointment.</p>}
               {(leadCaptured || appointmentCaptured) && <div className="waas-assistant-captured"><CheckCircle2 size={15} />Details captured</div>}
-              {status === "live" ? <button className="waas-assistant-end" type="button" onClick={() => void endSession()}><X size={16} /> End conversation</button> : status !== "connecting" && <button className="waas-assistant-reconnect" type="button" onClick={reconnect}>Try again</button>}
+              {status === "live" ? <button className="waas-assistant-end" type="button" onClick={() => void endSession()}><X size={16} /> End conversation</button> : !isConnecting && <button className="waas-assistant-reconnect" type="button" onClick={reconnect}>Try again</button>}
             </div>
           )}
 
@@ -237,7 +317,7 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
 
       <div className="waas-assistant-actions">
         <button type="button" className="chat" onClick={() => panel === "chat" ? close() : void start("chat")} aria-label={`Chat with ${businessName}`}><MessageCircle size={20} /><strong>Chat</strong></button>
-        <button type="button" className="voice" onClick={() => panel === "voice" ? close() : void start("voice")} aria-label={`Talk to ${businessName} AI`}><span>{status === "connecting" && panel === "voice" ? <LoaderCircle className="waas-spin" size={20} /> : panel === "voice" && status === "live" ? <Volume2 size={20} /> : <PhoneCall size={20} />}</span><strong>Talk to AI</strong></button>
+        <button type="button" className="voice" onClick={() => panel === "voice" ? close() : void start("voice")} aria-label={`Talk to ${businessName} AI`}><span>{isConnecting && panel === "voice" ? <LoaderCircle className="waas-spin" size={20} /> : panel === "voice" && status === "live" ? <Volume2 size={20} /> : <PhoneCall size={20} />}</span><strong>Talk to AI</strong></button>
       </div>
     </div>
   );
