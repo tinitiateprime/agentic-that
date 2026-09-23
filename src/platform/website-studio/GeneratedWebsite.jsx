@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import WebsiteSelectionBar from "./WebsiteSelectionBar";
+import WebsiteAssistant from "./WebsiteAssistant";
 import "./generated-website.css";
 
 const routePath = (route) => (Array.isArray(route) ? route.filter(Boolean) : []);
@@ -274,11 +275,6 @@ function Footer({ project, theme, previewToken }) {
   return <footer className="waas-footer"><div className="waas-footer-brand"><Brand profile={profile} site={site} base={base} /><p>{site.brand.positioning}</p></div><div><strong>Explore</strong><a href={base}>Home</a><a href={pageHref(base, "services")}>Services</a><a href={pageHref(base, "about")}>About</a><a href={pageHref(base, "contact")}>Contact</a></div><div><strong>Services</strong>{site.services.slice(0, 4).map((service, index) => <a href={pageHref(base, `services/${serviceSlug(service, index)}`)} key={service.name}>{service.name}</a>)}</div><div><strong>Connect</strong>{profile.phone && <a href={`tel:${profile.phone.replace(/[^+\d]/g, "")}`}>{profile.phone}</a>}{profile.email && <a href={`mailto:${profile.email}`}>{profile.email}</a>}{profile.location && <span>{profile.location}</span>}</div><div className="waas-footer-bottom"><span>© {new Date().getFullYear()} {profile.businessName}</span>{credits.length > 0 && <details className="waas-photo-credits"><summary>Photography credits</summary><div>{credits.map((photo) => photo.sourceUrl ? <a href={photo.sourceUrl} target="_blank" rel="noreferrer" key={photo.sourceUrl}>{photo.photographer || "Photo"} / Pexels</a> : <span key={photo.src}>{photo.photographer || "Photo"} / Pexels</span>)}</div></details>}<span>{experience.signature}</span></div></footer>;
 }
 
-function FloatingCall({ profile }) {
-  const href = profile.phone ? `tel:${profile.phone.replace(/[^+\d]/g, "")}` : profile.email ? `mailto:${profile.email}` : "#contact";
-  return <a className="waas-floating-call" href={href} aria-label={profile.phone ? `Call ${profile.businessName}` : `Contact ${profile.businessName}`} data-voice-agent-ready="true"><span>{profile.phone ? <Phone size={21} /> : <Mail size={21} />}</span><strong>{profile.phone ? "Call now" : "Enquire"}</strong></a>;
-}
-
 export function websiteRouteExists(project, route = []) {
   const path = routePath(route);
   if (!path.length || (["services", "about", "contact"].includes(path[0]) && path.length === 1)) return true;
@@ -308,5 +304,6 @@ export default function GeneratedWebsite({ project, theme, previewToken = null, 
       : path[0] === "about" ? <AboutPage project={project} theme={theme} previewToken={previewToken} />
         : path[0] === "contact" ? <ContactPage project={project} theme={theme} previewToken={previewToken} />
           : <HomePage project={project} theme={theme} previewToken={previewToken} />;
-  return <div className={previewToken ? "waas-preview-page" : ""} style={style}><div className={`waas-site waas-${theme}`}>{content}<Footer project={project} theme={theme} previewToken={previewToken} /><FloatingCall profile={project.businessProfile} /></div>{previewToken && <WebsiteSelectionBar token={previewToken} theme={theme} businessName={project.businessName} publishedTheme={project.selectedTheme} publishedUrl={project.publishedUrl} />}</div>;
+  const assistantSource = previewToken ? { previewToken, theme } : { publicSlug: project.publicSlug };
+  return <div className={previewToken ? "waas-preview-page" : ""} style={style}><div className={`waas-site waas-${theme}`}>{content}<Footer project={project} theme={theme} previewToken={previewToken} /><WebsiteAssistant source={assistantSource} businessName={project.businessName} phone={project.businessProfile?.phone} /></div>{previewToken && <WebsiteSelectionBar token={previewToken} theme={theme} businessName={project.businessName} publishedTheme={project.selectedTheme} publishedUrl={project.publishedUrl} />}</div>;
 }

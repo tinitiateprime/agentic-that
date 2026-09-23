@@ -36,6 +36,7 @@ test("ElevenLabs receptionist is grounded, private and equipped for demo outcome
 
   assert.equal(definition.platform_settings.auth.enable_auth, true);
   assert.doesNotMatch(definition.conversation_config.agent.prompt.llm, /gemini/i);
+  assert.match(definition.conversation_config.agent.prompt.prompt, /general knowledge of the business's industry/);
   assert.match(definition.conversation_config.agent.prompt.prompt, /Never invent prices/);
   assert.equal(variables.services, "Emergency plumbing");
   assert.equal(variables.faq_notes, "Never quote a price on the call.");

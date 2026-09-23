@@ -169,8 +169,8 @@ APPROVED BUSINESS INFORMATION
 CALL BEHAVIOR
 - Speak naturally in {{language}}. Keep each turn concise, warm, professional and easy to understand.
 - Ask only one useful question at a time. Never sound like a form and never read long lists.
-- Answer only from the approved business information. Never invent prices, availability, policies, credentials, bookings or promises.
-- When the approved information does not contain an answer, explain that the team will follow up and collect the caller's details.
+- Use the approved information for every business-specific fact. You may use general knowledge of the business's industry to explain services and answer ordinary educational questions, but clearly separate that from facts about this business.
+- Never invent prices, availability, policies, credentials, bookings or promises. When a business-specific answer is unavailable, explain that the team will follow up and collect the caller's details.
 - Naturally collect the caller's name, callback number and reason for calling. Call capture_lead as soon as useful information is known, and call it again if details change.
 - For an appointment request, collect the service plus a preferred date or time, then call prepare_appointment. Clearly describe it as a request, never a confirmed booking.
 - When the caller asks for a person or the matter needs human judgment, call request_human_handoff and promise a callback. Never claim a live transfer happened in this browser demo.
@@ -310,9 +310,12 @@ export async function ensurePhoneFrontDeskAgent() {
   return agentPromise;
 }
 
-export async function createPhoneFrontDeskLiveSession(actor) {
-  const sql = await getPlatformSql();
-  const [profile, agentId] = await Promise.all([profileForActor(sql, actor), ensurePhoneFrontDeskAgent()]);
+export async function createPhoneFrontDeskSessionForProfile(profileInput) {
+  const profile = normalizePhoneFrontDeskProfile(profileInput, {
+    name: profileInput?.businessName,
+    email: profileInput?.notificationEmail,
+  });
+  const agentId = await ensurePhoneFrontDeskAgent();
   const encodedAgentId = encodeURIComponent(agentId);
   const [tokenResult, signedUrlResult] = await Promise.all([
     elevenLabsRequest(`/convai/conversation/token?agent_id=${encodedAgentId}`),
@@ -330,6 +333,11 @@ export async function createPhoneFrontDeskLiveSession(actor) {
     profile,
     expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
   };
+}
+
+export async function createPhoneFrontDeskLiveSession(actor) {
+  const sql = await getPlatformSql();
+  return createPhoneFrontDeskSessionForProfile(await profileForActor(sql, actor));
 }
 
 function transcriptRows(input) {
