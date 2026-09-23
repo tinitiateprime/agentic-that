@@ -41,6 +41,7 @@ export const LIVE_ACCESS_CATALOG = Object.freeze({
   messaging: Object.freeze([
     "messaging.whatsapp",
     "messaging.telegram",
+    "messaging.ai-phone-front-desk",
   ]),
   publishing: Object.freeze([
     "publishing.instagram",

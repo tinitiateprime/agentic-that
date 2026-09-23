@@ -170,7 +170,7 @@ export default function ServiceDetail(props) {
   if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
     return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
   }
-  if (props.category?.id === "website") {
+  if (props.category?.id === "website" || props.service?.slug === "ai-phone-front-desk") {
     return <StandardServiceDetail {...props} />;
   }
   if (props.service?.availability === "live" && props.category?.id !== "engagement") {

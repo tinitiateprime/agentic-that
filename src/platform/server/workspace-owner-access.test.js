@@ -18,7 +18,7 @@ test("an expired workspace owner keeps every module and operational capability",
   assert.equal(owner.billingStatus, "exempt");
   assert.equal(owner.trialStartsAt, null);
   assert.equal(owner.trialEndsAt, null);
-  for (const resource of ["website.ai-website-studio", "messaging.telegram", "publishing.youtube", "scraping.facebook"]) {
+  for (const resource of ["website.ai-website-studio", "messaging.ai-phone-front-desk", "messaging.telegram", "publishing.youtube", "scraping.facebook"]) {
     assert.equal(principalHasAccess(owner, resource, "configure"), true);
   }
   for (const capability of ["workspace.team.manage", "website.generate", "messaging.configure", "publishing.execute", "scraping.run"]) {

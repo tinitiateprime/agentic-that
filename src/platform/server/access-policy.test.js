@@ -22,6 +22,7 @@ test("multiple roles combine at the highest level", () => {
     ],
   });
   assert.equal(access["messaging.whatsapp"], "view");
+  assert.equal(access["messaging.ai-phone-front-desk"], "view");
   assert.equal(access["messaging.telegram"], "operate");
 });
 

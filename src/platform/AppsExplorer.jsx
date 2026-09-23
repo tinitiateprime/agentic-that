@@ -50,6 +50,9 @@ const capabilityIcons = {
   wati: Link2,
   coexistence: ShieldCheck,
   "direct messaging": Send,
+  "live voice": MessageCircleMore,
+  "lead capture": UserRound,
+  "call summaries": FileText,
   "account sessions": KeyRound,
   images: Image,
   video: Video,
@@ -77,7 +80,7 @@ const capabilityIcons = {
 
 function serviceCapabilities(service) {
   const label = service.formatLabel || (service.availability === "live" ? "Guided workflow" : "Product preview");
-  return label.split("·").map((item) => item.trim()).filter(Boolean).slice(0, 3);
+  return label.split(/(?:Â·|·)/).map((item) => item.trim()).filter(Boolean).slice(0, 3);
 }
 
 function ServiceStatus({ status }) {
