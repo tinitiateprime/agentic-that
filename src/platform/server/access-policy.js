@@ -22,6 +22,7 @@ const CONFIGURE_CAPABILITIES = new Set([
   "messaging.configure",
   "publishing.accounts.configure",
   "scraping.configure",
+  "website.configure",
 ]);
 
 export function capabilityAccessLevel(capability) {

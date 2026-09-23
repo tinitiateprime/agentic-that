@@ -21,7 +21,7 @@ const PremiumServiceDetail = dynamic(() => import("./PremiumServiceDetail"));
 function actionFor(service, status) {
   if (status.state === "coming-soon") return { label: "Coming soon", disabled: true };
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
-  if (service.connectionKind === "none") return { label: "Start scraping", href: service.dashboardHref };
+  if (service.connectionKind === "none") return { label: service.actionLabel || `Open ${service.platformName} workspace`, href: service.dashboardHref };
   if (status.state === "connected") return { label: `Open ${service.platformName} workspace`, href: service.dashboardHref };
   return { label: `Open ${service.platformName} workspace`, disabled: true };
 }
@@ -169,6 +169,9 @@ function StandardServiceDetail({ user, service, category, related }) {
 export default function ServiceDetail(props) {
   if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
     return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
+  }
+  if (props.category?.id === "website") {
+    return <StandardServiceDetail {...props} />;
   }
   if (props.service?.availability === "live" && props.category?.id !== "engagement") {
     return <PremiumServiceDetail {...props} />;

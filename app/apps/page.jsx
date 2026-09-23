@@ -4,7 +4,7 @@ import { getCurrentPrincipal } from "@platform/server/access-control";
 
 export const metadata = {
   title: "Apps — AgenticThat",
-  description: "Choose, connect, and open AgenticThat messaging, publishing, scraping, SEO, and engagement services.",
+  description: "Choose and open AgenticThat AI website, messaging, publishing, scraping, SEO, and engagement services.",
 };
 
 export default async function AppsPage() {

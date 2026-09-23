@@ -1,4 +1,8 @@
-import { accessErrorResponse, authorizeGlobalAdminApi } from "@platform/server/access-control";
+import {
+  accessErrorResponse,
+  assertPrincipalCapability,
+  authorizeApiAccess,
+} from "@platform/server/access-control";
 import {
   executeAutomatedWebsiteProject,
   failQueuedWebsiteProject,
@@ -10,9 +14,14 @@ import { WebsiteStudioError } from "@platform/server/website-studio-ai";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+async function authorizeStudio(level, capability) {
+  const principal = await authorizeApiAccess("website.ai-website-studio", level);
+  return assertPrincipalCapability(principal, capability);
+}
+
 async function dispatchBackgroundGeneration(request, projectId, jobToken) {
   const runUrl = new URL(
-    `/api/admin-center/website-studio/jobs/${encodeURIComponent(projectId)}/run`,
+    `/api/website-studio/jobs/${encodeURIComponent(projectId)}/run`,
     request.url,
   );
   const response = await fetch(runUrl, {
@@ -33,8 +42,8 @@ async function dispatchBackgroundGeneration(request, projectId, jobToken) {
 
 export async function GET() {
   try {
-    await authorizeGlobalAdminApi();
-    return Response.json({ ok: true, ...(await websiteStudioSnapshot()) });
+    const actor = await authorizeStudio("view", "website.view");
+    return Response.json({ ok: true, ...(await websiteStudioSnapshot(actor)) });
   } catch (error) {
     try { return accessErrorResponse(error); } catch {
       console.error("AI Website Studio snapshot failed", error);
@@ -42,10 +51,11 @@ export async function GET() {
     }
   }
 }
+
 export async function POST(request) {
   let queued = null;
   try {
-    const actor = await authorizeGlobalAdminApi();
+    const actor = await authorizeStudio("operate", "website.generate");
     queued = await queueAutomatedWebsiteProject(actor, await request.json());
 
     if (process.env.NODE_ENV !== "development") {

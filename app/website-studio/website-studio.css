@@ -1,4 +1,4 @@
-.admin-main.website-studio-main {
+.website-studio-shell {
   min-width: 0;
   width: 100%;
   max-width: 1540px;
@@ -200,7 +200,7 @@
   margin: 22px 0 16px;
 }
 
-.admin-center-shell .waas-admin-tabs button {
+.website-studio-shell .waas-admin-tabs button {
   min-height: 45px;
   display: flex;
   align-items: center;
@@ -214,7 +214,7 @@
   font-weight: 700;
 }
 
-.admin-center-shell .waas-admin-tabs button.active {
+.website-studio-shell .waas-admin-tabs button.active {
   border-color: #a9d5c1;
   color: #125c41;
   background: #e9f7f0;
@@ -409,8 +409,8 @@
   text-transform: uppercase;
 }
 
-.admin-center-shell .waas-admin-field input,
-.admin-center-shell .waas-admin-field textarea {
+.website-studio-shell .waas-admin-field input,
+.website-studio-shell .waas-admin-field textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid #cbd9d3;
@@ -424,26 +424,26 @@
   transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
 }
 
-.admin-center-shell .waas-admin-field input {
+.website-studio-shell .waas-admin-field input {
   height: 48px;
   padding: 0 13px;
 }
 
-.admin-center-shell .waas-admin-field textarea {
+.website-studio-shell .waas-admin-field textarea {
   min-height: 112px;
   padding: 12px 13px;
   resize: vertical;
 }
 
-.admin-center-shell .waas-admin-field input:focus,
-.admin-center-shell .waas-admin-field textarea:focus {
+.website-studio-shell .waas-admin-field input:focus,
+.website-studio-shell .waas-admin-field textarea:focus {
   border-color: #3e9572;
   background: #fff;
   box-shadow: 0 0 0 4px rgba(39, 143, 103, 0.11);
 }
 
-.admin-center-shell .waas-admin-field input::placeholder,
-.admin-center-shell .waas-admin-field textarea::placeholder {
+.website-studio-shell .waas-admin-field input::placeholder,
+.website-studio-shell .waas-admin-field textarea::placeholder {
   color: #9aa7a2;
 }
 
@@ -525,7 +525,7 @@
   font-size: 11px;
 }
 
-.admin-center-shell .waas-automation-submit button {
+.website-studio-shell .waas-automation-submit button {
   min-height: 46px;
   display: flex;
   align-items: center;
@@ -541,7 +541,7 @@
   white-space: nowrap;
 }
 
-.admin-center-shell .waas-automation-submit button:disabled {
+.website-studio-shell .waas-automation-submit button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -677,7 +677,7 @@
   font-weight: 750;
 }
 
-.admin-center-shell .waas-result-links button {
+.website-studio-shell .waas-result-links button {
   width: 32px;
   height: 32px;
   display: grid;
@@ -693,7 +693,7 @@
   padding: 23px;
 }
 
-.admin-center-shell .waas-projects-card > .waas-card-heading > button {
+.website-studio-shell .waas-projects-card > .waas-card-heading > button {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -851,7 +851,7 @@
 
 .waas-project-action > a,
 .waas-project-action > span,
-.admin-center-shell .waas-project-action > button {
+.website-studio-shell .waas-project-action > button {
   width: 38px;
   height: 38px;
   display: grid;
@@ -867,7 +867,7 @@
   color: #94a19b;
 }
 
-.admin-center-shell .waas-project-action > button {
+.website-studio-shell .waas-project-action > button {
   border-color: #e5bcb7;
   color: #a3463c;
   background: #fff5f3;
@@ -890,7 +890,7 @@
   flex: 1;
 }
 
-.admin-center-shell .waas-project-warning button {
+.website-studio-shell .waas-project-warning button {
   flex: 0 0 auto;
   padding: 7px 10px;
   border: 1px solid #ddb0aa;
@@ -916,7 +916,7 @@
 }
 .waas-project-upgrade > svg { flex: 0 0 auto; }
 .waas-project-upgrade > span { flex: 1; }
-.admin-center-shell .waas-project-upgrade button {
+.website-studio-shell .waas-project-upgrade button {
   flex: 0 0 auto;
   min-height: 36px;
   padding: 7px 13px;
@@ -927,11 +927,11 @@
   font-size: 11px;
   font-weight: 800;
 }
-.admin-center-shell .waas-project-upgrade button:disabled { opacity: .65; cursor: wait; }
+.website-studio-shell .waas-project-upgrade button:disabled { opacity: .65; cursor: wait; }
 
 @media (max-width: 720px) {
   .waas-project-upgrade { flex-wrap: wrap; }
-  .admin-center-shell .waas-project-upgrade button { width: 100%; }
+  .website-studio-shell .waas-project-upgrade button { width: 100%; }
 }
 
 .waas-admin-empty {
@@ -997,7 +997,7 @@
 }
 
 @media (max-width: 900px) {
-  .admin-main.website-studio-main {
+  .website-studio-shell {
     padding: 22px 16px 48px;
   }
 
@@ -1074,7 +1074,7 @@
     overflow-x: auto;
   }
 
-  .admin-center-shell .waas-admin-tabs button {
+  .website-studio-shell .waas-admin-tabs button {
     flex: 0 0 auto;
   }
 

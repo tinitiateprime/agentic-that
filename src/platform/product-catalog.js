@@ -1,5 +1,12 @@
 export const productCategories = [
   {
+    id: "website",
+    label: "AI Websites",
+    eyebrow: "Autonomous website delivery",
+    title: "Turn a short business brief into a complete, published website",
+    description: "Generate three business-specific website directions, validate every page automatically, email private previews, and publish the client's selection.",
+  },
+  {
     id: "messaging",
     label: "Messaging",
     eyebrow: "Customer conversations",
@@ -169,6 +176,40 @@ const seoService = ({
 });
 
 export const productServices = [
+  {
+    slug: "ai-website-studio",
+    category: "website",
+    name: "AI Website Studio",
+    platformName: "Website Studio",
+    provider: "AgenticThat AI",
+    logo: "/ai-website-studio.svg",
+    accent: "#126847",
+    tint: "#e8f7f1",
+    availability: "live",
+    connectionKind: "none",
+    shortDescription: "Create three polished, responsive and business-specific websites from one short brief, then deliver and publish the chosen design automatically.",
+    promise: "Give every business a complete, conversion-ready website without a manual design or approval workflow.",
+    detailHeading: "Complete website generation built around the business, its services and its customers",
+    detailDescription: "The Studio understands the business type and every supplied service, plans the right pages and customer journey, matches professional photography, and validates the complete experience before sending anything to the client.",
+    formatLabel: "AI generation · Responsive sites · Auto publishing",
+    dashboardHref: "/website-studio",
+    actionLabel: "Open AI Website Studio",
+    capabilities: [
+      { title: "Business-aware architecture", description: "Turn any legitimate service catalogue into relevant pages, navigation, conversion copy and calls to action." },
+      { title: "Three complete design directions", description: "Deliver Editorial, Momentum and Aura as distinct responsive multi-page experiences rather than simple colour variations." },
+      { title: "Professional matched photography", description: "Select service-aware Pexels photography and verify every chosen image before client delivery." },
+      { title: "Automatic quality and publishing", description: "Run content, media, desktop and mobile checks, email private previews, and publish the client's choice immediately." },
+    ],
+    steps: [
+      { title: "Add the essential business details", description: "Enter the business name, type, email, description and complete service list." },
+      { title: "Let the delivery pipeline work", description: "AI creates the content and pages, matches photography, builds three designs and runs automated quality checks." },
+      { title: "The client chooses", description: "The client receives private previews by email and one click publishes the preferred website." },
+    ],
+    useCases: ["New business websites", "Agency client delivery", "Service-business launches", "Website redesigns", "Multi-service businesses"],
+    requirements: ["A real business name and type", "A short description of the business", "At least one genuine service", "A valid delivery email"],
+    outcomes: ["Three complete website concepts", "Responsive service pages", "Private client preview links", "Automatically published website"],
+    note: "Generation runs server-side, project history is private to the signed-in workspace user, and no website is delivered unless every automated quality check passes.",
+  },
   {
     slug: "whatsapp",
     category: "messaging",

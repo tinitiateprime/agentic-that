@@ -8,6 +8,7 @@ import {
   Cloud,
   Eye,
   FileText,
+  Globe2,
   Hash,
   Heart,
   Image,
@@ -33,6 +34,7 @@ import styles from "./app-store.module.css";
 import { accessResourceForService, accessSatisfies } from "./access-catalog";
 
 const categoryPresentation = {
+  website: { icon: Globe2, accent: "#126847", tint: "#e8f7f1" },
   messaging: { icon: MessageCircleMore, accent: "#087360", tint: "#e6f4f0" },
   publishing: { icon: SquarePen, accent: "#7857e8", tint: "#f1edff" },
   scraping: { icon: Search, accent: "#2378d4", tint: "#eaf3ff" },
@@ -41,6 +43,9 @@ const categoryPresentation = {
 };
 
 const capabilityIcons = {
+  "ai generation": Sparkles,
+  "responsive sites": Eye,
+  "auto publishing": Cloud,
   "cloud api": Cloud,
   wati: Link2,
   coexistence: ShieldCheck,

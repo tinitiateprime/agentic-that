@@ -25,11 +25,19 @@ export const CAPABILITY_CATALOG = Object.freeze({
     "messaging.operate",
     "messaging.configure",
   ]),
+  website: Object.freeze([
+    "website.view",
+    "website.generate",
+    "website.configure",
+  ]),
 });
 
 export const CAPABILITY_KEYS = Object.freeze(Object.values(CAPABILITY_CATALOG).flat());
 
 export const LIVE_ACCESS_CATALOG = Object.freeze({
+  website: Object.freeze([
+    "website.ai-website-studio",
+  ]),
   messaging: Object.freeze([
     "messaging.whatsapp",
     "messaging.telegram",
@@ -81,6 +89,9 @@ const scrapingManager = CAPABILITY_CATALOG.scraping;
 const messagingViewer = Object.freeze(["messaging.view"]);
 const messagingOperator = Object.freeze([...messagingViewer, "messaging.operate"]);
 const messagingManager = CAPABILITY_CATALOG.messaging;
+const websiteViewer = Object.freeze(["website.view"]);
+const websiteCreator = Object.freeze(["website.view", "website.generate"]);
+const websiteManager = CAPABILITY_CATALOG.website;
 
 function capabilityGrants(capabilities) {
   return capabilities.map((resourceKey) => Object.freeze({ resourceKey, accessLevel: "operate" }));
@@ -96,6 +107,7 @@ export const OPERATIONAL_ROLE_CATALOG = Object.freeze([
       ...CAPABILITY_CATALOG.publishing,
       ...CAPABILITY_CATALOG.scraping,
       ...CAPABILITY_CATALOG.messaging,
+      ...CAPABILITY_CATALOG.website,
     ]),
   }),
   Object.freeze({ id: "role_publishing_viewer", name: "Publishing Viewer", description: "Read-only Publishing access.", capabilities: publishingViewer }),
@@ -108,6 +120,9 @@ export const OPERATIONAL_ROLE_CATALOG = Object.freeze([
   Object.freeze({ id: "role_messaging_viewer", name: "Messaging Viewer", description: "Read-only Messaging access.", capabilities: messagingViewer }),
   Object.freeze({ id: "role_messaging_operator", name: "Messaging Operator", description: "Operates workspace messaging.", capabilities: messagingOperator }),
   Object.freeze({ id: "role_messaging_manager", name: "Messaging Manager", description: "Full Messaging operations and configuration.", capabilities: messagingManager }),
+  Object.freeze({ id: "role_website_viewer", name: "Website Viewer", description: "Views AI Website Studio projects and delivery status.", capabilities: websiteViewer }),
+  Object.freeze({ id: "role_website_creator", name: "Website Creator", description: "Creates, delivers, retries, and monitors AI-generated websites.", capabilities: websiteCreator }),
+  Object.freeze({ id: "role_website_manager", name: "Website Manager", description: "Full AI Website Studio operations and configuration.", capabilities: websiteManager }),
 ].map((role) => Object.freeze({
   ...role,
   grants: Object.freeze(capabilityGrants(role.capabilities)),
@@ -124,6 +139,12 @@ export const SERVICE_AUDIENCE_CAPABILITIES = Object.freeze({
 // Public signup bundles are deliberately system-owned. They can grant module
 // configuration, but global Admin Center access remains a separate flag.
 export const SELF_SERVICE_ROLE_CATALOG = Object.freeze([
+  Object.freeze({
+    id: "role_self_website",
+    name: "AI Website Studio access",
+    description: "Generate, deliver, and publish complete AI-created business websites.",
+    grants: Object.freeze([{ resourceKey: "website", accessLevel: "configure" }]),
+  }),
   Object.freeze({
     id: "role_self_messaging",
     name: "Messaging access",
@@ -145,11 +166,12 @@ export const SELF_SERVICE_ROLE_CATALOG = Object.freeze([
   Object.freeze({
     id: "role_self_full_access",
     name: "Full module access",
-    description: "All currently live Messaging, Publishing, and Scraping modules.",
+    description: "All currently live AI Website, Messaging, Publishing, and Scraping modules.",
     grants: Object.freeze([
       { resourceKey: "messaging", accessLevel: "configure" },
       { resourceKey: "publishing", accessLevel: "configure" },
       { resourceKey: "scraping", accessLevel: "configure" },
+      { resourceKey: "website", accessLevel: "configure" },
     ]),
   }),
 ]);

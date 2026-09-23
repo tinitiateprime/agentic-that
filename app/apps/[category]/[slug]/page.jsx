@@ -27,7 +27,7 @@ export default async function AppDetailPage({ params }) {
   if (!service || !category) notFound();
 
   let user = await requireAccess(accessResourceForService(service), "view", `/apps/${categoryId}/${slug}`);
-  if (service.availability === "live" && ["messaging", "publishing", "scraping"].includes(categoryId)) {
+  if (service.availability === "live" && ["website", "messaging", "publishing", "scraping"].includes(categoryId)) {
     user = await requirePrincipalCapability(user, `${categoryId}.view`, `/apps/${categoryId}/${slug}`);
   }
 

@@ -158,7 +158,7 @@ export function platformProductEmailTemplate({
   };
   const safeServices = (Array.isArray(serviceHighlights) ? serviceHighlights : [])
     .map((item) => ({
-      key: ["messaging", "publishing", "scraping"].includes(String(item?.key || "").toLowerCase())
+      key: ["website", "messaging", "publishing", "scraping"].includes(String(item?.key || "").toLowerCase())
         ? String(item.key).toLowerCase()
         : "",
       name: escapeHtml(item?.name || ""),
@@ -169,6 +169,7 @@ export function platformProductEmailTemplate({
     .filter((item) => item.name && item.description)
     .slice(0, 6);
   const servicePresentation = {
+    website: { accent: "#126847", tint: "#e8f7f1", icon: "&#10024;" },
     messaging: { accent: "#087360", tint: "#e6f4f0", icon: "&#9993;&#65038;" },
     publishing: { accent: "#7857e8", tint: "#f1edff", icon: "&#8599;&#65038;" },
     scraping: { accent: "#2378d4", tint: "#eaf3ff", icon: "&#9638;" },

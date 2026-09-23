@@ -21,7 +21,7 @@ test("a ready trial grants access before its first service starts the clock", ()
     trialEndsAt: null,
     nowMs: now,
   });
-  assert.equal(grants.length, 3);
+  assert.equal(grants.length, 4);
 });
 
 test("trial status and selected access expire at the configured end time", () => {

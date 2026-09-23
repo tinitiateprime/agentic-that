@@ -83,7 +83,7 @@ test("publishing system roles match their job responsibilities exactly", () => {
   assert.equal(publishingRoles.get("role_publishing_scheduler")?.name, "Scheduler");
 });
 
-test("scraping and messaging system roles match their job responsibilities exactly", () => {
+test("scraping, messaging, and website system roles match their job responsibilities exactly", () => {
   const roles = new Map(OPERATIONAL_ROLE_CATALOG.map((role) => [role.id, role.capabilities]));
 
   assert.deepEqual(roles.get("role_scraping_viewer"), ["scraping.view"]);
@@ -100,6 +100,10 @@ test("scraping and messaging system roles match their job responsibilities exact
     "messaging.operate",
   ]);
   assert.deepEqual(roles.get("role_messaging_manager"), CAPABILITY_CATALOG.messaging);
+
+  assert.deepEqual(roles.get("role_website_viewer"), ["website.view"]);
+  assert.deepEqual(roles.get("role_website_creator"), ["website.view", "website.generate"]);
+  assert.deepEqual(roles.get("role_website_manager"), CAPABILITY_CATALOG.website);
 });
 
 test("an unlimited workspace plan still follows each assigned operational role", () => {
@@ -115,6 +119,9 @@ test("an unlimited workspace plan still follows each assigned operational role",
     ["role_messaging_viewer", "messaging", "view"],
     ["role_messaging_operator", "messaging", "operate"],
     ["role_messaging_manager", "messaging", "configure"],
+    ["role_website_viewer", "website", "view"],
+    ["role_website_creator", "website", "operate"],
+    ["role_website_manager", "website", "configure"],
   ];
 
   for (const [roleId, assignedModule, assignedLevel] of expected) {

@@ -31,5 +31,5 @@ export default async function handler(request: Request, context: Context) {
 export const config: Config = {
   background: true,
   method: "POST",
-  path: "/api/admin-center/website-studio/jobs/:id/run",
+  path: "/api/website-studio/jobs/:id/run",
 };

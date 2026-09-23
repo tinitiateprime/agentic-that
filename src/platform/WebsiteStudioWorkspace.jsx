@@ -64,7 +64,7 @@ function StatusBadge({ status }) {
   return <span className={`waas-admin-status ${status || "unknown"}`}><i />{label}</span>;
 }
 
-function ProjectRow({ project, onRetry, retrying }) {
+function ProjectRow({ project, onRetry, retrying, canGenerate }) {
   const passed = project.qaReport?.checks?.filter((item) => item.passed).length || 0;
   const total = project.qaReport?.checks?.length || 0;
   const failed = project.status === "failed";
@@ -90,15 +90,15 @@ function ProjectRow({ project, onRetry, retrying }) {
         {project.publishedUrl
           ? <a href={project.publishedUrl} target="_blank" rel="noreferrer" aria-label={`Open ${project.businessName}`}><ExternalLink size={18} /></a>
           : failed
-            ? <button type="button" onClick={() => onRetry(project)} disabled={retrying} aria-label={`Retry ${project.businessName}`}>{retrying ? <LoaderCircle className="waas-spin" size={17} /> : <RefreshCw size={17} />}</button>
+            ? <button type="button" onClick={() => onRetry(project)} disabled={retrying || !canGenerate} aria-label={`Retry ${project.businessName}`}>{retrying ? <LoaderCircle className="waas-spin" size={17} /> : <RefreshCw size={17} />}</button>
             : <span><Clock3 size={17} /></span>}
       </div>
-      {needsV3Refresh && <p className="waas-project-upgrade"><WandSparkles size={16} /><span>This preview was created with the older design engine. Generate fresh V3 copy, layouts and photos from the saved brief; the new previews will be emailed automatically.</span><button type="button" onClick={() => onRetry(project)} disabled={retrying}>{retrying ? "Starting…" : "Generate fresh V3"}</button></p>}
+      {needsV3Refresh && <p className="waas-project-upgrade"><WandSparkles size={16} /><span>This preview was created with the older design engine. Generate fresh V3 copy, layouts and photos from the saved brief; the new previews will be emailed automatically.</span><button type="button" onClick={() => onRetry(project)} disabled={retrying || !canGenerate}>{retrying ? "Starting…" : "Generate fresh V3"}</button></p>}
       {(project.failureMessage || project.emailError) && (
         <p className="waas-project-warning">
           <CircleAlert size={16} />
           <span>{project.failureMessage || `Website generated, but email failed: ${project.emailError}`}</span>
-          {failed && <button type="button" onClick={() => onRetry(project)} disabled={retrying}>{retrying ? "Retrying…" : "Retry now"}</button>}
+          {failed && <button type="button" onClick={() => onRetry(project)} disabled={retrying || !canGenerate}>{retrying ? "Retrying…" : "Retry now"}</button>}
         </p>
       )}
     </article>
@@ -124,7 +124,7 @@ function projectPayload(form) {
   };
 }
 
-export default function AdminWebsiteStudio() {
+export default function WebsiteStudioWorkspace({ canGenerate = true }) {
   const [snapshot, setSnapshot] = useState({
     configured: true,
     model: "gemini-3.8-flash",
@@ -143,7 +143,7 @@ export default function AdminWebsiteStudio() {
 
   const refresh = useCallback(async () => {
     try {
-      setSnapshot(await studioRequest("/api/admin-center/website-studio"));
+      setSnapshot(await studioRequest("/api/website-studio"));
     } catch (loadError) {
       setError(loadError.message);
     } finally {
@@ -177,11 +177,12 @@ export default function AdminWebsiteStudio() {
 
   const generate = async (event) => {
     event.preventDefault();
+    if (!canGenerate) return;
     setBusy(true);
     setError("");
     setResult(null);
     try {
-      const data = await studioRequest("/api/admin-center/website-studio", {
+      const data = await studioRequest("/api/website-studio", {
         method: "POST",
         body: JSON.stringify(projectPayload(form)),
       });
@@ -198,11 +199,12 @@ export default function AdminWebsiteStudio() {
   };
 
   const retry = async (project) => {
+    if (!canGenerate) return;
     setRetryingId(project.id);
     setError("");
     setResult(null);
     try {
-      const data = await studioRequest("/api/admin-center/website-studio", {
+      const data = await studioRequest("/api/website-studio", {
         method: "POST",
         body: JSON.stringify({
           clientName: project.clientName,
@@ -233,7 +235,7 @@ export default function AdminWebsiteStudio() {
         <div className="waas-admin-hero-copy">
           <span className="waas-admin-icon"><WandSparkles size={24} /></span>
           <div>
-            <p>Global Admin · Website automation</p>
+            <p>AI Websites · Autonomous delivery</p>
             <h1>AI Website Studio</h1>
             <span>Five details in. Three polished websites delivered automatically.</span>
           </div>
@@ -277,6 +279,12 @@ export default function AdminWebsiteStudio() {
         <div className="waas-admin-alert error">
           <CircleAlert size={20} />
           <div><strong>Generation did not finish</strong><span>{error}</span></div>
+        </div>
+      )}
+      {!canGenerate && (
+        <div className="waas-admin-alert">
+          <BadgeCheck size={20} />
+          <div><strong>View-only Website Studio access</strong><span>You can monitor existing projects. Ask the workspace owner for the Website Creator role to generate or retry websites.</span></div>
         </div>
       )}
       {queuedProjectRunning && (
@@ -344,9 +352,9 @@ export default function AdminWebsiteStudio() {
                 <Bot size={22} />
                 <span><strong>Everything after this is automatic</strong><small>Generate → validate → create 3 previews → email the business</small></span>
               </div>
-              <button type="submit" disabled={busy || !snapshot.configured || !snapshot.imageProvider?.configured}>
+              <button type="submit" disabled={!canGenerate || busy || !snapshot.configured || !snapshot.imageProvider?.configured}>
                 {busy ? <LoaderCircle className="waas-spin" size={19} /> : <WandSparkles size={19} />}
-                {busy ? "Starting generation…" : "Create & deliver"}
+                {busy ? "Starting generation…" : canGenerate ? "Create & deliver" : "Creator access required"}
                 {!busy && <ArrowUpRight size={18} />}
               </button>
             </div>
@@ -400,12 +408,12 @@ export default function AdminWebsiteStudio() {
           {loading
             ? <div className="waas-admin-empty"><LoaderCircle className="waas-spin" /><span>Loading website projects…</span></div>
             : snapshot.projects.length
-              ? <div className="waas-project-list">{snapshot.projects.map((project) => <ProjectRow project={project} onRetry={retry} retrying={retryingId === project.id} key={project.id} />)}</div>
+              ? <div className="waas-project-list">{snapshot.projects.map((project) => <ProjectRow project={project} onRetry={retry} retrying={retryingId === project.id} canGenerate={canGenerate} key={project.id} />)}</div>
               : <div className="waas-admin-empty"><MonitorSmartphone /><strong>No websites generated yet</strong><span>Your first automatic delivery will appear here.</span></div>}
         </section>
       )}
 
-      <p className="waas-studio-footnote"><BadgeCheck size={15} />Accessible only to Global Admins <ArrowRight size={14} /> AI generation and delivery are server-side.</p>
+      <p className="waas-studio-footnote"><BadgeCheck size={15} />Private to your account <ArrowRight size={14} /> AI generation and delivery run securely on the server.</p>
     </div>
   );
 }

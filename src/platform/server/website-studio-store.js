@@ -146,8 +146,9 @@ async function expireStaleGenerations(sql) {
        )`;
 }
 
-export async function websiteStudioSnapshot() {
+export async function websiteStudioSnapshot(actor) {
   const sql = await getWebsiteStudioSql();
+  const actorUserId = requiredText(actor?.userId, "User ID", 120);
   await expireStaleGenerations(sql);
   const rows = await sql`
     SELECT id, business_name, business_type, client_name, client_email, business_profile,
@@ -156,6 +157,7 @@ export async function websiteStudioSnapshot() {
            email_status, email_error, failure_message, generated_at, published_at,
            created_at, updated_at
       FROM ai_website_projects
+     WHERE created_by = ${actorUserId}
      ORDER BY created_at DESC
      LIMIT 100`;
   return {
@@ -170,6 +172,7 @@ export async function websiteStudioSnapshot() {
 
 export async function queueAutomatedWebsiteProject(actor, input) {
   const sql = await getWebsiteStudioSql();
+  const actorUserId = requiredText(actor?.userId, "User ID", 120);
   const clientEmail = requiredEmail(input?.clientEmail);
   const profile = normalizeWebsiteBusinessProfile(input?.businessProfile || input);
   if (!String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()) {
@@ -192,7 +195,7 @@ export async function queueAutomatedWebsiteProject(actor, input) {
     SELECT count(*)::int AS count,
            count(*) FILTER (WHERE status = 'generating')::int AS active
       FROM ai_website_projects
-     WHERE created_by = ${actor.userId} AND created_at > now() - interval '1 hour'`;
+     WHERE created_by = ${actorUserId} AND created_at > now() - interval '1 hour'`;
   if (Number(recentUsage?.active || 0) > 0) {
     throw new WebsiteStudioError("Another website generation is already running. Wait for it to finish.", "GENERATION_IN_PROGRESS", 409);
   }
@@ -205,10 +208,10 @@ export async function queueAutomatedWebsiteProject(actor, input) {
       (id, created_by, business_name, business_type, client_name, client_email,
        business_profile, public_slug, preview_token_hash, status)
     VALUES
-      (${id}, ${actor.userId}, ${profile.businessName}, ${profile.businessType}, ${clientName},
+      (${id}, ${actorUserId}, ${profile.businessName}, ${profile.businessType}, ${clientName},
        ${clientEmail}, ${sql.json(profile)}, ${slug}, ${tokenDigest(token)}, 'generating')
     RETURNING *`;
-  await audit(sql, actor.userId, id, "ai_website.generation_started", {
+  await audit(sql, actorUserId, id, "ai_website.generation_started", {
     businessName: profile.businessName,
     businessType: profile.businessType,
     clientEmail,

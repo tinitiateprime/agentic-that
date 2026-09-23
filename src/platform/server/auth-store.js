@@ -582,7 +582,7 @@ async function migratePlatformDatabase(sql) {
         VALUES ('role_legacy_full_access', 'Legacy full access',
                 'Temporary full access for accounts that predate centralized RBAC.', true)
         ON CONFLICT (id) DO NOTHING`;
-      for (const resourceKey of ["messaging", "publishing", "scraping"]) {
+      for (const resourceKey of ["website", "messaging", "publishing", "scraping"]) {
         await tx`
           INSERT INTO rbac_role_grants (role_id, resource_key, access_level)
           VALUES ('role_legacy_full_access', ${resourceKey}, 'configure')

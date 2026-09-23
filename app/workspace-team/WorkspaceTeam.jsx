@@ -16,6 +16,7 @@ function RoleChecks({ roles, selected, onChange, disabled = false }) {
     Publishing: roles.filter((role) => role.id.startsWith("role_publishing_")),
     Scraping: roles.filter((role) => role.id.startsWith("role_scraping_")),
     Messaging: roles.filter((role) => role.id.startsWith("role_messaging_")),
+    "AI Websites": roles.filter((role) => role.id.startsWith("role_website_")),
   }), [roles]);
   const setRole = (roleId, checked) => onChange(checked ? [...new Set([...selected, roleId])] : selected.filter((id) => id !== roleId));
 
