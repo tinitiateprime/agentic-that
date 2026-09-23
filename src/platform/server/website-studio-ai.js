@@ -10,6 +10,10 @@ const DEFAULT_EMERGENCY_MODEL = "gemini-3.5-flash-lite";
 const MAX_GENERATION_ATTEMPTS = 12;
 const GENERATION_RETRY_BUDGET_MS = 8 * 60_000;
 const THEMES = Object.freeze(["editorial", "momentum", "aura"]);
+// Gemini rejects the complete site schema when its large service item schema
+// is multiplied beyond seven entries. Generate a smaller core site first,
+// then merge bounded service-only batches without dropping any services.
+const CORE_SERVICE_BATCH_SIZE = 6;
 const SERVICE_BATCH_SIZE = 12;
 const SERVICE_BATCH_CONCURRENCY = 4;
 
@@ -757,6 +761,14 @@ async function requestGemini(request, client, model) {
       }
       if (response.status === 401) throw new WebsiteStudioError("The Gemini API key is invalid.", "AI_AUTH_FAILED", 401);
       if (response.status === 403) throw new WebsiteStudioError("This Gemini model is not allowed for the API key.", "AI_MODEL_FORBIDDEN", 403);
+      if (response.status === 400 || response.status === 422) {
+        throw new WebsiteStudioError(
+          "Gemini rejected the website generation request before processing it.",
+          "AI_REQUEST_INVALID",
+          502,
+          providerMessage ? [providerMessage] : [],
+        );
+      }
       throw new WebsiteStudioError(providerMessage || "Gemini could not generate the website.", "AI_PROVIDER_ERROR", response.status);
     }
     return { payload, usage: usageFromPayload(payload) };
@@ -817,7 +829,7 @@ async function runGeminiTask({ buildRequest, parsePayload, client }) {
       if (["AI_QA_FAILED", "EMPTY_AI_RESPONSE", "INVALID_AI_RESPONSE"].includes(lastError.code)) {
         repairDetails = lastError.details?.length ? lastError.details : [lastError.message];
       }
-      if (["AI_NOT_CONFIGURED", "AI_AUTH_FAILED"].includes(lastError.code)) break;
+      if (["AI_NOT_CONFIGURED", "AI_AUTH_FAILED", "AI_REQUEST_INVALID"].includes(lastError.code)) break;
     }
   }
   if (dailyQuotaFailures > 0 && transientFailures === 0 && dailyQuotaFailures === attemptsMade) {
@@ -872,8 +884,8 @@ export async function generateWebsiteSpec(inputProfile, options = {}) {
     retryDelayMs: Math.max(0, Math.min(Number(options.retryDelayMs ?? process.env.GEMINI_WEBSITE_RETRY_DELAY_MS ?? 1_500), 10_000)),
     deadlineAt: Date.now() + GENERATION_RETRY_BUDGET_MS,
   };
-  const batches = serviceBatches(profile.services);
-  const coreServices = batches[0];
+  const coreServices = profile.services.slice(0, CORE_SERVICE_BATCH_SIZE);
+  const additionalBatches = serviceBatches(profile.services.slice(CORE_SERVICE_BATCH_SIZE));
   const coreProfile = { ...profile, services: coreServices };
   const core = await runGeminiTask({
     buildRequest: (repairDetails) => buildGeminiWebsiteRequest(profile, repairDetails, coreServices),
@@ -888,7 +900,7 @@ export async function generateWebsiteSpec(inputProfile, options = {}) {
     client,
   });
 
-  const additional = await mapWithConcurrency(batches.slice(1), SERVICE_BATCH_CONCURRENCY, (serviceBatch) => runGeminiTask({
+  const additional = await mapWithConcurrency(additionalBatches, SERVICE_BATCH_CONCURRENCY, (serviceBatch) => runGeminiTask({
     buildRequest: (repairDetails) => buildGeminiServiceBatchRequest(profile, serviceBatch, repairDetails),
     parsePayload: (payload) => parseGeminiServiceBatchPayload(payload, profile, serviceBatch),
     client,

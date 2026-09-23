@@ -191,12 +191,29 @@ test("large catalogues are generated in bounded batches and merged in source ord
 
   const result = await generateWebsiteSpec(customProfile, { apiKey: "test-key", model: "gemini-test", fetchImpl, timeoutMs: 10_000 });
   assert.deepEqual(result.spec.services.map((service) => service.name), services);
-  assert.deepEqual(requests.map((request) => request.size).sort((left, right) => left - right), [5, 12, 12]);
+  assert.deepEqual(requests.map((request) => request.size).sort((left, right) => left - right), [6, 11, 12]);
   assert.equal(requests.filter((request) => request.isCore).length, 1);
   assert.equal(requests.every((request) => request.minimum === request.size && request.maximum === request.size), true);
   assert.equal(result.attempts, 3);
   assert.equal(result.usage.totalTokens, 90);
   assert.equal(result.qa.passed, true);
+});
+
+test("provider request validation errors fail once instead of repeating every model", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: { status: "INVALID_ARGUMENT", message: "Request contains an invalid argument." } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await assert.rejects(
+    generateWebsiteSpec(profile, { apiKey: "test-key", models: ["model-a", "model-b"], fetchImpl, retryDelayMs: 0 }),
+    (error) => error.code === "AI_REQUEST_INVALID" && error.attempts === 1 && error.status === 502,
+  );
+  assert.equal(calls, 1);
 });
 
 test("temporary provider demand retries and falls back to another Gemini model", async () => {
