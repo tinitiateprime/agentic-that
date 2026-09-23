@@ -194,6 +194,12 @@
 
 .marketplaceMain,
 .detailMain {
+  --page-ink: #181b20;
+  --page-muted: #5e6672;
+  --page-subtle: #7b838d;
+  --page-line: #e1e4e7;
+  --page-soft: #f4f6f5;
+  --page-brand: #096f60;
   width: min(1280px, calc(100% - 64px));
   margin: 0 auto;
 }
