@@ -33,6 +33,11 @@ PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=<new-random-32-byte-hex-or-base64-secret>
 NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false
 RBAC_ENFORCEMENT_MODE=enforce
 
+# AI services (server-only)
+GEMINI_API_KEY=<server-only-google-ai-key>
+ELEVENLABS_API_KEY=<server-only-elevenlabs-api-key>
+ELEVENLABS_AGENT_ID=agent_6301m36sxacff369ckangq84hzxx
+
 # WhatsApp using the Meta Cloud API
 WA_PROVIDER=meta
 META_API_VERSION=v25.0

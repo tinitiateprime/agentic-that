@@ -1,6 +1,6 @@
 "use client";
 
-import { GoogleGenAI } from "@google/genai";
+import { Conversation } from "@elevenlabs/client";
 import {
   AlertCircle,
   ArrowRight,
@@ -44,24 +44,6 @@ function formatTime(value) {
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function bytesToBase64(bytes) {
-  let binary = "";
-  const step = 0x8000;
-  for (let index = 0; index < bytes.length; index += step) {
-    binary += String.fromCharCode(...bytes.subarray(index, Math.min(index + step, bytes.length)));
-  }
-  return window.btoa(binary);
-}
-
-function floatToPcmBase64(input) {
-  const pcm = new Int16Array(input.length);
-  for (let index = 0; index < input.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, input[index]));
-    pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return bytesToBase64(new Uint8Array(pcm.buffer));
 }
 
 function StatusPill({ state }) {
@@ -113,18 +95,11 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
   const [latestCall, setLatestCall] = useState(null);
 
   const sessionRef = useRef(null);
-  const mediaRef = useRef(null);
-  const captureContextRef = useRef(null);
-  const outputContextRef = useRef(null);
-  const processorRef = useRef(null);
-  const captureSourceRef = useRef(null);
-  const outputSourcesRef = useRef(new Set());
+  const conversationIdRef = useRef("");
   const transcriptViewportRef = useRef(null);
-  const nextPlaybackAtRef = useRef(0);
   const transcriptRef = useRef([]);
-  const inputBufferRef = useRef("");
-  const outputBufferRef = useRef("");
   const startedAtRef = useRef(0);
+  const callModeRef = useRef("voice");
   const endingRef = useRef(false);
   const stateRef = useRef("idle");
 
@@ -172,34 +147,12 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
   }, [transcript, inputCaption, outputCaption, typedSending]);
 
-  const stopPlayback = useCallback(() => {
-    for (const source of outputSourcesRef.current) {
-      try { source.stop(); } catch {}
-    }
-    outputSourcesRef.current.clear();
-    nextPlaybackAtRef.current = outputContextRef.current?.currentTime || 0;
-  }, []);
-
   const stopResources = useCallback(() => {
     endingRef.current = true;
-    try { sessionRef.current?.sendRealtimeInput?.({ audioStreamEnd: true }); } catch {}
-    try { sessionRef.current?.close?.(); } catch {}
+    const activeSession = sessionRef.current;
     sessionRef.current = null;
-    if (processorRef.current) {
-      processorRef.current.onaudioprocess = null;
-      try { processorRef.current.disconnect(); } catch {}
-    }
-    try { captureSourceRef.current?.disconnect(); } catch {}
-    processorRef.current = null;
-    captureSourceRef.current = null;
-    mediaRef.current?.getTracks?.().forEach((track) => track.stop());
-    mediaRef.current = null;
-    stopPlayback();
-    void captureContextRef.current?.close?.().catch(() => {});
-    void outputContextRef.current?.close?.().catch(() => {});
-    captureContextRef.current = null;
-    outputContextRef.current = null;
-  }, [stopPlayback]);
+    if (activeSession) void activeSession.endSession().catch(() => {});
+  }, []);
 
   const failLiveCall = useCallback((message) => {
     if (endingRef.current) return;
@@ -215,8 +168,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     stopResources();
     endingRef.current = false;
     transcriptRef.current = [];
-    inputBufferRef.current = "";
-    outputBufferRef.current = "";
+    conversationIdRef.current = "";
     setTranscript([]);
     setInputCaption("");
     setOutputCaption("");
@@ -259,118 +211,73 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     }
   }, [canConfigure, profile]);
 
-  const scheduleAudio = useCallback((base64) => {
-    const context = outputContextRef.current;
-    if (!context || !base64) return;
-    try {
-      const binary = window.atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-      const sampleCount = Math.floor(bytes.byteLength / 2);
-      const samples = new Float32Array(sampleCount);
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      for (let index = 0; index < sampleCount; index += 1) samples[index] = view.getInt16(index * 2, true) / 32768;
-      const buffer = context.createBuffer(1, sampleCount, 24_000);
-      buffer.copyToChannel(samples, 0);
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      source.connect(context.destination);
-      const startAt = Math.max(context.currentTime + 0.025, nextPlaybackAtRef.current);
-      source.start(startAt);
-      nextPlaybackAtRef.current = startAt + buffer.duration;
-      outputSourcesRef.current.add(source);
-      source.onended = () => outputSourcesRef.current.delete(source);
-    } catch {
-      setError("The call connected, but the browser could not play one audio response.");
-    }
+  const captureLeadTool = useCallback((args = {}) => {
+    setLead((current) => ({
+      callerName: cleanText(args.caller_name) || current.callerName,
+      callerPhone: cleanText(args.caller_phone) || current.callerPhone,
+      reason: cleanText(args.reason) || current.reason,
+      urgency: ["low", "normal", "high"].includes(args.urgency) ? args.urgency : current.urgency,
+    }));
+    return "Lead details saved for the call summary.";
   }, []);
 
-  const handleTools = useCallback((message) => {
-    const callsToHandle = message?.toolCall?.functionCalls || [];
-    if (!callsToHandle.length || !sessionRef.current) return;
-    const functionResponses = callsToHandle.map((call) => {
-      const args = call.args || {};
-      if (call.name === "capture_lead") {
-        setLead((current) => ({
-          callerName: cleanText(args.caller_name) || current.callerName,
-          callerPhone: cleanText(args.caller_phone) || current.callerPhone,
-          reason: cleanText(args.reason) || current.reason,
-          urgency: ["low", "normal", "high"].includes(args.urgency) ? args.urgency : current.urgency,
-        }));
-        return { id: call.id, name: call.name, response: { result: "Lead details saved for the demo summary." } };
-      }
-      if (call.name === "prepare_appointment") {
-        setAppointment({
-          service: cleanText(args.service),
-          preferredDate: cleanText(args.preferred_date),
-          preferredTime: cleanText(args.preferred_time),
-          notes: cleanText(args.notes),
-        });
-        return { id: call.id, name: call.name, response: { result: "Appointment request prepared. It is not a confirmed calendar booking." } };
-      }
-      if (call.name === "request_human_handoff") {
-        setHandoffRequested(true);
-        if (args.reason) setLead((current) => ({ ...current, reason: current.reason || cleanText(args.reason), urgency: args.urgency || current.urgency }));
-        return { id: call.id, name: call.name, response: { result: "Human callback requested. This browser demo cannot complete a live phone transfer." } };
-      }
-      return { id: call.id, name: call.name, response: { result: "Tool is not available in this demonstration." } };
+  const prepareAppointmentTool = useCallback((args = {}) => {
+    setAppointment({
+      service: cleanText(args.service),
+      preferredDate: cleanText(args.preferred_date),
+      preferredTime: cleanText(args.preferred_time),
+      notes: cleanText(args.notes),
     });
-    try { sessionRef.current.sendToolResponse({ functionResponses }); } catch {}
+    return "Appointment request prepared. It is not a confirmed calendar booking.";
   }, []);
 
-  const handleLiveMessage = useCallback((message) => {
-    handleTools(message);
-    const server = message?.serverContent;
-    if (!server) return;
-    if (server.interrupted) stopPlayback();
-    for (const part of server.modelTurn?.parts || []) {
-      if (part.inlineData?.data && String(part.inlineData?.mimeType || "").startsWith("audio/")) scheduleAudio(part.inlineData.data);
+  const requestHandoffTool = useCallback((args = {}) => {
+    setHandoffRequested(true);
+    if (args.reason) {
+      setLead((current) => ({
+        ...current,
+        reason: current.reason || cleanText(args.reason),
+        urgency: ["low", "normal", "high"].includes(args.urgency) ? args.urgency : current.urgency,
+      }));
     }
-    if (server.inputTranscription?.text) {
-      inputBufferRef.current += server.inputTranscription.text;
-      setInputCaption(cleanText(inputBufferRef.current));
-    }
-    if (server.outputTranscription?.text) {
-      outputBufferRef.current += server.outputTranscription.text;
-      setOutputCaption(cleanText(outputBufferRef.current));
-    }
-    if (server.turnComplete) {
-      const completed = [];
-      if (cleanText(inputBufferRef.current)) completed.push({ role: "caller", text: inputBufferRef.current });
-      if (cleanText(outputBufferRef.current)) completed.push({ role: "assistant", text: outputBufferRef.current });
-      pushTranscript(completed);
-      inputBufferRef.current = "";
-      outputBufferRef.current = "";
-      setInputCaption("");
-      setOutputCaption("");
-    }
-  }, [handleTools, pushTranscript, scheduleAudio, stopPlayback]);
-
-  const beginMicrophoneCapture = useCallback((stream) => {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const context = new AudioContextClass({ sampleRate: 16_000 });
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(1024, 1, 1);
-    const silent = context.createGain();
-    silent.gain.value = 0;
-    processor.onaudioprocess = (event) => {
-      if (!sessionRef.current || stateRef.current !== "live") return;
-      try {
-        sessionRef.current.sendRealtimeInput({
-          audio: {
-            data: floatToPcmBase64(event.inputBuffer.getChannelData(0)),
-            mimeType: `audio/pcm;rate=${context.sampleRate}`,
-          },
-        });
-      } catch {}
-    };
-    source.connect(processor);
-    processor.connect(silent);
-    silent.connect(context.destination);
-    captureContextRef.current = context;
-    captureSourceRef.current = source;
-    processorRef.current = processor;
+    return "Human callback requested. This browser demo cannot complete a live phone transfer.";
   }, []);
+
+  const clientTools = useMemo(() => ({
+    capture_lead: captureLeadTool,
+    prepare_appointment: prepareAppointmentTool,
+    request_human_handoff: requestHandoffTool,
+  }), [captureLeadTool, prepareAppointmentTool, requestHandoffTool]);
+
+  const handleConversationMessage = useCallback(({ message, role, source }) => {
+    const text = cleanText(message);
+    if (!text) return;
+    const mappedRole = role === "agent" || source === "ai" ? "assistant" : "caller";
+    const latest = transcriptRef.current.at(-1);
+    if (latest?.role !== mappedRole || latest?.text !== text) pushTranscript({ role: mappedRole, text });
+    if (mappedRole === "assistant") setTypedSending(false);
+  }, [pushTranscript]);
+
+  const fetchConversationSession = useCallback(async () => {
+    const response = await fetch("/api/phone-front-desk/session", { method: "POST", credentials: "include" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Unable to create the secure ElevenLabs session.");
+    return data;
+  }, []);
+
+  const conversationCallbacks = useCallback((mode) => ({
+    onMessage: handleConversationMessage,
+    onModeChange: ({ mode: activeMode }) => {
+      setInputCaption(activeMode === "listening" && mode === "voice" ? "Listening…" : "");
+      setOutputCaption(activeMode === "speaking" && mode === "voice" ? "Speaking…" : "");
+    },
+    onError: (message) => failLiveCall(cleanText(message) || "The ElevenLabs conversation was interrupted."),
+    onDisconnect: (details) => {
+      if (!endingRef.current && ["live", "typed"].includes(stateRef.current)) {
+        failLiveCall(details?.message || "The ElevenLabs conversation ended unexpectedly. Please start another call.");
+      }
+    },
+  }), [failLiveCall, handleConversationMessage]);
 
   const startVoiceCall = useCallback(async () => {
     if (!canOperate || stateRef.current === "preparing") return;
@@ -383,106 +290,85 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
         if (!saved) throw new Error("Save the receptionist profile before starting the call.");
       }
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not provide microphone access. Use the typed demo instead.");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      mediaRef.current = stream;
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) throw new Error("This browser cannot play live call audio. Use the typed demo instead.");
-      outputContextRef.current = new AudioContextClass();
-      await outputContextRef.current.resume();
-
-      const response = await fetch("/api/phone-front-desk/session", { method: "POST", credentials: "include" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Unable to create the live call session.");
-      const ai = new GoogleGenAI({ apiKey: data.token, httpOptions: { apiVersion: "v1alpha" } });
-      const session = await ai.live.connect({
-        model: data.model,
-        config: data.config,
-        callbacks: {
-          onopen: () => {},
-          onmessage: handleLiveMessage,
-          onerror: (event) => {
-            failLiveCall(event?.message || "The live voice connection was interrupted. Your typed demo is still available.");
-          },
-          onclose: () => {
-            if (!endingRef.current && stateRef.current === "live") {
-              failLiveCall("The live voice session ended. You can continue with the typed demo.");
-            }
-          },
-        },
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+      const data = await fetchConversationSession();
+      callModeRef.current = "voice";
+      startedAtRef.current = Date.now();
+      const session = await Conversation.startSession({
+        conversationToken: data.conversationToken,
+        connectionType: "webrtc",
+        dynamicVariables: data.dynamicVariables,
+        clientTools,
+        ...conversationCallbacks("voice"),
       });
       sessionRef.current = session;
+      conversationIdRef.current = session.getId();
       endingRef.current = false;
-      startedAtRef.current = Date.now();
       setCallState("live");
-      beginMicrophoneCapture(stream);
-      session.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: "Begin the demonstration call now. Say the approved greeting, then wait for the caller." }] }],
-        turnComplete: true,
-      });
     } catch (startError) {
       stopResources();
       endingRef.current = false;
       setError(startError instanceof Error ? startError.message : "Unable to start the live demo call.");
       setCallState("error");
     }
-  }, [beginMicrophoneCapture, canConfigure, canOperate, dirty, failLiveCall, handleLiveMessage, resetCall, saveProfile, setCallState, stopResources]);
+  }, [canConfigure, canOperate, clientTools, conversationCallbacks, dirty, fetchConversationSession, resetCall, saveProfile, setCallState, stopResources]);
 
   const startTypedCall = useCallback(async () => {
     if (!canOperate || !profile || stateRef.current === "preparing") return;
     setCallState("preparing");
     setNotice("");
     try {
-      let activeProfile = profile;
       if (dirty && canConfigure) {
-        activeProfile = await saveProfile({ quiet: true });
-        if (!activeProfile) throw new Error("Save the receptionist profile before starting the call.");
+        const saved = await saveProfile({ quiet: true });
+        if (!saved) throw new Error("Save the receptionist profile before starting the call.");
       }
       resetCall();
+      setCallState("preparing");
+      const data = await fetchConversationSession();
+      callModeRef.current = "typed";
       startedAtRef.current = Date.now();
-      const greeting = cleanText(activeProfile.greeting) || `Thank you for calling ${activeProfile.businessName}. How may I help you?`;
-      pushTranscript({ role: "assistant", text: greeting });
+      const session = await Conversation.startSession({
+        signedUrl: data.signedUrl,
+        connectionType: "websocket",
+        textOnly: true,
+        dynamicVariables: data.dynamicVariables,
+        clientTools,
+        ...conversationCallbacks("typed"),
+      });
+      sessionRef.current = session;
+      conversationIdRef.current = session.getId();
+      endingRef.current = false;
       setCallState("typed");
     } catch (startError) {
+      stopResources();
+      endingRef.current = false;
       setError(startError instanceof Error ? startError.message : "Unable to start the typed demo.");
       setCallState("error");
     }
-  }, [canConfigure, canOperate, dirty, profile, pushTranscript, resetCall, saveProfile, setCallState]);
+  }, [canConfigure, canOperate, clientTools, conversationCallbacks, dirty, fetchConversationSession, profile, resetCall, saveProfile, setCallState, stopResources]);
 
   const sendTypedMessage = useCallback(async () => {
     const message = cleanText(typedMessage);
     if (!message || typedSending || stateRef.current !== "typed") return;
-    const previous = transcriptRef.current;
     setTypedMessage("");
     setTypedSending(true);
     pushTranscript({ role: "caller", text: message });
     try {
-      const response = await fetch("/api/phone-front-desk/respond", {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ transcript: previous, message }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "The receptionist could not respond.");
-      pushTranscript({ role: "assistant", text: data.reply });
-      if (data.lead) setLead((current) => ({ ...current, ...Object.fromEntries(Object.entries(data.lead).filter(([, value]) => value)) }));
-      if (data.appointment) setAppointment(data.appointment);
-      if (data.handoffRequested) setHandoffRequested(true);
-      if (data.fallback) setNotice("The live model was busy, so the reliable scripted fallback answered this turn.");
+      if (!sessionRef.current) throw new Error("The typed conversation is no longer connected.");
+      sessionRef.current.sendUserMessage(message);
     } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : "The receptionist could not respond.");
-    } finally {
       setTypedSending(false);
+      setError(sendError instanceof Error ? sendError.message : "The receptionist could not respond.");
     }
   }, [pushTranscript, typedMessage, typedSending]);
 
   const finishCall = useCallback(async () => {
     if (!["live", "typed", "error"].includes(stateRef.current)) return;
-    const mode = stateRef.current === "typed" ? "typed" : "voice";
-    if (cleanText(inputBufferRef.current)) pushTranscript({ role: "caller", text: inputBufferRef.current });
-    if (cleanText(outputBufferRef.current)) pushTranscript({ role: "assistant", text: outputBufferRef.current });
-    inputBufferRef.current = "";
-    outputBufferRef.current = "";
+    const mode = callModeRef.current;
+    const conversationId = conversationIdRef.current;
     setInputCaption("");
     setOutputCaption("");
     const durationSeconds = Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000));
@@ -495,6 +381,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           mode,
+          conversationId,
           transcript: transcriptRef.current,
           durationSeconds,
           lead,
@@ -514,7 +401,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     } finally {
       endingRef.current = false;
     }
-  }, [appointment, handoffRequested, lead, pushTranscript, setCallState, stopResources]);
+  }, [appointment, handoffRequested, lead, setCallState, stopResources]);
 
   const stats = useMemo(() => ({
     calls: calls.length,
@@ -538,7 +425,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
           <p>Configure the essentials, start a natural browser call, and watch every enquiry become a clear lead and follow-up summary.</p>
           <div className="pfd-hero-meta">
             <StatusPill state={state} />
-            <span><span className="pfd-engine-dot" />{configured ? "Gemini Live ready" : "Gemini setup needed"}</span>
+            <span><span className="pfd-engine-dot" />{configured ? "ElevenLabs AI ready" : "ElevenLabs setup needed"}</span>
             <span><Headphones size={15} />Headphones recommended</span>
           </div>
         </div>
@@ -603,7 +490,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
                   <Keyboard size={18} />Use typed demo
                 </button>
               </div>
-              {!configured && <small className="pfd-stage-warning">Add GEMINI_API_KEY in Netlify to enable live voice. Typed fallback also requires Gemini for its best responses.</small>}
+              {!configured && <small className="pfd-stage-warning">Add ELEVENLABS_API_KEY in Netlify to enable the AI voice and typed demonstrations.</small>}
             </div>
           ) : state === "preparing" ? (
             <div className="pfd-connecting-stage"><div className="pfd-connecting-orbit"><PhoneCall size={27} /></div><strong>Opening the secure voice line</strong><p>Allow microphone access when your browser asks.</p></div>
@@ -619,7 +506,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
             <div className="pfd-live-stage">
               <div className="pfd-call-topline">
                 <span className="pfd-live-indicator"><i />{state === "live" ? "Microphone connected" : "Typed fallback active"}</span>
-                <span>{state === "live" ? <><Volume2 size={15} />Gemini Live</> : <><Keyboard size={15} />Keyboard mode</>}</span>
+                <span>{state === "live" ? <><Volume2 size={15} />ElevenLabs Voice AI</> : <><Keyboard size={15} />ElevenLabs Chat</>}</span>
               </div>
               <div className="pfd-wave" aria-hidden="true">{Array.from({ length: 28 }, (_, index) => <i style={{ "--bar": index }} key={index} />)}</div>
               <div className="pfd-transcript" aria-live="polite" ref={transcriptViewportRef}>
