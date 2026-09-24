@@ -1,5 +1,5 @@
 import { accessErrorResponse, assertPrincipalCapability, authorizeApiAccess } from "@platform/server/access-control";
-import { phoneFrontDeskProfileForActor } from "@platform/server/phone-front-desk-store";
+import { phoneFrontDeskIntegrationsEnabled, phoneFrontDeskProfileForActor } from "@platform/server/phone-front-desk-store";
 import { getPlatformSql } from "@platform/server/auth-store";
 import {
   bookCalendarAppointment,
@@ -17,6 +17,7 @@ export async function POST(request) {
     const input = JSON.parse(raw || "{}");
     const level = input.action === "verify" ? "configure" : "operate";
     const actor = await assertPrincipalCapability(await authorizeApiAccess("messaging.ai-phone-front-desk", level), `messaging.${level}`);
+    if (!phoneFrontDeskIntegrationsEnabled()) return Response.json({ error: "Calendar booking is not enabled." }, { status: 404 });
     const profile = await phoneFrontDeskProfileForActor(actor);
     let result;
     if (input.action === "verify") result = { connected: await verifyCalendarAccess(profile) };

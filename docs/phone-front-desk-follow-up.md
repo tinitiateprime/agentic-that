@@ -1,5 +1,7 @@
 # AI Phone Front Desk: email and calendar setup
 
+This add-on is paused by default. While paused, the receptionist saves calls and unconfirmed appointment requests without sending follow-up emails or booking Google Calendar events; its setup fields stay hidden. When you choose to launch it, set `PHONE_FRONT_DESK_FOLLOW_UP_ENABLED=true` in Netlify and redeploy, then follow the steps below.
+
 The receptionist saves each completed call, then sends a summary to the profile's **Follow-up email** through Resend. High-priority leads trigger an immediate alert as well. A failed summary can be retried from the call history. The AI never claims a booking until Google Calendar accepts the event.
 
 ## Resend

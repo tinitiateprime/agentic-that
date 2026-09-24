@@ -76,6 +76,7 @@ function Field({ label, hint, children, wide = false }) {
 export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
   const [loading, setLoading] = useState(true);
   const [configured, setConfigured] = useState(false);
+  const [integrationsEnabled, setIntegrationsEnabled] = useState(false);
   const [notifications, setNotifications] = useState({ configured: false });
   const [calendar, setCalendar] = useState({ configured: false, shareWith: "" });
   const [verifyingCalendar, setVerifyingCalendar] = useState(false);
@@ -127,6 +128,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Unable to load AI Phone Front Desk.");
       setConfigured(Boolean(data.configured));
+      setIntegrationsEnabled(Boolean(data.integrationsEnabled));
       setNotifications(data.notifications || { configured: false });
       setCalendar(data.calendar || { configured: false, shareWith: "" });
       setProfile(data.profile);
@@ -253,7 +255,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       reason: cleanText(args.reason) || current.reason,
       urgency: ["low", "normal", "high"].includes(args.urgency) ? args.urgency : current.urgency,
     }));
-    if (args.urgency === "high" && conversationIdRef.current) {
+    if (integrationsEnabled && args.urgency === "high" && conversationIdRef.current) {
       try {
         const response = await fetch("/api/phone-front-desk/alert", {
           method: "POST", credentials: "include", headers: { "content-type": "application/json" },
@@ -265,7 +267,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       } catch { return "Lead details saved, but the urgent email could not be delivered. Ask the caller to contact the business directly for immediate help."; }
     }
     return "Lead details saved for the call summary.";
-  }, []);
+  }, [integrationsEnabled]);
 
   const prepareAppointmentTool = useCallback((args = {}) => {
     setAppointment({
@@ -275,10 +277,11 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       notes: cleanText(args.notes),
       status: "requested",
     });
-    return "Appointment request prepared. It is not a confirmed calendar booking.";
+    return "Appointment request prepared. It is not a confirmed booking.";
   }, []);
 
   const calendarTool = useCallback(async (action, args = {}) => {
+    if (!integrationsEnabled) throw new Error("Live calendar booking is not enabled.");
     const response = await fetch("/api/phone-front-desk/calendar", {
       method: "POST", credentials: "include", headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -291,7 +294,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Google Calendar is unavailable.");
     return data;
-  }, []);
+  }, [integrationsEnabled]);
 
   const checkAvailabilityTool = useCallback(async (args = {}) => {
     try {
@@ -480,9 +483,11 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       setLatestCall(data.call);
       setCalls((current) => [data.call, ...current.filter((item) => item.id !== data.call.id)].slice(0, 30));
       setError("");
-      setNotice(data.call.emailStatus === "sent"
-        ? "Call saved and summary emailed to the business."
-        : "Call saved. Summary email needs attention; use Retry email below.");
+      setNotice(!integrationsEnabled
+        ? "Call complete. The lead and follow-up summary are saved below."
+        : data.call.emailStatus === "sent"
+          ? "Call saved and summary emailed to the business."
+          : "Call saved. Summary email needs attention; use Retry email below.");
       setCallState("completed");
     } catch (finishError) {
       setError(finishError instanceof Error ? finishError.message : "Unable to prepare the call summary.");
@@ -490,7 +495,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     } finally {
       endingRef.current = false;
     }
-  }, [appointment, handoffRequested, lead, setCallState, stopResources]);
+  }, [appointment, handoffRequested, integrationsEnabled, lead, setCallState, stopResources]);
 
   useEffect(() => {
     if (state !== "error" || autoFinalizeAttemptedRef.current || !conversationIdRef.current || !transcriptRef.current.length) return;
@@ -557,16 +562,18 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
             <Field label="Opening greeting" wide><textarea rows={3} value={profile.greeting} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("greeting", event.target.value)} /></Field>
             <Field label="Important FAQs and rules" hint="approved answers only" wide><textarea rows={5} value={profile.faqNotes} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("faqNotes", event.target.value)} placeholder="Pricing rules, service areas, booking notes, what must go to a human…" /></Field>
             <Field label="Human callback number"><input value={profile.transferNumber} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("transferNumber", event.target.value)} placeholder="Optional for demo" /></Field>
-            <Field label="Follow-up email" hint="summary and urgent alerts"><input type="email" value={profile.notificationEmail} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("notificationEmail", event.target.value)} /></Field>
-            <Field label="Google Calendar ID" hint="share this calendar with the service account" wide><input value={profile.calendarId || ""} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("calendarId", event.target.value)} placeholder="your-email@gmail.com or calendar ID" /></Field>
-            <Field label="Business time zone" hint="IANA name"><input value={profile.timeZone || "UTC"} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("timeZone", event.target.value)} placeholder="Asia/Kolkata" /></Field>
-            <Field label="Appointment length" hint="minutes"><input type="number" min="15" max="180" value={profile.durationMinutes || 60} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("durationMinutes", Number(event.target.value))} /></Field>
+            {integrationsEnabled && <>
+              <Field label="Follow-up email" hint="summary and urgent alerts"><input type="email" value={profile.notificationEmail} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("notificationEmail", event.target.value)} /></Field>
+              <Field label="Google Calendar ID" hint="share this calendar with the service account" wide><input value={profile.calendarId || ""} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("calendarId", event.target.value)} placeholder="your-email@gmail.com or calendar ID" /></Field>
+              <Field label="Business time zone" hint="IANA name"><input value={profile.timeZone || "UTC"} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("timeZone", event.target.value)} placeholder="Asia/Kolkata" /></Field>
+              <Field label="Appointment length" hint="minutes"><input type="number" min="15" max="180" value={profile.durationMinutes || 60} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("durationMinutes", Number(event.target.value))} /></Field>
+            </>}
           </div>
-          <div className="pfd-calendar-setup">
+          {integrationsEnabled && <div className="pfd-calendar-setup">
             <p>{notifications.configured ? `${notifications.provider} ready for call summaries and urgent alerts.` : "Resend needs AUTH_EMAIL_FROM and RESEND_API_KEY in Netlify."}</p>
             <p>{calendar.configured ? `Share the Google Calendar with ${calendar.shareWith} using event-editing permission.` : "Google Calendar needs the service account setting in Netlify."}</p>
             <button type="button" onClick={() => void verifyCalendar()} disabled={!canConfigure || callActive || saving || verifyingCalendar || !calendar.configured || !profile.calendarId}>{verifyingCalendar ? "Checking calendar…" : "Verify calendar access"}</button>
-          </div>
+          </div>}
           <footer className="pfd-profile-footer">
             <p><CheckCircle2 size={15} />The AI is instructed not to invent prices, policies or availability.</p>
             <button type="button" onClick={() => void saveProfile()} disabled={!canConfigure || saving || callActive || !dirty}><Save size={16} />{saving ? "Saving…" : dirty ? "Save profile" : "Profile saved"}</button>
@@ -650,13 +657,13 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
               <span><MessageSquareText size={18} /></span><div><small>Reason for calling</small><strong>{lead.reason || "Listening for the request"}</strong><p className={`pfd-urgency pfd-urgency-${lead.urgency}`}>{lead.urgency} priority</p></div>{lead.reason && <Check size={15} />}
             </article>
             <article className={appointment ? "pfd-capture-card is-ready" : "pfd-capture-card"}>
-              <span><CalendarCheck size={18} /></span><div><small>{appointment?.status === "booked" ? "Booked in Google Calendar" : "Appointment request"}</small><strong>{appointment?.service || "No request yet"}</strong><p>{appointment ? [appointment.preferredDate, appointment.preferredTime].filter(Boolean).join(" · ") || "Details captured" : "Date and time will appear here"}</p></div>{appointment && <Check size={15} />}
+              <span><CalendarCheck size={18} /></span><div><small>{integrationsEnabled && appointment?.status === "booked" ? "Booked in Google Calendar" : "Appointment request"}</small><strong>{appointment?.service || "No request yet"}</strong><p>{appointment ? [appointment.preferredDate, appointment.preferredTime].filter(Boolean).join(" · ") || "Details captured" : "Date and time will appear here"}</p></div>{appointment && <Check size={15} />}
             </article>
             <article className={handoffRequested ? "pfd-capture-card is-ready" : "pfd-capture-card"}>
               <span><PhoneForwarded size={18} /></span><div><small>Human follow-up</small><strong>{handoffRequested ? "Callback requested" : "Not requested"}</strong><p>{profile.transferNumber ? `Team number: ${profile.transferNumber}` : "Add a team number in the profile"}</p></div>{handoffRequested && <Check size={15} />}
             </article>
           </div>
-          <div className="pfd-demo-note"><Sparkles size={17} /><div><strong>Live calendar booking</strong><p>Appointments are confirmed only after Google Calendar creates an event. Human transfer still means a callback request.</p></div></div>
+          <div className="pfd-demo-note"><Sparkles size={17} /><div><strong>Demo-safe by design</strong><p>{integrationsEnabled ? "Appointments are confirmed only after Google Calendar creates an event. Human transfer still means a callback request." : "Appointment requests and transfers are saved for follow-up, not booked or connected to a live phone line."}</p></div></div>
         </aside>
       </div>
 
@@ -674,7 +681,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
                 <span className="pfd-history-icon">{call.mode === "voice" ? <Mic size={18} /> : <Keyboard size={18} />}</span>
                 <div className="pfd-history-person"><strong>{call.callerName || "Unknown caller"}</strong><small>{call.callerPhone || formatTime(call.createdAt)}</small></div>
                 <div className="pfd-history-summary"><strong>{call.reason || "General enquiry"}</strong><p>{call.summary}</p></div>
-                <div className="pfd-history-outcome"><span className={`pfd-urgency pfd-urgency-${call.urgency}`}>{call.urgency}</span><small>{call.appointment?.status === "booked" ? "Calendar booked" : formatDuration(call.durationSeconds)}</small><small>{call.emailStatus === "sent" ? "Email sent" : call.emailStatus === "skipped" ? "Email not configured" : call.emailStatus === "failed" ? "Email failed" : "Email pending"}</small>{canOperate && ["failed", "pending"].includes(call.emailStatus) && <button type="button" onClick={() => void retrySummaryEmail(call.id)}>Retry email</button>}</div>
+                <div className="pfd-history-outcome"><span className={`pfd-urgency pfd-urgency-${call.urgency}`}>{call.urgency}</span><small>{integrationsEnabled && call.appointment?.status === "booked" ? "Calendar booked" : formatDuration(call.durationSeconds)}</small>{integrationsEnabled && <><small>{call.emailStatus === "sent" ? "Email sent" : call.emailStatus === "skipped" ? "Email not configured" : call.emailStatus === "failed" ? "Email failed" : "Email pending"}</small>{canOperate && ["failed", "pending"].includes(call.emailStatus) && <button type="button" onClick={() => void retrySummaryEmail(call.id)}>Retry email</button>}</>}</div>
                 <ChevronRight size={18} />
               </article>
             ))}
