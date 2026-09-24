@@ -83,6 +83,27 @@ test("verification delivery sends a polished HTML email with a useful plain-text
   }
 });
 
+test("call follow-up can use Resend's idempotency header", async () => {
+  const original = { fetch: globalThis.fetch, from: process.env.AUTH_EMAIL_FROM, key: process.env.RESEND_API_KEY };
+  process.env.AUTH_EMAIL_FROM = "AgenticThat <accounts@agenticthat.com>";
+  process.env.RESEND_API_KEY = "re_test_key";
+  let headers;
+  globalThis.fetch = async (_url, options) => {
+    headers = options.headers;
+    return Response.json({ id: "email_456" });
+  };
+  try {
+    await sendPlatformAuthEmail({ to: "team@example.com", subject: "Call summary", text: "A caller needs help.", idempotencyKey: "pfd-summary-call-1" });
+    assert.equal(headers["Idempotency-Key"], "pfd-summary-call-1");
+  } finally {
+    globalThis.fetch = original.fetch;
+    if (original.from === undefined) delete process.env.AUTH_EMAIL_FROM;
+    else process.env.AUTH_EMAIL_FROM = original.from;
+    if (original.key === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = original.key;
+  }
+});
+
 test("Email Studio uses only its approved sender list and never inherits the account sender", async () => {
   const original = {
     fetch: globalThis.fetch,

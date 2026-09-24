@@ -303,7 +303,7 @@ export function resolvePlatformEmailStudioSender(senderId) {
   return sender;
 }
 
-export async function sendPlatformAuthEmail({ to, subject, text, html, senderId }) {
+export async function sendPlatformAuthEmail({ to, subject, text, html, senderId, idempotencyKey, timeoutMs = 30_000 }) {
   const from = senderId
     ? resolvePlatformEmailStudioSender(senderId).from
     : String(process.env.AUTH_EMAIL_FROM || "").trim();
@@ -313,9 +313,13 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId 
   if (resendKey && from) {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
-      headers: { authorization: `Bearer ${resendKey}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${resendKey}`,
+        "content-type": "application/json",
+        ...(idempotencyKey ? { "Idempotency-Key": String(idempotencyKey).slice(0, 256) } : {}),
+      },
       body: JSON.stringify({ from, to: [to], subject, text, html }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`Email provider returned HTTP ${response.status}.`);
     const result = await response.json().catch(() => ({}));
@@ -331,7 +335,7 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId 
         ...(secret ? { authorization: `Bearer ${secret}` } : {}),
       },
       body: JSON.stringify({ from, to, subject, text, html }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`Email webhook returned HTTP ${response.status}.`);
     const result = await response.json().catch(() => ({}));

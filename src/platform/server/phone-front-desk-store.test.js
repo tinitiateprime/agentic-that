@@ -40,5 +40,5 @@ test("ElevenLabs receptionist is grounded, private and equipped for demo outcome
   assert.match(definition.conversation_config.agent.prompt.prompt, /Never invent prices/);
   assert.equal(variables.services, "Emergency plumbing");
   assert.equal(variables.faq_notes, "Never quote a price on the call.");
-  assert.deepEqual(toolNames, ["capture_lead", "prepare_appointment", "request_human_handoff"]);
+  assert.deepEqual(toolNames, ["capture_lead", "prepare_appointment", "check_availability", "book_appointment", "request_human_handoff"]);
 });

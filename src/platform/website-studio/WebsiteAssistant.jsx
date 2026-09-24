@@ -92,6 +92,8 @@ export default function WebsiteAssistant({ source, businessName, phone = "" }) {
       if (cleanText(details.service) || cleanText(details.preferred_date) || cleanText(details.preferred_time)) setAppointmentCaptured(true);
       return "The appointment request is prepared but is not a confirmed booking.";
     },
+    check_availability: () => "This website does not have a connected Google Calendar. Collect an unconfirmed appointment request instead.",
+    book_appointment: () => "Booking is not available for this website. Do not confirm an appointment; collect an unconfirmed request instead.",
     request_human_handoff: () => {
       setLeadCaptured(true);
       return "A human callback request is noted. Do not claim a live transfer occurred.";
