@@ -38,6 +38,12 @@ GEMINI_API_KEY=<server-only-google-ai-key>
 ELEVENLABS_API_KEY=<server-only-elevenlabs-api-key>
 ELEVENLABS_AGENT_ID=agent_6301m36sxacff369ckangq84hzxx
 
+# AI Phone Front Desk business-owned Gmail and Google Calendar
+# Enable only after the migration and Google OAuth production redirect are ready.
+PHONE_FRONT_DESK_FOLLOW_UP_ENABLED=true
+GOOGLE_OAUTH_CLIENT_ID=<google-oauth-web-client-id>
+GOOGLE_OAUTH_CLIENT_SECRET=<google-oauth-web-client-secret>
+
 # WhatsApp using the Meta Cloud API
 WA_PROVIDER=meta
 META_API_VERSION=v25.0
@@ -103,6 +109,12 @@ accepted during migration. All Supabase variables and `DATABASE_URL` must point
 to the same project.
 `CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after
 deployment because changing it makes stored workspace credentials unreadable.
+The Google Calendar/Gmail connections use this same key and the configured OAuth
+client. If the local test used a different key or OAuth client from Netlify,
+reconnect Google on the deployed site; do not replace an in-use Netlify key.
+With `PLATFORM_PUBLIC_URL=https://agenticthat.com`, the OAuth callback is
+`https://agenticthat.com/api/phone-front-desk/google/callback`; register it in
+Google Cloud. `GOOGLE_OAUTH_REDIRECT_URI` is normally unnecessary in Netlify.
 `PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` follows the same stability requirement
 and encrypts the GitHub tokens used only by Global Admin Center project management.
 `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per connection in Config

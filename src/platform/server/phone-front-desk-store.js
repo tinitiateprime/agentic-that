@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import { getPlatformSql } from "./auth-store.js";
-import { sendPlatformAuthEmail, platformEmailConfiguration } from "./auth-email.js";
 import {
   calendarConfiguration,
   normalizeCalendarSettings,
 } from "./phone-front-desk-calendar.js";
+import { googleConnectionConfiguration, googleConnectionSummary, sendConnectedGmail } from "./phone-front-desk-google.js";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1";
 const ELEVENLABS_AGENT_NAME = "AgenticThat AI Phone Front Desk v1";
@@ -149,7 +149,7 @@ export async function deliverPhoneFrontDeskSummary(actor, callId) {
     UPDATE ai_phone_front_desk_calls
        SET email_status = 'processing', email_error = null, email_attempted_at = now()
      WHERE id = ${String(callId)} AND workspace_id = ${String(actor.workspaceId)}
-       AND (email_status IN ('pending', 'failed') OR (email_status = 'processing' AND email_attempted_at < now() - interval '2 minutes'))
+       AND (email_status IN ('pending', 'failed', 'skipped') OR (email_status = 'processing' AND email_attempted_at < now() - interval '2 minutes'))
     RETURNING *`;
   if (!claimed) {
     const [existing] = await sql`SELECT * FROM ai_phone_front_desk_calls WHERE id = ${String(callId)} AND workspace_id = ${String(actor.workspaceId)}`;
@@ -158,13 +158,20 @@ export async function deliverPhoneFrontDeskSummary(actor, callId) {
   }
   const profile = await profileForActor(sql, actor);
   try {
+    const connections = await googleConnectionSummary(actor.workspaceId);
+    if (!connections.mail.connected) {
+      const [updated] = await sql`
+        UPDATE ai_phone_front_desk_calls
+           SET email_status = 'skipped', email_error = null
+         WHERE id = ${claimed.id} AND workspace_id = ${String(actor.workspaceId)}
+        RETURNING *`;
+      return mapCall(updated);
+    }
     if (!profile.notificationEmail) throw new Error("Set the follow-up email in the receptionist profile.");
-    const delivery = await sendPlatformAuthEmail({
+    const delivery = await sendConnectedGmail(actor.workspaceId, {
       to: profile.notificationEmail,
       subject: `${claimed.urgency === "high" ? "URGENT — " : ""}${profile.businessName} call summary`,
       text: notificationText(profile, mapCall(claimed)),
-      idempotencyKey: `pfd-summary-${claimed.id}`,
-      timeoutMs: 15_000,
     });
     const [updated] = await sql`
       UPDATE ai_phone_front_desk_calls
@@ -184,6 +191,7 @@ export async function deliverPhoneFrontDeskSummary(actor, callId) {
 
 export async function sendPhoneFrontDeskUrgentAlert(actor, input) {
   requirePhoneFrontDeskIntegrations();
+  if (!(await googleConnectionSummary(actor.workspaceId)).mail.connected) return { status: "not_configured" };
   const conversationId = cleanLine(input?.conversationId, 120);
   if (!/^conv_[a-zA-Z0-9_-]{10,100}$/.test(conversationId)) throw Object.assign(new Error("An active conversation is required for an urgent alert."), { status: 400 });
   const sql = await getPlatformSql();
@@ -207,12 +215,10 @@ export async function sendPhoneFrontDeskUrgentAlert(actor, input) {
   }
   try {
     if (!profile.notificationEmail) throw new Error("Set the follow-up email in the receptionist profile.");
-    const delivery = await sendPlatformAuthEmail({
+    const delivery = await sendConnectedGmail(actor.workspaceId, {
       to: profile.notificationEmail,
       subject: `URGENT caller alert — ${profile.businessName}`,
       text: `An urgent caller needs attention.\n\nCaller: ${callerName || "Unknown"}\nCallback: ${callerPhone || "Not provided"}\nReason: ${reason}\nConversation: ${conversationId}`,
-      idempotencyKey: `pfd-urgent-${id}`,
-      timeoutMs: 15_000,
     });
     if (delivery.skipped) throw new Error("Email delivery is not configured.");
     await sql`UPDATE ai_phone_front_desk_alerts SET status = 'sent', email_provider_id = ${delivery.messageId || null}, updated_at = now() WHERE id = ${id}`;
@@ -228,7 +234,16 @@ async function profileForActor(sql, actor) {
     SELECT * FROM ai_phone_front_desk_profiles
      WHERE workspace_id = ${String(actor.workspaceId)}
      LIMIT 1`;
-  return mapProfile(row, actor);
+  const profile = mapProfile(row, actor);
+  if (!phoneFrontDeskIntegrationsEnabled()) return profile;
+  const connections = await googleConnectionSummary(actor.workspaceId);
+  return {
+    ...profile,
+    workspaceId: actor.workspaceId,
+    googleCalendarConnected: connections.calendar.connected,
+    calendarId: connections.calendar.calendarId || "",
+    timeZone: connections.calendar.timeZone || profile.timeZone,
+  };
 }
 
 export async function phoneFrontDeskProfileForActor(actor) {
@@ -238,21 +253,21 @@ export async function phoneFrontDeskProfileForActor(actor) {
 export async function phoneFrontDeskSnapshot(actor) {
   const sql = await getPlatformSql();
   const integrationsEnabled = phoneFrontDeskIntegrationsEnabled();
-  const email = integrationsEnabled ? platformEmailConfiguration() : null;
-  const [profile, rows] = await Promise.all([
+  const [profile, rows, connections] = await Promise.all([
     profileForActor(sql, actor),
     sql`
       SELECT * FROM ai_phone_front_desk_calls
        WHERE workspace_id = ${String(actor.workspaceId)}
        ORDER BY created_at DESC
        LIMIT 30`,
+    integrationsEnabled ? googleConnectionSummary(actor.workspaceId) : null,
   ]);
   return {
     configured: Boolean(String(process.env.ELEVENLABS_API_KEY || "").trim()),
     liveModel: "ElevenLabs Agents",
     integrationsEnabled,
-    notifications: email ? { configured: email.configured, provider: email.provider } : null,
-    calendar: integrationsEnabled ? calendarConfiguration() : null,
+    notifications: integrationsEnabled ? { configured: googleConnectionConfiguration().configured, provider: "gmail", ...connections.mail } : null,
+    calendar: integrationsEnabled ? { configured: googleConnectionConfiguration().configured, ...connections.calendar } : null,
     profile,
     calls: rows.map(mapCall),
   };
@@ -260,6 +275,11 @@ export async function phoneFrontDeskSnapshot(actor) {
 
 export async function savePhoneFrontDeskProfile(actor, input) {
   const profile = normalizePhoneFrontDeskProfile(input, actor);
+  if (phoneFrontDeskIntegrationsEnabled()) {
+    const connections = await googleConnectionSummary(actor.workspaceId);
+    profile.calendarId = connections.calendar.calendarId || "";
+    profile.timeZone = connections.calendar.timeZone || profile.timeZone;
+  }
   const sql = await getPlatformSql();
   const [row] = await sql`
     INSERT INTO ai_phone_front_desk_profiles
@@ -289,7 +309,7 @@ export async function savePhoneFrontDeskProfile(actor, input) {
       appointment_duration_minutes = excluded.appointment_duration_minutes,
       updated_at = now()
     RETURNING *`;
-  return mapProfile(row, actor);
+  return profileForActor(sql, actor);
 }
 
 function currentAgentPrompt() {
@@ -450,7 +470,7 @@ export function phoneFrontDeskDynamicVariables(profile) {
     greeting: profile.greeting,
     faq_notes: profile.faqNotes,
     transfer_number_configured: profile.transferNumber ? "yes" : "no",
-    calendar_connected: phoneFrontDeskIntegrationsEnabled() && profile.calendarId && calendarConfiguration().configured ? "yes" : "no",
+    calendar_connected: phoneFrontDeskIntegrationsEnabled() && profile.calendarId && (profile.googleCalendarConnected || calendarConfiguration().configured) ? "yes" : "no",
     time_zone: profile.timeZone,
     appointment_duration_minutes: String(profile.durationMinutes),
   };
@@ -521,6 +541,8 @@ export async function createPhoneFrontDeskSessionForProfile(profileInput) {
     name: profileInput?.businessName,
     email: profileInput?.notificationEmail,
   });
+  profile.googleCalendarConnected = Boolean(profileInput?.googleCalendarConnected);
+  profile.workspaceId = profileInput?.workspaceId || "";
   const agentId = await ensurePhoneFrontDeskAgent();
   const encodedAgentId = encodeURIComponent(agentId);
   const [tokenResult, signedUrlResult] = await Promise.all([

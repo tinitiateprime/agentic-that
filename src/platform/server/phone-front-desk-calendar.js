@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { connectedGoogleRequest } from "./phone-front-desk-google.js";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
@@ -55,7 +56,10 @@ async function accessToken() {
   return tokenPromise;
 }
 
-async function googleRequest(path, { method = "GET", body } = {}) {
+async function googleResponse(settings, path, { method = "GET", body } = {}) {
+  if (settings.googleCalendarConnected && settings.workspaceId) {
+    return (settings.googleCalendarRequest || connectedGoogleRequest)(settings.workspaceId, "calendar", `${CALENDAR_API}${path}`, { method, body });
+  }
   const token = await accessToken();
   const response = await fetch(`${CALENDAR_API}${path}`, {
     method,
@@ -64,9 +68,16 @@ async function googleRequest(path, { method = "GET", body } = {}) {
     signal: AbortSignal.timeout(8_000),
   });
   const payload = await response.json().catch(() => ({}));
+  return { response, data: payload };
+}
+
+async function googleRequest(settings, path, { method = "GET", body } = {}) {
+  const { response, data: payload } = await googleResponse(settings, path, { method, body });
   if (!response.ok) {
     const reason = response.status === 403 || response.status === 404
-      ? "Share this Google Calendar with the service account using 'Make changes to events', then check the Calendar ID."
+      ? settings.googleCalendarConnected
+        ? "This Google account cannot access the selected calendar. Reconnect or select another calendar."
+        : "Share this Google Calendar with the service account using 'Make changes to events', then check the Calendar ID."
       : `Google Calendar returned HTTP ${response.status}.`;
     throw Object.assign(new Error(reason), { status: response.status, googleStatus: response.status });
   }
@@ -125,7 +136,7 @@ export function appointmentInterval(settings, input, now = Date.now()) {
 export async function checkCalendarAvailability(settings, input) {
   if (!settings.calendarId) throw Object.assign(new Error("This business has not connected a Google Calendar. Take an appointment request instead."), { status: 409 });
   const slot = appointmentInterval(settings, input);
-  const result = await googleRequest("/freeBusy", {
+  const result = await googleRequest(settings, "/freeBusy", {
     method: "POST",
     body: { timeMin: slot.start, timeMax: slot.end, items: [{ id: settings.calendarId }] },
   });
@@ -137,16 +148,16 @@ export async function checkCalendarAvailability(settings, input) {
 export async function verifyCalendarAccess(settings) {
   if (!settings.calendarId) throw Object.assign(new Error("Enter a Calendar ID first."), { status: 400 });
   const now = new Date();
-  const result = await googleRequest("/freeBusy", {
+  const result = await googleRequest(settings, "/freeBusy", {
     method: "POST",
     body: { timeMin: now.toISOString(), timeMax: new Date(now.getTime() + 60_000).toISOString(), items: [{ id: settings.calendarId }] },
   });
   if (!result.calendars?.[settings.calendarId] || result.calendars[settings.calendarId].errors?.length) {
-    throw Object.assign(new Error("The service account cannot see this calendar. Check sharing and Calendar ID."), { status: 403 });
+    throw Object.assign(new Error(settings.googleCalendarConnected ? "The connected account cannot see this calendar. Choose another calendar." : "The service account cannot see this calendar. Check sharing and Calendar ID."), { status: 403 });
   }
-  const events = await googleRequest(`/calendars/${encodeURIComponent(settings.calendarId)}/events?maxResults=1&fields=accessRole`);
+  const events = await googleRequest(settings, `/calendars/${encodeURIComponent(settings.calendarId)}/events?maxResults=1&fields=accessRole`);
   if (!["writerWithoutPrivateAccess", "writer", "owner"].includes(events.accessRole)) {
-    throw Object.assign(new Error("The service account can see the calendar but cannot edit events. Grant event-editing permission."), { status: 403 });
+    throw Object.assign(new Error("The connected account can see the calendar but cannot edit events. Choose a calendar with event-editing permission."), { status: 403 });
   }
   return true;
 }
@@ -162,11 +173,9 @@ export async function bookCalendarAppointment(settings, input, { workspaceId, co
   const eventId = `pfd${crypto.createHash("sha256").update(`${workspaceId}|${conversationId}`).digest("hex").slice(0, 48)}`;
   const eventPath = `/calendars/${encodeURIComponent(settings.calendarId)}/events`;
   // Repeated client tool calls should return the first booking, never create another.
-  const existingResponse = await fetch(`${CALENDAR_API}${eventPath}/${eventId}`, {
-    headers: { authorization: `Bearer ${await accessToken()}` }, signal: AbortSignal.timeout(8_000),
-  });
+  const { response: existingResponse, data: existingData } = await googleResponse(settings, `${eventPath}/${eventId}`);
   if (existingResponse.ok) {
-    const existing = await existingResponse.json();
+    const existing = existingData;
     if (Date.parse(existing.start?.dateTime || "") !== Date.parse(availability.start)) {
       return { booked: false, reason: "This call already booked a different time. Do not confirm this new slot; ask the business to change the existing booking." };
     }
@@ -183,14 +192,14 @@ export async function bookCalendarAppointment(settings, input, { workspaceId, co
     `Conversation: ${conversationId}`,
   ].join("\n");
   try {
-    const event = await googleRequest(eventPath, {
+    const event = await googleRequest(settings, eventPath, {
       method: "POST",
       body: { id: eventId, summary: `${service} — ${callerName.trim().slice(0, 80)}`, description, start: { dateTime: availability.start, timeZone: settings.timeZone }, end: { dateTime: availability.end, timeZone: settings.timeZone } },
     });
     return { booked: true, eventId: event.id, start: availability.start, end: availability.end, eventUrl: event.htmlLink || "", alreadyBooked: false };
   } catch (error) {
     if (error.googleStatus === 409) {
-      const event = await googleRequest(`${eventPath}/${eventId}`);
+      const event = await googleRequest(settings, `${eventPath}/${eventId}`);
       if (Date.parse(event.start?.dateTime || "") !== Date.parse(availability.start)) {
         return { booked: false, reason: "This call already booked a different time. Do not confirm this new slot; ask the business to change the existing booking." };
       }

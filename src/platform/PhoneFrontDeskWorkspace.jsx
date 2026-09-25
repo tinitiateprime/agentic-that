@@ -78,7 +78,12 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
   const [configured, setConfigured] = useState(false);
   const [integrationsEnabled, setIntegrationsEnabled] = useState(false);
   const [notifications, setNotifications] = useState({ configured: false });
-  const [calendar, setCalendar] = useState({ configured: false, shareWith: "" });
+  const [calendar, setCalendar] = useState({ configured: false, connected: false });
+  const [calendarOptions, setCalendarOptions] = useState([]);
+  const [bookingTimeZone, setBookingTimeZone] = useState("");
+  const [timeZoneOptions, setTimeZoneOptions] = useState([]);
+  const [calendarVerified, setCalendarVerified] = useState(false);
+  const [connectionBusy, setConnectionBusy] = useState("");
   const [verifyingCalendar, setVerifyingCalendar] = useState(false);
   const [profile, setProfile] = useState(null);
   const [calls, setCalls] = useState([]);
@@ -130,7 +135,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       setConfigured(Boolean(data.configured));
       setIntegrationsEnabled(Boolean(data.integrationsEnabled));
       setNotifications(data.notifications || { configured: false });
-      setCalendar(data.calendar || { configured: false, shareWith: "" });
+      setCalendar(data.calendar || { configured: false, connected: false });
       setProfile(data.profile);
       setCalls(Array.isArray(data.calls) ? data.calls : []);
     } catch (loadError) {
@@ -141,6 +146,37 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
   }, []);
 
   useEffect(() => { void loadSnapshot(); }, [loadSnapshot]);
+
+  useEffect(() => { setBookingTimeZone(calendar.timeZone || ""); }, [calendar.timeZone]);
+
+  useEffect(() => {
+    const supported = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    setTimeZoneOptions([...new Set(["Asia/Kolkata", "UTC", ...supported])].sort());
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const result = url.searchParams.get("google");
+    if (!result) return;
+    url.searchParams.delete("google");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    if (result === "calendar-connected") setNotice("Google Calendar connected. Choose a calendar and verify access.");
+    else if (result === "mail-connected") setNotice("Business Gmail connected. Send a test email before using it with customers.");
+    else setError(result === "denied" ? "Google access was not approved." : result === "expired" ? "Google connection expired. Please try again." : "Google connection failed. Check the Google OAuth setup and try again.");
+  }, []);
+
+  useEffect(() => {
+    if (!integrationsEnabled || !calendar.connected) { setCalendarOptions([]); return; }
+    let active = true;
+    fetch("/api/phone-front-desk/google/connections?calendars=true", { cache: "no-store", credentials: "include" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not list calendars.");
+        if (active) setCalendarOptions(Array.isArray(data.calendars) ? data.calendars : []);
+      })
+      .catch((listError) => { if (active) setError(listError instanceof Error ? listError.message : "Could not list calendars."); });
+    return () => { active = false; };
+  }, [integrationsEnabled, calendar.connected]);
 
   useEffect(() => {
     if (!["live", "typed"].includes(state)) return undefined;
@@ -232,10 +268,65 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Google Calendar verification failed.");
+      setCalendarVerified(true);
       setNotice("Calendar availability and event-editing access verified. Complete one test booking before using it with clients.");
-    } catch (verifyError) { setError(verifyError instanceof Error ? verifyError.message : "Google Calendar verification failed."); }
+    } catch (verifyError) {
+      setCalendarVerified(false);
+      setError(verifyError instanceof Error ? verifyError.message : "Google Calendar verification failed.");
+    }
     finally { setVerifyingCalendar(false); }
   }, [canConfigure, dirty, saveProfile]);
+
+  const connectGoogle = useCallback(async (kind) => {
+    if (!canConfigure || !integrationsEnabled || !calendar.configured) return;
+    setError("");
+    if (dirty && !(await saveProfile({ quiet: true }))) return;
+    window.location.assign(`/api/phone-front-desk/google/connect?kind=${kind}`);
+  }, [calendar.configured, canConfigure, dirty, integrationsEnabled, saveProfile]);
+
+  const connectionAction = useCallback(async (action, input = {}) => {
+    setConnectionBusy(action);
+    setError("");
+    try {
+      const response = await fetch("/api/phone-front-desk/google/connections", {
+        method: "POST", credentials: "include", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, ...input }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Connection request failed.");
+      if (action === "select-calendar") {
+        setCalendar((current) => ({ ...current, ...data.connections.calendar }));
+        setProfile((current) => ({ ...current, calendarId: data.selected.id, timeZone: data.selected.timeZone }));
+        setCalendarVerified(false);
+        setNotice(`Using ${data.selected.name} for appointments.`);
+      } else if (action === "set-time-zone") {
+        setCalendar((current) => ({ ...current, ...data.connections.calendar }));
+        setProfile((current) => ({ ...current, timeZone: data.selected.timeZone }));
+        setBookingTimeZone(data.selected.timeZone);
+        setNotice(`Booking times now use ${data.selected.timeZone}. Your Google Calendar settings were not changed.`);
+      } else setNotice("Test email sent from your connected Gmail account to its inbox.");
+    } catch (actionError) { setError(actionError instanceof Error ? actionError.message : "Connection request failed."); }
+    finally { setConnectionBusy(""); }
+  }, []);
+
+  const disconnectGoogle = useCallback(async (kind) => {
+    if (!window.confirm(`Disconnect ${kind === "mail" ? "Gmail" : "Google Calendar"}? Automated ${kind === "mail" ? "emails" : "booking"} will stop.`)) return;
+    setConnectionBusy(`disconnect-${kind}`);
+    setError("");
+    try {
+      const response = await fetch(`/api/phone-front-desk/google/connections?kind=${kind}`, { method: "DELETE", credentials: "include" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not disconnect Google.");
+      if (kind === "mail") setNotifications((current) => ({ ...current, ...data.connections.mail }));
+      else {
+        setCalendar((current) => ({ ...current, ...data.connections.calendar }));
+        setProfile((current) => ({ ...current, calendarId: "" }));
+        setCalendarVerified(false);
+      }
+      setNotice(`${kind === "mail" ? "Gmail" : "Google Calendar"} disconnected.`);
+    } catch (disconnectError) { setError(disconnectError instanceof Error ? disconnectError.message : "Could not disconnect Google."); }
+    finally { setConnectionBusy(""); }
+  }, []);
 
   const retrySummaryEmail = useCallback(async (id) => {
     try {
@@ -244,7 +335,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       if (!response.ok) throw new Error(data.error || "Could not retry the summary email.");
       setCalls((current) => current.map((call) => call.id === id ? data.call : call));
       if (data.call.emailStatus === "sent") setNotice("Call summary email sent.");
-      else throw new Error(data.call.emailError || "Call summary email is still pending.");
+      else throw new Error(data.call.emailStatus === "skipped" ? "Connect business Gmail before sending this summary." : data.call.emailError || "Call summary email is still pending.");
     } catch (retryError) { setError(retryError instanceof Error ? retryError.message : "Could not retry the summary email."); }
   }, []);
 
@@ -563,16 +654,46 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
             <Field label="Important FAQs and rules" hint="approved answers only" wide><textarea rows={5} value={profile.faqNotes} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("faqNotes", event.target.value)} placeholder="Pricing rules, service areas, booking notes, what must go to a human…" /></Field>
             <Field label="Human callback number"><input value={profile.transferNumber} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("transferNumber", event.target.value)} placeholder="Optional for demo" /></Field>
             {integrationsEnabled && <>
-              <Field label="Follow-up email" hint="summary and urgent alerts"><input type="email" value={profile.notificationEmail} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("notificationEmail", event.target.value)} /></Field>
-              <Field label="Google Calendar ID" hint="share this calendar with the service account" wide><input value={profile.calendarId || ""} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("calendarId", event.target.value)} placeholder="your-email@gmail.com or calendar ID" /></Field>
-              <Field label="Business time zone" hint="IANA name"><input value={profile.timeZone || "UTC"} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("timeZone", event.target.value)} placeholder="Asia/Kolkata" /></Field>
+              <Field label="Send summaries to" hint="business inbox"><input type="email" value={profile.notificationEmail} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("notificationEmail", event.target.value)} /></Field>
               <Field label="Appointment length" hint="minutes"><input type="number" min="15" max="180" value={profile.durationMinutes || 60} disabled={!canConfigure || callActive} onChange={(event) => updateProfile("durationMinutes", Number(event.target.value))} /></Field>
             </>}
           </div>
-          {integrationsEnabled && <div className="pfd-calendar-setup">
-            <p>{notifications.configured ? `${notifications.provider} ready for call summaries and urgent alerts.` : "Resend needs AUTH_EMAIL_FROM and RESEND_API_KEY in Netlify."}</p>
-            <p>{calendar.configured ? `Share the Google Calendar with ${calendar.shareWith} using event-editing permission.` : "Google Calendar needs the service account setting in Netlify."}</p>
-            <button type="button" onClick={() => void verifyCalendar()} disabled={!canConfigure || callActive || saving || verifyingCalendar || !calendar.configured || !profile.calendarId}>{verifyingCalendar ? "Checking calendar…" : "Verify calendar access"}</button>
+          {integrationsEnabled && <div className="pfd-connections">
+            <div className="pfd-connection-card">
+              <strong><CalendarCheck size={16} />Google Calendar</strong>
+              <p>{calendar.connected ? `Connected as ${calendar.email}. Appointments use your selected calendar and its time zone.` : calendar.configured ? "Connect your Google account to book appointments automatically." : "Google OAuth needs to be configured by the platform owner."}</p>
+              {calendar.connected && <label>Booking calendar
+                <select value={calendar.calendarId || ""} onChange={(event) => void connectionAction("select-calendar", { calendarId: event.target.value })} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>
+                  {calendarOptions.length === 0 && <option value={calendar.calendarId || ""}>{calendar.calendarId || "Loading calendars…"}</option>}
+                  {calendarOptions.map((item) => <option value={item.id} key={item.id}>{item.name}{item.primary ? " (primary)" : ""}</option>)}
+                </select>
+              </label>}
+              {calendar.connected && <>
+                <label>Booking time zone
+                  <input list="pfd-booking-time-zones" value={bookingTimeZone} onChange={(event) => setBookingTimeZone(event.target.value)} placeholder="e.g. Asia/Kolkata" disabled={!canConfigure || callActive || Boolean(connectionBusy)} />
+                </label>
+                <datalist id="pfd-booking-time-zones">{timeZoneOptions.map((zone) => <option value={zone} key={zone} />)}</datalist>
+                <small>The assistant uses this time zone for appointments. Your Google Calendar settings stay unchanged.</small>
+                {calendarVerified && <small className="pfd-connection-verified"><CheckCircle2 size={13} /> Calendar access verified</small>}
+              </>}
+              <div className="pfd-connection-actions">
+                {!calendar.connected ? <button type="button" onClick={() => void connectGoogle("calendar")} disabled={!canConfigure || callActive || saving || !calendar.configured}>Connect Google Calendar</button> : <>
+                  <button type="button" onClick={() => void connectionAction("set-time-zone", { timeZone: bookingTimeZone })} disabled={!canConfigure || callActive || saving || Boolean(connectionBusy) || bookingTimeZone.trim() === calendar.timeZone}>{connectionBusy === "set-time-zone" ? "Saving…" : "Save time zone"}</button>
+                  <button type="button" onClick={() => void verifyCalendar()} disabled={!canConfigure || callActive || saving || verifyingCalendar || Boolean(connectionBusy)}>{verifyingCalendar ? "Checking…" : "Verify access"}</button>
+                  <button type="button" className="pfd-disconnect" onClick={() => void disconnectGoogle("calendar")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>Disconnect</button>
+                </>}
+              </div>
+            </div>
+            <div className="pfd-connection-card">
+              <strong><Mail size={16} />Business Gmail</strong>
+              <p>{notifications.connected ? `Connected as ${notifications.email}. Call summaries and urgent alerts will send from this mailbox.` : notifications.configured ? "Connect the business Gmail account to send follow-up emails from it." : "Google OAuth needs to be configured by the platform owner."}</p>
+              <div className="pfd-connection-actions">
+                {!notifications.connected ? <button type="button" onClick={() => void connectGoogle("mail")} disabled={!canConfigure || callActive || saving || !notifications.configured}>Connect Gmail</button> : <>
+                  <button type="button" onClick={() => void connectionAction("test-mail")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>{connectionBusy === "test-mail" ? "Sending…" : "Send test email"}</button>
+                  <button type="button" className="pfd-disconnect" onClick={() => void disconnectGoogle("mail")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>Disconnect</button>
+                </>}
+              </div>
+            </div>
           </div>}
           <footer className="pfd-profile-footer">
             <p><CheckCircle2 size={15} />The AI is instructed not to invent prices, policies or availability.</p>
@@ -681,7 +802,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
                 <span className="pfd-history-icon">{call.mode === "voice" ? <Mic size={18} /> : <Keyboard size={18} />}</span>
                 <div className="pfd-history-person"><strong>{call.callerName || "Unknown caller"}</strong><small>{call.callerPhone || formatTime(call.createdAt)}</small></div>
                 <div className="pfd-history-summary"><strong>{call.reason || "General enquiry"}</strong><p>{call.summary}</p></div>
-                <div className="pfd-history-outcome"><span className={`pfd-urgency pfd-urgency-${call.urgency}`}>{call.urgency}</span><small>{integrationsEnabled && call.appointment?.status === "booked" ? "Calendar booked" : formatDuration(call.durationSeconds)}</small>{integrationsEnabled && <><small>{call.emailStatus === "sent" ? "Email sent" : call.emailStatus === "skipped" ? "Email not configured" : call.emailStatus === "failed" ? "Email failed" : "Email pending"}</small>{canOperate && ["failed", "pending"].includes(call.emailStatus) && <button type="button" onClick={() => void retrySummaryEmail(call.id)}>Retry email</button>}</>}</div>
+                <div className="pfd-history-outcome"><span className={`pfd-urgency pfd-urgency-${call.urgency}`}>{call.urgency}</span><small>{integrationsEnabled && call.appointment?.status === "booked" ? "Calendar booked" : formatDuration(call.durationSeconds)}</small>{integrationsEnabled && <><small>{call.emailStatus === "sent" ? "Email sent" : call.emailStatus === "skipped" ? "Email not connected" : call.emailStatus === "failed" ? "Email failed" : "Email pending"}</small>{canOperate && ["failed", "pending", "skipped"].includes(call.emailStatus) && <button type="button" onClick={() => void retrySummaryEmail(call.id)}>Retry email</button>}</>}</div>
                 <ChevronRight size={18} />
               </article>
             ))}

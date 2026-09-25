@@ -72,3 +72,42 @@ test("booking checks Google free/busy and creates one repeatable event", async (
     else process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64 = originalKey;
   }
 });
+
+test("connected workspace calendar books without a service account or manual calendar ID", async () => {
+  const originalKey = process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
+  delete process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
+  const events = new Map();
+  const calls = [];
+  const googleCalendarRequest = async (workspaceId, kind, url, options = {}) => {
+    calls.push({ workspaceId, kind, url, method: options.method || "GET" });
+    if (url.endsWith("/freeBusy")) {
+      const busy = [...events.values()].filter((event) => event.start.dateTime < options.body.timeMax && event.end.dateTime > options.body.timeMin)
+        .map((event) => ({ start: event.start.dateTime, end: event.end.dateTime }));
+      return { response: { ok: true, status: 200 }, data: { calendars: { "owner@business.com": { busy } } } };
+    }
+    if (url.includes("/events?maxResults=1")) return { response: { ok: true, status: 200 }, data: { accessRole: "owner" } };
+    if (url.endsWith("/events") && options.method === "POST") {
+      events.set(options.body.id, options.body);
+      return { response: { ok: true, status: 200 }, data: { ...options.body, htmlLink: "https://calendar.google.com/event" } };
+    }
+    const event = events.get(url.split("/").at(-1));
+    return event
+      ? { response: { ok: true, status: 200 }, data: event }
+      : { response: { ok: false, status: 404 }, data: {} };
+  };
+  try {
+    const settings = { ...normalizeCalendarSettings({ calendarId: "owner@business.com", timeZone: "Asia/Kolkata" }), workspaceId: "business-workspace", googleCalendarConnected: true, googleCalendarRequest };
+    assert.equal(await verifyCalendarAccess(settings), true);
+    const args = { workspaceId: "business-workspace", conversationId: "conv_1234567890abcdef", callerName: "Sam", callerPhone: "+919000000000" };
+    const result = await bookCalendarAppointment(settings, { date: "2026-10-01", time: "10:30", service: "HVAC repair" }, args);
+    assert.equal(result.booked, true);
+    assert.equal(events.size, 1);
+    const [event] = events.values();
+    assert.equal(event.start.dateTime, "2026-10-01T05:00:00.000Z");
+    assert.equal(event.start.timeZone, "Asia/Kolkata");
+    assert.ok(calls.every((call) => call.workspaceId === "business-workspace" && call.kind === "calendar"));
+  } finally {
+    if (originalKey === undefined) delete process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
+    else process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64 = originalKey;
+  }
+});
