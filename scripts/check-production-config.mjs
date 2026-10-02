@@ -1,4 +1,7 @@
-const environment = process.env;
+import crypto from "node:crypto";
+import { amplifyEnvironment } from "./amplify-environment.mjs";
+
+const environment = process.argv.includes("--amplify") ? amplifyEnvironment(process.env) : process.env;
 const errors = [];
 
 function required(name, alternatives = []) {
@@ -29,7 +32,6 @@ required("PLATFORM_PUBLIC_URL");
 required("AUTH_EMAIL_FROM");
 required("RESEND_API_KEY", ["AUTH_EMAIL_WEBHOOK_URL"]);
 required("AUTH_RATE_LIMIT_PEPPER");
-required("NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG");
 falseValue("NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS");
 
 if (String(environment.RBAC_ENFORCEMENT_MODE || "enforce").trim().toLowerCase() !== "enforce") {
@@ -41,8 +43,30 @@ if (String(environment.SESSION_COOKIE_SECURE || "true").trim().toLowerCase() ===
 if (String(environment.TELEGRAM_DATA_STORE || "").trim().toLowerCase() !== "postgres") {
   errors.push("TELEGRAM_DATA_STORE must be postgres in production.");
 }
-if (String(environment.NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG || "").includes("-qa.")) {
-  errors.push("NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG must reference a stable signed release.");
+if (String(environment.COMPANION_RELEASE_TAG || environment.NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG || "").includes("-qa.")) {
+  errors.push("The Companion release tag must reference a stable signed release.");
+}
+
+for (const name of ["CREDENTIAL_ENCRYPTION_KEY", "PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY"]) {
+  const value = environment[name]?.trim();
+  if (value && (!/^[a-f0-9]{64}$/i.test(value) && Buffer.from(value, "base64").length !== 32)) errors.push(`${name} must encode exactly 32 bytes.`);
+}
+if (environment.SESSION_ENCRYPTION_KEY && Buffer.from(environment.SESSION_ENCRYPTION_KEY, "base64url").length !== 32) errors.push("SESSION_ENCRYPTION_KEY must encode exactly 32 bytes.");
+for (const [name, value] of Object.entries(environment)) {
+  if (value && /^\*{3,}/.test(value)) errors.push(`${name} contains a masked value instead of its original value.`);
+}
+if (environment.SERVICE_TOKEN_PRIVATE_KEY && environment.SERVICE_TOKEN_PUBLIC_KEY) {
+  try {
+    const privateKey = crypto.createPrivateKey(environment.SERVICE_TOKEN_PRIVATE_KEY);
+    const publicKey = crypto.createPublicKey(environment.SERVICE_TOKEN_PUBLIC_KEY);
+    if (privateKey.asymmetricKeyType !== "ed25519" || !crypto.createPublicKey(privateKey).equals(publicKey)) throw new Error();
+  } catch { errors.push("SERVICE_TOKEN_PRIVATE_KEY and SERVICE_TOKEN_PUBLIC_KEY must be a matching Ed25519 pair."); }
+}
+if (environment.HOSTING_PROVIDER === "aws-amplify") {
+  required("BACKGROUND_JOB_FUNCTION_NAME");
+  required("BACKGROUND_JOB_REGION");
+  if (environment.DATA_STORE !== "postgres") errors.push("DATA_STORE must be postgres on AWS.");
+  if (environment.RUN_DATABASE_MIGRATIONS === "true") errors.push("Apply database migrations separately; RUN_DATABASE_MIGRATIONS must be false on AWS.");
 }
 const whatsappProvider = String(environment.WA_PROVIDER || "meta").trim().toLowerCase();
 if (whatsappProvider === "meta") required("META_APP_SECRET");

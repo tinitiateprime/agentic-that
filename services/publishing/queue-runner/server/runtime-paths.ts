@@ -18,19 +18,16 @@ function resolveServicePath(
     : path.resolve(serviceRoot, candidate);
 }
 
-function isNetlifyRuntime() {
+function isServerlessRuntime() {
   return (
-    process.env.NETLIFY === "true" ||
-    Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
+    process.env.SERVERLESS === "true" ||
+    process.env.HOSTING_PROVIDER === "aws-amplify"
   );
 }
 
 export function publishingUploadDirectory() {
-  // Netlify's deployed application directory should not be used
-  // for temporary publishing media.
-  // Use the runtime temporary directory, then media-storage.ts
-  // persists the final file into Netlify Blobs.
-  if (isNetlifyRuntime()) {
+  // The deployed application is read-only; durable media lives in Supabase.
+  if (isServerlessRuntime()) {
     return path.join(
       tmpdir(),
       "agentic-that-publishing",

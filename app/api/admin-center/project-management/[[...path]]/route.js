@@ -3,17 +3,12 @@ import {
   accessErrorResponse,
   authorizeGlobalAdminApi,
 } from "@platform/server/access-control";
-import {
-  hydrateProjectWorkspaceData,
-  persistProjectWorkspaceData,
-  projectWorkspaceDataDirectory,
-} from "@platform/server/project-workspace-persistence";
+import { withProjectWorkspacePersistence } from "@platform/server/project-workspace-persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const apiBasePath = "/api/admin-center/project-management";
-const dataDirectory = projectWorkspaceDataDirectory();
 
 function normalizedPublicRequest(request) {
   const originHeader = request.headers.get("origin")?.trim();
@@ -49,26 +44,17 @@ function normalizedPublicRequest(request) {
     : new Request(publicUrl, request);
 }
 
-const workspaceHandler = createProjectWorkspaceHandler({
-  apiBasePath,
-  dataDirectory,
-  getIdentity: async () => {
-    const principal = await authorizeGlobalAdminApi();
-    return {
-      userId: principal.userId,
-      tenantId: "agentic-that-global-admin-center",
-      canManageRepositories: true,
-    };
-  },
-});
-
 async function handle(request) {
   try {
-    await authorizeGlobalAdminApi();
-    await hydrateProjectWorkspaceData(dataDirectory);
-    const response = await workspaceHandler(normalizedPublicRequest(request));
-    await persistProjectWorkspaceData(dataDirectory);
-    return response;
+    const principal = await authorizeGlobalAdminApi();
+    if (new URL(request.url).pathname.endsWith("/events")) return new Response(null, { status: 204 });
+    return await withProjectWorkspacePersistence(async dataDirectory => {
+      const workspaceHandler = createProjectWorkspaceHandler({
+        apiBasePath, dataDirectory,
+        getIdentity: async () => ({ userId: principal.userId, tenantId: "agentic-that-global-admin-center", canManageRepositories: true }),
+      });
+      return workspaceHandler(normalizedPublicRequest(request));
+    });
   } catch (error) {
     try {
       return accessErrorResponse(error);

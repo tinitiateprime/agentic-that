@@ -316,8 +316,8 @@ function telegramSql() {
   if (!url) throw new Error("DATABASE_URL or SUPABASE_DB_URL is required for Telegram database persistence.");
   globalForTelegram.__agenticThatTelegramSql ??= postgres(url, {
     prepare: false,
-    max: Number(process.env.PG_POOL_MAX || (process.env.NETLIFY === "true" ? 1 : 5)),
-    idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.NETLIFY === "true" ? 5 : 20)),
+    max: Number(process.env.PG_POOL_MAX || (process.env.SERVERLESS === "true" ? 1 : 5)),
+    idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.SERVERLESS === "true" ? 5 : 20)),
     connect_timeout: 15,
     onnotice: () => undefined,
   });

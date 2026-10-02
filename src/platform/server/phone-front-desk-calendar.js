@@ -12,7 +12,7 @@ let tokenPromise = null;
 
 function serviceAccount() {
   const encoded = String(process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64 || "").trim();
-  if (!encoded) throw Object.assign(new Error("Add the Google Calendar service account to Netlify first."), { status: 503 });
+  if (!encoded) throw Object.assign(new Error("Add the Google Calendar service account to the server environment first."), { status: 503 });
   let account;
   try { account = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")); } catch {
     throw Object.assign(new Error("The Google Calendar service account setting is invalid."), { status: 503 });

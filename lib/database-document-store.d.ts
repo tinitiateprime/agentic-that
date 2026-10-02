@@ -14,3 +14,5 @@ export function mutateDatabaseDocument<T, R>(
     | { document: T; result: R }
     | Promise<{ document: T; result: R }>
 ): Promise<R>;
+
+export function getDatabaseSql(): Promise<import("postgres").Sql>;

@@ -1,3 +1,4 @@
+import { dispatchBackgroundJob } from "../../../lib/background-jobs.js";
 import {
   accessErrorResponse,
   assertPrincipalCapability,
@@ -19,25 +20,8 @@ async function authorizeStudio(level, capability) {
   return assertPrincipalCapability(principal, capability);
 }
 
-async function dispatchBackgroundGeneration(request, projectId, jobToken) {
-  const runUrl = new URL(
-    `/api/website-studio/jobs/${encodeURIComponent(projectId)}/run`,
-    request.url,
-  );
-  const response = await fetch(runUrl, {
-    method: "POST",
-    cache: "no-store",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jobToken }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) {
-    throw new WebsiteStudioError(
-      "The website was queued, but its background worker could not start. Retry the project.",
-      "GENERATION_DISPATCH_FAILED",
-      503,
-    );
-  }
+async function dispatchBackgroundGeneration(_request, projectId, jobToken) {
+  await dispatchBackgroundJob({ version: 1, kind: "website-studio", jobId: projectId, jobToken });
 }
 
 export async function GET() {

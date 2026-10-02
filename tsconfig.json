@@ -55,7 +55,6 @@
     "app/**/*.jsx",
     "app/**/*.ts",
     "app/**/*.tsx",
-    "netlify/functions/**/*.mts",
     "services/messaging/telegram/src/**/*.ts",
     "services/messaging/whatsapp/src/**/*.js",
     "services/messaging/whatsapp/src/**/*.jsx",
@@ -70,7 +69,8 @@
     "src/**/*.js",
     "src/**/*.jsx",
     "src/**/*.ts",
-    "src/**/*.tsx"
+    "src/**/*.tsx",
+    "lib/**/*.ts"
   ],
   "exclude": [
     "node_modules"

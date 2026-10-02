@@ -513,6 +513,26 @@ export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumByt
   return Buffer.concat(chunks, receivedSize);
 }
 
+/** @param {{ start: number, end: number } | null} [range] */
+export async function readSupabasePublishingMediaObject(workspaceId, fileName, range = null) {
+  const configuration = supabaseServiceConfiguration();
+  const url = await signedArtifactUrl(configuration, storageObjectPath(workspaceId, fileName));
+  const headers = {};
+  if (range) {
+    if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start) throw new Error("Invalid publishing media range.");
+    headers.range = `bytes=${range.start}-${range.end}`;
+  }
+  const response = await fetch(url, { headers, cache: "no-store" });
+  if (!response.ok) throw new Error(`Publishing media could not be read (${response.status}).`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (range && (response.status !== 206 || bytes.length !== range.end - range.start + 1)) throw new Error("The publishing media range is incomplete.");
+  return bytes;
+}
+
+export async function deleteSupabasePublishingMediaObject(workspaceId, fileName) {
+  await deleteSupabaseJobArtifactParts([{ path: decodeURIComponent(storageObjectPath(workspaceId, fileName)) }]);
+}
+
 export async function readSupabaseJobArtifactRange(artifact, start, end, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
   if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
   const declaredSize = Number(artifact.byteSize || 0);

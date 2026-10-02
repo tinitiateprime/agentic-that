@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  outputFileTracingRoot: process.cwd(),
+  serverExternalPackages: ["telegram", "postgres", "@project-workspace/embedded", "@sparticuz/chromium", "playwright-core", "sharp"],
   ...(process.env.NEXT_DIST_DIR
     ? { distDir: process.env.NEXT_DIST_DIR }
     : {}),
@@ -46,7 +48,7 @@ const nextConfig = {
         ? `http://127.0.0.1:${Number(process.env.PUBLISH_QUEUE_SERVICE_PORT || 8792)}`
         : "");
 
-    if (publishQueueTarget && process.env.NETLIFY !== "true") {
+    if (publishQueueTarget && process.env.SERVERLESS !== "true" && process.env.HOSTING_PROVIDER !== "aws-amplify") {
       const target = publishQueueTarget.replace(/\/$/, "");
       rewrites.push(
         {

@@ -16,7 +16,7 @@ offered:
 4. After approval, add the public listing URL to Netlify as
    `NEXT_PUBLIC_PUBLISHING_EXTENSION_URL` with Builds scope.
 5. Keep `NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=/companion/download` as
-   documented in `docs/netlify-env.md`. That page selects Windows, macOS, or
+   documented in `docs/amplify-env.md`. That page selects Windows, macOS, or
    Linux release assets without requiring the Chrome extension.
 
 ### Required release credentials

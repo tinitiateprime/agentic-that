@@ -8,7 +8,9 @@ the database.
    `PLATFORM_SUPER_ADMIN_EMAILS` variable.
 2. Run **Production Database Migrations**, type `MIGRATE_PRODUCTION`, and require
    the RLS/grant verification step to pass.
-3. Configure Netlify from `docs/netlify-env.md`; run `npm run production:check`
+3. Configure the Lambda worker and Amplify compute role from
+   `docs/deployment.md`. Configure AWS Amplify from `docs/amplify-env.md`;
+   run `npm run production:check -- --amplify`
    with that same environment. Testing bypass must be false and RBAC must be
    `enforce`.
 4. Deploy the matching commit. Verify signup email, email verification, password
@@ -19,7 +21,7 @@ the database.
    no row in the other workspace.
 6. Send one immediate Telegram text and one media item; verify confirmed message
    IDs after a cold function invocation. Telegram scheduling is intentionally
-   unavailable on Netlify.
+   unavailable in the request-based AWS deployment.
 7. Deliver a Meta webhook twice and verify one WhatsApp message row. Verify an
    invalid Meta signature, unknown WABA, missing WATI token, and invalid Baileys
    secret are rejected without tenant fallback.
@@ -29,7 +31,7 @@ the database.
 9. Set `NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG` to that stable tag, redeploy,
    and verify checksums and downloads on every supported OS/architecture.
 10. Run load tests with representative concurrent workspaces and provider limits;
-    monitor Netlify p95/p99 duration/error rate, Supabase connections/CPU/IO, queue
+    monitor AWS Amplify p95/p99 duration/error rate, Supabase connections/CPU/IO, queue
     depth, webhook retries, and provider rate-limit responses before increasing
     the client cohort.
 

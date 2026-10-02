@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getStore } from "@netlify/blobs";
+import { DurableDocumentStore } from "../../../../lib/durable-document-store.ts";
 import {
   GrowthAdvisorError,
   growthAdvisorModel,
@@ -42,6 +41,7 @@ type JobsDatabase = {
 };
 
 export type GrowthAdvisorJobRepository = {
+  claimJob?(id: string, model: string): Promise<GrowthAdvisorJob | null>;
   createJob(userId: string, input: AdvisorRequest, model?: string, workspaceId?: string): Promise<GrowthAdvisorJob>;
   getJob(id: string): Promise<GrowthAdvisorJob | null>;
   updateJob(
@@ -67,14 +67,6 @@ const RUN_LEASE_MS = 7 * 60_000;
 export const GROWTH_ADVISOR_STALE_JOB_MS = 9 * 60_000;
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 180_000;
 const emptyDatabase = (): JobsDatabase => ({ version: 1, jobs: [] });
-let localMutation = Promise.resolve();
-
-const shouldUseNetlifyBlobs = () => (
-  process.env.DATA_STORE === "netlify-blobs" ||
-  process.env.NETLIFY === "true" ||
-  Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
-);
-
 const configuredApiKey = () => (
   process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || ""
 );
@@ -95,7 +87,10 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
     "data",
     "growth-advisor-jobs.json"
   );
-  private readonly useBlobs = shouldUseNetlifyBlobs();
+  private readonly documents = new DurableDocumentStore<JobsDatabase>(STORE_NAME, this.dataFile, emptyDatabase, (value) => {
+    const jobs = (value as JobsDatabase | null)?.jobs;
+    return { version: 1, jobs: Array.isArray(jobs) ? jobs.map(coerceJob).filter(Boolean) as GrowthAdvisorJob[] : [] };
+  });
 
   async createJob(userId: string, input: AdvisorRequest, model = growthAdvisorModel(), workspaceId = userId) {
     const timestamp = new Date().toISOString();
@@ -111,10 +106,6 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
       createdAt: timestamp,
       updatedAt: timestamp
     };
-    if (this.useBlobs) {
-      await getStore(STORE_NAME).setJSON(`jobs/${job.id}`, job);
-      return job;
-    }
     return this.mutateLocal((database) => {
       database.jobs = [job, ...database.jobs].slice(0, LOCAL_JOB_LIMIT);
       return job;
@@ -122,27 +113,13 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
   }
 
   async getJob(id: string) {
-    if (this.useBlobs) {
-      const value = await getStore(STORE_NAME).get(`jobs/${id}`, {
-        type: "json",
-        consistency: "strong"
-      });
-      return coerceJob(value);
-    }
-    return (await this.readLocal()).jobs.find((job) => job.id === id) || null;
+    return (await this.documents.read()).jobs.find((job) => job.id === id) || null;
   }
 
   async updateJob(
     id: string,
     updates: Partial<Omit<GrowthAdvisorJob, "id" | "userId" | "workspaceId" | "input" | "createdAt">>
   ) {
-    if (this.useBlobs) {
-      const current = await this.getJob(id);
-      if (!current) return null;
-      const job: GrowthAdvisorJob = { ...current, ...updates, updatedAt: new Date().toISOString() };
-      await getStore(STORE_NAME).setJSON(`jobs/${id}`, job);
-      return job;
-    }
     return this.mutateLocal((database) => {
       const index = database.jobs.findIndex((job) => job.id === id);
       if (index === -1) return null;
@@ -155,34 +132,23 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
     });
   }
 
-  private async readLocal(): Promise<JobsDatabase> {
-    try {
-      const value = JSON.parse(await readFile(this.dataFile, "utf8"));
-      if (!value || typeof value !== "object") return emptyDatabase();
-      return {
-        version: 1,
-        jobs: Array.isArray(value.jobs) ? value.jobs.map(coerceJob).filter(Boolean) as GrowthAdvisorJob[] : []
-      };
-    } catch {
-      return emptyDatabase();
-    }
+  private mutateLocal<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {
+    return this.documents.mutate(mutator);
   }
-
-  private async writeLocal(database: JobsDatabase) {
-    await mkdir(path.dirname(this.dataFile), { recursive: true });
-    await writeFile(this.dataFile, JSON.stringify(database, null, 2), "utf8");
-  }
-
-  private async mutateLocal<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {
-    const operation = localMutation.then(async () => {
-      const database = await this.readLocal();
-      const result = await mutator(database);
-      await this.writeLocal(database);
-      return result;
+  async claimJob(id: string, model: string) {
+    return this.documents.mutate(database => {
+      const job = database.jobs.find(item => item.id === id);
+      if (!job || job.status !== "pending") return null;
+      job.status = "running";
+      job.model = model;
+      job.attempts += 1;
+      job.startedAt = new Date().toISOString();
+      job.updatedAt = job.startedAt;
+      delete job.error;
+      return job;
     });
-    localMutation = operation.then(() => undefined, () => undefined);
-    return operation;
   }
+
 }
 
 export function growthAdvisorJobPayload(job: GrowthAdvisorJob) {
@@ -274,7 +240,7 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
   }
 
   const model = dependencies.model || current.model || growthAdvisorModel();
-  const running = await store.updateJob(id, {
+  const running = store.claimJob ? await store.claimJob(id, model) : await store.updateJob(id, {
     status: "running",
     model,
     attempts: current.attempts + 1,

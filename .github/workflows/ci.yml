@@ -40,11 +40,8 @@ jobs:
 
       - name: Verify application and Companion contracts
         run: |
-          npm run test:publishing
-          npm run test:instagram
-          npm run test:facebook
-          npm run test:whatsapp
-          npm run test:rbac
-          npm run test:security
-          npm --prefix services/messaging/telegram test
+          npm run test:all
+          npm run publishing:extension:validate
+          node scripts/build-publishing-companion-runtime.mjs
           npm run build
+          npm run aws:worker:build

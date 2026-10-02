@@ -70,8 +70,8 @@ function client() {
       // Safe with Supabase's transaction pooler (pgbouncer), which can't hold
       // server-side prepared statements across pooled connections.
       prepare: false,
-      max: Number(process.env.PG_POOL_MAX || (process.env.NETLIFY === "true" ? 1 : 5)),
-      idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.NETLIFY === "true" ? 5 : 20)),
+      max: Number(process.env.PG_POOL_MAX || (process.env.SERVERLESS === "true" ? 1 : 5)),
+      idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.SERVERLESS === "true" ? 5 : 20)),
       connect_timeout: 15,
       onnotice: () => {}, // silence "column already exists, skipping" etc.
       types: { timestamp: timestampAsIso },
@@ -82,7 +82,7 @@ function client() {
 
 // Run schema migration + admin bootstrap exactly once, before the first query.
 export function ensureReady() {
-  if (process.env.NETLIFY === "true" && process.env.RUN_DATABASE_MIGRATIONS !== "true") {
+  if (process.env.NODE_ENV === "production" && process.env.RUN_DATABASE_MIGRATIONS !== "true") {
     return Promise.resolve();
   }
   return (globalForDb.__tinitiateDbReady ||= (async () => {

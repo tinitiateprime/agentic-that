@@ -41,4 +41,4 @@ unchanged.
 
 Version 2.0.0 requires the database migration in
 `supabase/migrations/202609020001_companion_job_control.sql` and the three
-Supabase API/Storage environment variables documented in `docs/netlify-env.md`.
+Supabase API/Storage environment variables documented in `docs/amplify-env.md`.

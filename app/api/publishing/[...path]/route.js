@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { accessErrorResponse, assertPrincipalCapability, authorizeApiCapability, principalHasAccess } from "@platform/server/access-control";
 import {
@@ -34,15 +33,13 @@ import {
   updateCentralUpload,
   updateCentralUploadStatus,
 } from "@platform/server/publishing-central-store";
-import { deletePublishingMedia, readPublishingMedia, storePublishingMediaBytes } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
-import { publishingUploadDirectory } from "../../../../services/publishing/queue-runner/server/runtime-paths.ts";
+import { deletePublishingMedia, readPublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { storePublishingPreviewInput } from "@platform/server/publishing-media-preview";
 import {
   authorizeSupabaseJobArtifactPartUploads,
   deleteSupabaseJobArtifactParts,
   deleteSupabaseStagedArtifactParts,
   finalizeSupabaseJobArtifact,
-  storeSupabaseJobArtifact,
   storeSupabaseJobArtifactPart,
   SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
   verifySupabaseJobArtifactPartUploads,
@@ -52,7 +49,6 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
-const localStageRoot = path.join(publishingUploadDirectory(), ".central-staged");
 
 function fail(error) {
   try {
@@ -151,57 +147,6 @@ async function centralUploadForPrincipal(principalValue, uploadId, level = "view
   return upload;
 }
 
-function stagingUsesBlobs() {
-  return process.env.DATA_STORE === "netlify-blobs" || process.env.NETLIFY === "true" || Boolean(process.env.NETLIFY_BLOBS_CONTEXT);
-}
-
-function stageChunkKey(stage, offset) {
-  return `workspaces/${encodeURIComponent(stage.workspaceId)}/staged/${encodeURIComponent(stage.id)}/${offset}`;
-}
-
-function localStagePath(stage) {
-  return path.join(localStageRoot, encodeURIComponent(stage.workspaceId), encodeURIComponent(stage.id));
-}
-
-async function putStageChunk(stage, offset, bytes) {
-  if (stagingUsesBlobs()) {
-    const { getStore } = await import("@netlify/blobs");
-    await getStore("agentic-that-publishing-staging").set(stageChunkKey(stage, offset), bytes, { metadata: { workspaceId: stage.workspaceId } });
-    return;
-  }
-  const file = localStagePath(stage);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const handle = await fs.open(file, "r+").catch(() => fs.open(file, "w+", 0o600));
-  try {
-    await handle.write(bytes, 0, bytes.length, offset);
-  } finally {
-    await handle.close();
-  }
-}
-
-async function readStageBytes(stage) {
-  if (!stagingUsesBlobs()) return fs.readFile(localStagePath(stage));
-  const { getStore } = await import("@netlify/blobs");
-  const store = getStore("agentic-that-publishing-staging");
-  const buffers = [];
-  for (let offset = 0; offset < stage.size; offset += stage.chunkSize) {
-    const chunk = await store.get(stageChunkKey(stage, offset), { type: "arrayBuffer" });
-    if (!chunk) throw new Error("Part of the media upload is missing. Please upload the file again.");
-    buffers.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(buffers);
-}
-
-async function removeStageBytes(stage) {
-  if (!stagingUsesBlobs()) {
-    await fs.unlink(localStagePath(stage)).catch(() => undefined);
-    return;
-  }
-  const { getStore } = await import("@netlify/blobs");
-  const store = getStore("agentic-that-publishing-staging");
-  await Promise.all(Array.from({ length: Math.ceil(stage.size / stage.chunkSize) }, (_, index) => store.delete(stageChunkKey(stage, index * stage.chunkSize)).catch(() => undefined)));
-}
-
 async function finishStagedMedia(principalValue, stagedUploadId, previewInput = null) {
   let stage = await getCentralStagedUpload(principalValue.workspaceId, stagedUploadId);
   if (stage.offset !== stage.size) throw new Error("The media upload has not finished yet.");
@@ -226,7 +171,7 @@ async function finishStagedMedia(principalValue, stagedUploadId, previewInput = 
       previewArtifact,
     };
   }
-  if (stage.uploadStrategy === "signed_parts" || stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  if (stage.uploadStrategy === "signed_parts" || stage.artifactParts?.length) {
     const artifact = await finalizeSupabaseJobArtifact({
       workspaceId: principalValue.workspaceId,
       fileName: stage.fileName,
@@ -247,29 +192,7 @@ async function finishStagedMedia(principalValue, stagedUploadId, previewInput = 
       previewArtifact,
     };
   }
-  const bytes = await readStageBytes(stage);
-  if (bytes.length !== stage.size) throw new Error("The media upload size is invalid. Please upload the file again.");
-  const [, artifact] = await Promise.all([
-    storePublishingMediaBytes(stage.fileName, principalValue.workspaceId, stage.mimeType, bytes),
-    storeSupabaseJobArtifact(bytes, {
-      workspaceId: principalValue.workspaceId,
-      fileName: stage.fileName,
-      originalName: stage.originalName,
-      mimeType: stage.mimeType,
-    }),
-  ]);
-  stage = await finalizeCentralStagedUpload(principalValue, stagedUploadId, artifact);
-  await removeStageBytes(stage);
-  return {
-    originalName: stage.originalName,
-    fileName: stage.fileName,
-    mimeType: stage.mimeType,
-    size: stage.size,
-    extension: path.extname(stage.originalName),
-    url: `/api/publishing/media/${encodeURIComponent(stage.fileName)}`,
-    artifact: stage.artifactManifest,
-    previewArtifact,
-  };
+  throw new Error("The media upload has no stored parts. Please upload the file again.");
 }
 
 async function createPosts(principalValue, input) {
@@ -454,18 +377,13 @@ export async function POST(request, context) {
       if (!bytes.length || bytes.length > MAX_CHUNK_BYTES || offset + bytes.length > stage.size) {
         throw new Error("The media upload chunk is invalid.");
       }
-      let artifactPart = null;
-      if (stage.size > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
-        artifactPart = await storeSupabaseJobArtifactPart(bytes, {
+      const artifactPart = await storeSupabaseJobArtifactPart(bytes, {
           workspaceId: user.workspaceId,
           fileName: stage.fileName,
           mimeType: stage.mimeType,
           index: Math.floor(offset / stage.chunkSize),
           offset,
         });
-      } else {
-        await putStageChunk(stage, offset, bytes);
-      }
       return Response.json(await advanceCentralStagedUpload(user, stage.id, offset + bytes.length, artifactPart));
     }
     if (parts[0] === "staged-uploads" && parts[1] && parts[2] === "parts" && parts[3] === "authorize") {
@@ -671,7 +589,6 @@ export async function DELETE(request, context) {
       const stage = await getCentralStagedUpload(user.workspaceId, parts[1]);
       await deleteCentralStagedUpload(user, parts[1]);
       await Promise.all([
-        removeStageBytes(stage),
         (stage.uploadStrategy === "signed_parts"
           ? deleteSupabaseStagedArtifactParts({ workspaceId: stage.workspaceId, fileName: stage.fileName, partCount: Math.ceil(stage.size / stage.chunkSize) })
           : deleteSupabaseJobArtifactParts(stage.artifactParts)).catch(() => undefined),

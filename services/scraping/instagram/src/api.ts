@@ -1,3 +1,4 @@
+import { dispatchBackgroundJob, BackgroundJobError } from "../../../../lib/background-jobs.js";
 import { getInstagramScraperInfo, instagramScrapeRange, runInstagramScrape } from "./scraper.ts";
 import {
   InstagramRunStore,
@@ -261,7 +262,7 @@ export async function executeInstagramJob(jobId: string, workspaceId: string) {
     if (age < 55_000) return jobResponse(current, store);
   }
 
-  const running = await store.updateJob(jobId, { status: "running", error: undefined });
+  const running = await store.claimJob(jobId);
   if (!running) return null;
   try {
     const run = await executeScrape(running.input, store, running.createdByUserId);
@@ -307,6 +308,12 @@ export async function handleInstagramRequest(request: Request) {
     }
     const runJobMatch = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJobMatch) {
+      if (process.env.NODE_ENV === "production") {
+        const job = await store.getJob(runJobMatch[1]);
+        if (!job) return json({ message: "Job not found" }, 404);
+        if (job.status === "pending") await dispatchBackgroundJob({ version: 1, kind: "instagram", jobId: job.id, workspaceId: identity.workspaceId });
+        return json({ job }, 202);
+      }
       const result = await executeInstagramJob(runJobMatch[1], identity.workspaceId);
       return result ? json(result) : json({ message: "Job not found" }, 404);
     }
@@ -345,7 +352,7 @@ export async function handleInstagramRequest(request: Request) {
     const message = friendlyScrapeMessage(error);
     return json(
       { message },
-      error instanceof ScrapingServiceAuthError ? error.status : error instanceof InstagramRequestError ? 400 : 500
+      error instanceof BackgroundJobError ? error.status : error instanceof ScrapingServiceAuthError ? error.status : error instanceof InstagramRequestError ? 400 : 500
     );
   }
 }

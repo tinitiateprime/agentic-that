@@ -1,66 +1,109 @@
-# Netlify Deployment
+# AWS Amplify deployment
 
-This repo is configured for one Netlify deploy:
+Amplify hosts the Next.js website and request-based APIs. A private Node 22
+Lambda worker runs long scraping, Growth Advisor and Website Studio jobs.
+Supabase remains the PostgreSQL database, private media storage and token-scoped
+Companion job-control backend. Publishing browser sessions stay in the desktop
+Companion. Request-based Telegram hosting does not run a permanent listener or
+scheduler.
 
-```text
-/          React website
-/console   Telegram console
-/v1/*      Netlify Functions backend API
-/health    Netlify Functions health check
+## Prepare and validate
+
+Use the existing Supabase project and retain the original session, credential,
+service signing and project-token encryption keys. Masked values cannot decrypt
+existing records. Copy `PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` from Netlify into
+Amplify if it has not been added; the deployment helper generates a rate-limit
+pepper only when it is missing. Never paste secrets into chat or commit them.
+
+```powershell
+npm ci
+npm run test:all
+npm run build
+npm run aws:worker:build
+npm run db:verify-security
+npm run aws:storage:check
 ```
 
-## Build Settings
+Apply pending Supabase migrations before deploying the matching application
+commit. The dedicated database workflow remains available. Ordinary Amplify
+builds and production requests never perform DDL. The AWS document migration
+adds private, RLS-protected storage without changing existing business records.
+`aws:storage:check` creates and removes one temporary validation document and
+tests concurrent changes and transaction rollback.
 
-Netlify reads [netlify.toml](../netlify.toml):
+If Project Management or scraper history still exists only in Netlify Blobs,
+configure `NETLIFY_SITE_ID` and `NETLIFY_AUTH_TOKEN` locally and run:
 
-```text
-Build command: npm run build
-Publish directory: .next
-Functions directory: netlify/functions
+```powershell
+npm run storage:migrate:netlify
+npm run storage:migrate:netlify -- --apply
 ```
 
-## Required Environment Variables
+The first command is a dry run. The importer preserves source Netlify data and
+does not overwrite existing PostgreSQL documents. Run it before creating new
+AWS project data. Retain the original project encryption key. The remaining
+Netlify Blobs dependency supports this migration and older Telegram cutover
+readers; the Netlify deployment adapters and build plugin have been removed.
 
-The Telegram API always requires these values in Netlify site settings:
+## Authenticate and configure AWS
 
-```text
-SESSION_ENCRYPTION_KEY=<generated secret>
-USER_PROVISIONING_KEY=<generated secret>
-SESSION_COOKIE_SECURE=true
-DATA_STORE=netlify-blobs
-TELEGRAM_DATA_STORE=postgres
+Install [AWS CLI v2 for Windows](https://awscli.amazonaws.com/AWSCLIV2.msi), reopen
+the terminal and use your existing AWS console login:
+
+```powershell
+aws login --profile agenticthat --region us-east-1
+$env:AWS_PROFILE = 'agenticthat'
+npm run aws:deploy -- --check
+npm run aws:deploy
 ```
 
-The complete environment list for Telegram, WhatsApp, Instagram scraping, and publishing is maintained in [netlify-env.md](./netlify-env.md).
+The helper targets app `d21kcrps3tyzwx`, branch `main`, region `us-east-1` by
+default. Override them with `--app-id`, `--branch` and `--region` if needed.
+An authenticated profile needs permission to read/update that Amplify app,
+manage its CloudFormation stacks and scoped IAM roles, upload private S3
+deployment artifacts, and write the worker configuration in Secrets Manager.
+Browser sign-in alone does not authenticate the SDK.
 
-Generate the two secrets locally:
+`--check` makes read-only AWS calls and checks original environment values,
+Supabase permissions and the worker package. Deployment stops before creating
+resources when keys or migrations are missing. `--env-file <private-file>` can
+supply missing values; the helper otherwise reads the existing Amplify app and
+branch variables. The environment reference is [amplify-env.md](amplify-env.md).
 
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+`aws:deploy` provisions a private artifact bucket and encrypted configuration,
+the asynchronous worker, logs and a failure queue, and assigns a branch-scoped
+Amplify role that can invoke only that worker. Worker secrets are limited to
+the database, AI and email configuration it needs. Static AWS access keys are
+not added to the app. The worker ZIP contains Linux x64 browser/native binaries,
+even when prepared on Windows. Uploads use S3 because the worker package can
+exceed Lambda's direct-upload limit.
+
+## Release and check the live deployment
+
+Configure the worker before pushing the tested commit to `main`. Then run:
+
+```powershell
+npm run aws:deploy -- --release
 ```
 
-Run it twice and use different values.
+This starts an Amplify release, waits for success and verifies `/health` reports
+`provider: aws-amplify`. The checked-in `amplify.yml` installs Node 22 and build
+dependencies, prepares an allowlisted server environment, runs the production
+configuration check and builds `.next`. Server environment files contain secrets
+and must remain private deployment artifacts.
 
-## Storage
+If the public domain changes, update `PLATFORM_PUBLIC_URL`, the Google OAuth
+callback, Meta/WATI callbacks, verified email links and allowed Companion origins.
+Keeping `https://agenticthat.com` preserves existing callback URLs.
 
-Supabase PostgreSQL stores normalized, workspace-owned Telegram state and media,
-Publishing state, WhatsApp data, central accounts, roles, and job control. Netlify
-Blobs is retained only as a temporary Telegram cutover source and for the
-workspace-scoped scraper caches.
+After release, check signup/reset email, Google Calendar/Gmail reconnect where
+needed, Telegram text/media, signed WhatsApp webhooks, private publishing media,
+Companion job claims, scraper history, AI job completion and Project Management
+after cold starts. Follow [the live readiness runbook](production-readiness-runbook.md)
+for owned-account and cross-workspace validation. Local tests cannot establish
+external provider account permissions or prove a deployment that has not run.
 
-## Database releases
-
-Netlify builds never run migrations. Apply pending migrations first with the
-approval-gated **Production Database Migrations** GitHub Actions workflow, verify
-its RLS/grant check, and only then deploy the matching application commit.
-
-## Important Netlify Limitation
-
-Netlify Functions are request-based. They can handle login, account listing, and sending messages, but they do not keep a permanent Telegram listener running in the background.
-They also cannot retain interactive Chrome profiles or run browser publishing
-continuously. Keep the website and request-based API on Netlify and run the
-publishing Companion on the Windows, macOS, or Linux computer used for social
-login. The Companion claims workspace jobs through outbound, token-scoped
-Supabase RPCs; no public local port, permanent server, or browser extension is
-required. The extension remains an optional compatibility bridge. See
-[publishing-extension.md](./publishing-extension.md).
+AWS references: [SSR environment variables](https://docs.aws.amazon.com/amplify/latest/userguide/ssr-environment-variables.html),
+[SSR compute roles](https://docs.aws.amazon.com/amplify/latest/userguide/amplify-SSR-compute-role.html),
+[asynchronous Lambda invocation](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html),
+[console login for local development](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).

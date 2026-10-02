@@ -1,9 +1,8 @@
-import type { Config, Context } from "@netlify/functions";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createTelegramHttpServer } from "../../services/messaging/telegram/src/server.ts";
+import { createTelegramHttpServer } from "../../../services/messaging/telegram/src/server.ts";
 
 type LocalServer = {
   origin: string;
@@ -14,9 +13,8 @@ let localServerPromise: Promise<LocalServer> | null = null;
 
 async function getLocalServer() {
   process.env.SERVERLESS = "true";
-  process.env.DATA_STORE ||= "netlify-blobs";
   // The deployed function bundle is read-only. Account/session records use
-  // Netlify Blobs; transient upload parts must live in Lambda's writable temp
+  // PostgreSQL; transient upload parts must live in Lambda's writable temp
   // directory so media initialization cannot take the whole Telegram API down.
   process.env.DATA_DIR ||= path.join(tmpdir(), "agenticthat-telegram");
 
@@ -70,7 +68,7 @@ function startupFailure(error: unknown) {
   if (message.includes("SESSION_ENCRYPTION_KEY is required")) {
     return {
       code: "telegram_encryption_key_missing",
-      error: "Telegram needs SESSION_ENCRYPTION_KEY in the Netlify Functions environment."
+      error: "Telegram needs SESSION_ENCRYPTION_KEY in the server environment."
     };
   }
   if (message.includes("SESSION_ENCRYPTION_KEY must be")) {
@@ -82,13 +80,13 @@ function startupFailure(error: unknown) {
   if (message.includes("USER_PROVISIONING_KEY is required")) {
     return {
       code: "telegram_provisioning_key_missing",
-      error: "Telegram needs USER_PROVISIONING_KEY in the Netlify Functions environment."
+      error: "Telegram needs USER_PROVISIONING_KEY in the server environment."
     };
   }
   if (/blob|data store/i.test(message)) {
     return {
       code: "telegram_storage_unavailable",
-      error: "Telegram could not open its Netlify Blobs data store. Please try again."
+      error: "Telegram could not open its database. Please try again."
     };
   }
   if (/EROFS|EACCES|read-only|permission denied/i.test(message)) {
@@ -99,11 +97,11 @@ function startupFailure(error: unknown) {
   }
   return {
     code: "telegram_startup_failed",
-    error: "Telegram could not start. Check the Netlify Function logs and try again."
+    error: "Telegram could not start. Check the server logs and try again."
   };
 }
 
-export default async function handler(request: Request, _context: Context) {
+export async function handleTelegramRequest(request: Request) {
   try {
     const local = await getLocalServer();
     const incomingUrl = new URL(request.url);
@@ -130,7 +128,3 @@ export default async function handler(request: Request, _context: Context) {
     return Response.json({ ok: false, ...startupFailure(error) }, { status: 503 });
   }
 }
-
-export const config: Config = {
-  path: ["/v1/*", "/api/telegram/*"]
-};

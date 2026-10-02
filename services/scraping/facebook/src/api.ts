@@ -1,3 +1,4 @@
+import { dispatchBackgroundJob, BackgroundJobError } from "../../../../lib/background-jobs.js";
 import { facebookScrapeRange, getFacebookScraperInfo, runFacebookScrape } from "./scraper.ts";
 import { FacebookRunStore, type FacebookJob, type FacebookJobInput } from "./store.ts";
 import { requireScrapingServiceAccess, ScrapingServiceAuthError } from "../../../../lib/scraping-service-auth.ts";
@@ -157,7 +158,7 @@ export async function executeFacebookJob(jobId: string, workspaceId: string) {
   if (!current) return null;
   if (["complete", "failed"].includes(current.status)) return jobResponse(current, store);
   if (current.status === "running" && Date.now() - new Date(current.updatedAt).getTime() < 55_000) return jobResponse(current, store);
-  const running = await store.updateJob(jobId, { status: "running", error: undefined });
+  const running = await store.claimJob(jobId);
   if (!running) return null;
   try {
     const run = await executeScrape(running.input, store, running.createdByUserId);
@@ -196,6 +197,12 @@ export async function handleFacebookRequest(request: Request) {
     }
     const runJob = route.match(/^jobs\/([^/]+)\/run$/);
     if (request.method === "POST" && runJob) {
+      if (process.env.NODE_ENV === "production") {
+        const job = await store.getJob(runJob[1]);
+        if (!job) return json({ message: "Job not found" }, 404);
+        if (job.status === "pending") await dispatchBackgroundJob({ version: 1, kind: "facebook", jobId: job.id, workspaceId: identity.workspaceId });
+        return json({ job }, 202);
+      }
       const result = await executeFacebookJob(runJob[1], identity.workspaceId);
       return result ? json(result) : json({ message: "Job not found" }, 404);
     }
@@ -218,7 +225,7 @@ export async function handleFacebookRequest(request: Request) {
   } catch (error) {
     return json(
       { message: friendlyError(error) },
-      error instanceof ScrapingServiceAuthError ? error.status : error instanceof FacebookRequestError ? 400 : 500
+      error instanceof BackgroundJobError ? error.status : error instanceof ScrapingServiceAuthError ? error.status : error instanceof FacebookRequestError ? 400 : 500
     );
   }
 }

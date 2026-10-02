@@ -1,11 +1,15 @@
-# Netlify Environment Variables
+# AWS Amplify Environment Variables
 
-Use this as the production template for the main AgenticThat Netlify site. Replace every angle-bracket placeholder and never commit the completed file.
+Use this as the production template for the main AgenticThat AWS Amplify site. Replace every angle-bracket placeholder and never commit the completed file.
 
 ```env
-# Build and routing
-NODE_VERSION=22
-DATA_STORE=netlify-blobs
+# Hosting and routing
+HOSTING_PROVIDER=aws-amplify
+SERVERLESS=true
+DATA_STORE=postgres
+BACKGROUND_JOB_FUNCTION_NAME=<worker-function-name>
+BACKGROUND_JOB_REGION=us-east-1
+RUN_DATABASE_MIGRATIONS=false
 NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL=/console
 NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
@@ -18,8 +22,8 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<supabase-publishable-key>
 SUPABASE_SECRET_KEY=<supabase-secret-key>
 
 # Telegram API and encrypted account sessions
-SESSION_ENCRYPTION_KEY=<new-random-32-byte-base64url-secret>
-USER_PROVISIONING_KEY=<different-new-random-32-byte-base64url-secret>
+SESSION_ENCRYPTION_KEY=<original-telegram-session-encryption-key>
+USER_PROVISIONING_KEY=<original-user-provisioning-key>
 SESSION_COOKIE_SECURE=true
 TELEGRAM_DATA_STORE=postgres
 
@@ -28,8 +32,10 @@ PLATFORM_PUBLIC_URL=https://agenticthat.com
 PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
 AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
 RESEND_API_KEY=<server-only-resend-api-key>
-AUTH_RATE_LIMIT_PEPPER=<new-random-32-byte-base64url-secret>
-PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=<new-random-32-byte-hex-or-base64-secret>
+AUTH_RATE_LIMIT_PEPPER=<random-32-byte-base64url-secret>
+PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=<original-project-token-encryption-key>
+SERVICE_TOKEN_PRIVATE_KEY=<original-ed25519-private-key-pem>
+SERVICE_TOKEN_PUBLIC_KEY=<matching-ed25519-public-key-pem>
 NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false
 RBAC_ENFORCEMENT_MODE=enforce
 
@@ -54,7 +60,7 @@ META_APP_ID=<meta-app-id>
 META_APP_SECRET=<meta-app-secret>
 META_CONFIGURATION_ID=<embedded-signup-configuration-id>
 META_WEBHOOK_VERIFY_TOKEN=<new-random-webhook-verify-token>
-CREDENTIAL_ENCRYPTION_KEY=<new-random-32-byte-hex-key>
+CREDENTIAL_ENCRYPTION_KEY=<original-credential-encryption-key>
 
 # WhatsApp application database and first admin
 DATABASE_URL=<serverless-pooled-postgresql-url>
@@ -64,27 +70,30 @@ BUSINESS_NAME=AgenticThat
 WA_FROM=<e164-whatsapp-number>
 CURRENCY=INR
 
-# Exact stable, signed, notarized Companion release. QA tags are rejected by
+# Optional pin to a stable signed Companion release. QA tags are rejected by
 # the production configuration check.
-NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG=v2.1.12
+COMPANION_RELEASE_TAG=<optional-stable-release-tag>
 
 # Instagram scraping uses public Playwright pages; no Instagram session variables are required.
 INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES=360
 ```
 
-## Scopes
+## Amplify runtime configuration
 
-If the Netlify plan supports variable scopes:
+The checked-in amplify.yml uses Node 22, installs development build dependencies,
+writes an allowlisted .env.production, validates production keys, and builds .next.
+The runtime file preserves multiline PEM keys and excludes AWS build credentials.
+It contains server secrets: restrict deployment artifact access and never commit it.
+No server secret may have a NEXT_PUBLIC_ prefix.
 
-- Give `NODE_VERSION` and all `NEXT_PUBLIC_*` variables the **Builds** scope.
-- Give all remaining variables the **Functions** scope.
-- Using all scopes also works and is simplest when importing the block as an `.env` file.
+Set BACKGROUND_JOB_FUNCTION_NAME to the Lambda worker output and
+BACKGROUND_JOB_REGION=us-east-1. HOSTING_PROVIDER, SERVERLESS, DATA_STORE,
+TELEGRAM_DATA_STORE, pool limits, secure cookies, RBAC, and migration flags are
+set by the deployment helper. Ordinary builds and requests never run database DDL.
 
-Variables declared only under `[build.environment]` in `netlify.toml` are not exposed to Functions. `DATA_STORE` is therefore included above even though the repository also supplies its build-time value.
-
-Before deploying a release, run `npm run production:check` against the proposed
-Netlify environment. Apply SQL only through the approval-gated database workflow;
-ordinary Netlify builds are intentionally read-only.
+The worker receives only its required configuration through AWS Secrets Manager.
+Amplify uses a branch-specific IAM role to invoke that worker without static AWS keys.
+See [deployment.md](deployment.md) for setup, migration and live validation.
 
 ## Values not to add
 
@@ -102,7 +111,7 @@ SECRETS_SCAN_OMIT_KEYS=
 
 `DATABASE_URL` is the server-side Postgres connection. The public Supabase URL
 and publishable key let Companion call only the granted RLS-protected RPCs.
-`SUPABASE_SECRET_KEY` stays on Netlify and is used only to put publishing
+`SUPABASE_SECRET_KEY` stays on AWS Amplify and is used only to put publishing
 media in the private `job-artifacts` bucket and issue scoped signed downloads.
 Legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` values are
 accepted during migration. All Supabase variables and `DATABASE_URL` must point
@@ -110,21 +119,21 @@ to the same project.
 `CREDENTIAL_ENCRYPTION_KEY` must decode to exactly 32 bytes; keep it stable after
 deployment because changing it makes stored workspace credentials unreadable.
 The Google Calendar/Gmail connections use this same key and the configured OAuth
-client. If the local test used a different key or OAuth client from Netlify,
-reconnect Google on the deployed site; do not replace an in-use Netlify key.
+client. If the local test used a different key or OAuth client from AWS Amplify,
+reconnect Google on the deployed site; do not replace an in-use AWS Amplify key.
 With `PLATFORM_PUBLIC_URL=https://agenticthat.com`, the OAuth callback is
 `https://agenticthat.com/api/phone-front-desk/google/callback`; register it in
-Google Cloud. `GOOGLE_OAUTH_REDIRECT_URI` is normally unnecessary in Netlify.
+Google Cloud. `GOOGLE_OAUTH_REDIRECT_URI` is normally unnecessary in AWS Amplify.
 `PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` follows the same stability requirement
 and encrypts the GitHub tokens used only by Global Admin Center project management.
 `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per connection in Config
 Manager when no shared credentials are configured. They may instead be set as
-Functions-scoped variables to keep the connection form phone-only for every
+server runtime variables to keep the connection form phone-only for every
 workspace. Both modes encrypt the credentials alongside the Telegram session.
 
 `META_APP_SECRET` is required for Embedded Signup token exchange and signed webhook validation. `META_CONFIGURATION_ID` is required for the recommended Embedded Signup/coexistence button. If you intentionally use only the advanced manual Cloud API credential form, the configuration id can be omitted, but the app secret should still be set for webhook validation.
 
-Do not add `SECRETS_SCAN_OMIT_KEYS` in the Netlify UI. The repository excludes only public URLs, provider names, API versions, phone/WABA/app identifiers, and the Embedded Signup configuration id. Real tokens, app secrets, passwords, encryption keys, session cookies, and connection strings remain protected by secret scanning.
+`SECRETS_SCAN_OMIT_KEYS` configures the old Netlify scanner and is unused on Amplify. Keep real tokens, app secrets, passwords, encryption keys, session cookies, and connection strings private.
 
 ## Optional WATI fallback
 
@@ -132,7 +141,7 @@ New workspaces can choose Meta or WATI during WhatsApp onboarding. For WATI,
 the workspace owner enters the tenant API URL and access token in the setup
 wizard; AgenticThat validates them, generates a workspace-specific webhook
 secret, and stores the connection encrypted. Those self-serve connections do
-not require global WATI variables in Netlify.
+not require global WATI variables in AWS Amplify.
 
 Only add these variables when seeding a legacy/default WATI connection for the
 first admin workspace:
@@ -147,13 +156,13 @@ WATI_WEBHOOK_SECRET=<new-random-webhook-secret>
 The WATI webhook URL must include the same tenant secret:
 
 ```text
-https://<your-netlify-site>.netlify.app/api/webhooks/wati?token=<wati-webhook-secret>
+https://<your-public-domain>/api/webhooks/wati?token=<wati-webhook-secret>
 ```
 
 Read-only WhatsApp Web monitoring requires a separately deployed Baileys service. Configure its HTTPS URL and shared secret from `/settings`; the archive does not contain a runnable Baileys service. For a legacy environment-configured monitor, the equivalent variables are `BAILEYS_SERVICE_URL` and `BAILEYS_API_SECRET`.
 
 Only add `TELEGRAM_API_URL` when Telegram is hosted as an external service
-instead of the included Netlify Function. For publishing, omit both Publish
+instead of the included Next.js API. For publishing, omit both Publish
 Queue URL variables. Supabase keeps workspace metadata, durable jobs, leases,
 events, results, and private media. The paired Companion keeps browser sessions
 and profiles locally and calls Supabase directly. Team members use the website
@@ -162,7 +171,7 @@ without a tunnel, extension, or local URL.
 ## Publish Queue distribution
 
 Interactive social login and browser publishing use the installable desktop
-Companion because a request-based Netlify Function cannot own persistent browser
+Companion because the Amplify request runtime cannot own persistent browser
 profiles or a continuously running local worker. A Workspace Manager installs and
 pairs it once from Connections; other workspace users do not install it. After
 downloading the installer for their operating system, the manager runs it once;
@@ -183,7 +192,7 @@ Telegram scheduling are intentionally paused in this release.
 Use this Meta webhook callback URL:
 
 ```text
-https://<your-netlify-site>.netlify.app/api/webhooks/meta
+https://<your-public-domain>/api/webhooks/meta
 ```
 
 Enter the same newly generated value from `META_WEBHOOK_VERIFY_TOKEN` when Meta asks for the verification token.
@@ -195,7 +204,8 @@ Subscribe the Meta webhook to both `messages` and `calls`. The `calls` subscript
 Run the database workflow before deploying. It creates the tenant/account,
 phone-number, call-log, normalized Telegram/Publishing, authentication-security,
 and job-control schema, then verifies every public table has RLS with browser
-grants revoked. On Telegram's first request after migration, encrypted legacy
-Blob rows are imported idempotently into normalized Supabase tables. Keep the
+grants revoked. Complete any legacy Telegram Blob import while the Netlify
+source is still accessible, and verify the normalized Supabase account rows
+before cutover. An Amplify request has no Netlify Blob credentials. Keep the
 existing `META_ACCESS_TOKEN`, `META_WABA_ID`, and `META_PHONE_NUMBER_ID` variables
 during the first WhatsApp cutover; new workspaces never inherit them.

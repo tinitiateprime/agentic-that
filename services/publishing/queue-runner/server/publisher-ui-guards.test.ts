@@ -231,14 +231,11 @@ test("normal CI and Companion releases share the complete verification suite", a
   assert.match(ciWorkflow, /pull_request:/);
   assert.match(ciWorkflow, /workflow_call:/);
   for (const command of [
-    "npm run test:publishing",
-    "npm run test:instagram",
-    "npm run test:facebook",
-    "npm run test:whatsapp",
-    "npm run test:rbac",
-    "npm run test:security",
-    "npm --prefix services/messaging/telegram test",
+    "npm run test:all",
+    "npm run publishing:extension:validate",
+    "node scripts/build-publishing-companion-runtime.mjs",
     "npm run build",
+    "npm run aws:worker:build",
   ]) assert.match(ciWorkflow, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(releaseWorkflow, /verify:\s*\n\s*uses: \.\/\.github\/workflows\/ci\.yml/);
   assert.match(releaseWorkflow, /release-checks:/);
@@ -385,7 +382,7 @@ test("central publishing refresh uses one non-overlapping workspace request", as
   assert.match(routeSource, /parts\[0\] === "workspace-snapshot"/);
   assert.match(accessSource, /export async function requirePrincipalCapability/);
   assert.match(detailSource, /requirePrincipalCapability\(user,/);
-  assert.match(documentStoreSource, /process\.env\.NETLIFY === "true" \? 1 : 5/);
+  assert.match(documentStoreSource, /process\.env\.SERVERLESS === "true" \? 1 : 5/);
   assert.match(centralStoreSource, /supabasePublishingWorkspaceSnapshot\(workspaceId\)/);
   assert.match(jobControlSource, /export async function supabasePublishingWorkspaceSnapshot/);
   assert.match(jobControlSource, /jsonb_agg\(to_jsonb\(job_row\)\)/);

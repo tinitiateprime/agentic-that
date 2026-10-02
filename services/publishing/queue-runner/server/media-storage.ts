@@ -2,25 +2,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { publishingUploadDirectory } from "./runtime-paths.ts";
 
-const sharedMediaEnabled = () => (
-  process.env.DATA_STORE === "netlify-blobs"
-  || process.env.NETLIFY === "true"
-  || Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
-);
-
-async function netlifyBlobStore(name: string) {
-  const { getStore } = await import("@netlify/blobs");
-  return getStore(name);
-}
+const sharedMediaEnabled = () => process.env.SERVERLESS === "true" || process.env.HOSTING_PROVIDER === "aws-amplify";
+const sharedStorage = () => import("../../../../src/platform/server/supabase-job-control.js");
 
 function safeFileName(fileName: string) {
   const base = path.basename(String(fileName || ""));
   if (!base || base !== fileName) throw new Error("The publishing media filename is invalid.");
   return base;
-}
-
-function mediaKey(workspaceId: string, fileName: string) {
-  return `workspaces/${encodeURIComponent(workspaceId)}/media/${encodeURIComponent(safeFileName(fileName))}`;
 }
 
 export async function storePublishingMedia(fileName: string, workspaceId: string, mimeType: string) {
@@ -39,19 +27,14 @@ export async function storePublishingMediaBytes(fileName: string, workspaceId: s
     await fs.writeFile(localPath, bytes, { mode: 0o600 });
     return localPath;
   }
-  const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  await (await netlifyBlobStore("agentic-that-publishing-media")).set(mediaKey(workspaceId, fileName), payload, {
-    metadata: { workspaceId, fileName, mimeType },
-  });
+  await (await sharedStorage()).storeSupabaseJobArtifact(bytes, { workspaceId, fileName: safeName, originalName: safeName, mimeType });
   return localPath;
 }
 
 export async function readPublishingMedia(fileName: string, workspaceId: string) {
   const safeName = safeFileName(fileName);
   if (sharedMediaEnabled()) {
-    const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
-      .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
-    if (bytes) return Buffer.from(bytes);
+    return (await sharedStorage()).readSupabasePublishingMediaObject(workspaceId, safeName);
   }
   return fs.readFile(path.join(publishingUploadDirectory(), safeName));
 }
@@ -61,15 +44,7 @@ export async function readPublishingMediaRange(fileName: string, workspaceId: st
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
     throw new Error("The publishing media range is invalid.");
   }
-  if (sharedMediaEnabled()) {
-    const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
-      .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
-    if (bytes) {
-      const range = Buffer.from(bytes).subarray(start, end + 1);
-      if (range.length !== end - start + 1) throw new Error("The publishing media range is incomplete.");
-      return range;
-    }
-  }
+  if (sharedMediaEnabled()) return (await sharedStorage()).readSupabasePublishingMediaObject(workspaceId, safeName, { start, end });
   const handle = await fs.open(path.join(publishingUploadDirectory(), safeName), "r");
   try {
     const buffer = Buffer.alloc(end - start + 1);
@@ -90,8 +65,7 @@ export async function ensurePublishingMediaLocal(fileName: string, workspaceId: 
   } catch {
     if (!sharedMediaEnabled()) throw new Error(`Publishing media ${safeName} is missing.`);
   }
-  const bytes = await (await netlifyBlobStore("agentic-that-publishing-media"))
-    .get(mediaKey(workspaceId, safeName), { type: "arrayBuffer" });
+  const bytes = await (await sharedStorage()).readSupabasePublishingMediaObject(workspaceId, safeName);
   if (!bytes) throw new Error(`Publishing media ${safeName} is missing from shared storage.`);
   await fs.mkdir(path.dirname(localPath), { recursive: true });
   const temporary = `${localPath}.${process.pid}.tmp`;
@@ -107,8 +81,6 @@ export async function deletePublishingMedia(fileName: string, workspaceId: strin
   const safeName = safeFileName(fileName);
   await fs.unlink(path.join(publishingUploadDirectory(), safeName)).catch(() => undefined);
   if (sharedMediaEnabled()) {
-    await (await netlifyBlobStore("agentic-that-publishing-media"))
-      .delete(mediaKey(workspaceId, safeName))
-      .catch(() => undefined);
+    await (await sharedStorage()).deleteSupabasePublishingMediaObject(workspaceId, safeName);
   }
 }

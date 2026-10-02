@@ -1,6 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { supabaseJobControlTestHelpers } from "./supabase-job-control.js";
+import { readSupabasePublishingMediaObject, supabaseJobControlTestHelpers } from "./supabase-job-control.js";
+
+test("AWS media reads use workspace-scoped signed downloads and reject incomplete ranges", async (context) => {
+  const values = { NEXT_PUBLIC_SUPABASE_URL: "https://media-test.supabase.co", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test", SUPABASE_SECRET_KEY: "sb_secret_test" };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  context.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  let downloadStatus = 206;
+  const calls = [];
+  context.mock.method(globalThis, "fetch", async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === "POST") return Response.json({ signedURL: "/object/sign/job-artifacts/workspace_1/video.mp4?token=test" });
+    return new Response(Uint8Array.from([2, 3, 4]), { status: downloadStatus });
+  });
+  assert.deepEqual(await readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 4 }), Buffer.from([2, 3, 4]));
+  assert.equal(calls[0].url, "https://media-test.supabase.co/storage/v1/object/sign/job-artifacts/workspace_1/video.mp4");
+  assert.equal(new Headers(calls[1].options.headers).get("range"), "bytes=2-4");
+  assert.equal(calls[1].options.headers.apikey, undefined);
+  downloadStatus = 200;
+  await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 4 }));
+  downloadStatus = 206;
+  await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 5 }));
+});
 
 test("Supabase Storage signed paths retain the storage API prefix", () => {
   assert.equal(

@@ -1,0 +1,66 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AgenticThat asynchronous jobs for Amplify, with scoped IAM and retained failure records",
+  "Parameters": {
+    "AppId": { "Type": "String" },
+    "Branch": { "Type": "String", "Default": "main" },
+    "ArtifactsBucket": { "Type": "String" },
+    "WorkerCodeKey": { "Type": "String" },
+    "ServerConfigSecretArn": { "Type": "String" }
+  },
+  "Resources": {
+    "FailureQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": { "MessageRetentionPeriod": 1209600, "SqsManagedSseEnabled": true }
+    },
+    "WorkerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": { "Version": "2012-10-17", "Statement": [{ "Effect": "Allow", "Principal": { "Service": "lambda.amazonaws.com" }, "Action": "sts:AssumeRole" }] },
+        "Policies": [{
+          "PolicyName": "WorkerResources",
+          "PolicyDocument": { "Version": "2012-10-17", "Statement": [
+            { "Effect": "Allow", "Action": ["secretsmanager:GetSecretValue"], "Resource": { "Ref": "ServerConfigSecretArn" } },
+            { "Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": { "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/agenticthat-${AppId}-${Branch}-jobs:*" } },
+            { "Effect": "Allow", "Action": ["sqs:SendMessage"], "Resource": { "Fn::GetAtt": ["FailureQueue", "Arn"] } }
+          ] }
+        }]
+      }
+    },
+    "WorkerLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": { "LogGroupName": { "Fn::Sub": "/aws/lambda/agenticthat-${AppId}-${Branch}-jobs" }, "RetentionInDays": 30 }
+    },
+    "Worker": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": ["WorkerLogs"],
+      "Properties": {
+        "FunctionName": { "Fn::Sub": "agenticthat-${AppId}-${Branch}-jobs" },
+        "Runtime": "nodejs22.x", "Architectures": ["x86_64"], "Handler": "index.handler",
+        "Role": { "Fn::GetAtt": ["WorkerRole", "Arn"] },
+        "Code": { "S3Bucket": { "Ref": "ArtifactsBucket" }, "S3Key": { "Ref": "WorkerCodeKey" } },
+        "MemorySize": 2048, "Timeout": 900, "ReservedConcurrentExecutions": 4,
+        "EphemeralStorage": { "Size": 1024 },
+        "Environment": { "Variables": { "SERVER_CONFIG_SECRET_ARN": { "Ref": "ServerConfigSecretArn" }, "HOSTING_PROVIDER": "aws-amplify", "SERVERLESS": "true", "NODE_ENV": "production" } }
+      }
+    },
+    "WorkerInvocation": {
+      "Type": "AWS::Lambda::EventInvokeConfig",
+      "Properties": { "FunctionName": { "Ref": "Worker" }, "Qualifier": "$LATEST", "MaximumEventAgeInSeconds": 900, "MaximumRetryAttempts": 1, "DestinationConfig": { "OnFailure": { "Destination": { "Fn::GetAtt": ["FailureQueue", "Arn"] } } } }
+    },
+    "ComputeRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": { "Version": "2012-10-17", "Statement": [{
+          "Effect": "Allow", "Principal": { "Service": "amplify.amazonaws.com" }, "Action": "sts:AssumeRole"
+        }] },
+        "Policies": [{ "PolicyName": "InvokeAgenticThatJobs", "PolicyDocument": { "Version": "2012-10-17", "Statement": [{ "Effect": "Allow", "Action": "lambda:InvokeFunction", "Resource": { "Fn::GetAtt": ["Worker", "Arn"] } }] } }]
+      }
+    }
+  },
+  "Outputs": {
+    "WorkerFunctionName": { "Value": { "Ref": "Worker" } },
+    "ComputeRoleArn": { "Value": { "Fn::GetAtt": ["ComputeRole", "Arn"] } },
+    "FailureQueueUrl": { "Value": { "Ref": "FailureQueue" } }
+  }
+}

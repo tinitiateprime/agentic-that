@@ -267,7 +267,7 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
     const media = await resolveWebsiteMedia(generated.spec, profile);
     if (!media.hero) {
       throw new WebsiteStudioError(
-        "Professional photography is required for next-level sites. Add a free PEXELS_API_KEY in Netlify, then retry this project.",
+        "Professional photography is required for next-level sites. Add a free PEXELS_API_KEY in the server environment, then retry this project.",
         "WEBSITE_IMAGES_NOT_CONFIGURED",
         503,
       );
@@ -376,7 +376,7 @@ export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput)
 }
 
 // Kept for local tooling and direct server-side callers. Production requests
-// use queueAutomatedWebsiteProject and the Netlify background worker below.
+// use queueAutomatedWebsiteProject and the AWS background worker below.
 export async function createAutomatedWebsiteProject(actor, input) {
   const queued = await queueAutomatedWebsiteProject(actor, input);
   const completed = await executeAutomatedWebsiteProject(queued.project.id, queued.jobToken);

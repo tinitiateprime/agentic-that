@@ -63,6 +63,16 @@ try {
   if (!tables?.telegram || !tables?.publishing || !tables?.auth_security) {
     throw new Error("Normalized Telegram, Publishing, or authentication security tables are missing.");
   }
+  const [documents] = await sql`
+    SELECT relation.relrowsecurity AS protected
+      FROM pg_class relation JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+     WHERE namespace.nspname = 'agentic_that' AND relation.relname = 'app_document_store'`;
+  if (!documents?.protected) throw new Error("Private AWS document storage is missing or does not have RLS.");
+  const documentGrants = await sql`
+    SELECT grantee FROM information_schema.role_table_grants
+     WHERE table_schema = 'agentic_that' AND table_name = 'app_document_store'
+       AND grantee IN ('PUBLIC', 'anon', 'authenticated')`;
+  if (documentGrants.length) throw new Error("Browser roles have direct grants to private AWS document storage.");
   process.stdout.write("Database RLS, grants, and normalized security tables are verified.\n");
 } finally {
   await sql.end();

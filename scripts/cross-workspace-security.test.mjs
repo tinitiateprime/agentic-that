@@ -32,9 +32,10 @@ test("Telegram, Instagram, and Facebook reject records owned by a different work
   assert.match(telegramTests, /outsider/);
   assert.match(telegramTests, /workspace scoped/);
   for (const store of [instagramStore, facebookStore]) {
-    assert.match(store, /belongsToWorkspace/);
-    assert.match(store, /value\.workspaceId === this\.workspaceId/);
+    assert.match(store, /extends WorkspaceScrapeStore/);
   }
+  const scopedStore = await source("lib/workspace-scrape-store.ts");
+  assert.match(scopedStore, /record\.workspaceId === workspaceId/);
 });
 
 test("WhatsApp resources remain business scoped and production webhooks fail closed", async () => {

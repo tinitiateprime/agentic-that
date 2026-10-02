@@ -19,7 +19,8 @@ test("calendar converts the business's local time and rejects DST gaps", () => {
   assert.throws(() => appointmentInterval(newYork, { date: "2026-11-01", time: "01:30" }, Date.UTC(2026, 0, 1)), /unavailable or ambiguous/);
 });
 
-test("booking checks Google free/busy and creates one repeatable event", async () => {
+test("booking checks Google free/busy and creates one repeatable event", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 8, 1) });
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
   const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
@@ -73,7 +74,8 @@ test("booking checks Google free/busy and creates one repeatable event", async (
   }
 });
 
-test("connected workspace calendar books without a service account or manual calendar ID", async () => {
+test("connected workspace calendar books without a service account or manual calendar ID", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 8, 1) });
   const originalKey = process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
   delete process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_BASE64;
   const events = new Map();

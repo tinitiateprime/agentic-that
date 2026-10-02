@@ -1,3 +1,4 @@
+import { dispatchBackgroundJob } from "../../../../../../../lib/background-jobs.js";
 import {
   accessErrorResponse,
   authorizeApiCapability
@@ -14,12 +15,6 @@ export const runtime = "nodejs";
 const jobStore = new GrowthAdvisorJobStore();
 
 export async function POST(_request, context) {
-  if (process.env.NETLIFY === "true") {
-    return Response.json({
-      error: "The AI background route is unavailable.",
-      code: "AI_BACKGROUND_ROUTE_UNAVAILABLE"
-    }, { status: 503 });
-  }
 
   let principal;
   try {
@@ -32,6 +27,14 @@ export async function POST(_request, context) {
   const isLegacyOwner = job?.workspaceId === job?.userId && job?.userId === principal.userId;
   if (!job || (job.workspaceId !== principal.workspaceId && !isLegacyOwner)) {
     return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
+  }
+  if (process.env.NODE_ENV === "production") {
+    try {
+      if (job.status === "pending") await dispatchBackgroundJob({ version: 1, kind: "growth-advisor", jobId: id, workspaceId: principal.workspaceId, userId: principal.userId });
+      return Response.json({ ok: true, ...growthAdvisorJobPayload(job) }, { status: 202, headers: { "Cache-Control": "no-store" } });
+    } catch {
+      return Response.json({ error: "The AI background worker could not start.", code: "BACKGROUND_WORKER_UNAVAILABLE" }, { status: 503 });
+    }
   }
   const completed = await executeGrowthAdvisorJob(id, {
     store: jobStore,

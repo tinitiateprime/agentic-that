@@ -13,3 +13,11 @@ and Linux.
 
 See [the project tracker](agentic-that-project-tracker.md) for implementation and
 deployment status.
+
+## AWS hosting
+
+The website and request-based APIs deploy to AWS Amplify; long scraping and AI
+jobs run in an IAM-protected Lambda worker. Supabase remains the database,
+private media store and Companion job-control backend.
+
+See [AWS deployment](docs/deployment.md) and [environment variables](docs/amplify-env.md).
