@@ -4,6 +4,7 @@ import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type A
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { activateComposerControl } from "./composer-control.js";
 
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
@@ -310,7 +311,7 @@ async function getLoginError(page: Page) {
   return text || null;
 }
 
-async function clickStartPost(page: Page) {
+export async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
 
   // LinkedIn's current UI navigates to /sharing/compose and renders a TipTap
@@ -329,13 +330,6 @@ async function clickStartPost(page: Page) {
     page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
     page.locator('[aria-label*="Start a post" i]'),
   ];
-  const activate = async (control: Locator) => {
-    await control.evaluate((element: HTMLElement) => {
-      element.scrollIntoView({ block: "center", inline: "center" });
-      element.focus();
-      element.click();
-    });
-  };
 
   const openingDeadline = Date.now() + 45000;
   for (let attempt = 1; attempt <= 3 && Date.now() < openingDeadline; attempt += 1) {
@@ -344,7 +338,7 @@ async function clickStartPost(page: Page) {
 
     const onScreen = await firstInViewport(page, controls());
     if (onScreen) {
-      await activate(onScreen.locator).catch(() => undefined);
+      await activateComposerControl(onScreen.locator).catch(() => undefined);
       if (await waitForLinkedInComposer(page, 5000)) {
         await page.waitForTimeout(750);
         console.log("LinkedIn post composer opened.");
@@ -362,7 +356,7 @@ async function clickStartPost(page: Page) {
         if (Date.now() >= openingDeadline) break;
         const candidate = locator.nth(index);
         if (!await candidate.isVisible().catch(() => false)) continue;
-        await activate(candidate).catch(() => undefined);
+        await activateComposerControl(candidate).catch(() => undefined);
         if (await waitForLinkedInComposer(page, 3000)) {
           await page.waitForTimeout(750);
           console.log("LinkedIn post composer opened.");

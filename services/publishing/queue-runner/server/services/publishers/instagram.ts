@@ -5,6 +5,7 @@ import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { prepareInstagramMedia } from "./instagram-media.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { activateComposerControl } from "./composer-control.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 const INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/";
@@ -196,7 +197,7 @@ async function dismissPostLoginPrompts(page: Page) {
   }
 }
 
-async function clickCreateButton(page: Page) {
+export async function clickCreateButton(page: Page) {
   console.log("Clicking Instagram create button...");
 
   const createButton = await firstVisible([
@@ -211,8 +212,7 @@ async function clickCreateButton(page: Page) {
     throw new Error("Could not find Instagram + create button.");
   }
 
-  await createButton.scrollIntoViewIfNeeded();
-  await createButton.click({ force: true, timeout: 10000 });
+  await activateComposerControl(createButton);
   await page.waitForTimeout(350);
 
   if (await waitForInstagramComposerReady(page, 2500)) {
@@ -235,18 +235,7 @@ async function clickCreateButton(page: Page) {
     throw new Error("Instagram Create menu opened, but the Post option was not available.");
   }
 
-  await postOption.scrollIntoViewIfNeeded().catch(() => undefined);
-  try {
-    await postOption.click({ force: true, timeout: 10000 });
-  } catch (error) {
-    if (!/outside of the viewport/i.test(error instanceof Error ? error.message : String(error))) throw error;
-    console.log("Instagram Post option is below the compact viewport; activating the visible menu item directly...");
-    await postOption.evaluate((element) => {
-      const target = element.closest<HTMLElement>('[role="menuitem"], [role="link"], [role="button"], a, button')
-        ?? element as HTMLElement;
-      target.click();
-    });
-  }
+  await activateComposerControl(postOption);
 
   if (!await waitForInstagramComposerReady(page, 20000)) {
     throw new Error("Instagram Post was selected, but the Create new post composer did not open.");

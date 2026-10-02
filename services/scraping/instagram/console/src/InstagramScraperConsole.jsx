@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { getClientServiceToken } from "@platform/client-service-token";
+import { composeInstagramScrapeQuery } from "./profileComparison";
 import {
   getInstagramCompanionStatus,
   listInstagramCompanionRuns,
@@ -92,13 +93,7 @@ const cleanModeValue = (mode, value) => {
   return text;
 };
 
-const composeScrapeQuery = (mode, value) => {
-  const cleanValue = cleanModeValue(mode, value);
-  if (!cleanValue) return "";
-  if (mode === "profile") return `@${cleanValue}`;
-  if (mode === "keyword") return `#${cleanValue}`;
-  return cleanValue;
-};
+const composeScrapeQuery = composeInstagramScrapeQuery;
 
 const instagramUrlType = (value) => {
   try {

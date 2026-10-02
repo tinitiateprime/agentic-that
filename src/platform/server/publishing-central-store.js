@@ -1518,6 +1518,15 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
   };
 }
 
+// Private manifests stay on the server. Public upload records deliberately
+// omit their storage paths and cannot be used to fetch multipart media.
+export async function publishingWorkspaceMediaRecord(workspaceId, fileName) {
+  const document = await getPublishingSnapshot(workspaceId);
+  const record = document.uploads.find((item) => item.workspaceId === workspaceId && item.fileName === fileName)
+    || document.submissions.find((item) => item.workspaceId === workspaceId && item.fileName === fileName);
+  return record || null;
+}
+
 const ADMIN_MONITOR_LIMIT = 250;
 function adminMonitorTimestamp(upload) {
   return upload.postedAt || upload.updatedAt || upload.uploadedAt || upload.scheduledAt || new Date(0).toISOString();

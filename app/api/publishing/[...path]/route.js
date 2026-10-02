@@ -24,6 +24,7 @@ import {
   minimumCompanionVersion,
   publishingDashboard,
   publishingWorkspaceSnapshot,
+  publishingWorkspaceMediaRecord,
   publishingUserFromPrincipal,
   queueCentralUploads,
   removeCentralCompanion,
@@ -33,7 +34,8 @@ import {
   updateCentralUpload,
   updateCentralUploadStatus,
 } from "@platform/server/publishing-central-store";
-import { deletePublishingMedia, readPublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
+import { deletePublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
+import { publishingMediaResponse } from "@platform/server/publishing-media-response";
 import { storePublishingPreviewInput } from "@platform/server/publishing-media-preview";
 import {
   authorizeSupabaseJobArtifactPartUploads,
@@ -258,18 +260,16 @@ export async function GET(request, context) {
     if (parts[0] === "media" && parts[1]) {
       const webPrincipal = await principal("publishing.view");
       const workspaceId = webPrincipal.workspaceId;
-      const upload = (await listCentralUploads(workspaceId)).find((item) => item.fileName === parts[1]);
-      const submission = upload ? null : (await listCentralSubmissions(workspaceId)).find((item) => item.fileName === parts[1]);
-      if (!upload && !submission) return Response.json({ message: "Publishing media was not found." }, { status: 404 });
-      if (upload) assertPlatformAccess(webPrincipal, upload.platform, "view");
-      if (submission) {
+      const media = await publishingWorkspaceMediaRecord(workspaceId, parts[1]);
+      if (!media) return Response.json({ message: "Publishing media was not found." }, { status: 404 });
+      if (media.platform) assertPlatformAccess(webPrincipal, media.platform, "view");
+      else {
         const visibleAccountIds = new Set(visibleForPrincipal(webPrincipal, await listCentralAccounts(workspaceId)).map((account) => account.id));
-        if (!submission.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))) {
+        if (!media.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))) {
           throw new Error("Your role does not include access to this publishing media.");
         }
       }
-      const bytes = await readPublishingMedia(parts[1], workspaceId);
-      return new Response(bytes, { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "private, max-age=300" } });
+      return publishingMediaResponse(request, { ...media, workspaceId });
     }
     const user = await principal("publishing.view");
     const query = new URL(request.url).searchParams;

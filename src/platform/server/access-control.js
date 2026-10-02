@@ -26,6 +26,7 @@ import {
 } from "./auth-store.js";
 import { signServiceAccessToken } from "../../../lib/service-access-token.js";
 import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
+import { readPrincipalAccessState } from "./principal-access-store.js";
 
 export class AccessDeniedError extends Error {
   constructor(status, code, message) {
@@ -124,79 +125,20 @@ export async function getPrincipalForUser(inputUser) {
   }
 
   const sql = await getPlatformSql();
-  let [user] = await sql`
-    SELECT u.id, u.name, u.email, u.business_name, u.status, u.is_global_admin,
-           coalesce((to_jsonb(u)->>'mfa_enabled')::boolean, false) AS mfa_enabled,
-           u.billing_status, u.trial_starts_at, u.trial_ends_at,
-           m.workspace_id AS workspace_id
-      FROM platform_users u
-      LEFT JOIN workspace_memberships m ON m.user_id = u.id AND m.status = 'active'
-     WHERE u.id = ${String(inputUser.id)}
-     LIMIT 1`;
-  if (!user) return null;
-
-  const [workspaceOwner] = user.workspace_id ? await sql`
-    SELECT owner.id, owner.billing_status, owner.trial_starts_at, owner.trial_ends_at
-      FROM workspace_memberships membership
-      JOIN user_role_assignments assignment
-        ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
-      JOIN platform_users owner ON owner.id = membership.user_id
-     WHERE membership.workspace_id = ${String(user.workspace_id)}
-       AND membership.status = 'active'
-       AND owner.status = 'active'
-     ORDER BY membership.approved_at NULLS LAST, membership.created_at
-     LIMIT 1` : [];
-  // Billing belongs to the workspace, not to whichever person currently holds
-  // the operational owner role. Keeping the entitlement holder independent
-  // lets an owner hand off team administration without removing the workspace's
-  // paid or trial access.
-  const [workspaceBillingCandidate] = user.workspace_id ? await sql`
-    SELECT membership.user_id AS id
-      FROM workspace_memberships membership
-      JOIN platform_users candidate ON candidate.id = membership.user_id
-      JOIN user_role_entitlements entitlement ON entitlement.user_id = membership.user_id
-     WHERE membership.workspace_id = ${String(user.workspace_id)}
-       AND membership.status = 'active'
-       AND candidate.status = 'active'
-     ORDER BY CASE entitlement.status WHEN 'active' THEN 0 ELSE 1 END,
-              CASE entitlement.source WHEN 'payment' THEN 0 ELSE 1 END,
-              entitlement.expires_at DESC NULLS FIRST,
-              membership.created_at
-     LIMIT 1` : [];
-  const billingUserId = workspaceBillingCandidate?.id || workspaceOwner?.id || user.id;
-  const ownerAccessActive = Boolean(workspaceOwner);
-  if (!testingFullAccess && !ownerAccessActive) await refreshPlatformBillingState(billingUserId);
-  const [workspaceBillingUser] = await sql`
-    SELECT id, billing_status, trial_starts_at, trial_ends_at
-      FROM platform_users
-     WHERE id = ${String(billingUserId)}
-     LIMIT 1`;
-
-  let moduleRoleGrants = user.workspace_id ? await sql`
-    SELECT entitlement.role_id, role_grant.resource_key, role_grant.access_level
-      FROM workspace_memberships membership
-      JOIN user_role_entitlements entitlement ON entitlement.user_id = membership.user_id
-      JOIN rbac_role_grants role_grant ON role_grant.role_id = entitlement.role_id
-     WHERE membership.workspace_id = ${String(user.workspace_id)}
-       AND membership.status = 'active'
-       AND entitlement.status = 'active'
-       AND entitlement.starts_at <= now()
-       AND (entitlement.expires_at IS NULL OR entitlement.expires_at > now())` : [];
-  // Existing single-user accounts created before workspace ownership was
-  // introduced retain their current module access until the owner backfill runs.
-  if (!moduleRoleGrants.length) moduleRoleGrants = await sql`
-    SELECT e.role_id, g.resource_key, g.access_level
-      FROM user_role_entitlements e
-      JOIN rbac_role_grants g ON g.role_id = e.role_id
-     WHERE e.user_id = ${String(user.id)}
-       AND e.status = 'active'
-       AND e.starts_at <= now()
-       AND (e.expires_at IS NULL OR e.expires_at > now())`;
-  const operationalRoleGrants = await sql`
-    SELECT assignment.role_id, role_grant.resource_key, role_grant.access_level
-      FROM user_role_assignments assignment
-      JOIN rbac_role_grants role_grant ON role_grant.role_id = assignment.role_id
-     WHERE assignment.user_id = ${String(user.id)}`;
+  let state = await readPrincipalAccessState(sql, inputUser.id);
+  if (!state) return null;
+  const ownerAccessActive = Boolean(state.workspaceOwner);
+  if (!testingFullAccess && !ownerAccessActive) {
+    await refreshPlatformBillingState(state.billingUserId);
+    // Billing refresh can expire entitlements. Always read grants afterward;
+    // never cache another request's permissions or use pre-refresh grants.
+    state = await readPrincipalAccessState(sql, inputUser.id);
+    if (!state) return null;
+  }
+  const { user, workspaceOwner, workspaceBillingUser, operationalRoleGrants } = state;
+  const moduleRoleGrants = state.workspaceModuleRoleGrants.length
+    ? state.workspaceModuleRoleGrants
+    : state.userModuleRoleGrants;
   const status = String(user.status || "active");
   const isGlobalAdmin = Boolean(user.is_global_admin);
   const billingUser = workspaceBillingUser || workspaceOwner || user;

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildComparisonReport,
   canonicalPostKey,
+  composeInstagramScrapeQuery,
   extractHashtags,
   normalizeProfileInput,
   pinSelectedPosts,
@@ -40,6 +41,16 @@ test("normalizes usernames and Instagram profile URLs", () => {
   assert.equal(normalizeProfileInput("https://www.instagram.com/Brand.Name/?hl=en"), "brand.name");
   assert.equal(normalizeProfileInput("https://example.com/brand"), "");
   assert.equal(normalizeProfileInput("https://www.instagram.com/reel/ABC/"), "");
+});
+
+test("accepts pasted profile URLs in Profile mode without corrupting the username", () => {
+  for (const input of ["mosseri", "@mosseri", "https://www.instagram.com/mosseri/", "@https://www.instagram.com/mosseri/", "instagram.com/mosseri/?hl=en"]) {
+    assert.equal(composeInstagramScrapeQuery("profile", input), "@mosseri");
+  }
+  assert.equal(composeInstagramScrapeQuery("profile", "https://example.com/mosseri/"), "");
+  assert.equal(composeInstagramScrapeQuery("profile", "https://www.instagram.com/reel/ABC/"), "");
+  assert.equal(composeInstagramScrapeQuery("keyword", " #gardening "), "#gardening");
+  assert.equal(composeInstagramScrapeQuery("profile_url", "https://www.instagram.com/mosseri/"), "https://www.instagram.com/mosseri/");
 });
 
 test("uses recent job order and most-viewed analysis rankings", () => {

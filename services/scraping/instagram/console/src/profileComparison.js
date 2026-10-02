@@ -32,7 +32,7 @@ const metricSnapshot = (post, metric) => {
 };
 
 export function normalizeProfileInput(value) {
-  const raw = String(value || "").trim();
+  const raw = String(value || "").trim().replace(/^@+(?=(?:https?:\/\/|www\.|instagram\.com\/))/i, "");
   if (!raw) return "";
   if (/^(?:https?:\/\/|www\.|instagram\.com\/)/i.test(raw)) {
     try {
@@ -46,6 +46,20 @@ export function normalizeProfileInput(value) {
   }
   const username = raw.replace(/^@+/, "").replace(/\/+$/, "").trim();
   return /^[A-Za-z0-9._]+$/.test(username) ? username.toLowerCase() : "";
+}
+
+export function composeInstagramScrapeQuery(mode, value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (mode === "profile") {
+    const username = normalizeProfileInput(text);
+    return username ? `@${username}` : "";
+  }
+  if (mode === "keyword") {
+    const keyword = text.replace(/^#+/, "").trim();
+    return keyword ? `#${keyword}` : "";
+  }
+  return text;
 }
 
 export function canonicalPostKey(value) {
