@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import nodeCron from "node-cron";
+import { inFlightSnapshotReader } from "../../../lib/in-flight-snapshot.js";
 import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
 import {
   getDatabaseSql,
@@ -16,11 +17,9 @@ import {
   createSupabasePairing,
   deleteSupabaseAccount,
   latestSupabaseCompanion,
-  listSupabaseAccounts,
   listSupabaseJobs,
   listSupabasePublishingJobsForAdmin,
   revokeSupabaseCompanions,
-  supabaseJobDashboard,
   supabasePublishingWorkspaceSnapshot,
   synchronizePublishingJobs,
   upsertSupabaseAccount,
@@ -119,8 +118,15 @@ async function initialize() {
   await initializeDatabaseDocument(DOCUMENT_KEY, blankDocument());
 }
 
-function mutateWorkspaceDocument(workspaceId, operation) {
-  return mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { workspaceId });
+async function mutateWorkspaceDocument(workspaceId, operation) {
+  snapshotReads.invalidate(workspaceId);
+  workspaceReads.invalidate(workspaceId);
+  try {
+    return await mutateDatabaseDocument(DOCUMENT_KEY, blankDocument(), operation, { workspaceId });
+  } finally {
+    snapshotReads.invalidate(workspaceId);
+    workspaceReads.invalidate(workspaceId);
+  }
 }
 
 function mutateTokenDocument(tokenHash, operation) {
@@ -493,9 +499,13 @@ export function publishingUserFromPrincipal(principal) {
   };
 }
 
-export async function getPublishingSnapshot(workspaceId) {
+const snapshotReads = inFlightSnapshotReader(async (workspaceId) => {
   await initialize();
   return documentValue(await readDatabaseDocument(DOCUMENT_KEY, blankDocument(), { workspaceId }));
+});
+
+export async function getPublishingSnapshot(workspaceId) {
+  return snapshotReads.read(workspaceId);
 }
 
 async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
@@ -544,28 +554,21 @@ function applyRemotePublishingJobs(document, workspaceId, remoteJobs) {
   return changed;
 }
 
-async function reconcilePublishingControlPlane(workspaceId, knownRemoteJobs) {
+async function reconcilePublishingControlPlane(workspaceId, knownRemoteJobs, knownDocument) {
   const remoteJobs = Array.isArray(knownRemoteJobs)
     ? knownRemoteJobs.filter((item) => item.type === "publish")
-    : await listSupabaseJobs(workspaceId, { type: "publish", limit: 500 });
-  const current = await getPublishingSnapshot(workspaceId);
-  if (!remoteJobs.length || !applyRemotePublishingJobs(current, workspaceId, remoteJobs)) return current;
-  return mutateWorkspaceDocument(workspaceId, async (value) => {
-    const document = documentValue(value);
-    applyRemotePublishingJobs(document, workspaceId, remoteJobs);
-    return { document, result: document };
-  });
+    : await listSupabaseJobs(workspaceId, { type: "publish", limit: 500, includePayload: false });
+  const current = knownDocument || await getPublishingSnapshot(workspaceId);
+  // Status views use the current control plane without rewriting every record.
+  // Queue mutations reconcile under their workspace lock before selecting jobs.
+  if (remoteJobs.length) applyRemotePublishingJobs(current, workspaceId, remoteJobs);
+  return current;
 }
 
 export async function listCentralAccounts(workspaceId, platformName) {
-  const document = await getPublishingSnapshot(workspaceId);
   const requestedPlatform = platformName ? platform(platformName) : null;
-  const legacy = document.accounts
-    .filter((item) => item.workspaceId === workspaceId && (!requestedPlatform || item.platform === requestedPlatform))
-    .map((item) => publicAccount(document, item));
-  const normalized = await listSupabaseAccounts(workspaceId, requestedPlatform || undefined);
-  const byId = new Map(normalized.map((item) => [item.id, item]));
-  return legacy.map((item) => ({ ...item, ...(byId.get(item.id) || {}) }));
+  const snapshot = await publishingWorkspaceSnapshot(workspaceId);
+  return snapshot.accounts.filter((item) => !requestedPlatform || item.platform === requestedPlatform);
 }
 
 export async function getCentralCompanion(workspaceId) {
@@ -762,8 +765,7 @@ export async function deleteCentralAccount(principal, accountId) {
 }
 
 export async function listCentralUploads(workspaceId) {
-  const document = await reconcilePublishingControlPlane(workspaceId);
-  return document.uploads.filter((item) => item.workspaceId === workspaceId).map((item) => uploadPublic(document, item));
+  return (await publishingWorkspaceSnapshot(workspaceId)).uploads;
 }
 
 function createUploadInDocument(document, principal, input = {}) {
@@ -1299,10 +1301,11 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
 
 export async function queueCentralUploads(principal, uploadIds) {
   await initialize();
-  await reconcilePublishingControlPlane(principal.workspaceId);
+  const remoteJobs = await listSupabaseJobs(principal.workspaceId, { type: "publish", limit: 500, includePayload: false });
   const ids = Array.isArray(uploadIds) ? uploadIds : undefined;
   const jobs = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
     const document = documentValue(value);
+    applyRemotePublishingJobs(document, principal.workspaceId, remoteJobs);
     if (ids?.length) ids.forEach((item) => findOwned(document, "uploads", principal.workspaceId, item, "Post"));
     refreshDueJobs(document, principal.workspaceId, ids);
     return { document, result: document.jobs.filter((item) => item.workspaceId === principal.workspaceId && !TERMINAL_JOB_STATES.has(item.state)).map((item) => ({ ...item })) };
@@ -1454,32 +1457,29 @@ export async function updateCentralJob(token, jobId, input = {}) {
 }
 
 export async function publishingDashboard(workspaceId) {
-  const document = await reconcilePublishingControlPlane(workspaceId);
-  const uploads = document.uploads.filter((item) => item.workspaceId === workspaceId);
-  const control = await supabaseJobDashboard(workspaceId);
-  const jobs = control.jobs.filter((item) => item.type === "publish").map((item) => {
-    const safeJob = { ...item };
-    delete safeJob.payload;
-    return { ...safeJob, state: item.status === "success" ? "published" : item.status };
-  });
+  const snapshot = await publishingWorkspaceSnapshot(workspaceId);
+  const { uploads } = snapshot;
   return {
     totals: {
-      accounts: document.accounts.filter((item) => item.workspaceId === workspaceId).length,
+      accounts: snapshot.accounts.length,
       queued: uploads.filter((item) => item.status === "queued").length,
       processing: uploads.filter((item) => item.status === "processing").length,
       posted: uploads.filter((item) => item.status === "posted").length,
       failed: uploads.filter((item) => item.status === "failed").length,
     },
-    companion: control.companion,
-    jobs,
-    recentActivity: document.activityLogs.filter((item) => item.workspaceId === workspaceId).slice(0, 30),
+    companion: snapshot.companion,
+    jobs: snapshot.jobs,
+    recentActivity: snapshot.activityLogs.slice(0, 30),
   };
 }
 
-export async function publishingWorkspaceSnapshot(workspaceId) {
-  const control = await supabasePublishingWorkspaceSnapshot(workspaceId);
+const workspaceReads = inFlightSnapshotReader(async (workspaceId) => {
+  const [control, initialDocument] = await Promise.all([
+    supabasePublishingWorkspaceSnapshot(workspaceId),
+    getPublishingSnapshot(workspaceId),
+  ]);
   const normalizedAccounts = control.accounts;
-  const document = await reconcilePublishingControlPlane(workspaceId, control.jobs);
+  const document = await reconcilePublishingControlPlane(workspaceId, control.jobs, initialDocument);
   const normalizedById = new Map(normalizedAccounts.map((item) => [item.id, item]));
   const accounts = document.accounts
     .filter((item) => item.workspaceId === workspaceId)
@@ -1516,6 +1516,10 @@ export async function publishingWorkspaceSnapshot(workspaceId) {
     companion: control.companion,
     jobs,
   };
+});
+
+export async function publishingWorkspaceSnapshot(workspaceId) {
+  return workspaceReads.read(workspaceId);
 }
 
 // Private manifests stay on the server. Public upload records deliberately

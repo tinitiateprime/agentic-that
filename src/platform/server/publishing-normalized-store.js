@@ -18,6 +18,7 @@ const TABLES = Object.freeze({
 });
 
 let normalizedReady = false;
+let normalizedCheck;
 
 function emptyDocument(initialValue) {
   return typeof initialValue === "function" ? initialValue() : structuredClone(initialValue);
@@ -25,10 +26,13 @@ function emptyDocument(initialValue) {
 
 async function hasNormalizedTables(sql) {
   if (normalizedReady) return true;
-  const [row] = await sql`
-    SELECT to_regclass('agentic_that.publishing_accounts') IS NOT NULL AS ready`;
-  normalizedReady = Boolean(row?.ready);
-  return normalizedReady;
+  if (!normalizedCheck) {
+    normalizedCheck = Promise.resolve(sql`
+      SELECT to_regclass('agentic_that.publishing_accounts') IS NOT NULL AS ready`)
+      .then(([row]) => (normalizedReady = Boolean(row?.ready)))
+      .finally(() => { normalizedCheck = undefined; });
+  }
+  return normalizedCheck;
 }
 
 async function resolveWorkspace(transaction, selector = {}) {
@@ -127,13 +131,31 @@ export async function readPublishingMonitoringState(key, initialValue, requested
     document.companions = rows.map((row) => decodedRecord(row.record)).filter(Boolean);
   }
   const [counts] = await sql`
+    WITH effective_uploads AS (
+      SELECT stored.workspace_id,
+             CASE
+               WHEN latest.status = 'success' THEN 'posted'
+               WHEN latest.status IN ('failed', 'uncertain', 'reconnect_required', 'cancelled') THEN 'failed'
+               WHEN latest.status IN ('claimed', 'running', 'opening_platform', 'uploading', 'publishing') THEN 'processing'
+               WHEN latest.status IS NOT NULL THEN 'queued'
+               ELSE stored.record->>'status'
+             END AS status
+        FROM agentic_that.publishing_uploads stored
+        LEFT JOIN LATERAL (
+          SELECT remote.status
+            FROM agentic_that.publishing_legacy_jobs legacy
+            JOIN public.jobs remote ON remote.id = legacy.id AND remote.workspace_id = stored.workspace_id
+           WHERE legacy.workspace_id = stored.workspace_id AND legacy.record->>'uploadId' = stored.id
+           ORDER BY remote.updated_at DESC LIMIT 1
+        ) latest ON true
+    )
     SELECT count(*)::integer AS posts,
-           count(*) FILTER (WHERE record->>'status' = 'posted')::integer AS published,
-           count(*) FILTER (WHERE record->>'status' = 'processing')::integer AS active,
-           count(*) FILTER (WHERE record->>'status' = 'queued')::integer AS scheduled,
-           count(*) FILTER (WHERE record->>'status' = 'failed')::integer AS needs_attention,
+           count(*) FILTER (WHERE status = 'posted')::integer AS published,
+           count(*) FILTER (WHERE status = 'processing')::integer AS active,
+           count(*) FILTER (WHERE status = 'queued')::integer AS scheduled,
+           count(*) FILTER (WHERE status = 'failed')::integer AS needs_attention,
            count(DISTINCT workspace_id)::integer AS workspaces
-      FROM agentic_that.publishing_uploads`;
+      FROM effective_uploads`;
   return {
     document,
     totals: {

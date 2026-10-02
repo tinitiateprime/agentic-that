@@ -74,9 +74,14 @@ export function encryptGoogleToken(token) {
 export function decryptGoogleToken(value) {
   const [version, iv, tag, ciphertext] = String(value || "").split(":");
   if (version !== "v1" || !iv || !tag || !ciphertext) throw connectionError("Google connection needs to be reconnected.", 409);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
-  return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
+  const key = encryptionKey();
+  try {
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
+  } catch {
+    throw connectionError("The saved Google connection cannot be read with the current credential encryption key. Reconnect this account.", 409);
+  }
 }
 
 function validKind(kind) {

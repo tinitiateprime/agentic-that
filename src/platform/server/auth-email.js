@@ -321,7 +321,18 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId,
       body: JSON.stringify({ from, to: [to], subject, text, html }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`Email provider returned HTTP ${response.status}.`);
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      // Give useful setup guidance without exposing an upstream response that
+      // could contain addresses, request data or credentials.
+      if (failure.name === "validation_error" && /domain is not verified/i.test(String(failure.message || ""))) {
+        throw new Error("The sending domain is not verified in Resend. Verify it in Resend Domains before sending email.");
+      }
+      if ([401, 403].includes(response.status) && failure.name === "invalid_api_key") {
+        throw new Error("The Resend API key is invalid. Update the email provider credentials.");
+      }
+      throw new Error(`Email provider returned HTTP ${response.status}.`);
+    }
     const result = await response.json().catch(() => ({}));
     return { provider: "resend", messageId: String(result.id || "") || null, skipped: false };
   }

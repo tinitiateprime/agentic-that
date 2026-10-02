@@ -590,10 +590,10 @@ function typedReply(transcript, profile, message) {
   return "I've noted that for the team. Is there anything else you would like me to include before I prepare the call summary?";
 }
 
-function extractLead(transcript, suppliedLead = {}) {
+export function extractPhoneFrontDeskLead(transcript, suppliedLead = {}) {
   const callerText = transcript.filter((item) => item.role === "caller").map((item) => item.text).join(" ");
   const phoneMatch = callerText.match(/(?:\+?\d[\d ()-]{6,}\d)/);
-  const nameMatch = callerText.match(/\b(?:my name is|this is|i am|i'm)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,2})/i);
+  const nameMatch = callerText.match(/\b(?:my name is|this is|i am|i'm)\s+([a-z][a-z'-]*(?:\s+(?!(?:and|how|what|when|where|why|can|could|would|i|calling|from)\b)[a-z][a-z'-]*){0,2})/i);
   const high = /\b(emergency|urgent|immediately|right away|danger|fire|flood|burst|gas leak|not breathing)\b/i.test(callerText);
   const low = /\b(no rush|not urgent|whenever|next week)\b/i.test(callerText);
   return {
@@ -614,7 +614,7 @@ export async function respondToTypedPhoneCall(actor, input) {
   const callerMessage = cleanLine(input?.message, 1200);
   if (!callerMessage) throw Object.assign(new Error("Enter a caller message."), { status: 400 });
   const history = [...transcript, { role: "caller", text: callerMessage }].slice(-30);
-  const extracted = extractLead(history);
+  const extracted = extractPhoneFrontDeskLead(history);
   return {
     reply: typedReply(history, profile, callerMessage),
     lead: {
@@ -630,7 +630,7 @@ export async function respondToTypedPhoneCall(actor, input) {
 }
 
 async function summarizeTranscript(profile, transcript, suppliedLead) {
-  const extracted = extractLead(transcript, suppliedLead);
+  const extracted = extractPhoneFrontDeskLead(transcript, suppliedLead);
   const reason = extracted.reason || cleanLine(extracted.callerText, 260) || "General enquiry";
   const subject = extracted.callerName ? `${extracted.callerName} called` : "A caller contacted the business";
   const callback = extracted.callerPhone ? ` Callback number: ${extracted.callerPhone}.` : " Callback details still need confirmation.";

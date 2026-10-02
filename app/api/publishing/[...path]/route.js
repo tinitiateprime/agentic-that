@@ -109,10 +109,11 @@ function visibleForPrincipal(principalValue, rows) {
 }
 
 async function visibleWorkspacePublishing(principalValue) {
-  const accounts = visibleForPrincipal(principalValue, await listCentralAccounts(principalValue.workspaceId));
+  const snapshot = await publishingWorkspaceSnapshot(principalValue.workspaceId);
+  const accounts = visibleForPrincipal(principalValue, snapshot.accounts);
   const accountIds = new Set(accounts.map((account) => account.id));
-  const uploads = (await listCentralUploads(principalValue.workspaceId)).filter((upload) => accountIds.has(upload.accountId));
-  return { accounts, accountIds, uploads };
+  const uploads = snapshot.uploads.filter((upload) => accountIds.has(upload.accountId));
+  return { accounts, accountIds, uploads, snapshot };
 }
 
 async function centralAccountForPrincipal(principalValue, accountId, level = "view") {
@@ -331,8 +332,8 @@ export async function GET(request, context) {
       });
     }
     if (parts[0] === "submissions") {
-      const { accountIds: visibleAccountIds } = await visibleWorkspacePublishing(user);
-      return Response.json((await listCentralSubmissions(user.workspaceId)).filter((submission) => submission.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))));
+      const { accountIds: visibleAccountIds, snapshot } = await visibleWorkspacePublishing(user);
+      return Response.json(snapshot.submissions.filter((submission) => submission.selectedAccountIds.some((accountId) => visibleAccountIds.has(accountId))));
     }
     if (parts[0] === "schedules") return Response.json(await listCentralSchedules(user.workspaceId));
     if (parts[0] === "social-media-schedules") return Response.json([]);

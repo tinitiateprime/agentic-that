@@ -13,6 +13,12 @@ const ACTIVE_JOB_STATES = new Set([
   "queued", "waiting_for_companion", "claimed", "running", "opening_platform",
   "uploading", "publishing", "reconnect_required", "cancel_requested",
 ]);
+const JOB_STATUS_COLUMNS = [
+  "id", "workspace_id", "job_type", "platform", "account_id", "requested_by_user_id",
+  "assigned_device_id", "idempotency_key", "priority", "status", "progress", "message",
+  "error", "attempt_count", "max_attempts", "lease_expires_at", "final_action_started_at",
+  "not_before", "started_at", "completed_at", "created_at", "updated_at",
+];
 
 function id(prefix) {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
@@ -941,7 +947,11 @@ export async function listSupabaseJobs(workspaceId, options = {}) {
   const sql = await getDatabaseSql();
   const limit = Math.max(1, Math.min(Number(options.limit) || 200, 500));
   let rows;
-  if (options.type) {
+  if (options.includePayload === false) {
+    rows = options.type
+      ? await sql`SELECT ${sql(JOB_STATUS_COLUMNS)} FROM public.jobs WHERE workspace_id = ${workspaceId} AND job_type = ${options.type} ORDER BY created_at DESC LIMIT ${limit}`
+      : await sql`SELECT ${sql(JOB_STATUS_COLUMNS)} FROM public.jobs WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT ${limit}`;
+  } else if (options.type) {
     rows = await sql`SELECT * FROM public.jobs WHERE workspace_id = ${workspaceId} AND job_type = ${options.type} ORDER BY created_at DESC LIMIT ${limit}`;
   } else {
     rows = await sql`SELECT * FROM public.jobs WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT ${limit}`;
@@ -984,10 +994,7 @@ export async function cancelSupabaseJob(workspaceId, jobId) {
 }
 
 export async function supabaseJobDashboard(workspaceId) {
-  const [companion, jobs] = await Promise.all([
-    latestSupabaseCompanion(workspaceId),
-    listSupabaseJobs(workspaceId, { limit: 200 }),
-  ]);
+  const { companion, jobs } = await supabasePublishingWorkspaceSnapshot(workspaceId);
   return { companion, jobs };
 }
 
@@ -1021,7 +1028,7 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
          WHERE workspace_id = ${workspaceId} ORDER BY created_at
       ) account_row), '[]'::jsonb) AS accounts,
       coalesce((SELECT jsonb_agg(to_jsonb(job_row)) FROM (
-        SELECT * FROM public.jobs
+        SELECT ${sql(JOB_STATUS_COLUMNS)} FROM public.jobs
          WHERE workspace_id = ${workspaceId} ORDER BY created_at DESC LIMIT 500
       ) job_row), '[]'::jsonb) AS jobs
   `;

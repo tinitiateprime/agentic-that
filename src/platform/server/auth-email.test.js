@@ -10,6 +10,23 @@ import {
   sendVerificationEmail,
 } from "./auth-email.js";
 
+test("an unverified sending domain produces setup guidance without exposing provider data", async (context) => {
+  const before={from:process.env.AUTH_EMAIL_FROM,key:process.env.RESEND_API_KEY};
+  process.env.AUTH_EMAIL_FROM='AgenticThat <accounts@example.com>';
+  process.env.RESEND_API_KEY='re_test_key';
+  context.after(()=>{
+    for(const [envKey,value] of [['AUTH_EMAIL_FROM',before.from],['RESEND_API_KEY',before.key]]) {
+      if(value===undefined)delete process.env[envKey];else process.env[envKey]=value;
+    }
+  });
+  context.mock.method(globalThis,'fetch',async()=>Response.json({name:'validation_error',message:'The example.com domain is not verified. Private request: secret'}, {status:403}));
+  await assert.rejects(sendPlatformAuthEmail({to:'test@example.com',subject:'Test',text:'Test'}),error=>{
+    assert.match(error.message,/sending domain is not verified.*Resend Domains/);
+    assert.doesNotMatch(error.message,/example\.com|secret/);
+    return true;
+  });
+});
+
 test("authentication links use the canonical domain instead of the legacy Netlify hostname", () => {
   const originalOrigin = process.env.PLATFORM_PUBLIC_URL;
   process.env.PLATFORM_PUBLIC_URL = "https://agentic-that.netlify.app";

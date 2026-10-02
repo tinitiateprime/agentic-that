@@ -2,12 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliverPhoneFrontDeskSummary,
+  extractPhoneFrontDeskLead,
   normalizePhoneFrontDeskProfile,
   phoneFrontDeskAgentDefinition,
   phoneFrontDeskDynamicVariables,
   phoneFrontDeskIntegrationsEnabled,
   sendPhoneFrontDeskUrgentAlert,
 } from "./phone-front-desk-store.js";
+
+test("spoken caller names stop before the next sentence or question", () => {
+  assert.equal(extractPhoneFrontDeskLead([{role:'caller',text:'My name is AWS Tester. How long is the consultation?'}]).callerName,'AWS Tester');
+  assert.equal(extractPhoneFrontDeskLead([{role:'caller',text:"I'm Jane O'Connor and I would like an appointment."}]).callerName,"Jane O'Connor");
+  assert.equal(extractPhoneFrontDeskLead([{role:'caller',text:'My name is Alex. What do you offer?'}],{callerName:'Alex Smith'}).callerName,'Alex Smith');
+});
 
 test("phone front desk profile keeps useful data and rejects unsafe contact values", () => {
   const profile = normalizePhoneFrontDeskProfile({

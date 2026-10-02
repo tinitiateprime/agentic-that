@@ -52,7 +52,9 @@ test("Google OAuth tokens are encrypted and tampering is rejected", async () => 
   const encrypted = encryptGoogleToken(token);
   assert.doesNotMatch(encrypted, /refresh-token-secret/);
   assert.equal(decryptGoogleToken(encrypted), token);
-  assert.throws(() => decryptGoogleToken(`${encrypted}x`));
+  assert.throws(() => decryptGoogleToken(`${encrypted}x`), error => error.status === 409 && /Reconnect this account/.test(error.message));
+  process.env.CREDENTIAL_ENCRYPTION_KEY = "a-different-stable-google-encryption-key";
+  assert.throws(() => decryptGoogleToken(encrypted), error => error.status === 409 && /credential encryption key/.test(error.message));
 }));
 
 test("Google connections reject placeholder or short encryption keys", async () => withGoogleEnvironment(() => {

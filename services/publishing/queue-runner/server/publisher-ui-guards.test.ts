@@ -382,7 +382,7 @@ test("central publishing refresh uses one non-overlapping workspace request", as
   assert.match(routeSource, /parts\[0\] === "workspace-snapshot"/);
   assert.match(accessSource, /export async function requirePrincipalCapability/);
   assert.match(detailSource, /requirePrincipalCapability\(user,/);
-  assert.match(documentStoreSource, /process\.env\.SERVERLESS === "true" \? 1 : 5/);
+  assert.match(documentStoreSource, /process\.env\.SERVERLESS === "true" \? 4 : 5/);
   assert.match(centralStoreSource, /supabasePublishingWorkspaceSnapshot\(workspaceId\)/);
   assert.match(jobControlSource, /export async function supabasePublishingWorkspaceSnapshot/);
   assert.match(jobControlSource, /jsonb_agg\(to_jsonb\(job_row\)\)/);

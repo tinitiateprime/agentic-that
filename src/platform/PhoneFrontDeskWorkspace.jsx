@@ -680,6 +680,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
                 {!calendar.connected ? <button type="button" onClick={() => void connectGoogle("calendar")} disabled={!canConfigure || callActive || saving || !calendar.configured}>Connect Google Calendar</button> : <>
                   <button type="button" onClick={() => void connectionAction("set-time-zone", { timeZone: bookingTimeZone })} disabled={!canConfigure || callActive || saving || Boolean(connectionBusy) || bookingTimeZone.trim() === calendar.timeZone}>{connectionBusy === "set-time-zone" ? "Saving…" : "Save time zone"}</button>
                   <button type="button" onClick={() => void verifyCalendar()} disabled={!canConfigure || callActive || saving || verifyingCalendar || Boolean(connectionBusy)}>{verifyingCalendar ? "Checking…" : "Verify access"}</button>
+                  <button type="button" onClick={() => void connectGoogle("calendar")} disabled={!canConfigure || callActive || saving || Boolean(connectionBusy)}>Reconnect Google Calendar</button>
                   <button type="button" className="pfd-disconnect" onClick={() => void disconnectGoogle("calendar")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>Disconnect</button>
                 </>}
               </div>
@@ -690,6 +691,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
               <div className="pfd-connection-actions">
                 {!notifications.connected ? <button type="button" onClick={() => void connectGoogle("mail")} disabled={!canConfigure || callActive || saving || !notifications.configured}>Connect Gmail</button> : <>
                   <button type="button" onClick={() => void connectionAction("test-mail")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>{connectionBusy === "test-mail" ? "Sending…" : "Send test email"}</button>
+                  <button type="button" onClick={() => void connectGoogle("mail")} disabled={!canConfigure || callActive || saving || Boolean(connectionBusy)}>Reconnect Gmail</button>
                   <button type="button" className="pfd-disconnect" onClick={() => void disconnectGoogle("mail")} disabled={!canConfigure || callActive || Boolean(connectionBusy)}>Disconnect</button>
                 </>}
               </div>
