@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/patch-postgres-pooling.mjs",
     "dev": "npm run publishing:css && node scripts/dev-all.mjs",
     "dev:all": "npm run dev",
     "dev:site": "node scripts/copy-telegram-console.mjs && node scripts/dev-next.mjs",

@@ -27,6 +27,7 @@ const timestampAsIso = {
 export async function getWebsiteStudioSql() {
   globalForWebsiteStudio.__websiteStudioSql ||= postgres(connectionString(), {
     prepare: false,
+    max_pipeline: 0, // Serialize queries on each Supabase transaction-pool connection.
     max: 1,
     idle_timeout: 5,
     connect_timeout: 15,

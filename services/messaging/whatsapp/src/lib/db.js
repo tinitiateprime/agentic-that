@@ -70,6 +70,9 @@ function client() {
       // Safe with Supabase's transaction pooler (pgbouncer), which can't hold
       // server-side prepared statements across pooled connections.
       prepare: false,
+      // Supabase transaction pooling can stall when unnamed queries overlap.
+      // Complete each query before sending the next one on this connection.
+      max_pipeline: 0,
       max: Number(process.env.PG_POOL_MAX || (process.env.SERVERLESS === "true" ? 1 : 5)),
       idle_timeout: Number(process.env.PG_IDLE_TIMEOUT_SECONDS || (process.env.SERVERLESS === "true" ? 5 : 20)),
       connect_timeout: 15,
