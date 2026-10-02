@@ -143,13 +143,20 @@ export default function WebsiteStudioWorkspace({ canGenerate = true }) {
 
   const refresh = useCallback(async () => {
     try {
-      setSnapshot(await studioRequest("/api/website-studio"));
+      const current = await studioRequest("/api/website-studio");
+      setSnapshot(current);
+      if (canGenerate) {
+        // Advance at most one durable step per poll. Await it before responding
+        // to avoid overlapping provider calls when the user opens two tabs.
+        const project = current.projects.find(item => item.requestDriven);
+        if (project) await studioRequest(`/api/website-studio/${encodeURIComponent(project.id)}/run`, { method: "POST" });
+      }
     } catch (loadError) {
       setError(loadError.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canGenerate]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -162,8 +169,14 @@ export default function WebsiteStudioWorkspace({ canGenerate = true }) {
   ));
   useEffect(() => {
     if (!pipelineActive) return undefined;
-    const timer = window.setInterval(refresh, 5_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      await refresh();
+      if (!cancelled) timer = window.setTimeout(poll, 5_000);
+    };
+    timer = window.setTimeout(poll, 5_000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [pipelineActive, refresh]);
 
   const stats = useMemo(() => ({

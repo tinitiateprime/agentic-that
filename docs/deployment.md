@@ -1,7 +1,7 @@
 # AWS Amplify deployment
 
 Amplify hosts the Next.js website and request-based APIs. A private Node 22
-Lambda worker runs long scraping, Growth Advisor and Website Studio jobs.
+Lambda worker can run long scraping, Growth Advisor and Website Studio jobs.
 Supabase remains the PostgreSQL database, private media storage and token-scoped
 Companion job-control backend. Publishing browser sessions stay in the desktop
 Companion. Request-based Telegram hosting does not run a permanent listener or
@@ -9,11 +9,15 @@ scheduler.
 
 ## Prepare and validate
 
-Use the existing Supabase project and retain the original session, credential,
-service signing and project-token encryption keys. Masked values cannot decrypt
-existing records. Copy `PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` from Netlify into
-Amplify if it has not been added; the deployment helper generates a rate-limit
-pepper only when it is missing. Never paste secrets into chat or commit them.
+Use the existing Supabase project and retain the original session, credential
+and service signing keys. Retain the project-token key if its original value is
+available. Masked values cannot decrypt existing records. Netlify secrets are
+write-only: its UI, CLI and API cannot reveal them. Without an explicit project
+key, the embedded project module creates one private key which is persisted in
+the PostgreSQL project snapshot, including across cold starts. GitHub tokens
+encrypted with a lost original key must be re-entered in Project Management.
+The other encryption keys must remain unchanged. Never paste secrets into chat
+or commit them.
 
 If you have a private environment export, prepare the local import file:
 
@@ -24,8 +28,38 @@ npm run aws:env:prepare -- --from "C:\path\to\your-private-environment.txt"
 This writes the ignored `.env.aws-import`, preserves complete signing PEMs,
 accepts supported Supabase aliases, excludes masked placeholders and generates
 one stable rate-limit pepper if absent. Add any missing original encryption
-keys directly to this local file. A masked project-token key cannot be recovered
-or replaced safely for existing data. Keep this file private.
+keys directly to this local file. Leave the optional project key blank when it
+is unavailable, rather than entering a masked value. Keep this file private.
+
+## Deploy using the Amplify console
+
+Add the private server values to Amplify environment variables; local ignored
+files are not uploaded by GitHub. The build normalizes the legacy production
+hostname to `https://www.agenticthat.com` and preserves custom preview origins.
+Map `www.agenticthat.com` to this Amplify branch in Domain management, and
+register `https://www.agenticthat.com/api/phone-front-desk/google/callback` in
+Google Cloud. Existing Meta webhook settings should use the same canonical host.
+
+`BACKGROUND_JOB_MODE=auto` uses the configured `BACKGROUND_JOB_FUNCTION_NAME`.
+If no function name is set, Website Studio advances one bounded AI/media/render
+step per authenticated request, with private state and claims in Supabase.
+Growth Advisor makes one bounded provider attempt per request and persists a
+retry or result. Keep the page open for request-driven progress; reopening
+Website Studio resumes its saved steps. The Companion continues to run scraping
+and publishing locally in either mode. Do not add an arbitrary Lambda name: the
+function must run the compatible worker package and Amplify must be able to
+invoke it. `BACKGROUND_JOB_MODE=lambda` explicitly requires this setup;
+`BACKGROUND_JOB_MODE=request` explicitly selects the request fallback.
+
+Redeploy `main` after adding valid credentials, then run:
+
+```powershell
+npm run aws:live:check
+```
+
+This checks the public site, service health and unauthenticated API guards. It
+does not send messages or validate connected third-party accounts. Provider
+tokens rejected by Meta or Resend must be replaced in the private environment.
 
 ```powershell
 npm ci
@@ -79,7 +113,7 @@ Browser sign-in alone does not authenticate the SDK.
 `--check` makes read-only AWS calls and checks original environment values,
 Supabase permissions and the worker package. Deployment stops before creating
 resources when keys or migrations are missing. `--env-file <private-file>` can
-supply missing values; the helper otherwise reads the existing Amplify app and
+supply missing values without overwriting existing cloud credentials; the helper otherwise reads the existing Amplify app and
 branch variables. The environment reference is [amplify-env.md](amplify-env.md).
 
 `aws:deploy` provisions a private artifact bucket and encrypted configuration,
@@ -106,7 +140,8 @@ and must remain private deployment artifacts.
 
 If the public domain changes, update `PLATFORM_PUBLIC_URL`, the Google OAuth
 callback, Meta/WATI callbacks, verified email links and allowed Companion origins.
-Keeping `https://agenticthat.com` preserves existing callback URLs.
+Both the apex domain and `www` may route to Amplify, but use `www` for production
+links and OAuth callbacks so host-only session cookies stay on one origin.
 
 After release, check signup/reset email, Google Calendar/Gmail reconnect where
 needed, Telegram text/media, signed WhatsApp webhooks, private publishing media,

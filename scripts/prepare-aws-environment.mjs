@@ -22,7 +22,7 @@ const values = amplifyEnvironment({ ...await existing(outputPath), ...await exis
 values.AUTH_RATE_LIMIT_PEPPER ||= randomBytes(32).toString("base64url");
 await writeFile(outputPath, serializeEnvironment(values, { escapeDollar: false }), { mode: 0o600 });
 console.log(`Prepared ${Object.keys(values).length} values in ${path.basename(outputPath)}; secrets hidden. Masked values were excluded.`);
-for (const name of ["SESSION_ENCRYPTION_KEY", "USER_PROVISIONING_KEY", "PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY", "SERVICE_TOKEN_PRIVATE_KEY", "SERVICE_TOKEN_PUBLIC_KEY", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "BACKGROUND_JOB_FUNCTION_NAME"]) {
+for (const name of ["SESSION_ENCRYPTION_KEY", "USER_PROVISIONING_KEY", "SERVICE_TOKEN_PRIVATE_KEY", "SERVICE_TOKEN_PUBLIC_KEY", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY"]) {
   if (!values[name]) console.log(`Still required: ${name}`);
 }
-console.log("Retain original encryption/signing keys. Configure the real Lambda worker and compute role before release.");
+console.log("Retain original encryption/signing keys. Lambda is optional; when used, configure its real function name and invocation role.");

@@ -34,8 +34,8 @@ test("AWS production validation accepts the PEM encodings supported by runtime",
   }
 });
 
-test("missing originals, mismatched keys and absent workers stop production configuration", () => {
-  const missing = check({ SESSION_ENCRYPTION_KEY: "", BACKGROUND_JOB_FUNCTION_NAME: "" });
+test("missing original credentials, mismatched keys and incomplete explicit Lambda mode stop production configuration", () => {
+  const missing = check({ SESSION_ENCRYPTION_KEY: "", BACKGROUND_JOB_FUNCTION_NAME: "", BACKGROUND_JOB_MODE: "lambda" });
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /SESSION_ENCRYPTION_KEY is required/);
   assert.match(missing.stderr, /BACKGROUND_JOB_FUNCTION_NAME is required/);
@@ -44,4 +44,10 @@ test("missing originals, mismatched keys and absent workers stop production conf
   assert.equal(mismatched.status, 1);
   assert.match(mismatched.stderr, /matching Ed25519 pair/);
   assert.equal(check({ PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY: "********2a03" }).status, 1);
+});
+
+test("Amplify can deploy with private project-key persistence and request-driven AI", () => {
+  const result = check({ PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY: "", BACKGROUND_JOB_FUNCTION_NAME: "", BACKGROUND_JOB_MODE: "auto" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(check({ BACKGROUND_JOB_MODE: "detached" }).status, 1);
 });

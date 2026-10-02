@@ -16,6 +16,8 @@ const THEMES = Object.freeze(["editorial", "momentum", "aura"]);
 const CORE_SERVICE_BATCH_SIZE = 6;
 const SERVICE_BATCH_SIZE = 12;
 const SERVICE_BATCH_CONCURRENCY = 4;
+const REQUEST_CORE_SERVICE_BATCH_SIZE = 2;
+const REQUEST_SERVICE_BATCH_SIZE = 3;
 
 const SERVICE_ITEM_SCHEMA = {
   type: "object",
@@ -728,6 +730,7 @@ function addUsage(left, right) {
 }
 
 async function requestGemini(request, client, model) {
+  if (client.lowLatency) request.generationConfig.thinkingConfig = { thinkingLevel: "LOW" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.min(client.timeoutMs, Math.max(1, client.deadlineAt - Date.now())));
   try {
@@ -786,7 +789,7 @@ async function runGeminiTask({ buildRequest, parsePayload, client }) {
   let lastError = null;
   let usage = { promptTokens: 0, outputTokens: 0, totalTokens: 0 };
   const attemptModels = [...client.models, ...client.models]
-    .slice(0, MAX_GENERATION_ATTEMPTS);
+    .slice(0, client.maxAttempts || MAX_GENERATION_ATTEMPTS);
   let attemptsMade = 0;
   let transientFailures = 0;
   let dailyQuotaFailures = 0;
@@ -872,58 +875,82 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-export async function generateWebsiteSpec(inputProfile, options = {}) {
-  const profile = normalizeWebsiteBusinessProfile(inputProfile);
+function websiteClient(options) {
   const apiKey = cleanText(options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY, 500);
   if (!apiKey) throw new WebsiteStudioError("Add GEMINI_API_KEY before generating websites.", "AI_NOT_CONFIGURED", 503);
-  const client = {
+  return {
     apiKey,
     models: resolveWebsiteModels(options),
     fetchImpl: options.fetchImpl || fetch,
     timeoutMs: Math.max(10_000, Math.min(Number(options.timeoutMs || process.env.GEMINI_WEBSITE_TIMEOUT_MS || 55_000), 110_000)),
     retryDelayMs: Math.max(0, Math.min(Number(options.retryDelayMs ?? process.env.GEMINI_WEBSITE_RETRY_DELAY_MS ?? 1_500), 10_000)),
-    deadlineAt: Date.now() + GENERATION_RETRY_BUDGET_MS,
+    deadlineAt: Date.now() + (options.budgetMs || GENERATION_RETRY_BUDGET_MS),
+    maxAttempts: options.maxAttempts,
+    lowLatency: options.lowLatency === true,
   };
-  const coreServices = profile.services.slice(0, CORE_SERVICE_BATCH_SIZE);
-  const additionalBatches = serviceBatches(profile.services.slice(CORE_SERVICE_BATCH_SIZE));
+}
+
+async function generateCore(profile, coreServices, client) {
   const coreProfile = { ...profile, services: coreServices };
-  const core = await runGeminiTask({
+  return runGeminiTask({
     buildRequest: (repairDetails) => buildGeminiWebsiteRequest(profile, repairDetails, coreServices),
     parsePayload: (payload) => {
       const spec = parseGeminiPayload(payload, coreProfile);
       const qa = runWebsiteQa(spec, coreProfile);
-      if (!qa.passed) {
-        throw new WebsiteStudioError("The generated website failed automated quality checks.", "AI_QA_FAILED", 502, qa.checks.filter((check) => !check.passed).map((check) => check.message));
-      }
+      if (!qa.passed) throw new WebsiteStudioError("The generated website failed automated quality checks.", "AI_QA_FAILED", 502, qa.checks.filter((check) => !check.passed).map((check) => check.message));
       return spec;
     },
     client,
   });
+}
+
+function completeWebsiteSpec(profile, core, additional) {
+  const spec = { ...core.value, services: [...core.value.services, ...additional.flatMap((result) => result.value)] };
+  const qa = runWebsiteQa(spec, profile);
+  if (!qa.passed) throw new WebsiteStudioError("The generated website failed final automated quality checks.", "AI_QA_FAILED", 502, qa.checks.filter((check) => !check.passed).map((check) => check.message));
+  return {
+    spec, qa,
+    model: [...new Set([core.model, ...additional.map((result) => result.model)])].join(" + "),
+    attempts: core.attempts + additional.reduce((total, result) => total + result.attempts, 0),
+    usage: additional.reduce((total, result) => addUsage(total, result.usage), core.usage),
+  };
+}
+
+// One bounded provider call per request; completed batches survive cold starts.
+export async function generateWebsiteSpecStep(inputProfile, state = {}, options = {}) {
+  const profile = normalizeWebsiteBusinessProfile(inputProfile);
+  const client = websiteClient({ timeoutMs: 18_000, budgetMs: 18_000, maxAttempts: 1, lowLatency: true, ...options });
+  const coreServices = profile.services.slice(0, REQUEST_CORE_SERVICE_BATCH_SIZE);
+  const next = { ...state, additional: [...(state.additional || [])] };
+  if (!next.core) next.core = await generateCore(profile, coreServices, client);
+  else {
+    const completedCount = next.core.value.services.length + next.additional.reduce((count, result) => count + result.value.length, 0);
+    const services = profile.services.slice(completedCount, completedCount + REQUEST_SERVICE_BATCH_SIZE);
+    if (services.length) {
+      next.additional.push(await runGeminiTask({
+        buildRequest: details => buildGeminiServiceBatchRequest(profile, services, details),
+        parsePayload: payload => parseGeminiServiceBatchPayload(payload, profile, services),
+        client,
+      }));
+    }
+  }
+  const completedCount = next.core.value.services.length + next.additional.reduce((count, result) => count + result.value.length, 0);
+  return { state: next, result: completedCount === profile.services.length ? completeWebsiteSpec(profile, next.core, next.additional) : null };
+}
+
+export async function generateWebsiteSpec(inputProfile, options = {}) {
+  const profile = normalizeWebsiteBusinessProfile(inputProfile);
+  const client = websiteClient(options);
+  const coreServices = profile.services.slice(0, CORE_SERVICE_BATCH_SIZE);
+  const additionalBatches = serviceBatches(profile.services.slice(CORE_SERVICE_BATCH_SIZE));
+  const core = await generateCore(profile, coreServices, client);
 
   const additional = await mapWithConcurrency(additionalBatches, SERVICE_BATCH_CONCURRENCY, (serviceBatch) => runGeminiTask({
     buildRequest: (repairDetails) => buildGeminiServiceBatchRequest(profile, serviceBatch, repairDetails),
     parsePayload: (payload) => parseGeminiServiceBatchPayload(payload, profile, serviceBatch),
     client,
   }));
-  const spec = {
-    ...core.value,
-    services: [
-      ...core.value.services,
-      ...additional.flatMap((result) => result.value),
-    ],
-  };
-  const qa = runWebsiteQa(spec, profile);
-  if (!qa.passed) {
-    throw new WebsiteStudioError("The generated website failed final automated quality checks.", "AI_QA_FAILED", 502, qa.checks.filter((check) => !check.passed).map((check) => check.message));
-  }
-  const modelsUsed = [...new Set([core.model, ...additional.map((result) => result.model)])];
-  return {
-    spec,
-    qa,
-    model: modelsUsed.join(" + "),
-    attempts: core.attempts + additional.reduce((total, result) => total + result.attempts, 0),
-    usage: additional.reduce((total, result) => addUsage(total, result.usage), core.usage),
-  };
+  return completeWebsiteSpec(profile, core, additional);
 }
 
 export const websiteStudioModels = () => resolveWebsiteModels();

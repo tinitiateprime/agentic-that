@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { amplifyEnvironment } from "./amplify-environment.mjs";
+import { backgroundJobMode } from "../lib/background-jobs.js";
 
 const environment = process.argv.includes("--amplify") ? amplifyEnvironment(process.env) : process.env;
 const errors = [];
@@ -21,7 +22,6 @@ required("DATABASE_URL", ["SUPABASE_DB_URL"]);
 required("SESSION_ENCRYPTION_KEY");
 required("USER_PROVISIONING_KEY");
 required("CREDENTIAL_ENCRYPTION_KEY");
-required("PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY");
 required("SERVICE_TOKEN_PRIVATE_KEY");
 required("SERVICE_TOKEN_PUBLIC_KEY");
 required("PLATFORM_SUPER_ADMIN_EMAILS");
@@ -67,8 +67,12 @@ if (environment.SERVICE_TOKEN_PRIVATE_KEY && environment.SERVICE_TOKEN_PUBLIC_KE
   } catch { errors.push("SERVICE_TOKEN_PRIVATE_KEY and SERVICE_TOKEN_PUBLIC_KEY must be a matching Ed25519 pair."); }
 }
 if (environment.HOSTING_PROVIDER === "aws-amplify") {
-  required("BACKGROUND_JOB_FUNCTION_NAME");
-  required("BACKGROUND_JOB_REGION");
+  try {
+    if (backgroundJobMode(environment) === "lambda") {
+      required("BACKGROUND_JOB_FUNCTION_NAME");
+      required("BACKGROUND_JOB_REGION");
+    }
+  } catch (error) { errors.push(error.message); }
   if (environment.DATA_STORE !== "postgres") errors.push("DATA_STORE must be postgres on AWS.");
   if (environment.RUN_DATABASE_MIGRATIONS === "true") errors.push("Apply database migrations separately; RUN_DATABASE_MIGRATIONS must be false on AWS.");
 }

@@ -7,7 +7,9 @@ Use this as the production template for the main AgenticThat AWS Amplify site. R
 HOSTING_PROVIDER=aws-amplify
 SERVERLESS=true
 DATA_STORE=postgres
-BACKGROUND_JOB_FUNCTION_NAME=<worker-function-name>
+BACKGROUND_JOB_MODE=auto
+# Optional; when set, this must identify the compatible deployed Lambda worker.
+BACKGROUND_JOB_FUNCTION_NAME=
 BACKGROUND_JOB_REGION=us-east-1
 RUN_DATABASE_MIGRATIONS=false
 NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL=/console
@@ -28,12 +30,13 @@ SESSION_COOKIE_SECURE=true
 TELEGRAM_DATA_STORE=postgres
 
 # Platform authentication, verification, reset, and distributed abuse controls
-PLATFORM_PUBLIC_URL=https://agenticthat.com
+PLATFORM_PUBLIC_URL=https://www.agenticthat.com
 PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
 AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
 RESEND_API_KEY=<server-only-resend-api-key>
 AUTH_RATE_LIMIT_PEPPER=<random-32-byte-base64url-secret>
-PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=<original-project-token-encryption-key>
+# Optional: retain the original value when available; never enter a masked value.
+PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=
 SERVICE_TOKEN_PRIVATE_KEY=<original-ed25519-private-key-pem>
 SERVICE_TOKEN_PUBLIC_KEY=<matching-ed25519-public-key-pem>
 NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS=false
@@ -86,14 +89,17 @@ The runtime file preserves multiline PEM keys and excludes AWS build credentials
 It contains server secrets: restrict deployment artifact access and never commit it.
 No server secret may have a NEXT_PUBLIC_ prefix.
 
-Set BACKGROUND_JOB_FUNCTION_NAME to the Lambda worker output and
+When using Lambda, set BACKGROUND_JOB_FUNCTION_NAME to the worker output and
 BACKGROUND_JOB_REGION=us-east-1. HOSTING_PROVIDER, SERVERLESS, DATA_STORE,
 TELEGRAM_DATA_STORE, pool limits, secure cookies, RBAC, and migration flags are
 set by the deployment helper. Ordinary builds and requests never run database DDL.
 
 The region defaults to the Amplify build region, falling back to `us-east-1`.
 The function name must identify a deployed worker; a name alone does not create
-Lambda or grant Amplify permission to invoke it. Supabase legacy aliases are
+Lambda or grant Amplify permission to invoke it. With no function name, auto
+mode uses durable request-driven AI steps, while Companion scraping/publishing
+continues locally. Explicit lambda mode requires a configured worker; request
+mode bypasses it. Supabase legacy aliases are
 mapped to their canonical runtime names. Signing keys accept actual PEM
 newlines, literal `\n` escapes, or base64-encoded PEM, matching the runtime.
 
@@ -127,11 +133,15 @@ deployment because changing it makes stored workspace credentials unreadable.
 The Google Calendar/Gmail connections use this same key and the configured OAuth
 client. If the local test used a different key or OAuth client from AWS Amplify,
 reconnect Google on the deployed site; do not replace an in-use AWS Amplify key.
-With `PLATFORM_PUBLIC_URL=https://agenticthat.com`, the OAuth callback is
-`https://agenticthat.com/api/phone-front-desk/google/callback`; register it in
+With `PLATFORM_PUBLIC_URL=https://www.agenticthat.com`, the OAuth callback is
+`https://www.agenticthat.com/api/phone-front-desk/google/callback`; register it in
 Google Cloud. `GOOGLE_OAUTH_REDIRECT_URI` is normally unnecessary in AWS Amplify.
-`PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` follows the same stability requirement
-and encrypts the GitHub tokens used only by Global Admin Center project management.
+`PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY`, when configured, encrypts the GitHub
+tokens used only by Global Admin Center project management. Without it, the
+embedded module persists its generated key in the private PostgreSQL snapshot.
+This key survives cold starts and deployments. An unavailable original Netlify
+secret cannot decrypt existing GitHub tokens: re-enter those tokens rather than
+changing other encryption keys. Keep a configured original key stable.
 `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are entered per connection in Config
 Manager when no shared credentials are configured. They may instead be set as
 server runtime variables to keep the connection form phone-only for every

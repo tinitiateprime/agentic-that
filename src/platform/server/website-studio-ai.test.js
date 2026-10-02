@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildWebsitePrompt,
   generateWebsiteSpec,
+  generateWebsiteSpecStep,
   normalizeWebsiteBusinessProfile,
   normalizeWebsiteSpec,
   runWebsiteQa,
@@ -161,6 +162,7 @@ test("Gemini generation uses structured data and returns QA evidence", async () 
   const result = await generateWebsiteSpec(profile, { apiKey: "test-key", model: "gemini-test", fetchImpl, timeoutMs: 10_000 });
   assert.match(requestedUrl, /gemini-test:generateContent$/);
   assert.equal(requestBody.generationConfig.responseFormat.text.mimeType, "APPLICATION_JSON");
+  assert.equal(requestBody.generationConfig.thinkingConfig.thinkingLevel, "HIGH");
   assert.equal(result.qa.passed, true);
   assert.equal(result.usage.totalTokens, 300);
 });
@@ -196,6 +198,32 @@ test("large catalogues are generated in bounded batches and merged in source ord
   assert.equal(requests.every((request) => request.minimum === request.size && request.maximum === request.size), true);
   assert.equal(result.attempts, 3);
   assert.equal(result.usage.totalTokens, 90);
+  assert.equal(result.qa.passed, true);
+});
+
+test("request-driven generation preserves completed batches across cold starts", async () => {
+  const services = Array.from({ length: 29 }, (_, index) => `Specialist service ${index + 1}`);
+  let calls = 0;
+  const fetchImpl = async (_url, init) => {
+    calls += 1;
+    const request = JSON.parse(init.body);
+    assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "LOW");
+    const prompt = request.contents[0].parts[0].text;
+    const marker = "SERVICES_FOR_THIS_RESPONSE:\n";
+    const batch = JSON.parse(prompt.slice(prompt.lastIndexOf(marker) + marker.length));
+    const value = request.generationConfig.responseFormat.text.schema.properties.brand ? providerSpec(batch) : { services: providerSpec(batch).services };
+    return Response.json({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify(value) }] } }] });
+  };
+  let state;
+  let result;
+  for (let step = 0; step < 10; step++) {
+    const next = await generateWebsiteSpecStep({ ...profile, services }, state, { apiKey: "test-key", model: "test-model", fetchImpl });
+    assert.equal(calls, step + 1);
+    state = JSON.parse(JSON.stringify(next.state));
+    result = next.result;
+    if (step < 9) assert.equal(result, null);
+  }
+  assert.deepEqual(result.spec.services.map(item => item.name), services);
   assert.equal(result.qa.passed, true);
 });
 

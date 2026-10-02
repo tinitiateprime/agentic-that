@@ -17,7 +17,7 @@ test("authentication links use the canonical domain instead of the legacy Netlif
   try {
     assert.equal(
       platformAuthLink("/verify-email", "verification-token"),
-      "https://agenticthat.com/verify-email?token=verification-token",
+      "https://www.agenticthat.com/verify-email?token=verification-token",
     );
   } finally {
     if (originalOrigin === undefined) delete process.env.PLATFORM_PUBLIC_URL;

@@ -41,7 +41,8 @@ type JobsDatabase = {
 };
 
 export type GrowthAdvisorJobRepository = {
-  claimJob?(id: string, model: string): Promise<GrowthAdvisorJob | null>;
+  claimJob?(id: string, model: string, staleAfterMs?: number): Promise<GrowthAdvisorJob | null>;
+  updateClaimedJob?(id: string, attempt: number, updates: Partial<GrowthAdvisorJob>): Promise<GrowthAdvisorJob | null>;
   createJob(userId: string, input: AdvisorRequest, model?: string, workspaceId?: string): Promise<GrowthAdvisorJob>;
   getJob(id: string): Promise<GrowthAdvisorJob | null>;
   updateJob(
@@ -59,6 +60,7 @@ type ExecuteDependencies = {
   timeoutMs?: number;
   requestAdvice?: (options: GeminiRequestOptions) => Promise<GrowthAdvisorJobResult>;
   sleep?: (milliseconds: number) => Promise<void>;
+  requestMode?: boolean;
 };
 
 const STORE_NAME = "instagram-growth-advisor";
@@ -135,16 +137,25 @@ export class GrowthAdvisorJobStore implements GrowthAdvisorJobRepository {
   private mutateLocal<T>(mutator: (database: JobsDatabase) => T | Promise<T>) {
     return this.documents.mutate(mutator);
   }
-  async claimJob(id: string, model: string) {
+  async claimJob(id: string, model: string, staleAfterMs = RUN_LEASE_MS) {
     return this.documents.mutate(database => {
       const job = database.jobs.find(item => item.id === id);
-      if (!job || job.status !== "pending") return null;
+      if (!job || (job.status !== "pending" && !(job.status === "running" && Date.now() - Date.parse(job.updatedAt) >= staleAfterMs))) return null;
       job.status = "running";
       job.model = model;
       job.attempts += 1;
       job.startedAt = new Date().toISOString();
       job.updatedAt = job.startedAt;
       delete job.error;
+      return job;
+    });
+  }
+
+  async updateClaimedJob(id: string, attempt: number, updates: Partial<GrowthAdvisorJob>) {
+    return this.documents.mutate(database => {
+      const job = database.jobs.find(item => item.id === id);
+      if (!job || job.attempts !== attempt || job.status !== "running") return job || null;
+      Object.assign(job, updates, { updatedAt: new Date().toISOString() });
       return job;
     });
   }
@@ -224,7 +235,8 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
     if (!isLegacyOwner) return null;
   }
   if (current.status === "complete" || current.status === "failed") return current;
-  if (current.status === "running" && Date.now() - Date.parse(current.updatedAt) < RUN_LEASE_MS) return current;
+  const leaseMs = dependencies.requestMode ? 45_000 : RUN_LEASE_MS;
+  if (current.status === "running" && Date.now() - Date.parse(current.updatedAt) < leaseMs) return current;
 
   const apiKey = dependencies.apiKey ?? configuredApiKey();
   if (!apiKey) {
@@ -240,22 +252,25 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
   }
 
   const model = dependencies.model || current.model || growthAdvisorModel();
-  const running = store.claimJob ? await store.claimJob(id, model) : await store.updateJob(id, {
+  const running = store.claimJob ? await store.claimJob(id, model, leaseMs) : await store.updateJob(id, {
     status: "running",
     model,
     attempts: current.attempts + 1,
     startedAt: current.startedAt || new Date().toISOString(),
     error: undefined
   });
-  if (!running) return null;
+  if (!running) return store.getJob(id);
+  const save = (updates: Partial<GrowthAdvisorJob>) => store.updateClaimedJob
+    ? store.updateClaimedJob(id, running.attempts, updates)
+    : store.updateJob(id, updates);
 
   const requestAdvice = dependencies.requestAdvice || requestGeminiGrowthAdvice;
   const sleep = dependencies.sleep || wait;
-  const timeoutMs = dependencies.timeoutMs || configuredBackgroundTimeoutMs();
+  const timeoutMs = dependencies.requestMode ? Math.min(dependencies.timeoutMs || 18_000, 18_000) : dependencies.timeoutMs || configuredBackgroundTimeoutMs();
 
   try {
     let result: GrowthAdvisorJobResult | undefined;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < (dependencies.requestMode ? 1 : 2); attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -264,6 +279,7 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
           apiKey,
           model,
           signal: controller.signal,
+          lowLatency: dependencies.requestMode,
           onTelemetry: (event) => console.info("Instagram growth advisor Gemini", {
             jobId: id,
             attempt: attempt + 1,
@@ -272,7 +288,7 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
         });
         break;
       } catch (error) {
-        if (attempt === 0 && isRetryable(error)) {
+        if (!dependencies.requestMode && attempt === 0 && isRetryable(error)) {
           console.warn("Instagram growth advisor retrying Gemini", {
             jobId: id,
             code: error instanceof GrowthAdvisorError ? error.code : error instanceof Error ? error.name : "UnknownError"
@@ -286,15 +302,17 @@ export async function executeGrowthAdvisorJob(id: string, dependencies: ExecuteD
       }
     }
     if (!result) throw new GrowthAdvisorError("AI did not return an answer.", "EMPTY_AI_RESPONSE", 502);
-    return store.updateJob(id, {
+    return save({
       status: "complete",
       completedAt: new Date().toISOString(),
       result,
       error: undefined
     });
   } catch (error) {
+    const retryable = isRetryable(error) || (error instanceof Error && error.name === "AbortError");
+    if (dependencies.requestMode && retryable && running.attempts < 8) return save({ status: "pending", error: undefined });
     console.error("Instagram growth advisor job failed", { jobId: id, error });
-    return store.updateJob(id, {
+    return save({
       status: "failed",
       completedAt: new Date().toISOString(),
       error: jobFailure(error)

@@ -14,8 +14,12 @@ import {
 import { getWebsiteStudioSql } from "./website-studio-database.js";
 import { resolveWebsiteMedia, verifyWebsiteMedia, websiteImageConfiguration } from "./website-studio-media.js";
 import { runWebsiteRenderQa } from "./website-studio-render-qa.js";
+import { initializeDatabaseDocument } from "../../../lib/database-document-store.js";
+import { runRequestJobStep } from "../../../lib/request-job-runner.js";
+import { advanceWebsiteRequestPipeline } from "./website-studio-request-pipeline.js";
 
 const PROJECT_PREFIX = "website_";
+const requestJobKey = id => `website-studio/request/${id}`;
 
 function cleanText(value, max = 300) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, max) : "";
@@ -131,6 +135,8 @@ async function sendPreviewEmail(project, token) {
     text,
     html: previewEmailHtml({ businessName: project.businessName, clientName: project.clientName, links }),
     senderId: emailStudio.configured ? emailStudio.defaultSenderId : undefined,
+    idempotencyKey: `website-preview/${project.id}`,
+    timeoutMs: 18_000,
   });
   return { ...result, links };
 }
@@ -143,6 +149,11 @@ async function expireStaleGenerations(sql) {
        AND (
          (generation_attempts = 0 AND updated_at < now() - interval '5 minutes')
          OR updated_at < now() - interval '20 minutes'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM agentic_that.app_document_store AS request_job
+          WHERE request_job.key = 'website-studio/request/' || ai_website_projects.id
+            AND request_job.value->>'stage' NOT IN ('complete', 'failed')
        )`;
 }
 
@@ -152,7 +163,8 @@ export async function websiteStudioSnapshot(actor) {
   await expireStaleGenerations(sql);
   const rows = await sql`
     SELECT id, business_name, business_type, client_name, client_email, business_profile,
-           site_spec, qa_report, status, selected_theme, public_slug, preview_expires_at,
+           CASE WHEN site_spec IS NULL THEN NULL ELSE jsonb_build_object('schemaVersion', site_spec->'schemaVersion') END AS site_spec,
+           qa_report, status, selected_theme, public_slug, preview_expires_at,
            generation_model, generation_attempts, prompt_tokens, output_tokens,
            email_status, email_error, failure_message, generated_at, published_at,
            created_at, updated_at
@@ -160,12 +172,17 @@ export async function websiteStudioSnapshot(actor) {
      WHERE created_by = ${actorUserId}
      ORDER BY created_at DESC
      LIMIT 100`;
+  const requestJobs = rows.length ? await sql`
+    SELECT key FROM agentic_that.app_document_store
+     WHERE key IN ${sql(rows.map(row => requestJobKey(row.id)))}
+       AND value->>'stage' NOT IN ('complete', 'failed')` : [];
+  const requestIds = new Set(requestJobs.map(row => row.key));
   return {
     configured: Boolean(String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim()),
     model: websiteStudioModels()[0],
     fallbackModels: websiteStudioModels().slice(1),
     imageProvider: websiteImageConfiguration(),
-    projects: rows.map(mapProject),
+    projects: rows.map(row => ({ ...mapProject(row), requestDriven: requestIds.has(requestJobKey(row.id)) && (row.status === "generating" || (row.status === "awaiting_selection" && row.email_status === "pending")) })),
     themes: websiteStudioThemes(),
   };
 }
@@ -236,6 +253,65 @@ export async function failQueuedWebsiteProject(projectIdInput, tokenInput, error
      RETURNING *`;
   if (failed) await audit(sql, failed.created_by, id, "ai_website.generation_dispatch_failed", { message });
   return failed ? mapProject(failed) : null;
+}
+
+export async function prepareWebsiteRequestJob(actor, queued) {
+  await initializeDatabaseDocument(requestJobKey(queued.project.id), {
+    ownerId: actor.userId, id: queued.project.id, token: queued.jobToken,
+    profile: queued.project.businessProfile, stage: "ai", retries: 0,
+  });
+}
+
+export async function advanceWebsiteRequestJob(actor, projectIdInput) {
+  const id = requiredText(projectIdInput, "Project ID", 100);
+  const ownerId = requiredText(actor?.userId, "User ID", 120);
+  const sql = await getWebsiteStudioSql();
+  const [current] = await sql`SELECT * FROM ai_website_projects WHERE id = ${id} AND created_by = ${ownerId}`;
+  if (!current) throw new WebsiteStudioError("Website project not found.", "PROJECT_NOT_FOUND", 404);
+  if (current.status === "failed") return { project: mapProject(current) };
+  await runRequestJobStep(requestJobKey(id), ownerId, job => advanceWebsiteRequestPipeline(job, {
+    previewLinks,
+    stagePreview: async state => {
+      const generated = state.generated;
+      await sql`UPDATE ai_website_projects
+        SET site_spec = ${sql.json(generated.spec)}, qa_report = ${sql.json(generated.qa)},
+            generation_model = ${generated.model}, generation_attempts = ${generated.attempts},
+            prompt_tokens = ${generated.usage.promptTokens || null}, output_tokens = ${generated.usage.outputTokens || null}, updated_at = now()
+        WHERE id = ${id} AND created_by = ${ownerId} AND status = 'generating'`;
+    },
+    markReady: async state => {
+      const [ready] = await sql`UPDATE ai_website_projects
+        SET qa_report = ${sql.json(state.generated.qa)},
+            status = CASE WHEN status = 'generating' THEN 'awaiting_selection' ELSE status END,
+            generated_at = COALESCE(generated_at, now()), updated_at = now()
+        WHERE id = ${id} AND created_by = ${ownerId} AND status IN ('generating', 'awaiting_selection', 'published') RETURNING id`;
+      if (!ready) throw new WebsiteStudioError("Website generation is no longer active.", "GENERATION_EXPIRED", 409);
+      await audit(sql, ownerId, id, "ai_website.generated", { model: state.generated.model, qaPassed: true, renderedConcepts: 6 });
+    },
+    deliver: async state => {
+      const [row] = await sql`SELECT * FROM ai_website_projects WHERE id = ${id} AND created_by = ${ownerId}`;
+      if (!row) throw new WebsiteStudioError("Website project not found.", "PROJECT_NOT_FOUND", 404);
+      if (row.email_status === "sent") return;
+      const delivery = await sendPreviewEmail(mapProject(row), state.token);
+      await sql`UPDATE ai_website_projects
+        SET email_status = ${delivery.skipped ? "skipped" : "sent"}, email_provider_id = ${delivery.messageId || null}, email_error = null, updated_at = now()
+        WHERE id = ${id} AND created_by = ${ownerId}`;
+      await audit(sql, ownerId, id, "ai_website.previews_delivered", { provider: delivery.provider, skipped: delivery.skipped });
+    },
+    fail: async (state, error) => {
+      const message = cleanText(error instanceof Error ? error.message : "Website generation failed.", 800);
+      if (state.stage === "email") {
+        await sql`UPDATE ai_website_projects SET email_status = 'failed', email_error = ${message}, updated_at = now()
+          WHERE id = ${id} AND created_by = ${ownerId}`;
+      } else {
+        await sql`UPDATE ai_website_projects SET status = 'failed', failure_message = ${message}, updated_at = now()
+          WHERE id = ${id} AND created_by = ${ownerId} AND status = 'generating'`;
+        await audit(sql, ownerId, id, "ai_website.generation_failed", { message });
+      }
+    },
+  }));
+  const [row] = await sql`SELECT * FROM ai_website_projects WHERE id = ${id} AND created_by = ${ownerId}`;
+  return { project: mapProject(row) };
 }
 
 export async function executeAutomatedWebsiteProject(projectIdInput, tokenInput) {

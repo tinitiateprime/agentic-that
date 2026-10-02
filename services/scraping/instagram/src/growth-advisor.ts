@@ -114,6 +114,7 @@ export type GeminiRequestOptions = AdvisorRequest & {
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   onTelemetry?: (event: GeminiTelemetryEvent) => void;
+  lowLatency?: boolean;
 };
 
 type GeminiTelemetryEvent = {
@@ -440,6 +441,7 @@ export async function requestGeminiGrowthAdvice(options: GeminiRequestOptions): 
   const model = cleanText(options.model, 100) || DEFAULT_MODEL;
   const fetchImpl = options.fetchImpl || fetch;
   const geminiRequest = buildGeminiRequest(request);
+  if (options.lowLatency) geminiRequest.generationConfig.thinkingConfig.thinkingLevel = "LOW";
   const requestBody = JSON.stringify(geminiRequest);
   const startedAt = Date.now();
   const emitTelemetry = (event: GeminiTelemetryEvent) => {

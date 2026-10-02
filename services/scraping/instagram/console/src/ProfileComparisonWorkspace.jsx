@@ -443,6 +443,7 @@ export default function ProfileComparisonWorkspace({
 
     const runUrl = `/api/instagram/growth-advisor/jobs/${encodeURIComponent(jobId)}/run`;
     let dispatched = false;
+    let requestDriven = false;
     for (let attempt = 0; attempt < 3 && !dispatched; attempt += 1) {
       try {
         const token = await getClientServiceToken("scraping", serviceToken);
@@ -457,6 +458,8 @@ export default function ProfileComparisonWorkspace({
           failure.code = failureData.code;
           throw failure;
         }
+        const runData = await runResponse.json().catch(() => ({}));
+        requestDriven = runData.executionMode === "request";
         dispatched = true;
       } catch (cause) {
         if (attempt === 2) throw cause;
@@ -506,7 +509,12 @@ export default function ProfileComparisonWorkspace({
         onProgress(payload.operation === "question"
           ? "Gemini is answering your question..."
           : "Gemini is reviewing the evidence and building your plan...");
-      } else if (!pendingRedispatched && Date.now() - startedAt > 15_000) {
+      }
+      if (requestDriven && ["pending", "running"].includes(statusData?.job?.status)) {
+        const token = await getClientServiceToken("scraping", serviceToken);
+        const runResponse = await fetch(runUrl, { method: "POST", cache: "no-store", headers: { authorization: `Bearer ${token}` } });
+        if (!runResponse.ok) throw new Error("The AI analysis could not continue. Please try again.");
+      } else if (statusData?.job?.status === "pending" && !pendingRedispatched && Date.now() - startedAt > 15_000) {
         pendingRedispatched = true;
         fetch(runUrl, { method: "POST", cache: "no-store" }).catch(() => undefined);
       }

@@ -48,7 +48,7 @@ function pexelsPhoto(photo, alt, highResolution = false) {
   };
 }
 
-async function searchPexels(query, { apiKey, fetchImpl, perPage = 8 }) {
+async function searchPexels(query, { apiKey, fetchImpl, perPage = 8, timeoutMs = 12_000 }) {
   const url = new URL(PEXELS_ENDPOINT);
   url.searchParams.set("query", cleanText(query, 140));
   url.searchParams.set("orientation", "landscape");
@@ -56,7 +56,7 @@ async function searchPexels(query, { apiKey, fetchImpl, perPage = 8 }) {
   url.searchParams.set("per_page", String(Math.max(1, Math.min(perPage, 24))));
   const response = await fetchImpl(url, {
     headers: { Authorization: apiKey },
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`Pexels image search failed (${response.status}).`);
   const payload = await response.json();
@@ -134,11 +134,13 @@ function resolvedPhotos(media) {
 }
 
 export async function verifyWebsiteMedia(media, options = {}) {
-  const photos = resolvedPhotos(media);
+  const allPhotos = resolvedPhotos(media);
+  const offset = options.offset || 0;
+  const photos = allPhotos.slice(offset, options.limit ? offset + options.limit : undefined);
   const fetchImpl = options.fetchImpl || fetch;
   const checks = await mapWithConcurrency(photos, 4, async (photo) => {
     try {
-      const response = await fetchImpl(photo.src, { method: "HEAD", signal: AbortSignal.timeout(12_000) });
+      const response = await fetchImpl(photo.src, { method: "HEAD", signal: AbortSignal.timeout(options.timeoutMs || 12_000) });
       const contentType = cleanText(response.headers?.get?.("content-type"), 100).toLowerCase();
       const passed = response.ok && contentType.startsWith("image/");
       return { id: photo.id, passed, status: response.status, contentType };
@@ -146,7 +148,7 @@ export async function verifyWebsiteMedia(media, options = {}) {
       return { id: photo.id, passed: false, status: 0, message: error instanceof Error ? error.message : "Image validation failed." };
     }
   });
-  return { passed: checks.length > 0 && checks.every((check) => check.passed), checks };
+  return { passed: checks.length > 0 && checks.every((check) => check.passed), checks, complete: offset + checks.length >= allPhotos.length };
 }
 
 export async function resolveWebsiteMedia(spec, profile, options = {}) {
@@ -168,11 +170,12 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
   }
 
   const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = options.timeoutMs || 12_000;
   const broadQuery = cleanText(spec?.mediaPlan?.heroQuery || `${profile?.businessType} professional service`, 140);
   const galleryQuery = cleanText(spec?.mediaPlan?.galleryQuery || broadQuery, 140);
   const [heroResults, galleryResults] = await Promise.all([
-    searchPexels(broadQuery, { apiKey, fetchImpl, perPage: 18 }),
-    searchPexels(galleryQuery, { apiKey, fetchImpl, perPage: 18 }),
+    searchPexels(broadQuery, { apiKey, fetchImpl, perPage: 18, timeoutMs }),
+    searchPexels(galleryQuery, { apiKey, fetchImpl, perPage: 18, timeoutMs }),
   ]);
   const heroCandidates = uniquePhotos(heroResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.heroAlt, true)).filter(Boolean));
   const galleryCandidates = uniquePhotos(galleryResults.map((photo) => pexelsPhoto(photo, spec?.mediaPlan?.storyAlt)).filter(Boolean));
@@ -199,7 +202,7 @@ export async function resolveWebsiteMedia(spec, profile, options = {}) {
   const servicesToSearch = spec?.services || [];
   const serviceResults = await mapWithConcurrency(servicesToSearch, SEARCH_CONCURRENCY, async (service) => {
     try {
-      const matches = await searchPexels(service.imageQuery, { apiKey, fetchImpl, perPage: 8 });
+      const matches = await searchPexels(service.imageQuery, { apiKey, fetchImpl, perPage: 8, timeoutMs });
       return [service.slug, matches.map((photo) => pexelsPhoto(photo, service.imageAlt)).filter(Boolean)];
     } catch {
       return [service.slug, []];

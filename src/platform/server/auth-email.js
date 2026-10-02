@@ -2,7 +2,7 @@ function publicOrigin() {
   const configured = String(process.env.PLATFORM_PUBLIC_URL || process.env.URL || "").trim();
   if (configured) {
     const origin = configured.replace(/\/$/, "");
-    if (origin === "https://agentic-that.netlify.app") return "https://agenticthat.com";
+    if (origin === "https://agentic-that.netlify.app") return "https://www.agenticthat.com";
     return origin;
   }
   return "http://localhost:3000";
@@ -333,6 +333,7 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId,
       headers: {
         "content-type": "application/json",
         ...(secret ? { authorization: `Bearer ${secret}` } : {}),
+        ...(idempotencyKey ? { "Idempotency-Key": String(idempotencyKey).slice(0, 256) } : {}),
       },
       body: JSON.stringify({ from, to, subject, text, html }),
       signal: AbortSignal.timeout(timeoutMs),

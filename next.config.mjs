@@ -2,6 +2,13 @@
 const nextConfig = {
   outputFileTracingRoot: process.cwd(),
   serverExternalPackages: ["telegram", "postgres", "@project-workspace/embedded", "@sparticuz/chromium", "playwright-core", "sharp"],
+  outputFileTracingIncludes: {
+    "/api/website-studio": ["./node_modules/@sparticuz/chromium/bin/**"],
+    "/api/website-studio/**": ["./node_modules/@sparticuz/chromium/bin/**"],
+  },
+  outputFileTracingExcludes: {
+    "/*": ["./data/**", "./.data/**", "./services/**/data/**"],
+  },
   ...(process.env.NEXT_DIST_DIR
     ? { distDir: process.env.NEXT_DIST_DIR }
     : {}),

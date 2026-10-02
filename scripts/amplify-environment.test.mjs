@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import nextEnvironment from "@next/env";
-import { amplifyEnvironment, serializeEnvironment, workerEnvironment } from "./amplify-environment.mjs";
+import { amplifyEnvironment, normalizeEnvironmentAliases, serializeEnvironment, workerEnvironment } from "./amplify-environment.mjs";
 
 test("Amplify forwards app configuration and excludes AWS build credentials and old provider state", () => {
   const values = amplifyEnvironment({ DATABASE_URL: "postgres://host/db", DATA_STORE: "netlify-blobs", RUN_DATABASE_MIGRATIONS: "true", AWS_SECRET_ACCESS_KEY: "secret", NETLIFY_AUTH_TOKEN: "old-token", NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co" });
@@ -40,4 +40,20 @@ test("Amplify accepts supported Supabase aliases and defaults the worker region"
   assert.equal(values.AWS_REGION, undefined);
   assert.equal(amplifyEnvironment({}).BACKGROUND_JOB_REGION, "us-east-1");
   assert.equal(amplifyEnvironment({ BACKGROUND_JOB_REGION: "ap-south-1", AWS_REGION: "us-east-1" }).BACKGROUND_JOB_REGION, "ap-south-1");
+});
+
+test("AWS production links use www while preserving explicitly configured preview domains", () => {
+  for (const origin of [undefined, "https://agenticthat.com", "https://agentic-that.netlify.app", "https://www.agenticthat.com/"]) {
+    assert.equal(amplifyEnvironment({ PLATFORM_PUBLIC_URL: origin }).PLATFORM_PUBLIC_URL, "https://www.agenticthat.com");
+  }
+  assert.equal(amplifyEnvironment({ PLATFORM_PUBLIC_URL: "https://preview.example.test" }).PLATFORM_PUBLIC_URL, "https://preview.example.test");
+});
+
+test("canonicalizing each layer preserves newer cloud aliases over a private export", () => {
+  const values = amplifyEnvironment({
+    ...normalizeEnvironmentAliases({ SUPABASE_SECRET_KEY: "old-local-key", RESEND_API_KEY: "old-email-key" }),
+    ...normalizeEnvironmentAliases({ SUPABASE_SERVICE_ROLE_KEY: "cloud-server-key", RESEND_API_KEY: "cloud-email-key" }),
+  });
+  assert.equal(values.SUPABASE_SECRET_KEY, "cloud-server-key");
+  assert.equal(values.RESEND_API_KEY, "cloud-email-key");
 });

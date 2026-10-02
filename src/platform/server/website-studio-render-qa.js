@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readdir, rm } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
@@ -54,7 +54,14 @@ async function cleanupQaProfiles() {
   const temporaryEntries = await readdir(temporaryDirectory, { withFileTypes: true }).catch(() => []);
   await Promise.all(temporaryEntries
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("playwright_chromiumdev_profile-"))
-    .map((entry) => rm(path.join(temporaryDirectory, entry.name), { recursive: true, force: true }).catch(() => {})));
+    .map(async entry => {
+      const directory = path.resolve(temporaryDirectory, entry.name);
+      if (path.dirname(directory) !== path.resolve(temporaryDirectory)) throw new Error("Invalid browser profile directory.");
+      const details = await stat(directory).catch(() => null);
+      // Requests from other workspaces may be rendering in the same instance.
+      // Browser.close removes our own profile; remove only older crash leftovers.
+      if (details && Date.now() - details.mtimeMs > 20 * 60_000) await rm(directory, { recursive: true, force: true }).catch(() => {});
+    }));
 }
 
 export function assessRenderedWebsite(metrics, viewport) {
@@ -152,16 +159,22 @@ export async function runWebsiteRenderQa(links, options = {}) {
   const ownsBrowser = !options.browser;
   let browser = options.browser || null;
   const checks = [];
+  const viewports = options.viewportNames ? VIEWPORTS.filter(item => options.viewportNames.includes(item.name)) : VIEWPORTS;
+  const expectedChecks = Object.keys(links || {}).length * viewports.length;
+  let expired = false;
+  let timeout;
+  if (options.budgetMs) timeout = setTimeout(() => { expired = true; void browser?.close().catch(() => {}); }, options.budgetMs);
   try {
     for (const [theme, url] of Object.entries(links || {})) {
-      for (const viewport of VIEWPORTS) {
+      for (const viewport of viewports) {
         let completed = false;
         let lastError = null;
-        const maximumAttempts = ownsBrowser ? 2 : 1;
+        const maximumAttempts = options.maxAttempts || (ownsBrowser ? 2 : 1);
         for (let attempt = 1; attempt <= maximumAttempts && !completed; attempt += 1) {
           let context = null;
           try {
             if (!browser || !browser.isConnected()) browser = await launchQaBrowser();
+            if (expired) throw new Error("Visual QA timed out. Please retry the website.");
             context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
             const page = await context.newPage();
             // Real media availability is checked separately with source HEAD
@@ -170,7 +183,7 @@ export async function runWebsiteRenderQa(links, options = {}) {
             await page.route("**/*", (route) => (route.request().resourceType() === "image"
               ? route.fulfill({ status: 200, contentType: "image/svg+xml", body: QA_IMAGE_PLACEHOLDER })
               : route.continue()));
-            const response = await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+            const response = await page.goto(url, { waitUntil: "networkidle", timeout: options.timeoutMs || 30_000 });
             const metrics = await readPageMetrics(page, theme, response);
             const result = assessRenderedWebsite(metrics, viewport);
             checks.push({ key: `render-${theme}-${viewport.name}`, passed: result.passed, message: result.passed ? `${theme} passes ${viewport.name} visual checks.` : result.details.join(" "), metrics });
@@ -193,8 +206,9 @@ export async function runWebsiteRenderQa(links, options = {}) {
       }
     }
   } finally {
+    clearTimeout(timeout);
     if (ownsBrowser) await browser?.close().catch(() => {});
     if (ownsBrowser) await cleanupQaProfiles();
   }
-  return { passed: checks.length === 6 && checks.every((check) => check.passed), checks, checkedAt: new Date().toISOString() };
+  return { passed: expectedChecks > 0 && checks.length === expectedChecks && checks.every((check) => check.passed), checks, checkedAt: new Date().toISOString() };
 }

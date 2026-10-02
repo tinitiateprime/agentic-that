@@ -8,7 +8,7 @@ import { CloudFormationClient, CreateStackCommand, UpdateStackCommand, DescribeS
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { SecretsManagerClient, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
-import { amplifyEnvironment, workerEnvironment } from "./amplify-environment.mjs";
+import { amplifyEnvironment, normalizeEnvironmentAliases, workerEnvironment } from "./amplify-environment.mjs";
 
 const argument = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1]; };
 const appId = argument("--app-id", "d21kcrps3tyzwx");
@@ -44,11 +44,18 @@ try {
     amplify.send(new GetAppCommand({ appId })), amplify.send(new GetBranchCommand({ appId, branchName })),
   ]);
   const envFile = argument("--env-file", undefined);
-  const source = { ...app.environmentVariables, ...branch.environmentVariables, ...(envFile ? parseAwsEnvironmentInput(await readFile(envFile, "utf8")) : {}) };
+  // The private file fills missing settings. Existing cloud values, including
+  // canonicalized Supabase aliases, take precedence over stale local exports.
+  const source = {
+    ...normalizeEnvironmentAliases(envFile ? parseAwsEnvironmentInput(await readFile(envFile, "utf8")) : {}),
+    ...normalizeEnvironmentAliases(app.environmentVariables || {}),
+    ...normalizeEnvironmentAliases(branch.environmentVariables || {}),
+  };
   const values = amplifyEnvironment(source);
   values.AUTH_RATE_LIMIT_PEPPER ||= randomBytes(32).toString("base64url");
   values.BACKGROUND_JOB_FUNCTION_NAME = `agenticthat-${appId}-${branchName}-jobs`;
   values.BACKGROUND_JOB_REGION = region;
+  values.BACKGROUND_JOB_MODE = "lambda";
   const checked = spawnSync(process.execPath, ["scripts/check-production-config.mjs", "--amplify"], { env: { ...process.env, ...values }, stdio: "inherit" });
   if (checked.status !== 0) throw new Error("Deployment stopped: complete the missing original server values first. No AWS resources were changed.");
   const databaseCheck = spawnSync(process.execPath, ["scripts/verify-database-security.mjs"], { env: { ...process.env, ...values }, stdio: "inherit" });

@@ -1,4 +1,4 @@
-import { dispatchBackgroundJob } from "../../../lib/background-jobs.js";
+import { backgroundJobMode, dispatchBackgroundJob } from "../../../lib/background-jobs.js";
 import {
   accessErrorResponse,
   assertPrincipalCapability,
@@ -8,6 +8,7 @@ import {
   executeAutomatedWebsiteProject,
   failQueuedWebsiteProject,
   queueAutomatedWebsiteProject,
+  prepareWebsiteRequestJob,
   websiteStudioSnapshot,
 } from "@platform/server/website-studio-store";
 import { WebsiteStudioError } from "@platform/server/website-studio-ai";
@@ -43,8 +44,10 @@ export async function POST(request) {
     queued = await queueAutomatedWebsiteProject(actor, await request.json());
 
     if (process.env.NODE_ENV !== "development") {
-      await dispatchBackgroundGeneration(request, queued.project.id, queued.jobToken);
-      return Response.json({ ok: true, queued: true, project: queued.project }, { status: 202 });
+      const mode = backgroundJobMode();
+      if (mode === "lambda") await dispatchBackgroundGeneration(request, queued.project.id, queued.jobToken);
+      else await prepareWebsiteRequestJob(actor, queued);
+      return Response.json({ ok: true, queued: true, project: { ...queued.project, requestDriven: mode === "request" } }, { status: 202 });
     }
 
     const result = await executeAutomatedWebsiteProject(queued.project.id, queued.jobToken);

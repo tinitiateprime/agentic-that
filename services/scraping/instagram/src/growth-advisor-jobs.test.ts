@@ -154,3 +154,28 @@ test("does not execute a growth-advisor job from another workspace", async () =>
   assert.equal(store.job.status, "pending");
   assert.equal(calls, 0);
 });
+
+test("request mode saves a transient retry and resumes without restarting completed work", async () => {
+  const store = new MemoryJobStore();
+  let calls = 0;
+  const requestAdvice = async () => {
+    calls += 1;
+    if (calls === 1) throw Object.assign(new Error("timeout"), { name: "AbortError" });
+    return plan;
+  };
+  const options = { store, apiKey: "test-key", requestMode: true, requestAdvice };
+  assert.equal((await executeGrowthAdvisorJob("job-1", options))?.status, "pending");
+  assert.equal(calls, 1);
+  assert.equal((await executeGrowthAdvisorJob("job-1", options))?.status, "complete");
+  assert.equal(calls, 2);
+  await executeGrowthAdvisorJob("job-1", options);
+  assert.equal(calls, 2);
+});
+
+test("request mode eventually records a terminal error instead of retrying forever", async () => {
+  const store = new MemoryJobStore();
+  store.job.attempts = 7;
+  const result = await executeGrowthAdvisorJob("job-1", { store, apiKey: "test-key", requestMode: true,
+    requestAdvice: async () => { throw Object.assign(new Error("timeout"), { name: "AbortError" }); } });
+  assert.equal(result?.status, "failed");
+});

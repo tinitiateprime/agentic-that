@@ -1,4 +1,4 @@
-import { dispatchBackgroundJob } from "../../../../../../../lib/background-jobs.js";
+import { backgroundJobMode, dispatchBackgroundJob } from "../../../../../../../lib/background-jobs.js";
 import {
   accessErrorResponse,
   authorizeApiCapability
@@ -11,6 +11,7 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const jobStore = new GrowthAdvisorJobStore();
 
@@ -28,10 +29,11 @@ export async function POST(_request, context) {
   if (!job || (job.workspaceId !== principal.workspaceId && !isLegacyOwner)) {
     return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
   }
-  if (process.env.NODE_ENV === "production") {
+  const mode = backgroundJobMode();
+  if (process.env.NODE_ENV === "production" && mode === "lambda") {
     try {
       if (job.status === "pending") await dispatchBackgroundJob({ version: 1, kind: "growth-advisor", jobId: id, workspaceId: principal.workspaceId, userId: principal.userId });
-      return Response.json({ ok: true, ...growthAdvisorJobPayload(job) }, { status: 202, headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ok: true, executionMode: "lambda", ...growthAdvisorJobPayload(job) }, { status: 202, headers: { "Cache-Control": "no-store" } });
     } catch {
       return Response.json({ error: "The AI background worker could not start.", code: "BACKGROUND_WORKER_UNAVAILABLE" }, { status: 503 });
     }
@@ -39,12 +41,13 @@ export async function POST(_request, context) {
   const completed = await executeGrowthAdvisorJob(id, {
     store: jobStore,
     workspaceId: principal.workspaceId,
-    userId: principal.userId
+    userId: principal.userId,
+    requestMode: process.env.NODE_ENV === "production" && mode === "request"
   });
   if (!completed) {
     return Response.json({ error: "AI job not found.", code: "AI_JOB_NOT_FOUND" }, { status: 404 });
   }
-  return Response.json({ ok: true, ...growthAdvisorJobPayload(completed) }, {
+  return Response.json({ ok: true, executionMode: "request", ...growthAdvisorJobPayload(completed) }, {
     headers: { "Cache-Control": "no-store" }
   });
 }

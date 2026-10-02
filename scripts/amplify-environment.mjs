@@ -6,9 +6,8 @@ const sample = readFileSync(new URL("../.env.example", import.meta.url), "utf8")
 export const environmentNames = new Set([...sample.matchAll(/^\s*#?\s*([A-Z][A-Z0-9_]*)=/gm)].map(match => match[1]));
 for (const key of ["BACKGROUND_JOB_FUNCTION_NAME", "BACKGROUND_JOB_REGION", "HOSTING_PROVIDER", "SERVERLESS", "PG_POOL_MAX", "PG_IDLE_TIMEOUT_SECONDS", "RUN_DATABASE_MIGRATIONS", "SUPABASE_DB_URL", "SUPABASE_DATABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_PUBLISHABLE_KEY", "GOOGLE_API_KEY", "GEMINI_BACKGROUND_TIMEOUT_MS", "GEMINI_WEBSITE_EMERGENCY_MODEL", "TELEGRAM_MEDIA_DOWNLOAD_TIMEOUT_MS", "TELEGRAM_MEDIA_MAX_BYTES", "COMPANION_RELEASE_TAG", "NEXT_PUBLIC_PUBLISHING_COMPANION_RELEASE_TAG", "MINIMUM_COMPANION_VERSION"]) environmentNames.add(key);
 
-export function amplifyEnvironment(source) {
-  const values = {};
-  for (const key of environmentNames) if (source[key]?.trim()) values[key] = source[key];
+export function normalizeEnvironmentAliases(source) {
+  const values = Object.fromEntries(Object.entries(source).filter(([, value]) => typeof value === "string" && value.trim()));
   const aliases = {
     DATABASE_URL: ["SUPABASE_DB_URL", "SUPABASE_DATABASE_URL"],
     NEXT_PUBLIC_SUPABASE_URL: ["SUPABASE_URL"],
@@ -19,7 +18,18 @@ export function amplifyEnvironment(source) {
     const value = values[name] || alternatives.map(alias => values[alias]).find(Boolean);
     if (value) values[name] = value;
   }
+  return values;
+}
+
+export function amplifyEnvironment(source) {
+  const values = {};
+  for (const key of environmentNames) if (source[key]?.trim()) values[key] = source[key];
+  Object.assign(values, normalizeEnvironmentAliases(values));
   values.BACKGROUND_JOB_REGION ||= source.AWS_REGION?.trim() || "us-east-1";
+  values.BACKGROUND_JOB_MODE ||= "auto";
+  if (!values.PLATFORM_PUBLIC_URL || /^https:\/\/(?:www\.)?agenticthat\.com\/?$|^https:\/\/agentic-that\.netlify\.app\/?$/.test(values.PLATFORM_PUBLIC_URL.trim())) {
+    values.PLATFORM_PUBLIC_URL = "https://www.agenticthat.com";
+  }
   return {
     ...values,
     HOSTING_PROVIDER: "aws-amplify",

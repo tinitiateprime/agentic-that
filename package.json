@@ -67,6 +67,7 @@
     "test:all": "node scripts/run-all-tests.mjs",
     "test:telegram": "npm --prefix services/messaging/telegram test",
     "aws:storage:check": "node scripts/check-aws-storage.mjs",
+    "aws:live:check": "node scripts/check-aws-live.mjs",
     "storage:migrate:netlify": "node scripts/migrate-netlify-storage.mjs"
   },
   "dependencies": {
