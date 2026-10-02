@@ -9,6 +9,17 @@ for (const key of ["BACKGROUND_JOB_FUNCTION_NAME", "BACKGROUND_JOB_REGION", "HOS
 export function amplifyEnvironment(source) {
   const values = {};
   for (const key of environmentNames) if (source[key]?.trim()) values[key] = source[key];
+  const aliases = {
+    DATABASE_URL: ["SUPABASE_DB_URL", "SUPABASE_DATABASE_URL"],
+    NEXT_PUBLIC_SUPABASE_URL: ["SUPABASE_URL"],
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ["SUPABASE_PUBLISHABLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY"],
+    SUPABASE_SECRET_KEY: ["SUPABASE_SERVICE_ROLE_KEY"],
+  };
+  for (const [name, alternatives] of Object.entries(aliases)) {
+    const value = values[name] || alternatives.map(alias => values[alias]).find(Boolean);
+    if (value) values[name] = value;
+  }
+  values.BACKGROUND_JOB_REGION ||= source.AWS_REGION?.trim() || "us-east-1";
   return {
     ...values,
     HOSTING_PROVIDER: "aws-amplify",
@@ -30,8 +41,11 @@ export function workerEnvironment(values) {
   return Object.fromEntries(Object.entries(values).filter(([name]) => names.has(name) || /^(GEMINI_|INSTAGRAM_|FACEBOOK_)/.test(name)));
 }
 
-export function serializeEnvironment(values) {
-  return Object.entries(values).map(([key, value]) => `${key}=${JSON.stringify(value).replaceAll("$", "\\$")}`).join("\n") + "\n";
+export function serializeEnvironment(values, { escapeDollar = true } = {}) {
+  return Object.entries(values).map(([key, value]) => {
+    const encoded = JSON.stringify(value);
+    return `${key}=${escapeDollar ? encoded.replaceAll("$", "\\$") : encoded}`;
+  }).join("\n") + "\n";
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

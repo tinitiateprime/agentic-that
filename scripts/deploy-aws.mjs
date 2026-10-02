@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { parse } from "dotenv";
+import { parseAwsEnvironmentInput } from "./aws-environment-input.mjs";
 import { AmplifyClient, GetAppCommand, GetBranchCommand, UpdateAppCommand, UpdateBranchCommand, StartJobCommand, GetJobCommand } from "@aws-sdk/client-amplify";
 import { CloudFormationClient, CreateStackCommand, UpdateStackCommand, DescribeStacksCommand } from "@aws-sdk/client-cloudformation";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -44,7 +44,7 @@ try {
     amplify.send(new GetAppCommand({ appId })), amplify.send(new GetBranchCommand({ appId, branchName })),
   ]);
   const envFile = argument("--env-file", undefined);
-  const source = { ...app.environmentVariables, ...branch.environmentVariables, ...(envFile ? parse(await readFile(envFile)) : {}) };
+  const source = { ...app.environmentVariables, ...branch.environmentVariables, ...(envFile ? parseAwsEnvironmentInput(await readFile(envFile, "utf8")) : {}) };
   const values = amplifyEnvironment(source);
   values.AUTH_RATE_LIMIT_PEPPER ||= randomBytes(32).toString("base64url");
   values.BACKGROUND_JOB_FUNCTION_NAME = `agenticthat-${appId}-${branchName}-jobs`;

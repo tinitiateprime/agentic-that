@@ -80,7 +80,7 @@ INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES=360
 
 ## Amplify runtime configuration
 
-The checked-in amplify.yml uses Node 22, installs development build dependencies,
+The checked-in amplify.yml installs the latest Node 22, installs development build dependencies,
 writes an allowlisted .env.production, validates production keys, and builds .next.
 The runtime file preserves multiline PEM keys and excludes AWS build credentials.
 It contains server secrets: restrict deployment artifact access and never commit it.
@@ -90,6 +90,12 @@ Set BACKGROUND_JOB_FUNCTION_NAME to the Lambda worker output and
 BACKGROUND_JOB_REGION=us-east-1. HOSTING_PROVIDER, SERVERLESS, DATA_STORE,
 TELEGRAM_DATA_STORE, pool limits, secure cookies, RBAC, and migration flags are
 set by the deployment helper. Ordinary builds and requests never run database DDL.
+
+The region defaults to the Amplify build region, falling back to `us-east-1`.
+The function name must identify a deployed worker; a name alone does not create
+Lambda or grant Amplify permission to invoke it. Supabase legacy aliases are
+mapped to their canonical runtime names. Signing keys accept actual PEM
+newlines, literal `\n` escapes, or base64-encoded PEM, matching the runtime.
 
 The worker receives only its required configuration through AWS Secrets Manager.
 Amplify uses a branch-specific IAM role to invoke that worker without static AWS keys.

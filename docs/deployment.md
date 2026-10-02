@@ -15,6 +15,18 @@ existing records. Copy `PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY` from Netlify int
 Amplify if it has not been added; the deployment helper generates a rate-limit
 pepper only when it is missing. Never paste secrets into chat or commit them.
 
+If you have a private environment export, prepare the local import file:
+
+```powershell
+npm run aws:env:prepare -- --from "C:\path\to\your-private-environment.txt"
+```
+
+This writes the ignored `.env.aws-import`, preserves complete signing PEMs,
+accepts supported Supabase aliases, excludes masked placeholders and generates
+one stable rate-limit pepper if absent. Add any missing original encryption
+keys directly to this local file. A masked project-token key cannot be recovered
+or replaced safely for existing data. Keep this file private.
+
 ```powershell
 npm ci
 npm run test:all
@@ -53,8 +65,8 @@ the terminal and use your existing AWS console login:
 ```powershell
 aws login --profile agenticthat --region us-east-1
 $env:AWS_PROFILE = 'agenticthat'
-npm run aws:deploy -- --check
-npm run aws:deploy
+npm run aws:deploy -- --env-file .env.aws-import --check
+npm run aws:deploy -- --env-file .env.aws-import
 ```
 
 The helper targets app `d21kcrps3tyzwx`, branch `main`, region `us-east-1` by
@@ -83,11 +95,11 @@ exceed Lambda's direct-upload limit.
 Configure the worker before pushing the tested commit to `main`. Then run:
 
 ```powershell
-npm run aws:deploy -- --release
+npm run aws:deploy -- --env-file .env.aws-import --release
 ```
 
 This starts an Amplify release, waits for success and verifies `/health` reports
-`provider: aws-amplify`. The checked-in `amplify.yml` installs Node 22 and build
+`provider: aws-amplify`. The checked-in `amplify.yml` installs the latest Node 22 and build
 dependencies, prepares an allowlisted server environment, runs the production
 configuration check and builds `.next`. Server environment files contain secrets
 and must remain private deployment artifacts.

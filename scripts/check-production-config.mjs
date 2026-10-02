@@ -57,8 +57,12 @@ for (const [name, value] of Object.entries(environment)) {
 }
 if (environment.SERVICE_TOKEN_PRIVATE_KEY && environment.SERVICE_TOKEN_PUBLIC_KEY) {
   try {
-    const privateKey = crypto.createPrivateKey(environment.SERVICE_TOKEN_PRIVATE_KEY);
-    const publicKey = crypto.createPublicKey(environment.SERVICE_TOKEN_PUBLIC_KEY);
+    const keyInput = value => {
+      const normalized = value.replace(/\\n/g, "\n").trim();
+      return normalized.includes("BEGIN") ? normalized : Buffer.from(normalized, "base64");
+    };
+    const privateKey = crypto.createPrivateKey(keyInput(environment.SERVICE_TOKEN_PRIVATE_KEY));
+    const publicKey = crypto.createPublicKey(keyInput(environment.SERVICE_TOKEN_PUBLIC_KEY));
     if (privateKey.asymmetricKeyType !== "ed25519" || !crypto.createPublicKey(privateKey).equals(publicKey)) throw new Error();
   } catch { errors.push("SERVICE_TOKEN_PRIVATE_KEY and SERVICE_TOKEN_PUBLIC_KEY must be a matching Ed25519 pair."); }
 }

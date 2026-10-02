@@ -29,3 +29,15 @@ test("Next.js reads PEM newlines and literal dollar signs from the AWS runtime f
   assert.equal(parsed.TEST_AWS_PEM, values.TEST_AWS_PEM);
   assert.equal(parsed.TEST_AWS_URL, values.TEST_AWS_URL);
 });
+
+test("Amplify accepts supported Supabase aliases and defaults the worker region", () => {
+  const values = amplifyEnvironment({ SUPABASE_DATABASE_URL: "postgres://host/db", SUPABASE_URL: "https://test.supabase.co", SUPABASE_ANON_KEY: "public-key", SUPABASE_SERVICE_ROLE_KEY: "server-key", AWS_REGION: "eu-west-1" });
+  assert.equal(values.DATABASE_URL, "postgres://host/db");
+  assert.equal(values.NEXT_PUBLIC_SUPABASE_URL, "https://test.supabase.co");
+  assert.equal(values.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, "public-key");
+  assert.equal(values.SUPABASE_SECRET_KEY, "server-key");
+  assert.equal(values.BACKGROUND_JOB_REGION, "eu-west-1");
+  assert.equal(values.AWS_REGION, undefined);
+  assert.equal(amplifyEnvironment({}).BACKGROUND_JOB_REGION, "us-east-1");
+  assert.equal(amplifyEnvironment({ BACKGROUND_JOB_REGION: "ap-south-1", AWS_REGION: "us-east-1" }).BACKGROUND_JOB_REGION, "ap-south-1");
+});
