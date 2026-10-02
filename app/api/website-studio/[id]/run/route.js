@@ -7,7 +7,7 @@ export const maxDuration = 30;
 
 export async function POST(_request, context) {
   try {
-    const actor = assertPrincipalCapability(await authorizeApiAccess("website.ai-website-studio", "operate"), "website.generate");
+    const actor = await assertPrincipalCapability(await authorizeApiAccess("website.ai-website-studio", "operate"), "website.generate");
     const { id } = await context.params;
     return Response.json({ ok: true, ...await advanceWebsiteRequestJob(actor, id) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

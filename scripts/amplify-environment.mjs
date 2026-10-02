@@ -53,7 +53,10 @@ export function workerEnvironment(values) {
 
 export function serializeEnvironment(values, { escapeDollar = true } = {}) {
   return Object.entries(values).map(([key, value]) => {
-    const encoded = JSON.stringify(value);
+    // Console PEMs often contain literal \n. Decode them before JSON encoding
+    // so Next's dotenv loader does not leave extra backslashes in the key.
+    const normalized = value.includes("-----BEGIN ") ? value.replace(/\\r\\n|\\n/g, "\n") : value;
+    const encoded = JSON.stringify(normalized);
     return `${key}=${escapeDollar ? encoded.replaceAll("$", "\\$") : encoded}`;
   }).join("\n") + "\n";
 }

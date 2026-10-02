@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import crypto from "node:crypto";
 import nextEnvironment from "@next/env";
 import { amplifyEnvironment, normalizeEnvironmentAliases, serializeEnvironment, workerEnvironment } from "./amplify-environment.mjs";
 
@@ -28,6 +29,20 @@ test("Next.js reads PEM newlines and literal dollar signs from the AWS runtime f
   const [, parsed] = nextEnvironment.processEnv([{ path: ".env.production", contents: serializeEnvironment(values), env: {} }], undefined, console, true);
   assert.equal(parsed.TEST_AWS_PEM, values.TEST_AWS_PEM);
   assert.equal(parsed.TEST_AWS_URL, values.TEST_AWS_URL);
+});
+
+test("escaped console signing keys remain a usable matching pair after Next loads them", () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  const privatePem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const publicPem = publicKey.export({ type: "spki", format: "pem" });
+  const values = {
+    TEST_AWS_PRIVATE_SIGNING_KEY: privatePem.replaceAll("\n", "\\n"),
+    TEST_AWS_PUBLIC_SIGNING_KEY: publicPem.replaceAll("\n", "\\n"),
+  };
+  const [, parsed] = nextEnvironment.processEnv([{ path: ".env.production", contents: serializeEnvironment(values), env: {} }], undefined, console, true);
+  const payload = Buffer.from("AWS service identity validation");
+  const signature = crypto.sign(null, payload, crypto.createPrivateKey(parsed.TEST_AWS_PRIVATE_SIGNING_KEY));
+  assert.equal(crypto.verify(null, payload, crypto.createPublicKey(parsed.TEST_AWS_PUBLIC_SIGNING_KEY), signature), true);
 });
 
 test("Amplify accepts supported Supabase aliases and defaults the worker region", () => {
