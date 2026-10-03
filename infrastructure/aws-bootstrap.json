@@ -1,0 +1,28 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Private deployment artifacts and encrypted configuration for AgenticThat AWS jobs",
+  "Parameters": { "AppId": { "Type": "String" } },
+  "Resources": {
+    "Artifacts": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": { "BlockPublicAcls": true, "BlockPublicPolicy": true, "IgnorePublicAcls": true, "RestrictPublicBuckets": true },
+        "BucketEncryption": { "ServerSideEncryptionConfiguration": [{ "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }] },
+        "VersioningConfiguration": { "Status": "Enabled" },
+        "LifecycleConfiguration": { "Rules": [{ "Id": "OldDeploymentVersions", "Status": "Enabled", "NoncurrentVersionExpiration": { "NoncurrentDays": 30 } }] }
+      }
+    },
+    "ServerConfiguration": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": { "Description": { "Fn::Sub": "AgenticThat ${AppId} background worker configuration" } }
+    }
+  },
+  "Outputs": {
+    "ArtifactsBucket": { "Value": { "Ref": "Artifacts" } },
+    "ServerConfigSecretArn": { "Value": { "Ref": "ServerConfiguration" } }
+  }
+}

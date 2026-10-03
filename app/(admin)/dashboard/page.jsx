@@ -4,7 +4,6 @@ import {
   getBusiness,
   eagleEye,
   dashboardStats,
-  listTemplates,
   listContactThreads,
   respondedContacts,
   unrespondedContacts,
@@ -13,20 +12,19 @@ import {
   messageStatusSummary,
 } from "@whatsapp/lib/data";
 import { timeAgo } from "@whatsapp/lib/format";
-import { metaGetTemplates, metaTemplatesConfigured, metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
+import { metaTemplatesConfigured, metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 // WATI CRM is no longer used for this project — kept commented (not deleted)
 // in case it's needed again; see components/WatiContactsBox.jsx.
 // import WatiContactsBox from "@whatsapp/components/WatiContactsBox";
 import QuickSendBox from "@whatsapp/components/QuickSendBox";
-import TemplatesCard from "@whatsapp/components/TemplatesCard";
 import MessageStatCards from "@whatsapp/components/MessageStatCards";
 import ResponseLists from "@whatsapp/components/ResponseLists";
 import ReadUnreadLists from "@whatsapp/components/ReadUnreadLists";
 import AllContactsCRM from "@whatsapp/components/AllContactsCRM";
-import MetaTemplatesSummary from "@whatsapp/components/MetaTemplatesSummary";
 import AutoRefresh from "@whatsapp/components/AutoRefresh";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Eagle Eye — Tinitiate WA" };
+export const metadata = { title: "Dashboard — Tinitiate WA" };
 
 const WINDOWS = [
   { key: "0", label: "All", days: 0 },
@@ -36,33 +34,31 @@ const WINDOWS = [
 
 export default async function DashboardPage({ searchParams }) {
   const user = await requireUser();
+  const creds = await credsForBusiness(user.business_id);
   const business = await getBusiness(user.business_id);
   const sp = await searchParams;
   const windowDays = Number(sp?.window || 0);
 
   const stats = await dashboardStats(business.id);
   const contacts = await eagleEye(business.id, windowDays);
-  const templates = await listTemplates(business.id);
   const allContacts = await listContactThreads(business.id);
   const responded = await respondedContacts(business.id);
   const unresponded = await unrespondedContacts(business.id);
   const unread = await unreadContacts(business.id);
   const read = await readContacts(business.id);
   const messageStats = await messageStatusSummary(business.id);
-  const metaConfigured = metaTemplatesConfigured();
-  const metaTemplates = metaConfigured ? await metaGetTemplates({ approvedOnly: false }).catch(() => []) : [];
   // Sender numbers on the WABA — lets Quick send pick which business number to
   // send from when there's more than one (multi-number WABA).
-  const phoneNumbers = metaConfigured ? await metaListPhoneNumbers().catch(() => []) : [];
+  const phoneNumbers = metaTemplatesConfigured(creds) ? await metaListPhoneNumbers(creds).catch(() => []) : [];
 
   return (
     <div className="space-y-5">
       {/* Re-pull dashboard data every 5 minutes without a full reload */}
       <AutoRefresh intervalMs={5 * 60 * 1000} />
       <div>
-        <h1 className="text-xl font-semibold">Chat Eagle Eye</h1>
+        <h1 className="text-xl font-semibold">Dashboard</h1>
         <p className="text-sm text-slate-500">
-          Every contact at a glance — last activity and message status.
+          Eagle Eye — every contact at a glance, last activity and message status.
         </p>
       </div>
 
@@ -77,13 +73,6 @@ export default async function DashboardPage({ searchParams }) {
           CRM. Not deleted, just not rendered:
       <WatiContactsBox />
       */}
-
-      {/* WhatsApp templates submitted to Meta for approval — separate from the
-          CRM templates below, which are canned free-text quick replies */}
-      <MetaTemplatesSummary templates={metaTemplates} configured={metaConfigured} />
-
-      {/* Templates — add/manage canned replies used across chat & broadcasts */}
-      <TemplatesCard templates={templates} />
 
       {/* Replies you haven't opened yet vs chats you're caught up on */}
       <ReadUnreadLists unread={unread} read={read} />

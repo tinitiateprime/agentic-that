@@ -1,7 +1,12 @@
+import { Suspense } from "react";
+import GlobalLoader from "@platform/GlobalLoader";
+import "@fontsource/roboto/latin-400.css";
+import "@fontsource/roboto/latin-500.css";
 import "../src/styles/globals.css";
 import "../services/messaging/whatsapp/src/styles/whatsapp-globals.css";
 import "../src/platform/platform-home.css";
 import "../services/scraping/instagram/console/src/instagram-scraper.css";
+import "../services/scraping/facebook/console/src/facebook-scraper.css";
 
 export const metadata = {
   title: "AgenticThat",
@@ -11,13 +16,18 @@ export const metadata = {
 export const viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#030303",
+  themeColor: "#f7faf8",
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="min-h-screen text-slate-800 antialiased">{children}</body>
+      <body className="min-h-screen text-slate-800 antialiased">
+        {children}
+        <Suspense fallback={null}>
+          <GlobalLoader />
+        </Suspense>
+      </body>
     </html>
   );
 }

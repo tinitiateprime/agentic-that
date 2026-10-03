@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, requireUser } from "@whatsapp/lib/auth";
 import { getBusiness, getContact, listMessages, listTemplates } from "@whatsapp/lib/data";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import Chat from "./Chat";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 export async function generateMetadata({ params }) {
   const { id } = await params;
@@ -12,6 +13,8 @@ export async function generateMetadata({ params }) {
 
 export default async function ContactChatPage({ params }) {
   const user = await requireUser();
+  const operator = await getCurrentUser("operate");
+  const creds = await credsForBusiness(user.business_id);
   const { id } = await params;
   const contact = await getContact(user.business_id, id);
   if (!contact) notFound();
@@ -19,9 +22,9 @@ export default async function ContactChatPage({ params }) {
   const business = await getBusiness(user.business_id);
   const messages = await listMessages(contact.id);
   const templates = await listTemplates(user.business_id);
-  const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
+  const provider = creds.provider;
   const phoneNumbers =
-    provider === "meta" ? await metaListPhoneNumbers().catch(() => []) : [];
+    provider === "meta" ? await metaListPhoneNumbers(creds).catch(() => []) : [];
 
   return (
     <div className="space-y-3">
@@ -43,6 +46,7 @@ export default async function ContactChatPage({ params }) {
         currency={business.currency}
         provider={provider}
         phoneNumbers={phoneNumbers}
+        canOperate={Boolean(operator)}
       />
     </div>
   );

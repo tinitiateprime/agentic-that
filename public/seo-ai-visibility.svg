@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AI visibility checker">
+  <rect width="64" height="64" rx="18" fill="#f4efff"/>
+  <path d="M11 34s8-12 21-12 21 12 21 12-8 12-21 12S11 34 11 34Z" fill="#fff" stroke="#7c3aed" stroke-linejoin="round" stroke-width="3"/>
+  <circle cx="32" cy="34" r="6" fill="#7c3aed"/>
+  <path d="m45 12 1.7 4.3L51 18l-4.3 1.7L45 24l-1.7-4.3L39 18l4.3-1.7L45 12Z" fill="#7c3aed"/>
+  <path d="m20 14 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1 1-2.5Z" fill="#9f78f1"/>
+</svg>

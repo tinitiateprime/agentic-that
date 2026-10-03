@@ -1,8 +1,11 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { prepareInstagramMedia } from "./instagram-media.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { activateComposerControl } from "./composer-control.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 const INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/";
@@ -194,7 +197,7 @@ async function dismissPostLoginPrompts(page: Page) {
   }
 }
 
-async function clickCreateButton(page: Page) {
+export async function clickCreateButton(page: Page) {
   console.log("Clicking Instagram create button...");
 
   const createButton = await firstVisible([
@@ -209,8 +212,7 @@ async function clickCreateButton(page: Page) {
     throw new Error("Could not find Instagram + create button.");
   }
 
-  await createButton.scrollIntoViewIfNeeded();
-  await createButton.click({ force: true, timeout: 10000 });
+  await activateComposerControl(createButton);
   await page.waitForTimeout(350);
 
   if (await waitForInstagramComposerReady(page, 2500)) {
@@ -233,8 +235,7 @@ async function clickCreateButton(page: Page) {
     throw new Error("Instagram Create menu opened, but the Post option was not available.");
   }
 
-  await postOption.scrollIntoViewIfNeeded().catch(() => undefined);
-  await postOption.click({ force: true, timeout: 10000 });
+  await activateComposerControl(postOption);
 
   if (!await waitForInstagramComposerReady(page, 20000)) {
     throw new Error("Instagram Post was selected, but the Create new post composer did not open.");
@@ -276,7 +277,7 @@ async function uploadInstagramMedia(page: Page, filePath: string) {
     ? dialogFileInput
     : page.locator('input[type="file"]').last();
   if ((await fileInput.count()) > 0) {
-    await fileInput.setInputFiles(filePath);
+    await setLocalInputFile(page, fileInput, filePath);
   } else {
     const selectButton = await firstVisible([
       page.getByRole("button", { name: /Select from computer/i }),
@@ -292,10 +293,10 @@ async function uploadInstagramMedia(page: Page, filePath: string) {
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
-      await fileChooser.setFiles(filePath);
+      await setLocalFileChooserFile(fileChooser, filePath);
     } else {
       await dismissNativeFileDialogFallback(page);
-      await page.locator('input[type="file"]').last().setInputFiles(filePath);
+      await setLocalInputFile(page, page.locator('input[type="file"]').last(), filePath);
     }
   }
 
@@ -376,10 +377,9 @@ async function clickInstagramEditNext(page: Page) {
 
   const editReady = await waitForAnyVisible([
     page.getByText(/^Edit$/i),
-    page.getByText(/^New post$/i),
-    page.getByText(/^Create new post$/i),
-    page.getByRole("button", { name: /^Next$/i }),
-    page.getByText(/^Next$/i),
+    page.getByText(/^Edit video$/i),
+    page.getByText(/^Filters$/i),
+    page.getByText(/^Adjustments$/i),
   ], 60000);
 
   if (!editReady) throw new Error("Instagram edit screen did not appear.");
@@ -397,8 +397,9 @@ async function clickInstagramEditNext(page: Page) {
   const shareReady = await waitForAnyVisible([
     page.getByRole("button", { name: /^Share$/i }),
     page.getByText(/^Share$/i),
-    page.getByText(/^New reel$/i),
-    page.getByText(/^Create new post$/i),
+    page.getByPlaceholder(/Write a caption/i),
+    page.locator('textarea[aria-label*="caption" i]'),
+    page.locator('[contenteditable="true"][aria-label*="caption" i]'),
   ], 60000);
 
   if (!shareReady) throw new Error("Instagram share screen did not appear.");
@@ -430,6 +431,18 @@ async function clickDoneAfterInstagramShared(page: Page) {
 
   while (Date.now() < deadline) {
     await cancelDiscardPromptIfVisible(page);
+
+    const platformError = await firstVisible([
+      page.getByText(/Your post could not be shared/i),
+      page.getByText(/Couldn't create (?:post|thread)/i),
+      page.getByText(/Something went wrong\. Please try again/i),
+      page.getByText(/Try again later/i),
+      page.getByText(/Uploaded image isn['’]t in an allowed aspect ratio/i),
+    ]);
+    if (platformError) {
+      const message = (await platformError.textContent().catch(() => null))?.replace(/\s+/g, " ").trim();
+      throw new Error((message || "Instagram showed an error after Share was submitted.").slice(0, 700));
+    }
 
     const sharedScreen = await firstVisible([
       page.getByText(/^Reel shared$/i),
@@ -534,7 +547,7 @@ async function fillInstagramCaption(page: Page, caption: string) {
   console.log("Instagram caption entered.");
 }
 
-async function clickInstagramShareAndWait(page: Page) {
+async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promise<void> | void) {
   console.log("Clicking Instagram Share button...");
 
   const shareButton = await firstVisible([
@@ -546,12 +559,13 @@ async function clickInstagramShareAndWait(page: Page) {
 
   await shareButton.scrollIntoViewIfNeeded();
   await shareButton.click({ force: true, timeout: 10000 });
+  await onSubmitted?.();
   await page.waitForTimeout(300);
 
   await clickDoneAfterInstagramShared(page);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "Instagram",
@@ -564,6 +578,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     beforeCheck: () => dismissPostLoginPrompts(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -580,15 +595,20 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
   if (await isLoggedIn(page)) {
     console.log("Instagram session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("Instagram saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "Instagram",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissPostLoginPrompts(page),
+    });
   } else {
-    console.log("Complete the full Instagram login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full Instagram login manually in the visible browser; Companion will save the session after the account opens.");
     await clickLoginInterstitialLink(page);
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await page.goto(INSTAGRAM_HOME_URL, { timeout: 60000 });
-  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
 
   if (holdAfterLogin) {
     const holdTime = getLoginHoldMs();
@@ -602,21 +622,28 @@ export async function loginToInstagram(page: Page, _upload?: PlatformUpload, hol
 }
 
 export async function postToInstagram(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  if (upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName) {
+    throw new Error("Instagram does not support text-only feed posts.");
+  }
   const filePath = publishingUploadFilePath(upload.fileName);
   if (!fs.existsSync(filePath)) throw new Error(`Instagram upload file not found: ${filePath}`);
+  const preparedMedia = await prepareInstagramMedia(filePath, upload.mimeType);
+  try {
+    if (preparedMedia.normalized) console.log("Prepared a non-cropping Instagram-compatible image.");
+    await loginToInstagram(page, upload, false, accountLogin);
+    await clickCreateButton(page);
+    await uploadInstagramMedia(page, preparedMedia.filePath);
+    await dismissInstagramReelsInfo(page);
+    await selectOriginalAspectAndClickNext(page);
+    await clickInstagramEditNext(page);
+    await fillInstagramCaption(page, upload.caption ?? "");
+    await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
 
-  await loginToInstagram(page, upload, false, accountLogin);
-  await clickCreateButton(page);
-  await uploadInstagramMedia(page, filePath);
-  await dismissInstagramReelsInfo(page);
-  await selectOriginalAspectAndClickNext(page);
-  await clickInstagramEditNext(page);
-  await fillInstagramCaption(page, upload.caption);
-  await clickInstagramShareAndWait(page);
-
-  const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
-  console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);
-  await page.waitForTimeout(holdTime);
-
-  return { success: true };
+    const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
+    console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);
+    await page.waitForTimeout(holdTime);
+    return { success: true };
+  } finally {
+    await preparedMedia.cleanup().catch(() => undefined);
+  }
 }

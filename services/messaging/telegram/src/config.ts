@@ -1,10 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-const projectRoot = process.cwd();
-
-function loadEnvFile() {
-  const envPath = path.join(projectRoot, ".env");
+function parseEnvFile(envPath: string) {
   if (!existsSync(envPath)) return;
 
   for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
@@ -19,11 +16,33 @@ function loadEnvFile() {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
+    // First definition wins, so later (higher-precedence) files must be read first.
     process.env[key] ??= value;
   }
 }
 
-loadEnvFile();
+function loadEnvFiles() {
+  // The service is launched with its own working directory, but the shared
+  // credentials live in the monorepo root .env.local / .env. Walk from the
+  // current directory up to the filesystem root so those files are picked up
+  // regardless of where the process was started. .env.local takes precedence
+  // over .env (matching Next.js), and closer directories win over ancestors.
+  const dirs: string[] = [];
+  let dir = process.cwd();
+  while (true) {
+    dirs.push(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  for (const candidate of dirs) {
+    parseEnvFile(path.join(candidate, ".env.local"));
+    parseEnvFile(path.join(candidate, ".env"));
+  }
+}
+
+loadEnvFiles();
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -62,6 +81,9 @@ export type AppConfig = {
   rateLimitMaxRequests: number;
   loginStartRateLimitMax: number;
   messageRateLimitMax: number;
+  telegramApiId: number | null;
+  telegramApiHash: string | null;
+  telegramApiCredentialsStatus: "configured" | "user_required" | "invalid";
 };
 
 export type BotConfig = {
@@ -79,6 +101,22 @@ export function readConfig(): AppConfig {
     ? positiveInteger("SERVICE_PORT", 8787)
     : positiveInteger("PORT", 8787);
 
+  // Shared Telegram application credentials are optional. Deployments without
+  // them remain healthy and ask the operator for their own my.telegram.org
+  // credentials when a number is connected. This is also important on
+  // Netlify: health checks and existing-account access must not fail merely
+  // because the optional shared application identity is absent.
+  const rawTelegramApiId = optionalEnv("TELEGRAM_API_ID");
+  const rawTelegramApiHash = optionalEnv("TELEGRAM_API_HASH");
+  const parsedTelegramApiId = Number(rawTelegramApiId);
+  const validTelegramApiId = Boolean(rawTelegramApiId) && Number.isInteger(parsedTelegramApiId) && parsedTelegramApiId > 0;
+  const validTelegramApiHash = /^[a-f0-9]{32}$/i.test(rawTelegramApiHash);
+  const telegramApiCredentialsStatus = validTelegramApiId && validTelegramApiHash
+    ? "configured"
+    : rawTelegramApiId || rawTelegramApiHash
+      ? "invalid"
+      : "user_required";
+
   return {
     dataDir: optionalEnv("DATA_DIR", "data"),
     sessionEncryptionKey: requiredEnv("SESSION_ENCRYPTION_KEY"),
@@ -88,11 +126,14 @@ export function readConfig(): AppConfig {
     corsOrigin: optionalEnv("CORS_ORIGIN"),
     loginChallengeTtlMinutes: positiveInteger("LOGIN_CHALLENGE_TTL_MINUTES", 10),
     appSessionTtlHours: positiveInteger("APP_SESSION_TTL_HOURS", 24),
-    sessionCookieSecure: booleanEnv("SESSION_COOKIE_SECURE", process.env.NETLIFY === "true"),
+    sessionCookieSecure: booleanEnv("SESSION_COOKIE_SECURE", process.env.NODE_ENV === "production"),
     rateLimitWindowSeconds: positiveInteger("RATE_LIMIT_WINDOW_SECONDS", 60),
     rateLimitMaxRequests: positiveInteger("RATE_LIMIT_MAX_REQUESTS", 120),
     loginStartRateLimitMax: positiveInteger("LOGIN_START_RATE_LIMIT_MAX", 5),
-    messageRateLimitMax: positiveInteger("MESSAGE_RATE_LIMIT_MAX", 20)
+    messageRateLimitMax: positiveInteger("MESSAGE_RATE_LIMIT_MAX", 20),
+    telegramApiId: telegramApiCredentialsStatus === "configured" ? parsedTelegramApiId : null,
+    telegramApiHash: telegramApiCredentialsStatus === "configured" ? rawTelegramApiHash : null,
+    telegramApiCredentialsStatus
   };
 }
 

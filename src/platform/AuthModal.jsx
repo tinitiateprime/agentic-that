@@ -8,31 +8,68 @@ const EMPTY_FORM = {
   email: "",
   password: "",
   confirmPassword: "",
+  plan: "full",
 };
+
+const SIGNUP_STEPS = [
+  { id: 1, shortLabel: "Account", eyebrow: "Step 1 of 3", title: "Tell us about yourself", description: "Create the account that will own your AgenticThat workspace." },
+  { id: 2, shortLabel: "Access", eyebrow: "Step 2 of 3", title: "Activate full access", description: "Every AgenticThat service is available to your workspace without a trial clock." },
+  { id: 3, shortLabel: "Success", eyebrow: "Setup complete", title: "Your workspace is ready", description: "All AgenticThat services are available to your workspace." },
+];
 
 export default function AuthModal({ open, initialMode = "login", onClose, onAuthenticated }) {
   const firstInputRef = useRef(null);
+  const stepHeadingRef = useRef(null);
   const onCloseRef = useRef(onClose);
+  const onAuthenticatedRef = useRef(onAuthenticated);
+  const completedUserRef = useRef(null);
   const [mode, setMode] = useState(initialMode === "signup" ? "signup" : "login");
   const [form, setForm] = useState(EMPTY_FORM);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [errorCode, setErrorCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
+  const [signupStep, setSignupStep] = useState(1);
+  const [completedUser, setCompletedUser] = useState(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
+  const [emailDeliveryFailed, setEmailDeliveryFailed] = useState(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
-  }, [onClose]);
+    onAuthenticatedRef.current = onAuthenticated;
+  }, [onClose, onAuthenticated]);
+
+  useEffect(() => {
+    completedUserRef.current = verificationRequired ? null : completedUser;
+  }, [completedUser, verificationRequired]);
 
   useEffect(() => {
     if (!open) return undefined;
     setMode(initialMode === "signup" ? "signup" : "login");
+    setSignupStep(1);
+    setCompletedUser(null);
+    setVerificationRequired(false);
+    setEmailDeliveryFailed(false);
+    completedUserRef.current = null;
     setError("");
+    setNotice("");
+    setErrorCode("");
     setBusy(false);
+    setResendingVerification(false);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusTimer = window.setTimeout(() => firstInputRef.current?.focus(), 80);
     const handleKeyDown = (event) => {
-      if (event.key === "Escape") onCloseRef.current?.();
+      if (event.key !== "Escape") return;
+      const authenticatedUser = completedUserRef.current;
+      if (authenticatedUser) {
+        completedUserRef.current = null;
+        onAuthenticatedRef.current?.(authenticatedUser);
+        return;
+      }
+      onCloseRef.current?.();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -42,40 +79,135 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     };
   }, [open, initialMode]);
 
+  useEffect(() => {
+    if (!open || mode !== "signup" || signupStep === 1) return;
+    stepHeadingRef.current?.focus();
+  }, [open, mode, signupStep]);
+
   if (!open) return null;
 
   const isSignup = mode === "signup";
+  const activeStep = signupStep === 3 && verificationRequired
+    ? { eyebrow: "Account created", title: "Verify your email", description: "Confirm your email address to open your workspace." }
+    : SIGNUP_STEPS[signupStep - 1];
   const update = (field) => (event) => {
     setForm((current) => ({ ...current, [field]: event.target.value }));
   };
 
   const changeMode = (nextMode) => {
-    if (busy) return;
+    if (busy || completedUser) return;
     setMode(nextMode);
+    setSignupStep(1);
     setError("");
+    setNotice("");
+    setErrorCode("");
   };
+
+  const goToStep = (step) => {
+    setError("");
+    setNotice("");
+    setSignupStep(step);
+  };
+
+  function validateAccountDetails() {
+    if (form.name.trim().length < 2) return "Enter your full name.";
+    if (form.businessName.trim().length < 2) return "Enter your company or workspace name.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "Enter a valid work email.";
+    if (form.password.length < 8) return "Password must contain at least 8 characters.";
+    if (form.password !== form.confirmPassword) return "Passwords do not match.";
+    return "";
+  }
+
+  function finishSignup() {
+    if (!completedUser) return;
+    if (verificationRequired) {
+      setCompletedUser(null);
+      setForm(EMPTY_FORM);
+      setSignupStep(1);
+      onClose?.();
+      return;
+    }
+    const authenticatedUser = completedUser;
+    completedUserRef.current = null;
+    setCompletedUser(null);
+    setForm(EMPTY_FORM);
+    setSignupStep(1);
+    onAuthenticated?.(authenticatedUser);
+  }
+
+  function requestClose() {
+    if (busy) return;
+    if (completedUser) {
+      finishSignup();
+      return;
+    }
+    onClose?.();
+  }
 
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setNotice("");
+    setErrorCode("");
 
-    if (isSignup && form.password !== form.confirmPassword) {
-      setError("Passwords do not match.");
+    if (!isSignup) {
+      setBusy(true);
+      try {
+        const response = await fetch("/api/platform-auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: form.email, password: form.password }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setErrorCode(data.code || "");
+          throw new Error(data.error || "Unable to continue. Please try again.");
+        }
+        if (data.mfaRequired) {
+          const requested = new URLSearchParams(window.location.search).get("next") || "";
+          const next = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/admin-center";
+          window.location.assign(`/admin-mfa?next=${encodeURIComponent(next)}`);
+          return;
+        }
+        setForm(EMPTY_FORM);
+        onAuthenticated?.(data.user);
+      } catch (submitError) {
+        setError(submitError instanceof Error ? submitError.message : "Unable to continue. Please try again.");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    if (signupStep === 1) {
+      const validationError = validateAccountDetails();
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+      goToStep(2);
+      return;
+    }
+
+    if (signupStep === 3) {
+      finishSignup();
       return;
     }
 
     setBusy(true);
     try {
-      const endpoint = isSignup ? "/api/platform-auth/signup" : "/api/platform-auth/login";
-      const response = await fetch(endpoint, {
+      const response = await fetch("/api/platform-auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(isSignup ? form : { email: form.email, password: form.password }),
+        body: JSON.stringify(form),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Unable to continue. Please try again.");
-      setForm(EMPTY_FORM);
-      onAuthenticated?.(data.user);
+      setCompletedUser(data.user);
+      setVerificationRequired(data.verificationRequired === true);
+      setEmailDeliveryFailed(data.emailDeliveryFailed === true);
+      completedUserRef.current = data.verificationRequired === true ? null : data.user;
+      setSignupStep(3);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to continue. Please try again.");
     } finally {
@@ -83,14 +215,32 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     }
   }
 
+  async function resendVerification() {
+    setBusy(true); setResendingVerification(true); setError(""); setNotice("");
+    try {
+      const response = await fetch("/api/platform-auth/resend-verification", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: form.email }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Unable to resend verification.");
+      setEmailDeliveryFailed(false);
+      setNotice(data.message);
+    } catch (resendError) {
+      setError(resendError instanceof Error ? resendError.message : "Unable to resend verification.");
+    } finally {
+      setBusy(false);
+      setResendingVerification(false);
+    }
+  }
+
   return (
     <div
       className="auth-overlay"
       role="presentation"
-      onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose?.()}
+      onMouseDown={(event) => event.target === event.currentTarget && requestClose()}
     >
       <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-        <button className="auth-close" type="button" aria-label="Close" onClick={onClose} disabled={busy}>
+        <button className="auth-close" type="button" aria-label="Close" onClick={requestClose} disabled={busy}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
 
@@ -110,59 +260,137 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
         <div className="auth-form-panel">
           <div className="auth-mode-switch" aria-label="Authentication mode">
-            <button type="button" className={!isSignup ? "active" : ""} onClick={() => changeMode("login")}>Sign in</button>
-            <button type="button" className={isSignup ? "active" : ""} onClick={() => changeMode("signup")}>Create account</button>
+            <button type="button" className={!isSignup ? "active" : ""} onClick={() => changeMode("login")} disabled={Boolean(completedUser)}>Sign in</button>
+            <button type="button" className={isSignup ? "active" : ""} onClick={() => changeMode("signup")} disabled={Boolean(completedUser)}>Create account</button>
           </div>
 
-          <header className="auth-heading">
-            <p>{isSignup ? "Start your workspace" : "Welcome back"}</p>
-            <h1 id="auth-title">{isSignup ? "Create your AgenticThat account" : "Sign in to continue"}</h1>
-            <span>{isSignup ? "Set up your secure automation workspace in a minute." : "Use your account to open AgenticThat services."}</span>
+          {isSignup && (
+            <ol className="auth-stepper" aria-label="Account setup progress">
+              {SIGNUP_STEPS.map((step) => (
+                <li
+                  className={`${signupStep === step.id ? "active" : ""}${signupStep > step.id ? " complete" : ""}`}
+                  key={step.id}
+                  aria-current={signupStep === step.id ? "step" : undefined}
+                >
+                  <span>{signupStep > step.id ? "✓" : step.id}</span>
+                  <small>{step.id === 3 && verificationRequired ? "Verify email" : step.shortLabel}</small>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          <header className="auth-heading" ref={stepHeadingRef} tabIndex={isSignup && signupStep > 1 ? -1 : undefined}>
+            <p>{isSignup ? activeStep.eyebrow : "Welcome back"}</p>
+            <h1 id="auth-title">{isSignup ? activeStep.title : "Sign in to continue"}</h1>
+            <span>{isSignup ? activeStep.description : "Use your account to open AgenticThat services."}</span>
           </header>
 
           <form className="auth-form" onSubmit={submit}>
-            {isSignup && (
-              <div className="auth-field-row">
+            {(!isSignup || signupStep === 1) && (
+              <>
+                {isSignup && (
+                  <div className="auth-field-row">
+                    <label className="auth-field">
+                      <span>Full name</span>
+                      <input ref={firstInputRef} value={form.name} onChange={update("name")} autoComplete="name" placeholder="Your name" minLength={2} maxLength={80} required />
+                    </label>
+                    <label className="auth-field">
+                      <span>Company</span>
+                      <input value={form.businessName} onChange={update("businessName")} autoComplete="organization" placeholder="Workspace name" minLength={2} maxLength={120} required />
+                    </label>
+                  </div>
+                )}
+
                 <label className="auth-field">
-                  <span>Full name</span>
-                  <input ref={firstInputRef} value={form.name} onChange={update("name")} autoComplete="name" placeholder="Your name" minLength={2} maxLength={80} required />
+                  <span>Work email</span>
+                  <input ref={isSignup ? undefined : firstInputRef} type="email" value={form.email} onChange={update("email")} autoComplete="email" placeholder="name@company.com" maxLength={254} required />
                 </label>
+
                 <label className="auth-field">
-                  <span>Company</span>
-                  <input value={form.businessName} onChange={update("businessName")} autoComplete="organization" placeholder="Workspace name" minLength={2} maxLength={120} required />
+                  <span>Password</span>
+                  <div className="auth-password-field">
+                    <input type={showPassword ? "text" : "password"} value={form.password} onChange={update("password")} autoComplete={isSignup ? "new-password" : "current-password"} placeholder={isSignup ? "At least 8 characters" : "Enter your password"} minLength={8} maxLength={128} required />
+                    <button type="button" onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? "Hide" : "Show"}</button>
+                  </div>
                 </label>
+
+                {isSignup && (
+                  <label className="auth-field">
+                    <span>Confirm password</span>
+                    <input type={showPassword ? "text" : "password"} value={form.confirmPassword} onChange={update("confirmPassword")} autoComplete="new-password" placeholder="Repeat your password" minLength={8} maxLength={128} required />
+                  </label>
+                )}
+              </>
+            )}
+
+            {isSignup && signupStep === 2 && (
+              <div className="auth-plan-step">
+                <div className="auth-plan-card selected">
+                  <div className="auth-plan-card-head">
+                    <span className="auth-plan-check">✓</span>
+                    <div><strong>Full workspace access</strong><small>Available now · no card required</small></div>
+                  </div>
+                  <p>Includes every Messaging, Publishing, and Scraping service with no trial clock or trial usage quotas.</p>
+                  <ul className="auth-trial-limits">
+                    <li>All app modules are unlocked.</li>
+                    <li>Trial usage quotas do not apply.</li>
+                    <li>Provider safety controls remain active.</li>
+                  </ul>
+                </div>
+                <p className="auth-plan-note"><span>✓</span> Full service access is shared by the whole workspace.</p>
               </div>
             )}
 
-            <label className="auth-field">
-              <span>Work email</span>
-              <input ref={isSignup ? undefined : firstInputRef} type="email" value={form.email} onChange={update("email")} autoComplete="email" placeholder="name@company.com" maxLength={254} required />
-            </label>
-
-            <label className="auth-field">
-              <span>Password</span>
-              <div className="auth-password-field">
-                <input type={showPassword ? "text" : "password"} value={form.password} onChange={update("password")} autoComplete={isSignup ? "new-password" : "current-password"} placeholder={isSignup ? "At least 8 characters" : "Enter your password"} minLength={8} maxLength={128} required />
-                <button type="button" onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? "Hide" : "Show"}</button>
+            {isSignup && signupStep === 3 && (
+              <div className="auth-success" role="status">
+                <div className="auth-success-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
+                </div>
+                <strong>Welcome, {completedUser?.name || form.name}.</strong>
+                <p>{verificationRequired
+                  ? emailDeliveryFailed
+                    ? "Your account was created, but we couldn't send the verification email. Please try again later or contact support."
+                    : "Check your inbox and verify your work email before signing in."
+                  : "Every service is ready with full access and no trial usage quotas."}</p>
+                <span>{verificationRequired ? emailDeliveryFailed ? "Your email still needs verification." : "The secure link expires in 24 hours." : "No payment method is required."}</span>
+                {verificationRequired && (
+                  <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>
+                    {resendingVerification ? "Sending..." : "Resend verification email"}
+                  </button>
+                )}
               </div>
-            </label>
-
-            {isSignup && (
-              <label className="auth-field">
-                <span>Confirm password</span>
-                <input type={showPassword ? "text" : "password"} value={form.confirmPassword} onChange={update("confirmPassword")} autoComplete="new-password" placeholder="Repeat your password" minLength={8} maxLength={128} required />
-              </label>
             )}
 
             <div className={`auth-error${error ? " visible" : ""}`} role="alert">{error || " "}</div>
+            {notice && <p className="auth-notice" role="status">{notice}</p>}
+            {errorCode === "EMAIL_NOT_VERIFIED" && <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>{resendingVerification ? "Sending..." : "Resend verification email"}</button>}
 
-            <button className="auth-submit" type="submit" disabled={busy}>
-              <span>{busy ? "Please wait..." : isSignup ? "Create secure account" : "Continue to AgenticThat"}</span>
-              {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
-            </button>
+            <div className={`auth-actions${isSignup && signupStep === 2 ? " has-back" : ""}`}>
+              {isSignup && signupStep === 2 && (
+                <button className="auth-back" type="button" onClick={() => goToStep(signupStep - 1)} disabled={busy}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m5 5-5-5 5-5" /></svg>
+                  Back
+                </button>
+              )}
+
+              <button className="auth-submit" type="submit" disabled={busy}>
+                <span>{busy
+                  ? resendingVerification ? "Sending email..." : isSignup ? "Creating your workspace..." : "Signing in..."
+                  : !isSignup
+                    ? "Continue to AgenticThat"
+                    : signupStep === 1
+                      ? "Continue to access"
+                      : signupStep === 2
+                        ? "Activate full access"
+                        : verificationRequired ? "Done" : "Open my workspace"}</span>
+                {!busy && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
+              </button>
+            </div>
           </form>
 
-          <p className="auth-legal">By continuing, you agree to the Terms of Service and Privacy Policy.</p>
+          {!isSignup && <p className="auth-legal"><a href="/forgot-password">Forgot your password?</a></p>}
+
+          {(!isSignup || signupStep < 3) && <p className="auth-legal">By continuing, you agree to the Terms of Service and Privacy Policy.</p>}
         </div>
       </section>
     </div>

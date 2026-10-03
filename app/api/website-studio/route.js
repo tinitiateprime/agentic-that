@@ -1,0 +1,71 @@
+import { backgroundJobMode, dispatchBackgroundJob } from "../../../lib/background-jobs.js";
+import {
+  accessErrorResponse,
+  assertPrincipalCapability,
+  authorizeApiAccess,
+} from "@platform/server/access-control";
+import {
+  executeAutomatedWebsiteProject,
+  failQueuedWebsiteProject,
+  queueAutomatedWebsiteProject,
+  prepareWebsiteRequestJob,
+  websiteStudioSnapshot,
+} from "@platform/server/website-studio-store";
+import { WebsiteStudioError } from "@platform/server/website-studio-ai";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
+
+async function authorizeStudio(level, capability) {
+  const principal = await authorizeApiAccess("website.ai-website-studio", level);
+  return assertPrincipalCapability(principal, capability);
+}
+
+async function dispatchBackgroundGeneration(_request, projectId, jobToken) {
+  await dispatchBackgroundJob({ version: 1, kind: "website-studio", jobId: projectId, jobToken });
+}
+
+export async function GET() {
+  try {
+    const actor = await authorizeStudio("view", "website.view");
+    return Response.json({ ok: true, ...(await websiteStudioSnapshot(actor)) });
+  } catch (error) {
+    try { return accessErrorResponse(error); } catch {
+      console.error("AI Website Studio snapshot failed", error);
+      return Response.json({ error: "Unable to load AI Website Studio." }, { status: 500 });
+    }
+  }
+}
+
+export async function POST(request) {
+  let queued = null;
+  try {
+    const actor = await authorizeStudio("operate", "website.generate");
+    queued = await queueAutomatedWebsiteProject(actor, await request.json());
+
+    if (process.env.NODE_ENV !== "development") {
+      const mode = backgroundJobMode();
+      if (mode === "lambda") await dispatchBackgroundGeneration(request, queued.project.id, queued.jobToken);
+      else await prepareWebsiteRequestJob(actor, queued);
+      return Response.json({ ok: true, queued: true, project: { ...queued.project, requestDriven: mode === "request" } }, { status: 202 });
+    }
+
+    const result = await executeAutomatedWebsiteProject(queued.project.id, queued.jobToken);
+    if (!result || result.error) {
+      throw new WebsiteStudioError(result?.error || "Website generation failed.", "GENERATION_FAILED", 502);
+    }
+    return Response.json({ ok: true, ...result }, { status: 201 });
+  } catch (error) {
+    if (queued?.project?.id && queued?.jobToken) {
+      try { await failQueuedWebsiteProject(queued.project.id, queued.jobToken, error); } catch {}
+    }
+    try { return accessErrorResponse(error); } catch {
+      console.error("AI Website Studio generation failed", error);
+      return Response.json({
+        error: error instanceof Error ? error.message : "Unable to generate the websites.",
+        code: error?.code || "GENERATION_FAILED",
+        projectId: error?.projectId || null,
+      }, { status: Number(error?.status) >= 400 ? Number(error.status) : 500 });
+    }
+  }
+}

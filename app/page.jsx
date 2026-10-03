@@ -2,6 +2,10 @@ import PlatformHome from "@platform/PlatformHome";
 import { getCurrentPlatformUser } from "@platform/server/auth-store";
 import { redirect } from "next/navigation";
 
+export const viewport = {
+  themeColor: "#02060d",
+};
+
 function safeNextPath(value) {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "";
 }

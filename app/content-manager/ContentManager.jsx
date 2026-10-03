@@ -8,8 +8,6 @@ import {
   Clock3,
   Database,
   ExternalLink,
-  Eye,
-  EyeOff,
   FileText,
   KeyRound,
   Loader2,
@@ -25,23 +23,29 @@ import {
   Zap
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { publishingFetch } from "../../lib/publishing-endpoint";
+import { getClientServiceToken } from "@platform/client-service-token";
+import ProductShell from "@platform/ProductShell";
+import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
-const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
+const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
+  || "/companion/download";
+const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"];
 const platformLabels = {
   instagram: "Instagram",
   facebook: "Facebook",
   x: "X",
   youtube: "YouTube",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  reddit: "Reddit"
 };
 const platformLogos = {
   instagram: "/instagram-logo.svg",
   facebook: "/facebook-logo.svg",
   x: "/x-logo.svg",
   youtube: "/youtube-logo.svg",
-  linkedin: "/linkedin-logo.png"
+  linkedin: "/linkedin-logo.png",
+  reddit: "/reddit-logo.svg"
 };
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingLabels = {
@@ -52,11 +56,13 @@ const messagingLogos = {
   telegram: "/telegram-logo.svg",
   whatsapp: "/whatsapp-logo.svg"
 };
+const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
+const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 const roleLabels = {
-  operations_manager: "Operations Manager",
-  post_uploader: "Post Uploader",
+  operations_manager: "Publishing Manager",
+  post_uploader: "Content Uploader",
   scheduler: "Scheduler",
-  viewer: "Viewer"
+  viewer: "Publishing Viewer"
 };
 const statusLabels = {
   queued: "Queued",
@@ -121,9 +127,10 @@ async function responsePayload(response) {
   return payload;
 }
 
-async function telegramRequest(path, init = {}) {
+async function telegramRequest(path, identityToken, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
     ...init,
     headers,
@@ -135,10 +142,12 @@ async function telegramRequest(path, init = {}) {
 async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", "Bearer " + token);
-  const response = await publishingFetch(path, {
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
+  const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
+  const response = await fetch("/api/publishing" + normalized, {
     ...init,
-    headers
+    headers,
+    credentials: "include"
   });
   return responsePayload(response);
 }
@@ -178,12 +187,20 @@ function InlineNotice({ notice, onClose }) {
   );
 }
 
-function EmptyState({ icon: Icon, title, copy, action }) {
+function EmptyState({ icon: Icon, title, copy, steps = [], action }) {
   return (
     <div className="content-empty">
       <span><Icon size={28} /></span>
       <h3>{title}</h3>
       <p>{copy}</p>
+      {steps.length > 0 && (
+        <ol className="content-guide-steps" aria-label="What to do next">
+          {steps.map((step) => {
+            const StepIcon = step.icon;
+            return <li key={step.title}><i><StepIcon size={19} strokeWidth={1.9} /></i><strong>{step.title}</strong><small>{step.copy}</small></li>;
+          })}
+        </ol>
+      )}
       {action}
     </div>
   );
@@ -216,6 +233,9 @@ export default function ContentManager({
   initialService,
   initialMessagingPlatform,
   initialPublishingPlatform,
+  publishingIdentityToken,
+  telegramIdentityToken,
+  effectiveAccess,
   user,
   telegramDashboardUrl,
   publishQueueUrl
@@ -232,12 +252,19 @@ export default function ContentManager({
   const [publishingAccounts, setPublishingAccounts] = useState([]);
   const [publishingUploads, setPublishingUploads] = useState([]);
   const [publishingSchedules, setPublishingSchedules] = useState([]);
+  const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "view"));
+  const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "view"));
+  const visibleServices = services.filter((service) => (
+    service.id === "messaging" ? allowedMessagingPlatforms.length > 0
+      : service.id === "publishing" ? allowedPublishingPlatforms.length > 0
+        : false
+  ));
 
   const loadTelegram = useCallback(async () => {
-    setTelegramStatus("checking");
+    if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me");
-      const accountData = await telegramRequest("/telegram/accounts");
+      const me = await telegramRequest("/me", telegramIdentityToken);
+      const accountData = await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
       setTelegramStatus("ready");
@@ -246,20 +273,20 @@ export default function ContentManager({
       setTelegramAccounts([]);
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
-  }, []);
+  }, [telegramIdentityToken]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
     const session = candidateSession ?? readPublishingSession();
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
+      rememberPublishingAccounts([]);
       setPublishingUploads([]);
       setPublishingSchedules([]);
       setPublishingStatus("needs-login");
       return;
     }
 
-    setPublishingStatus("checking");
     try {
       const me = await publishingRequest("/api/auth/me", session.token);
       const [accountsResult, uploadsResult, schedulesResult] = await Promise.allSettled([
@@ -269,8 +296,10 @@ export default function ContentManager({
       ]);
 
       const nextSession = { token: session.token, user: me };
+      const accountList = accountsResult.status === "fulfilled" && Array.isArray(accountsResult.value) ? accountsResult.value : [];
       setPublishingSession(nextSession);
-      setPublishingAccounts(accountsResult.status === "fulfilled" && Array.isArray(accountsResult.value) ? accountsResult.value : []);
+      setPublishingAccounts(accountList);
+      rememberPublishingAccounts(accountList);
       setPublishingUploads(uploadsResult.status === "fulfilled" && Array.isArray(uploadsResult.value) ? uploadsResult.value : []);
       setPublishingSchedules(schedulesResult.status === "fulfilled" && Array.isArray(schedulesResult.value) ? schedulesResult.value : []);
       setPublishingStatus("ready");
@@ -279,6 +308,7 @@ export default function ContentManager({
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
         setPublishingAccounts([]);
+        rememberPublishingAccounts([]);
         setPublishingUploads([]);
         setPublishingSchedules([]);
         setPublishingStatus("needs-login");
@@ -288,14 +318,35 @@ export default function ContentManager({
     }
   }, []);
 
+  const connectPublishing = useCallback(async () => {
+    if (!publishingIdentityToken) { setPublishingStatus("unauthorized"); return; }
+    try {
+      const me = await publishingRequest("/api/auth/me", publishingIdentityToken);
+      const centralSession = { token: publishingIdentityToken, user: me };
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      return loadPublishing(centralSession);
+    } catch (error) {
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingUploads([]);
+      setPublishingSchedules([]);
+      setPublishingStatus(
+        error.status === 401
+          ? "needs-upgrade"
+          : "offline"
+      );
+    }
+  }, [loadPublishing, publishingIdentityToken]);
+
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadPublishing()]);
-  }, [loadPublishing, loadTelegram]);
+    void Promise.all([loadTelegram(), connectPublishing()]);
+  }, [connectPublishing, loadTelegram]);
 
   const connectedAccounts = telegramAccounts.length + publishingAccounts.length;
   const activePublishingAccounts = publishingAccounts.filter((account) => account.enabled).length;
   const queuedUploads = publishingUploads.filter((upload) => upload.status === "queued").length;
-  const activeDefinition = services.find((service) => service.id === activeService) || services[0];
+  const activeDefinition = visibleServices.find((service) => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
     setActiveService(serviceId);
@@ -329,45 +380,30 @@ export default function ContentManager({
 
   const refreshActive = () => {
     if (activeService === "messaging" && messagingPlatform === "telegram") return loadTelegram();
-    if (activeService === "publishing") return loadPublishing(publishingSession);
+    if (activeService === "publishing") return connectPublishing();
     return Promise.resolve();
   };
 
   return (
-    <main className="content-shell">
-      <header className="content-topbar">
-        <a className="content-brand" href="/">
-          <span>AT</span>
-          <strong>AgenticThat</strong>
-          <small>Content Manager</small>
-        </a>
-        <div className="content-workspace">
-          <span>{String(user.businessName || user.name || "W").charAt(0).toUpperCase()}</span>
-          <div><strong>{user.businessName || user.name}</strong><small>{user.email}</small></div>
-        </div>
-        <div className="content-top-actions">
-          <a className="content-secondary" href="/config-manager"><Settings2 size={15} />Config Manager</a>
-          <a className="content-back" href="/"><ArrowLeft size={16} />Back to services</a>
-        </div>
-      </header>
+    <ProductShell user={user} active="content">
+      <main className="content-shell">
+        <section className="content-overview">
+          <div>
+            <p><Database size={15} />Content and activity</p>
+            <h1>See what is connected and ready to use.</h1>
+            <span>Review connected accounts, queued content, and recent activity. To add or sign in an account, use Connections.</span>
+          </div>
+          <div className="content-overview-metrics">
+            <Metric icon={UsersRound} label="connected accounts" value={connectedAccounts} />
+            <Metric icon={ShieldCheck} label="active publishing" value={activePublishingAccounts} />
+            <Metric icon={FileText} label="queued posts" value={queuedUploads} />
+          </div>
+        </section>
 
-      <section className="content-overview">
-        <div>
-          <p><Database size={15} />Service account inventory</p>
-          <h1>Content routing, accounts, and app visibility in one place.</h1>
-          <span>Accounts are still added in Config Manager. This page shows where each connected account is available and what content is already attached to it.</span>
-        </div>
-        <div className="content-overview-metrics">
-          <Metric icon={UsersRound} label="connected accounts" value={connectedAccounts} />
-          <Metric icon={ShieldCheck} label="active publishing" value={activePublishingAccounts} />
-          <Metric icon={FileText} label="queued posts" value={queuedUploads} />
-        </div>
-      </section>
-
-      <div className="content-layout">
+        <div className="content-layout">
         <aside className="content-service-nav">
           <div className="content-nav-heading"><span>Services</span><small>Grouped by app</small></div>
-          {services.map((service) => {
+          {visibleServices.map((service) => {
             const count = service.id === "messaging"
               ? telegramAccounts.length
               : service.id === "publishing"
@@ -416,6 +452,7 @@ export default function ContentManager({
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
               onReload={loadTelegram}
+              allowedPlatforms={allowedMessagingPlatforms}
             />
           )}
           {activeService === "publishing" && (
@@ -428,6 +465,9 @@ export default function ContentManager({
               platform={publishingPlatform}
               publishQueueUrl={publishQueueUrl}
               onPlatformChange={selectPublishingPlatform}
+              allowedPlatforms={allowedPublishingPlatforms}
+              canConfigure={hasAccess(effectiveAccess, `publishing.${publishingPlatform}`, "configure")}
+              onReconnect={connectPublishing}
               onSession={(session) => {
                 if (!session) {
                   window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
@@ -438,7 +478,6 @@ export default function ContentManager({
                 setPublishingSession(session);
                 void loadPublishing(session);
               }}
-              setNotice={setNotice}
             />
           )}
           {activeService === "engagement" && (
@@ -450,16 +489,17 @@ export default function ContentManager({
             />
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </ProductShell>
   );
 }
 
-function MessagingContent({ platform, onPlatformChange, status, user, accounts, dashboardUrl, onReload }) {
+function MessagingContent({ platform, onPlatformChange, status, user, accounts, dashboardUrl, onReload, allowedPlatforms }) {
   return (
     <>
       <div className="content-app-tabs messaging-tabs" role="tablist" aria-label="Messaging apps">
-        {messagingPlatforms.map((item) => (
+        {allowedPlatforms.map((item) => (
           <button
             type="button"
             role="tab"
@@ -470,7 +510,7 @@ function MessagingContent({ platform, onPlatformChange, status, user, accounts, 
           >
             <img src={messagingLogos[item]} alt="" />
             <span>{messagingLabels[item]}</span>
-            <i className={item === "whatsapp" ? "soon" : ""}>{item === "telegram" ? accounts.length : "Soon"}</i>
+            <i>{item === "telegram" ? accounts.length : "Live"}</i>
           </button>
         ))}
       </div>
@@ -478,14 +518,27 @@ function MessagingContent({ platform, onPlatformChange, status, user, accounts, 
       {platform === "telegram" ? (
         <TelegramAccounts status={status} user={user} accounts={accounts} dashboardUrl={dashboardUrl} onReload={onReload} />
       ) : (
-        <PlaceholderPanel
-          icon={MessageCircle}
-          title="WhatsApp account data will appear here"
-          copy="The WhatsApp app is reserved as a placeholder for now. Once account adding is enabled in Config Manager, connected WhatsApp senders will be shown in this section."
-          link="/config-manager?service=messaging&platform=whatsapp"
-        />
+        <WhatsAppContent />
       )}
     </>
+  );
+}
+
+function WhatsAppContent() {
+  return (
+    <div className="content-placeholder">
+      <span><MessageCircle size={32} /></span>
+      <p>Live service</p>
+      <h3>WhatsApp contacts and conversations are ready</h3>
+      <div>
+        The WhatsApp workspace now includes connected senders, CRM contacts,
+        inbox threads, templates, groups, calling events, and provider settings.
+      </div>
+      <div className="content-empty-actions">
+        <a className="content-primary" href="/dashboard">Open WhatsApp dashboard<ExternalLink size={15} /></a>
+        <a href="/settings">Manage connection<Settings2 size={15} /></a>
+      </div>
+    </div>
   );
 }
 
@@ -509,12 +562,17 @@ function TelegramAccounts({ status, user, accounts, dashboardUrl, onReload }) {
     return (
       <EmptyState
         icon={LockKeyhole}
-        title="Sign in to the Telegram workspace"
-        copy="Content Manager uses the same Telegram workspace session as Config Manager before it can display connected Telegram accounts."
+        title="Connect Telegram through Connections"
+        copy="Sign in and add Telegram accounts in Connections. Content will update here automatically afterward."
+        steps={[
+          { icon: Settings2, title: "Open Connections", copy: "Choose Telegram." },
+          { icon: KeyRound, title: "Verify account", copy: "Use Telegram's newest code." },
+          { icon: RefreshCw, title: "Return here", copy: "Your account appears automatically." }
+        ]}
         action={
           <div className="content-empty-actions">
-            <a className="content-primary" href={dashboardUrl} target="_blank" rel="noreferrer">Open Telegram sign in<ExternalLink size={15} /></a>
-            <button className="content-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I signed in</button>
+            <a className="content-primary" href="/config-manager?service=messaging&platform=telegram"><Settings2 size={15} />Open Connections</a>
+            <button className="content-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I connected an account</button>
           </div>
         }
       />
@@ -542,6 +600,11 @@ function TelegramAccounts({ status, user, accounts, dashboardUrl, onReload }) {
           icon={UsersRound}
           title="No Telegram accounts connected"
           copy="Connect the first Telegram account in Config Manager and it will appear here immediately."
+          steps={[
+            { icon: Settings2, title: "Open Connections", copy: "Choose Telegram." },
+            { icon: KeyRound, title: "Connect securely", copy: "Verify the account once." },
+            { icon: MessageCircle, title: "Start messaging", copy: "Open it from this workspace." }
+          ]}
           action={<a className="content-primary" href="/config-manager?service=messaging&platform=telegram"><Settings2 size={15} />Open Config Manager</a>}
         />
       ) : (
@@ -576,37 +639,15 @@ function PublishingContent({
   platform,
   publishQueueUrl,
   onPlatformChange,
-  onSession,
-  setNotice
+  allowedPlatforms,
+  canConfigure,
+  onReconnect,
+  onSession
 }) {
-  const [username, setUsername] = useState("operations.manager");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
   const platformAccounts = useMemo(
     () => accounts.filter((account) => account.platform === platform),
     [accounts, platform]
   );
-
-  const signIn = async (event) => {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const response = await publishingRequest("/api/auth/login", "", {
-        method: "POST",
-        body: JSON.stringify({ username: username.trim(), password })
-      });
-      const nextSession = { token: response.token, user: response.user };
-      setPassword("");
-      onSession(nextSession);
-      setNotice({ tone: "success", message: "Publish Queue content data is ready." });
-    } catch (error) {
-      setNotice({ tone: "error", message: error.message });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   if (status === "checking") {
     return <div className="content-loading"><Loader2 className="spin" size={22} />Loading Publish Queue content...</div>;
@@ -616,34 +657,42 @@ function PublishingContent({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Publish Queue service is unavailable"
-        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
-        action={<a className="content-primary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={15} /></a>}
+        title="Publishing is temporarily unavailable"
+        copy="Refresh this page. If it continues, ask the Workspace Manager to open the paired Companion."
+        action={
+          <div className="content-empty-actions">
+            <button className="content-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
       />
     );
   }
 
-  if (status === "needs-login") {
+  if (status === "needs-upgrade") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="Update the Publishing Companion"
+        copy="This computer is running an older Companion that cannot open account-owned publishing workspaces."
+        action={<a className="content-primary" href={publishingCompanionDownloadUrl}>Download latest Companion<ExternalLink size={15} /></a>}
+      />
+    );
+  }
+
+  if (status === "needs-login" || status === "needs-setup") {
+    const firstSetup = status === "needs-setup";
     return (
       <div className="content-auth-card">
         <div className="content-auth-copy">
           <span><LockKeyhole size={25} /></span>
-          <p>Protected content data</p>
-          <h3>Publish Queue sign in required</h3>
-          <div>Use a Publish Queue workspace role to display connected social accounts, queued posts, and schedules.</div>
-          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
+          <p>{firstSetup ? "First-time setup required" : "Protected content data"}</p>
+          <h3>{firstSetup ? "Create Operations Manager access" : "Operations Manager sign in required"}</h3>
+          <div>{firstSetup
+            ? "Create your workspace password in Config Manager before viewing publishing content."
+            : "Enter your workspace’s Operations Manager password in Config Manager to continue."}</div>
+          <small><ShieldCheck size={14} />Your password is created by you and is not copied from the Companion.</small>
         </div>
-        <form onSubmit={signIn}>
-          <label><span>Username</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label>
-            <span>Password</span>
-            <div className="content-secret-input">
-              <input type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
-              <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-            </div>
-          </label>
-          <button className="content-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Continue</button>
-        </form>
+        <a className="content-primary" href="/config-manager?service=publishing">{firstSetup ? "Create manager password" : "Sign in through Config Manager"}<ArrowRight size={16} /></a>
       </div>
     );
   }
@@ -657,7 +706,7 @@ function PublishingContent({
       <div className="content-connection-bar">
         <div><CheckCircle2 size={18} /><span><strong>Publish Queue connected</strong><small>{session?.user?.fullName || "Workspace user"} - {roleLabels[session?.user?.role] || "Workspace role"}</small></span></div>
         <div className="content-bar-actions">
-          <a className="content-secondary" href="/config-manager?service=publishing"><Settings2 size={14} />Manage accounts</a>
+          {canConfigure && <a className="content-secondary" href="/config-manager?service=publishing"><Settings2 size={14} />Manage accounts</a>}
           <a className="content-secondary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={14} /></a>
           <button className="content-tertiary" type="button" onClick={() => onSession(null)}>Change login</button>
         </div>
@@ -672,7 +721,7 @@ function PublishingContent({
       </div>
 
       <div className="content-app-tabs" role="tablist" aria-label="Publishing apps">
-        {publishPlatforms.map((item) => {
+        {allowedPlatforms.map((item) => {
           const count = accounts.filter((account) => account.platform === item).length;
           return (
             <button
@@ -703,6 +752,11 @@ function PublishingContent({
           icon={Plug}
           title={"No " + platformLabels[platform] + " accounts connected"}
           copy="Add accounts in Config Manager. They will appear here grouped under their publishing app."
+          steps={[
+            { icon: Settings2, title: "Open Connections", copy: "Choose the publishing app." },
+            { icon: KeyRound, title: "Complete Login", copy: "Sign in to the account once." },
+            { icon: Send, title: "Create content", copy: "Return here when it is ready." }
+          ]}
           action={<a className="content-primary" href={"/config-manager?service=publishing&platform=" + platform}><Settings2 size={15} />Open Config Manager</a>}
         />
       ) : (
@@ -721,6 +775,13 @@ function PublishingContent({
 }
 
 function PublishingAccountCard({ account, uploads }) {
+  const connectionLabel = !account.enabled
+    ? "Paused"
+    : account.readiness === "reconnect_required" || account.sessionStatus === "reconnect_required" || !account.credentialConfigured
+      ? "Reconnect required"
+      : account.readiness === "waiting_for_companion" || account.companionStatus === "offline"
+        ? "Waiting for Companion"
+        : "Ready";
   const counts = uploads.reduce((result, upload) => {
     result[upload.status] = (result[upload.status] || 0) + 1;
     return result;
@@ -735,7 +796,7 @@ function PublishingAccountCard({ account, uploads }) {
       <header>
         <span><img src={platformLogos[account.platform]} alt="" /></span>
         <div><h3>{account.displayName}</h3><p>{account.handle}</p></div>
-        <StatusPill active={account.enabled && account.credentialConfigured}>{!account.enabled ? "Paused" : account.credentialConfigured ? "Ready" : "Login required"}</StatusPill>
+        <StatusPill active={connectionLabel === "Ready"}>{connectionLabel}</StatusPill>
       </header>
       <div className="content-post-counts">
         {Object.keys(statusLabels).map((status) => (
@@ -747,7 +808,7 @@ function PublishingAccountCard({ account, uploads }) {
       </div>
       <div className="content-account-fields">
         <AccountField label="Login identity" value={account.loginIdentifier} />
-        <AccountField label="Publishing login" value={account.credentialConfigured ? "Saved session ready" : "Open Login in Config Manager"} />
+        <AccountField label="Publishing login" value={connectionLabel === "Reconnect required" ? "Reconnect in Connections" : connectionLabel} />
         <AccountField label="Queued posts" value={String(counts.queued || 0)} />
         <AccountField label="Latest activity" value={formatDate(latestActivity)} />
         <AccountField label="Added" value={formatDate(account.createdAt)} />

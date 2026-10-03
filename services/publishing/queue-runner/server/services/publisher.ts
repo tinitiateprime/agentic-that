@@ -1,82 +1,243 @@
-import { chromium, type BrowserContext, type Page } from "playwright-core";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { BrowserContext, Page } from "playwright-core";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
-import type { PlatformUpload } from "../../shared/schema.js";
+import type { PlatformUpload, PublishingEngine } from "../../shared/schema.js";
 import {
   automationInput,
+  bindPublishingAccountsToCompanion,
   createAutomationRun,
   createAutomationRunPost,
+  deferUploadForSafety,
   finishAutomationRun,
   finishAutomationRunPost,
   getPublishingAccount,
   listPlatformAccounts,
   listUploads,
+  pausePlatformAccountForSafety,
+  requeueAccountSessionFailures,
   updatePlatformAccountCredentialState,
+  updateLinkedInManagedPages,
+  updateUploadPublishActionState,
   updateUploadStatus,
   type AutomationInputMode,
   type AutomationRunTrigger,
   type PublishingAccount
 } from "../local-storage.js";
+import { ensurePublishingMediaLocal } from "../media-storage.js";
+import { claimPublishingExecution, releasePublishingExecution, type PublishingExecutionLease } from "../execution-lease.js";
+import { publishingCompanionId } from "../companion-identity.js";
 import { loginToFacebook, postToFacebook } from "./publishers/facebook.js";
 import { loginToInstagram, postToInstagram } from "./publishers/instagram.js";
-import { loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
+import { discoverLinkedInManagedPages, loginToLinkedIn, postToLinkedIn } from "./publishers/linkedin.js";
 import type { AccountLogin } from "./publishers/manual-login.js";
 import { loginToYouTube, postToYouTube } from "./publishers/youtube.js";
 import { loginToX, postToX } from "./publishers/x.js";
-import { publishingBrowserDataDirectory } from "../runtime-paths.js";
+import {
+  publishingDesktopHost,
+  type DesktopBrowserPurpose,
+} from "./desktop-host.js";
+import { assessPublishingSafety, type PublishingSafetyAssessment } from "./safety-governor.js";
+import { classifyPublishingRisk } from "./risk-classifier.js";
+import { launchCompanionEngineBrowser } from "../engines/companion/index.js";
+import {
+  detectedExternalBrowserExecutablePath,
+  externalBrowserExecutablePath,
+  externalBrowserProfilePath,
+  externalBrowserProfilesRoot,
+  launchExternalBrowserEngine,
+  stopExternalPublishingBrowsers,
+} from "../engines/external-browser/index.js";
+import type { PublishingBrowserSession } from "../engines/types.js";
+import {
+  platformRequiresExternalBrowser,
+  publishingEngineForPlatform,
+  selectManualLoginSurface,
+  type ManualLoginRequest,
+  type ManualLoginSurface,
+} from "./login-surface.js";
+import { requestCentralWorkspaceSync } from "../central-sync.js";
 
-const accountProfilesDir = path.join(publishingBrowserDataDirectory(), "accounts");
-const X_LOGIN_URL = "https://x.com/i/flow/login";
+const SESSION_STATE_ALGORITHM = "aes-256-gcm";
+// Reddit is absent: it publishes only through Zernio on the platform server.
+const platformLoginUrls: Partial<Record<PublishingAccount["platform"], string>> = {
+  instagram: "https://www.instagram.com/accounts/login/",
+  x: "https://x.com/i/flow/login",
+  linkedin: "https://www.linkedin.com/login/",
+  facebook: "https://www.facebook.com/login/",
+  youtube: "https://www.youtube.com/upload",
+};
 
-const disabledChromeFeatures = [
-  "IsolateOrigins",
-  "site-per-process",
-  "ChromeWhatsNewUI",
-  "ChromeSignin",
-  "SigninInterception",
-  "DiceWebSigninInterception",
-  "SignInProfileCreation",
-  "IdentityDiscAccountMenu",
-  "AccountConsistency",
-  "PasswordManagerOnboarding"
-].join(",");
+type BrowserStorageOrigin = {
+  origin: string;
+  localStorage: Array<{ name: string; value: string }>;
+  indexedDB?: unknown[];
+  sessionStorage?: Array<{ name: string; value: string }>;
+};
 
-function readJsonFile(filePath: string) {
+type BrowserUserAgentMetadata = {
+  brands?: Array<{ brand: string; version: string }>;
+  fullVersionList?: Array<{ brand: string; version: string }>;
+  fullVersion?: string;
+  platform: string;
+  platformVersion: string;
+  architecture: string;
+  model: string;
+  mobile: boolean;
+  bitness?: string;
+  wow64?: boolean;
+};
+
+type BrowserStorageState = {
+  cookies?: Parameters<BrowserContext["addCookies"]>[0];
+  origins?: BrowserStorageOrigin[];
+  userAgent?: string;
+  navigatorPlatform?: string;
+  userAgentMetadata?: BrowserUserAgentMetadata;
+};
+
+type EncryptedSessionState = {
+  version: 1;
+  algorithm: typeof SESSION_STATE_ALGORITHM;
+  iv: string;
+  authTag: string;
+  ciphertext: string;
+};
+
+function managedChromeSessionPath(account: PublishingAccount) {
+  return path.join(externalBrowserProfilePath(account), "companion-managed-session.json");
+}
+
+function hasManagedChromeSession(account: PublishingAccount) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, any>;
+    return fs.existsSync(managedChromeSessionPath(account));
   } catch {
-    return {};
+    return false;
   }
 }
 
-function writeJsonFile(filePath: string, data: Record<string, any>) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data));
+function markManagedChromeSession(account: PublishingAccount) {
+  const markerPath = managedChromeSessionPath(account);
+  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  fs.writeFileSync(markerPath, `${JSON.stringify({
+    version: 1,
+    platform: account.platform,
+    savedAt: new Date().toISOString(),
+  })}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
-function accountProfilePath(account: PublishingAccount) {
-  return path.join(accountProfilesDir, account.platform, account.id.replace(/[^a-z0-9-_]/gi, "-"));
+export function resolvedAccountEngine(account: PublishingAccount): PublishingEngine {
+  const configuredEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
+  // Some providers bind a successful login to the Chrome profile that created
+  // it. Facebook, X, and YouTube always keep that profile; other providers use it when a
+  // session transfer is rejected or the external engine was explicitly chosen.
+  return configuredEngine === "external_browser" || hasManagedChromeSession(account)
+    ? "external_browser"
+    : "companion";
 }
 
 function accountSessionStatePath(account: PublishingAccount) {
-  return path.join(accountProfilePath(account), "automation-session-state.json");
+  return path.join(externalBrowserProfilePath(account), "automation-session-state.enc.json");
 }
 
-export async function removeSavedAccountProfile(account: PublishingAccount) {
-  const profilesRoot = path.resolve(accountProfilesDir);
-  const profilePath = path.resolve(accountProfilePath(account));
+function legacyAccountSessionStatePath(account: PublishingAccount) {
+  return path.join(externalBrowserProfilePath(account), "automation-session-state.json");
+}
+
+function hasExternalAccountProfile(account: PublishingAccount) {
+  try {
+    return fs.existsSync(externalBrowserProfilePath(account));
+  } catch {
+    return false;
+  }
+}
+
+function sessionEncryptionKey() {
+  const configured = process.env.PUBLISH_QUEUE_SESSION_ENCRYPTION_KEY?.trim();
+  return configured ? createHash("sha256").update(configured, "utf8").digest() : null;
+}
+
+export function writeEncryptedSessionState(filePath: string, state: unknown, key: Buffer) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(SESSION_STATE_ALGORITHM, key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(state), "utf8"),
+    cipher.final(),
+  ]);
+  const envelope: EncryptedSessionState = {
+    version: 1,
+    algorithm: SESSION_STATE_ALGORITHM,
+    iv: iv.toString("base64"),
+    authTag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+  const temporaryPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(envelope)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(temporaryPath, filePath);
+}
+
+export function readEncryptedSessionState(filePath: string, key: Buffer) {
+  const envelope = JSON.parse(fs.readFileSync(filePath, "utf8")) as EncryptedSessionState;
+  if (
+    envelope.version !== 1
+    || envelope.algorithm !== SESSION_STATE_ALGORITHM
+    || !envelope.iv
+    || !envelope.authTag
+    || !envelope.ciphertext
+  ) {
+    throw new Error("The saved publishing session has an unsupported encrypted format.");
+  }
+  const decipher = createDecipheriv(SESSION_STATE_ALGORITHM, key, Buffer.from(envelope.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(envelope.authTag, "base64"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(envelope.ciphertext, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+  return JSON.parse(plaintext) as BrowserStorageState;
+}
+
+function migrateLegacyAccountSessionState(account: PublishingAccount) {
+  const legacyPath = legacyAccountSessionStatePath(account);
+  if (!fs.existsSync(legacyPath)) return;
+
+  try {
+    const key = sessionEncryptionKey();
+    if (key) {
+      const legacyState = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+      writeEncryptedSessionState(accountSessionStatePath(account), legacyState, key);
+    }
+  } catch (error) {
+    console.warn(
+      `Could not migrate the legacy session export for ${account.platform} account ${account.handle}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    // Persistent Chromium profiles retain the actual browser session. Remove
+    // the old plaintext export even when OS-backed encryption is unavailable.
+    fs.rmSync(legacyPath, { force: true });
+  }
+}
+
+async function removeExternalAccountProfile(account: PublishingAccount) {
+  const profilesRoot = path.resolve(externalBrowserProfilesRoot());
+  const profilePath = path.resolve(externalBrowserProfilePath(account));
   if (!profilePath.startsWith(`${profilesRoot}${path.sep}`)) {
     throw new Error("The saved account profile path is invalid.");
   }
   await fs.promises.rm(profilePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 });
 }
 
+export async function removeSavedAccountProfile(account: PublishingAccount) {
+  await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+  await removeExternalAccountProfile(account);
+}
+
 export function hasSavedAccountSession(account: PublishingAccount) {
   try {
+    migrateLegacyAccountSessionState(account);
     const sessionPath = accountSessionStatePath(account);
-    return fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 2;
+    return hasManagedChromeSession(account) || (fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 2);
   } catch {
     return false;
   }
@@ -85,133 +246,128 @@ export function hasSavedAccountSession(account: PublishingAccount) {
 function clearSavedAccountSession(account: PublishingAccount) {
   try {
     fs.rmSync(accountSessionStatePath(account), { force: true });
+    fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
   } catch {
     // A locked profile file should not hide the original login failure.
   }
 }
 
 export async function reconcileSavedAccountSessions() {
-  const accounts = await listPlatformAccounts();
-  await Promise.all(accounts
-    .filter(account => !account.credentialConfigured && hasSavedAccountSession(account))
-    .map(account => updatePlatformAccountCredentialState(account.id, true)));
-}
-
-function detectedChromeExecutablePath() {
-  const configured = process.env.PUBLISH_QUEUE_CHROME_PATH?.trim()
-    || process.env.CHROME_PATH?.trim()
-    || process.env.GOOGLE_CHROME_PATH?.trim();
-  const candidates = [
-    configured,
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.env.LocalAppData ? path.join(process.env.LocalAppData, "Google", "Chrome", "Application", "chrome.exe") : undefined,
-    process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome" : undefined,
-    process.platform === "linux" ? "/usr/bin/google-chrome-stable" : undefined,
-  ].filter(Boolean) as string[];
-
-  return candidates.find(candidate => path.isAbsolute(candidate) && fs.existsSync(candidate)) ?? null;
-}
-
-function chromeExecutablePath() {
-  const executablePath = detectedChromeExecutablePath();
-  if (!executablePath) {
-    throw new Error("Google Chrome is required for publishing. Install Chrome, then restart AgenticThat Publishing Companion.");
+  const binding = await bindPublishingAccountsToCompanion(publishingCompanionId());
+  if (binding.rebound > 0) {
+    console.log(`Bound ${binding.rebound} publishing account(s) to this Companion instance.`);
   }
-  return executablePath;
+  const accounts = await listPlatformAccounts();
+  const migratedDirectories = (await Promise.all(accounts.map(account => Promise.resolve(
+    publishingDesktopHost()?.migrateLegacyAccountBrowserData?.(account.id, account.platform) ?? 0,
+  ).catch(() => 0)))).reduce((total, migrated) => total + migrated, 0);
+  if (migratedDirectories > 0) {
+    console.log(`Recovered ${migratedDirectories} protected browser session director${migratedDirectories === 1 ? "y" : "ies"} from the previous Companion name.`);
+  }
+  for (const account of accounts) {
+    migrateLegacyAccountSessionState(account);
+    // Older releases could transfer a Facebook/X/YouTube login into Electron and then
+    // delete the external profile. Request one clean reconnect instead of
+    // claiming that a missing provider-safe profile is ready.
+    if (platformRequiresExternalBrowser(account.platform) && !hasManagedChromeSession(account)) {
+      await updatePlatformAccountCredentialState(account.id, false);
+    }
+  }
 }
 
 export function publishingBrowserRuntimeHealth() {
-  const executablePath = detectedChromeExecutablePath();
+  const executablePath = detectedExternalBrowserExecutablePath();
+  const embeddedBrowser = Boolean(publishingDesktopHost());
   return {
     chromeInstalled: Boolean(executablePath),
     chromeExecutablePath: executablePath,
+    embeddedBrowser,
+    automationAvailable: embeddedBrowser || Boolean(executablePath),
+    engines: {
+      companion: { available: embeddedBrowser },
+      external_browser: { available: Boolean(executablePath) },
+    },
   };
 }
 
-function getFreePort() {
-  return new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => port ? resolve(port) : reject(new Error("Could not allocate a Chrome debugging port.")));
-    });
-  });
+const activeAccountBrowserOperations = new Map<string, { purpose: DesktopBrowserPurpose; token: symbol }>();
+
+function reserveAccountBrowser(account: PublishingAccount, purpose: DesktopBrowserPurpose) {
+  const existing = activeAccountBrowserOperations.get(account.id);
+  if (existing) {
+    throw new Error(
+      `${account.displayName} is already busy with a ${existing.purpose} session. Wait for it to finish before starting another account job.`,
+    );
+  }
+  const token = Symbol(account.id);
+  activeAccountBrowserOperations.set(account.id, { purpose, token });
+  return () => {
+    if (activeAccountBrowserOperations.get(account.id)?.token === token) {
+      activeAccountBrowserOperations.delete(account.id);
+    }
+  };
 }
 
-function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
-  if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve();
-
-  return new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, timeoutMs);
-    processHandle.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
+async function launchAccountBrowser(
+  account: PublishingAccount,
+  purpose: DesktopBrowserPurpose,
+  selectedEngine: PublishingEngine = resolvedAccountEngine(account),
+): Promise<PublishingBrowserSession> {
+  const releaseAccount = reserveAccountBrowser(account, purpose);
+  const desktopHost = publishingDesktopHost();
+  if (selectedEngine === "companion") {
+    if (!desktopHost) {
+      releaseAccount();
+      throw new Error("Publishing requires the Publishing Companion desktop app. Open Companion and try again; Chrome, Edge, or Chromium is available only as a login fallback.");
+    }
+    return launchCompanionEngineBrowser({
+      account,
+      purpose,
+      desktopHost,
+      restoreSessionState: context => restoreAccountSessionState(account, context, "companion"),
+      releaseAccount,
     });
-  });
-}
-
-async function waitForChromeDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  const endpoint = `http://127.0.0.1:${port}`;
-
-  while (Date.now() < deadline) {
-    if (processHandle.exitCode !== null) {
-      throw new Error(`Chrome closed before the manual login window was ready. Exit code: ${processHandle.exitCode}`);
-    }
-
-    try {
-      const response = await fetch(`${endpoint}/json/version`);
-      if (response.ok) return endpoint;
-    } catch {
-      // Chrome is still starting.
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 250));
   }
 
-  throw new Error("Chrome did not expose its local debugging endpoint in time.");
-}
-
-function prepareChromeProfile(profileDir: string) {
-  const preferencesPath = path.join(profileDir, "Default", "Preferences");
-  const preferences = readJsonFile(preferencesPath);
-  preferences.browser = { ...(preferences.browser ?? {}), has_seen_welcome_page: true };
-  preferences.credentials_enable_service = false;
-  preferences.profile = { ...(preferences.profile ?? {}), exit_type: "Normal", password_manager_enabled: false };
-  preferences.signin = { ...(preferences.signin ?? {}), allowed: false, allowed_on_next_startup: false };
-  preferences.sync = { ...(preferences.sync ?? {}), suppress_start: true };
-  writeJsonFile(preferencesPath, preferences);
-}
-
-async function launchAccountBrowser(account: PublishingAccount): Promise<BrowserContext> {
-  const profileDir = accountProfilePath(account);
-  prepareChromeProfile(profileDir);
-  const slowMoMs = Number(process.env.AUTOMATION_SLOW_MO_MS ?? 120);
-  const commonArgs = ["--no-first-run", "--no-default-browser-check", "--disable-notifications", "--deny-permission-prompts"];
-  const context = await chromium.launchPersistentContext(profileDir, {
-    headless: false,
-    executablePath: chromeExecutablePath(),
-    slowMo: slowMoMs,
-    viewport: null,
-    args: account.platform === "facebook"
-      ? commonArgs
-      : [...commonArgs, "--disable-blink-features=AutomationControlled", "--disable-site-isolation-trials", "--disable-sync", "--disable-signin-promo", `--disable-features=${disabledChromeFeatures}`],
-  });
-  await restoreAccountSessionState(account, context);
-  return context;
-}
-
-async function saveAccountSessionState(account: PublishingAccount, context: BrowserContext) {
   try {
-    const statePath = accountSessionStatePath(account);
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    await context.storageState({ path: statePath });
-    console.log(`Saved browser session state for ${account.platform} account ${account.handle}.`);
+    return await launchExternalBrowserEngine({
+      account,
+      purpose,
+      targetUrl: purpose === "login" ? platformLoginUrls[account.platform] ?? "about:blank" : "about:blank",
+      desktopHost,
+      restoreSessionState: context => restoreAccountSessionState(account, context, "external_browser"),
+      releaseAccount,
+    });
+  } catch (error) {
+    // Launchers release the account after they take ownership. Errors thrown
+    // before that point still need to free the per-account operation lock.
+    releaseAccount();
+    throw error;
+  }
+}
+
+async function saveAccountSessionState(
+  account: PublishingAccount,
+  context: BrowserContext,
+  engine: PublishingEngine,
+) {
+  try {
+    // Electron's per-account persistent partition already saves cookies with
+    // Chromium/OS encryption. Asking CDP for cookies after a large media post
+    // can block the embedded service, so no duplicate export is needed here.
+    if (engine === "companion") {
+      await Promise.resolve(publishingDesktopHost()?.flushAccountBrowserData?.(account.id));
+      fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+      console.log(`Retained protected Companion session for ${account.platform} account ${account.handle}.`);
+      return;
+    }
+    // Refresh the encrypted recovery copy after every successful external
+    // browser run. Some providers issue or rotate cookies while a post is
+    // being published, and Chrome may not persist session-only cookies when
+    // the managed window closes.
+    await exportStandardBrowserSession(account, context);
+    fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+    console.log(`Retained dedicated external browser profile for ${account.platform} account ${account.handle}.`);
   } catch (error) {
     console.warn(
       `Could not save browser session state for ${account.platform} account ${account.handle}:`,
@@ -220,15 +376,133 @@ async function saveAccountSessionState(account: PublishingAccount, context: Brow
   }
 }
 
-async function restoreAccountSessionState(account: PublishingAccount, context: BrowserContext) {
+async function exportStandardBrowserSession(account: PublishingAccount, context: BrowserContext) {
+  const key = sessionEncryptionKey();
+  if (!key) {
+    if (publishingDesktopHost()) {
+      throw new Error("Companion could not protect the connected account session. Restart Companion and try login again.");
+    }
+    console.log(`The ${account.platform} login remains in its dedicated local browser profile.`);
+    return;
+  }
+
+  fs.rmSync(legacyAccountSessionStatePath(account), { force: true });
+  const nativeState = await context.storageState({ indexedDB: true }) as BrowserStorageState;
+  const originByName = new Map((nativeState.origins ?? []).map(origin => [origin.origin, origin]));
+  for (const page of context.pages()) {
+    const pageStorage = await page.evaluate(() => ({
+      origin: window.location.origin,
+      sessionStorage: Object.keys(window.sessionStorage).map(name => ({ name, value: window.sessionStorage.getItem(name) ?? "" })),
+    })).catch(() => null);
+    if (!pageStorage || !/^https?:\/\//i.test(pageStorage.origin)) continue;
+    const existing = originByName.get(pageStorage.origin) ?? {
+      origin: pageStorage.origin,
+      localStorage: [],
+    };
+    existing.sessionStorage = pageStorage.sessionStorage;
+    originByName.set(pageStorage.origin, existing);
+  }
+  nativeState.origins = [...originByName.values()];
+
+  const identityPage = context.pages().find(page => /^https?:\/\//i.test(page.url())) ?? context.pages()[0];
+  if (identityPage) {
+    const identity = await identityPage.evaluate(async () => {
+      const navigatorWithData = navigator as Navigator & {
+        userAgentData?: {
+          brands?: Array<{ brand: string; version: string }>;
+          mobile?: boolean;
+          platform?: string;
+          getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+        };
+      };
+      const data = navigatorWithData.userAgentData;
+      const highEntropy: Record<string, unknown> = data?.getHighEntropyValues
+        ? await data.getHighEntropyValues(["architecture", "bitness", "fullVersionList", "model", "platformVersion", "uaFullVersion", "wow64"]).catch(() => ({}))
+        : {};
+      return {
+        userAgent: navigator.userAgent,
+        navigatorPlatform: navigator.platform,
+        userAgentMetadata: data ? {
+          brands: data.brands,
+          fullVersionList: Array.isArray(highEntropy.fullVersionList) ? highEntropy.fullVersionList as Array<{ brand: string; version: string }> : undefined,
+          fullVersion: typeof highEntropy.uaFullVersion === "string" ? highEntropy.uaFullVersion : undefined,
+          platform: data.platform ?? "",
+          platformVersion: typeof highEntropy.platformVersion === "string" ? highEntropy.platformVersion : "",
+          architecture: typeof highEntropy.architecture === "string" ? highEntropy.architecture : "",
+          model: typeof highEntropy.model === "string" ? highEntropy.model : "",
+          mobile: Boolean(data.mobile),
+          bitness: typeof highEntropy.bitness === "string" ? highEntropy.bitness : undefined,
+          wow64: typeof highEntropy.wow64 === "boolean" ? highEntropy.wow64 : undefined,
+        } : undefined,
+      };
+    }).catch(() => null);
+    if (identity?.userAgent) nativeState.userAgent = identity.userAgent;
+    if (identity?.navigatorPlatform) nativeState.navigatorPlatform = identity.navigatorPlatform;
+    if (identity?.userAgentMetadata) nativeState.userAgentMetadata = identity.userAgentMetadata;
+  }
+
+  writeEncryptedSessionState(accountSessionStatePath(account), nativeState, key);
+  console.log(`Saved protected ${account.platform} login session for ${account.handle}.`);
+}
+
+export async function installBrowserStorageState(context: BrowserContext, state: BrowserStorageState) {
+  const origins = Array.isArray(state.origins) ? state.origins : [];
+  const cookies = Array.isArray(state.cookies) ? state.cookies : [];
+  if (cookies.length > 0) await context.addCookies(cookies);
+
+  // Electron exposes its persistent partition over CDP. Playwright's
+  // setStorageState() tries to create a temporary target, which Electron does
+  // not support. Installing storage before provider navigation restores the
+  // same data without clearing device-bound managed-Chrome data.
+  const storageByOrigin = Object.fromEntries(origins.map(entry => [entry.origin, {
+    localStorage: Array.isArray(entry.localStorage) ? entry.localStorage : [],
+    sessionStorage: Array.isArray(entry.sessionStorage) ? entry.sessionStorage : [],
+  }]));
+  await context.addInitScript((entriesByOrigin: Record<string, {
+    localStorage: Array<{ name: string; value: string }>;
+    sessionStorage: Array<{ name: string; value: string }>;
+  }>) => {
+    const storage = entriesByOrigin[window.location.origin];
+    if (!storage) return;
+    for (const entry of storage.localStorage) {
+      window.localStorage.setItem(entry.name, entry.value);
+    }
+    for (const entry of storage.sessionStorage) {
+      window.sessionStorage.setItem(entry.name, entry.value);
+    }
+  }, storageByOrigin);
+}
+
+async function restoreAccountSessionState(
+  account: PublishingAccount,
+  context: BrowserContext,
+  engine: PublishingEngine,
+) {
+  migrateLegacyAccountSessionState(account);
   const statePath = accountSessionStatePath(account);
   if (!fs.existsSync(statePath)) return;
 
   try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as { cookies?: Parameters<BrowserContext["addCookies"]>[0] };
-    if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-      await context.addCookies(state.cookies);
+    const key = sessionEncryptionKey();
+    if (!key) return;
+    const state = readEncryptedSessionState(statePath, key);
+    await installBrowserStorageState(context, state);
+
+    const transferredUserAgent = state.userAgent;
+    if (transferredUserAgent) {
+      const applyBrowserIdentity = async (page: Page) => {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Network.setUserAgentOverride", {
+          userAgent: transferredUserAgent,
+          acceptLanguage: "en-US,en;q=0.9",
+          platform: state.navigatorPlatform || "Win32",
+          ...(state.userAgentMetadata ? { userAgentMetadata: state.userAgentMetadata } : {}),
+        });
+      };
+      await Promise.all(context.pages().map(page => applyBrowserIdentity(page).catch(() => undefined)));
+      context.on("page", page => { void applyBrowserIdentity(page).catch(() => undefined); });
     }
+    console.log(`Imported protected ${account.platform} login into ${engine === "companion" ? "Companion" : "the external browser"} for ${account.handle}.`);
   } catch (error) {
     console.warn(
       `Could not restore saved session state for ${account.platform} account ${account.handle}:`,
@@ -237,69 +511,170 @@ async function restoreAccountSessionState(account: PublishingAccount, context: B
   }
 }
 
-async function launchNormalChromeForManualXLogin(account: PublishingAccount) {
-  const profileDir = accountProfilePath(account);
-  fs.mkdirSync(profileDir, { recursive: true });
-  prepareChromeProfile(profileDir);
-
-  const port = await getFreePort();
-  const chromePath = chromeExecutablePath();
-  const chromeArgs = [
-    `--user-data-dir=${profileDir}`,
-    "--profile-directory=Default",
-    `--remote-debugging-port=${port}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-notifications",
-    "--new-window",
-    X_LOGIN_URL,
-  ];
-
-  console.log(`Opening normal Chrome for manual X login for ${account.handle}.`);
-  const chromeProcess = spawn(chromePath, chromeArgs, {
-    stdio: "ignore",
-    windowsHide: false,
-  });
-
-  let spawnError: Error | null = null;
-  chromeProcess.once("error", error => { spawnError = error; });
-
-  await new Promise(resolve => setTimeout(resolve, 100));
-  if (spawnError) throw spawnError;
-
-  return { chromeProcess, debugEndpoint: await waitForChromeDebugEndpoint(port, chromeProcess) };
+async function verifyManagedExternalSession(account: PublishingAccount, fallbackReason?: unknown) {
+  const browser = await launchAccountBrowser(account, "login", "external_browser");
+  try {
+    await browser.update({
+      state: "opening",
+      detail: `Restarting the protected ${account.platform} browser once to verify the saved login.`,
+    });
+    await loginOnly(browser.page, account, { useSavedSessionOnly: true });
+    await exportStandardBrowserSession(account, browser.context);
+    markManagedChromeSession(account);
+    await browser.update({
+      state: "posted",
+      detail: "Login survived a fresh browser restart and is ready for publishing in Companion.",
+    });
+    if (fallbackReason) {
+      console.warn(
+        `${account.platform} kept the login in the protected managed Chrome profile for ${account.handle}:`,
+        errorMessage(fallbackReason),
+      );
+    }
+  } catch (error) {
+    await browser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
+    throw error;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
 }
 
-async function prepareXSessionInNormalChrome(account: PublishingAccount) {
-  const { chromeProcess, debugEndpoint } = await launchNormalChromeForManualXLogin(account);
-  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+async function prepareStandardBrowserSession(account: PublishingAccount) {
+  const externalBrowser = await launchAccountBrowser(account, "login", "external_browser");
+  let exportError: unknown = null;
+  try {
+    await externalBrowser.update({
+      state: "waiting",
+      detail: resolvedAccountEngine(account) === "external_browser"
+        ? `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will retain and restart-check this dedicated browser profile.`
+        : `Complete ${account.platform} login in Chrome, Edge, or Chromium. Companion will transfer and verify the session before saving it.`,
+    });
+    await loginOnly(externalBrowser.page, account, { ignoreLoginErrors: true });
+    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+    try {
+      await exportStandardBrowserSession(account, externalBrowser.context);
+    } catch (error) {
+      exportError = error;
+      console.warn(`Could not create a transferable session for ${account.handle}; verifying the protected managed Chrome profile:`, errorMessage(error));
+    }
+    await externalBrowser.update({
+      state: "waiting",
+      detail: "Login confirmed. Restart-checking the saved session before it is marked ready.",
+    });
+  } catch (error) {
+    await externalBrowser.update({ state: "failed", detail: errorMessage(error) }).catch(() => undefined);
+    throw error;
+  } finally {
+    await externalBrowser.close().catch(() => undefined);
+  }
+
+  if (exportError) {
+    await verifyManagedExternalSession(account, exportError);
+    return;
+  }
+
+  // Facebook, X, YouTube, explicitly external accounts, and provider-bound fallbacks use
+  // the exact persistent browser profile that authenticated. Moving cookies to
+  // Electron can invalidate device-bound Google/X sessions.
+  if (resolvedAccountEngine(account) === "external_browser") {
+    await verifyManagedExternalSession(account);
+    return;
+  }
+
+  if (!publishingDesktopHost()) {
+    await verifyManagedExternalSession(account, new Error("Companion embedded verification is unavailable."));
+    return;
+  }
+
+  let companionBrowser: PublishingBrowserSession;
+  try {
+    companionBrowser = await launchAccountBrowser(account, "login", "companion");
+  } catch (error) {
+    await verifyManagedExternalSession(account, error);
+    return;
+  }
+
+  let companionTransferError: unknown = null;
+  try {
+    await companionBrowser.update({
+      state: "opening",
+      detail: `Verifying the transferred ${account.platform} login inside Companion.`,
+    });
+    await loginOnly(companionBrowser.page, account, {
+      useSavedSessionOnly: true,
+      embeddedLogin: true,
+    });
+    await saveAccountSessionState(account, companionBrowser.context, "companion");
+    await companionBrowser.update({
+      state: "posted",
+      detail: "Login confirmed, transferred, and verified inside Companion. The account is ready to publish.",
+    });
+    await removeExternalAccountProfile(account).catch(error => {
+      console.warn(`Could not remove the temporary external login profile for ${account.handle}:`, errorMessage(error));
+    });
+    console.log(`${account.platform} login transferred and verified in Companion for ${account.handle}.`);
+  } catch (error) {
+    companionTransferError = error;
+    await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+    await companionBrowser.update({
+      state: "opening",
+      detail: "The provider kept this login bound to Chrome. Companion is restart-checking the protected profile before saving it.",
+    }).catch(() => undefined);
+  } finally {
+    await companionBrowser.close().catch(() => undefined);
+  }
+
+  if (companionTransferError) {
+    await verifyManagedExternalSession(account, companionTransferError);
+  }
+}
+
+async function prepareEmbeddedCompanionSession(account: PublishingAccount) {
+  const browser = await launchAccountBrowser(account, "login", "companion");
 
   try {
-    browser = await chromium.connectOverCDP(debugEndpoint);
-    const context = browser.contexts()[0];
-    const page = context.pages().find(item => item.url().includes("x.com")) ?? context.pages()[0] ?? await context.newPage();
-    await page.bringToFront().catch(() => undefined);
-    await loginToX(page, undefined, false, accountLogin({
-      ignoreLoginErrors: true,
-    }));
-    await saveAccountSessionState(account, context);
-    console.log(`Normal Chrome manual X session saved for ${account.handle}. Closing Chrome.`);
+    await browser.update({
+      state: "waiting",
+      detail: `Sign in to ${account.platform} inside Companion. Passwords and verification codes stay on the provider page.`,
+    });
+    await loginOnly(browser.page, account, { ignoreLoginErrors: true, embeddedLogin: true });
+    await exportStandardBrowserSession(account, browser.context).catch(error => {
+      console.warn(`Could not create the encrypted ${account.platform} session recovery copy:`, errorMessage(error));
+    });
+    await saveAccountSessionState(account, browser.context, "companion");
+    await removeExternalAccountProfile(account).catch(() => undefined);
+    await browser.update({
+      state: "posted",
+      detail: "Login confirmed and the protected local session is ready.",
+    });
+  } catch (error) {
+    const message = errorMessage(error);
+    const fallbackHint = /Chrome fallback/i.test(message)
+      ? ""
+      : " Use the Chrome fallback if this provider blocks embedded sign-in.";
+    await browser.update({
+      state: "failed",
+      detail: `${message}${fallbackHint}`,
+    }).catch(() => undefined);
+    throw error;
   } finally {
-    await browser?.close().catch(() => undefined);
-    await waitForProcessExit(chromeProcess, 15000);
-    if (chromeProcess.exitCode === null && !chromeProcess.killed) chromeProcess.kill();
+    await browser.close().catch(() => undefined);
   }
 }
 
 type AccountLoginOptions = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
+  onFinalActionSubmitted?: () => Promise<void> | void;
 };
 
 function accountLogin(options: AccountLoginOptions = {}): AccountLogin {
   return {
     useSavedSessionOnly: options.useSavedSessionOnly,
-    ignoreLoginErrors: options.ignoreLoginErrors
+    ignoreLoginErrors: options.ignoreLoginErrors,
+    embeddedLogin: options.embeddedLogin,
+    onFinalActionSubmitted: options.onFinalActionSubmitted,
   };
 }
 
@@ -311,6 +686,7 @@ async function publishOne(page: Page, upload: PlatformUpload, options: AccountLo
     case "instagram": return postToInstagram(page, upload, login);
     case "facebook": return postToFacebook(page, upload, login);
     case "x": return postToX(page, upload, login);
+    case "reddit": throw new Error("Reddit posts publish through Zernio, not the Companion.");
   }
 }
 
@@ -318,10 +694,17 @@ async function loginOnly(page: Page, account: PublishingAccount, options: Accoun
   const login = accountLogin(options);
   switch (account.platform) {
     case "youtube": return loginToYouTube(page, login);
-    case "linkedin": return loginToLinkedIn(page, undefined, login);
+    case "linkedin": {
+      const result = await loginToLinkedIn(page, undefined, login);
+      const pages = await discoverLinkedInManagedPages(page);
+      await updateLinkedInManagedPages(account.id, pages);
+      console.log(`Discovered ${pages.length} managed LinkedIn Page${pages.length === 1 ? "" : "s"} for ${account.handle}.`);
+      return result;
+    }
     case "instagram": return loginToInstagram(page, undefined, false, login);
     case "facebook": return loginToFacebook(page, undefined, false, login);
     case "x": return loginToX(page, undefined, false, login);
+    case "reddit": throw new Error("Reddit accounts connect through Zernio, not the Companion.");
   }
 }
 
@@ -338,11 +721,28 @@ function isSessionFailure(message: string) {
   return /saved browser session is not active|sign in|log in|login|session (?:expired|invalid)|authentication/i.test(message);
 }
 
+async function visiblePublishingRiskSignal(page: Page) {
+  const candidates = [
+    page.locator('iframe[title*="captcha" i], iframe[src*="captcha" i], iframe[src*="arkoselabs" i]').first(),
+    page.getByText(/captcha|checkpoint|security verification|verify your identity|temporarily limited|too many requests|account (?:is |has been )?(?:restricted|suspended|disabled|locked)/i).first(),
+    page.locator('[role="alert"]').filter({
+      hasText: /rate.?limit|try again later|action blocked|verification|restricted|suspended|disabled|locked/i,
+    }).first(),
+  ];
+  for (const candidate of candidates) {
+    if (await candidate.isVisible().catch(() => false)) {
+      return (await candidate.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || "CAPTCHA verification";
+    }
+  }
+  return "";
+}
+
 async function runAccountQueue(
   automationRunId: string,
   trigger: AutomationRunTrigger,
   account: PublishingAccount,
   uploads: PlatformUpload[],
+  signal: AbortSignal,
   options: AccountLoginOptions = {},
 ) {
   console.log(`Publishing ${uploads.length} post(s) through ${account.platform} account ${account.handle} (${account.id}).`);
@@ -351,9 +751,13 @@ async function runAccountQueue(
     runPostIds.set(upload.id, await createAutomationRunPost(automationRunId, upload));
   }
 
-  let browser: BrowserContext | null = null;
+  let browser: PublishingBrowserSession | null = null;
   let hadFailure = false;
   let sessionInvalidated = false;
+  const sameLinkedInDestination = (candidate: PlatformUpload, upload: PlatformUpload) => (
+    candidate.platform !== "linkedin"
+    || (candidate.linkedinTarget?.id ?? "personal") === (upload.linkedinTarget?.id ?? "personal")
+  );
 
   async function failUnfinishedPosts(message: string) {
     const currentUploads = await listUploads(account.platform, account.id);
@@ -369,32 +773,136 @@ async function runAccountQueue(
     }
   }
 
-  try {
-    browser = await launchAccountBrowser(account);
-    const page = browser.pages()[0] ?? await browser.newPage();
+  async function deferRemainingPosts(startIndex: number, assessment: PublishingSafetyAssessment) {
+    if (!assessment.retryAt) throw new Error("The publishing safety governor did not provide a retry time.");
+    const message = `${assessment.reason ?? "Publishing safety spacing is active"} Next safe attempt: ${assessment.retryAt}`;
+    for (const upload of uploads.slice(startIndex)) {
+      await deferUploadForSafety(upload.id, assessment.retryAt, message);
+      const runPostId = runPostIds.get(upload.id);
+      if (runPostId) await finishAutomationRunPost(runPostId, "deferred", message);
+    }
+    console.log(`Deferred ${uploads.length - startIndex} post(s) for ${account.handle}: ${message}`);
+  }
 
-    for (const upload of uploads) {
+  async function holdRemainingPostsForManualResume(startIndex: number, message: string) {
+    for (const upload of uploads.slice(startIndex)) {
+      const runPostId = runPostIds.get(upload.id);
+      if (runPostId) await finishAutomationRunPost(runPostId, "deferred", message);
+    }
+  }
+
+  try {
+    signal.throwIfAborted();
+    const initialHistory = (await listUploads(account.platform, account.id))
+      .filter(candidate => sameLinkedInDestination(candidate, uploads[0]));
+    const initialAssessment = assessPublishingSafety(uploads[0], initialHistory, Date.now(), account.safetyMode ?? "standard");
+    if (!initialAssessment.allowed) {
+      await deferRemainingPosts(0, initialAssessment);
+      return false;
+    }
+    browser = await launchAccountBrowser(account, "publish");
+    const page = browser.page;
+
+    for (const [uploadIndex, upload] of uploads.entries()) {
+      signal.throwIfAborted();
+      if (uploadIndex > 0) {
+        const accountHistory = (await listUploads(account.platform, account.id))
+          .filter(candidate => sameLinkedInDestination(candidate, upload));
+        const assessment = assessPublishingSafety(upload, accountHistory, Date.now(), account.safetyMode ?? "standard");
+        if (!assessment.allowed) {
+          await deferRemainingPosts(uploadIndex, assessment);
+          await browser.update({
+            state: "waiting",
+            detail: `Remaining posts were safely deferred until ${assessment.retryAt}.`,
+            currentItem: upload.title || upload.originalName || "Post",
+            currentIndex: uploadIndex + 1,
+            totalItems: uploads.length,
+          });
+          break;
+        }
+      }
       const runPostId = runPostIds.get(upload.id);
       await updateUploadStatus(upload.id, "processing", `Automation ${trigger} run ${automationRunId} started publishing`);
+      await browser.update({
+        state: "publishing",
+        detail: `Publishing ${uploadIndex + 1} of ${uploads.length}`,
+        currentItem: upload.title || upload.originalName || "Post",
+        currentIndex: uploadIndex + 1,
+        totalItems: uploads.length,
+      });
 
+      let finalActionSubmitted = false;
       try {
-        await publishOne(page, upload, options);
+        await updateUploadPublishActionState(upload.id, "prepared");
+        await publishOne(page, upload, {
+          ...options,
+          onFinalActionSubmitted: async () => {
+            finalActionSubmitted = true;
+            await updateUploadPublishActionState(upload.id, "submitted");
+          },
+        });
+        signal.throwIfAborted();
       } catch (error) {
         hadFailure = true;
-        const message = errorMessage(error);
-        if (isSessionFailure(message)) {
+        const originalMessage = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+        const youtubeStudioReview = !signal.aborted
+          && finalActionSubmitted
+          && account.platform === "youtube"
+          && upload.postFormat === "video";
+        const message = youtubeStudioReview && !/check youtube studio/i.test(originalMessage)
+          ? `YouTube accepted Publish, but video completion was not confirmed. Check YouTube Studio before retrying. Detail: ${originalMessage}`
+          : originalMessage;
+        const visibleRisk = signal.aborted ? "" : await visiblePublishingRiskSignal(page).catch(() => "");
+        const risk = signal.aborted
+          ? null
+          : classifyPublishingRisk(
+            `${message} ${visibleRisk}${finalActionSubmitted ? " final publish result is uncertain" : ""}`,
+            page.url(),
+          );
+        if (risk) {
+          const safetyMessage = `${risk.reason} Original platform message: ${message}`;
+          await pausePlatformAccountForSafety(account.id, risk.accountStatus, safetyMessage);
+          if (risk.requiresLogin) {
+            await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
+          }
+          if (risk.kind === "uncertain_publish") {
+            await updateUploadPublishActionState(upload.id, "uncertain");
+          }
+        } else if (isSessionFailure(message)) {
           sessionInvalidated = true;
           clearSavedAccountSession(account);
           await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
         }
         await updateUploadStatus(upload.id, "failed", `Automation ${trigger} run ${automationRunId} failed: ${message}`);
         if (runPostId) await finishAutomationRunPost(runPostId, "failed", message);
+        await browser.update({
+          state: signal.aborted ? "stopped" : youtubeStudioReview ? "review" : "failed",
+          detail: message,
+          currentItem: upload.title || upload.originalName || "Post",
+          currentIndex: uploadIndex + 1,
+          totalItems: uploads.length,
+        });
         console.error(`Failed ${upload.id} through ${account.handle}:`, message);
+        if (signal.aborted) throw new Error(message);
+        if (risk) {
+          await holdRemainingPostsForManualResume(
+            uploadIndex + 1,
+            `Account paused for manual review: ${risk.reason}`,
+          );
+          break;
+        }
         continue;
       }
 
       await updateUploadStatus(upload.id, "posted", `Automation ${trigger} run ${automationRunId} posted successfully`);
       if (runPostId) await finishAutomationRunPost(runPostId, "posted");
+      await browser.update({
+        state: "posted",
+        detail: `Published ${uploadIndex + 1} of ${uploads.length}`,
+        currentItem: upload.title || upload.originalName || "Post",
+        currentIndex: uploadIndex + 1,
+        totalItems: uploads.length,
+      });
       console.log(`Posted ${upload.id} through ${account.handle}.`);
     }
 
@@ -407,7 +915,7 @@ async function runAccountQueue(
     return hadFailure;
   } catch (error) {
     hadFailure = true;
-    const message = errorMessage(error);
+    const message = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
     if (isSessionFailure(message)) {
       sessionInvalidated = true;
       clearSavedAccountSession(account);
@@ -417,47 +925,82 @@ async function runAccountQueue(
     throw error;
   } finally {
     if (browser) {
-      if (!sessionInvalidated) await saveAccountSessionState(account, browser);
+      if (!sessionInvalidated) await saveAccountSessionState(account, browser.context, browser.engine);
       await browser.close().catch(() => undefined);
     }
   }
 }
 
-async function prepareManualAccountSession(account: PublishingAccount) {
-  if (account.platform === "x") {
-    await prepareXSessionInNormalChrome(account);
-    return;
+async function prepareManualAccountSession(account: PublishingAccount, surface: ManualLoginSurface) {
+  console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}) using the ${surface} login surface.`);
+  if (surface === "embedded") {
+    await prepareEmbeddedCompanionSession(account);
+  } else {
+    await prepareStandardBrowserSession(account);
   }
+  console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
+}
 
-  console.log(`Opening ${account.platform} login page for ${account.handle} (${account.id}).`);
-  const browser = await launchAccountBrowser(account);
-  try {
-    const page = browser.pages()[0] ?? await browser.newPage();
-    await loginOnly(page, account, { ignoreLoginErrors: true });
-    await saveAccountSessionState(account, browser);
-    console.log(`Manual session saved for ${account.platform} account ${account.handle}.`);
-  } finally {
-    await browser.close().catch(() => undefined);
+const activeSessionPreparations = new Map<string, {
+  operation: Promise<void>;
+  surface: ManualLoginSurface;
+}>();
+
+export function assertAccountEngineChangeAllowed(accountId: string) {
+  if (activeAccountBrowserOperations.has(accountId) || activeSessionPreparations.has(accountId)) {
+    throw new Error("This account is busy with login or publishing. Wait for it to finish before changing its engine.");
   }
 }
 
-const activeSessionPreparations = new Map<string, Promise<void>>();
-
-export async function startManualAccountSession(accountId: string) {
+export async function startManualAccountSession(
+  accountId: string,
+  requestedSurface: ManualLoginRequest = "engine",
+) {
   const existing = activeSessionPreparations.get(accountId);
   const account = await getPublishingAccount(accountId);
   if (!account) throw new Error("Publishing account not found.");
   if (!account.enabled) throw new Error("Publishing account is disabled.");
 
-  if (existing) return { account, started: false };
+  if (existing) return { account, started: false, surface: existing.surface };
 
-  const operation = prepareManualAccountSession(account)
+  const surface = selectManualLoginSurface({
+    platform: account.platform,
+    requestedSurface,
+    activeEngine: resolvedAccountEngine(account),
+    credentialConfigured: account.credentialConfigured,
+    externalProfilePresent: hasExternalAccountProfile(account),
+    embeddedBrowserAvailable: Boolean(publishingDesktopHost()),
+  });
+  if (!account.credentialConfigured) {
+    if (surface === "external") {
+      await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+      clearSavedAccountSession(account);
+    } else {
+      await removeSavedAccountProfile(account);
+    }
+  }
+  if (surface === "external") externalBrowserExecutablePath();
+
+  const operation = prepareManualAccountSession(account, surface)
     .then(async () => {
       await updatePlatformAccountCredentialState(account.id, true);
+      const requeued = await requeueAccountSessionFailures(account.id);
+      if (requeued.length > 0) {
+        console.log(`Requeued ${requeued.length} post(s) after the Companion login was verified.`);
+      }
+      await requestCentralWorkspaceSync().catch(error => {
+        console.warn("The login was saved locally; central account status will retry on the next heartbeat:", errorMessage(error));
+      });
     })
-    .catch(error => {
-      clearSavedAccountSession(account);
-      void updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
+    .catch(async error => {
+      if (surface === "external") {
+        await removeSavedAccountProfile(account).catch(() => clearSavedAccountSession(account));
+      } else {
+        await Promise.resolve(publishingDesktopHost()?.clearAccountBrowserData(account.id)).catch(() => undefined);
+        clearSavedAccountSession(account);
+      }
+      await updatePlatformAccountCredentialState(account.id, hasManagedChromeSession(account)).catch(() => undefined);
+      await requestCentralWorkspaceSync().catch(() => undefined);
       console.error(
         `Manual session preparation failed for ${account.platform} account ${account.handle}:`,
         errorMessage(error),
@@ -467,8 +1010,8 @@ export async function startManualAccountSession(accountId: string) {
       activeSessionPreparations.delete(account.id);
     });
 
-  activeSessionPreparations.set(account.id, operation);
-  return { account, started: true };
+  activeSessionPreparations.set(account.id, { operation, surface });
+  return { account, started: true, surface };
 }
 
 type RunAutomationOptions = {
@@ -476,9 +1019,11 @@ type RunAutomationOptions = {
   trigger?: AutomationRunTrigger;
   startedByUserId?: string;
   uploadIds?: string[];
+  workspaceId?: string;
 };
 
 let activeAutomationRun: Promise<void> | null = null;
+let activeAutomationController: AbortController | null = null;
 const pendingAutomationRuns: Array<{
   options: RunAutomationOptions;
   resolve: () => void;
@@ -489,9 +1034,25 @@ export function isAutomationRunning() {
   return activeAutomationRun !== null || pendingAutomationRuns.length > 0;
 }
 
+export async function cancelAutomation(reason = "Publishing was stopped by the user.") {
+  const cancellationError = new Error(reason);
+  const wasRunning = Boolean(activeAutomationRun || pendingAutomationRuns.length);
+  activeAutomationController?.abort(cancellationError);
+  const pending = pendingAutomationRuns.splice(0);
+  for (const run of pending) run.reject(cancellationError);
+  await Promise.all([
+    Promise.resolve(publishingDesktopHost()?.stopPublishingBrowsers(reason)).catch(() => undefined),
+    stopExternalPublishingBrowsers(reason).catch(() => undefined),
+  ]);
+  return wasRunning;
+}
+
 function maxConcurrentAccounts() {
-  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 2);
-  return Number.isInteger(configured) ? Math.min(5, Math.max(1, configured)) : 2;
+  // Different accounts can start together at the scheduled minute. Their
+  // selected engines remain visible, while the per-account lock guarantees
+  // that one account never receives overlapping jobs.
+  const configured = Number(process.env.PUBLISH_QUEUE_MAX_CONCURRENT_ACCOUNTS ?? 5);
+  return Number.isInteger(configured) ? Math.min(5, Math.max(1, configured)) : 5;
 }
 
 async function runWithConcurrency<T>(
@@ -510,19 +1071,73 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
-async function runAutomationOnce({ mode = "ready", trigger = "manual", startedByUserId, uploadIds }: RunAutomationOptions) {
+async function runAutomationOnce(
+  { mode = "ready", trigger = "manual", startedByUserId, uploadIds, workspaceId }: RunAutomationOptions,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
   console.log(`Starting publisher automation (${trigger})...`);
-  const { channels } = await automationInput(undefined, mode);
+  const { channels } = await automationInput(undefined, mode, workspaceId);
   const requestedIds = uploadIds?.length ? new Set(uploadIds) : null;
-  const uploads = Object.values(channels).flat().filter(upload => !requestedIds || requestedIds.has(upload.id));
-  if (uploads.length === 0) {
+  const requestedUploads = Object.values(channels).flat().filter(upload => !requestedIds || requestedIds.has(upload.id));
+  const companionId = publishingCompanionId();
+  const accountAssignments = new Map(await Promise.all([...new Set(requestedUploads.map(upload => upload.accountId))]
+    .map(async accountId => [accountId, await getPublishingAccount(accountId)] as const)));
+  const candidateUploads = requestedUploads.filter(upload => {
+    const account = accountAssignments.get(upload.accountId);
+    return account && (!account.companionId || account.companionId === companionId);
+  });
+  if (candidateUploads.length === 0) {
     console.log(requestedIds
       ? "None of the requested posts are ready for publishing."
       : "No due uploads for enabled publishing accounts.");
     return;
   }
 
-  const automationRunId = await createAutomationRun(trigger, startedByUserId);
+  const leaseOwnerId = process.env.PUBLISHING_COMPANION_ID?.trim() || `companion-${process.pid}`;
+  const leaseResults = await Promise.all(candidateUploads.map(async upload => ({
+    upload,
+    lease: await claimPublishingExecution(upload.id, upload.workspaceId, leaseOwnerId),
+  })));
+  const claimed = leaseResults.filter((item): item is { upload: PlatformUpload; lease: PublishingExecutionLease } => Boolean(item.lease));
+  if (claimed.length === 0) {
+    console.log("All due publishing jobs are already claimed by another Companion.");
+    return;
+  }
+
+  const executableClaims: typeof claimed = [];
+  for (const item of claimed) {
+    try {
+      if (item.upload.postFormat !== "text" && item.upload.fileName) {
+        await ensurePublishingMediaLocal(item.upload.fileName, item.upload.workspaceId);
+      }
+      executableClaims.push(item);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Publishing media is missing.";
+      await updateUploadStatus(item.upload.id, "failed", `Publishing media is unavailable: ${message}`, startedByUserId, item.upload.workspaceId)
+        .catch(() => undefined);
+      await releasePublishingExecution(item.lease).catch(() => undefined);
+    }
+  }
+  const uploads = executableClaims.map(item => item.upload);
+  if (uploads.length === 0) {
+    console.warn("No claimed publishing jobs had usable media.");
+    return;
+  }
+
+  const desktopHost = publishingDesktopHost();
+  if (desktopHost) await desktopHost.requestPublishingPermission();
+
+  let automationRunId: string;
+  try {
+    automationRunId = await createAutomationRun(trigger, startedByUserId);
+  } catch (error) {
+    await Promise.allSettled([
+      Promise.resolve(desktopHost?.finishPublishingRun()),
+      ...executableClaims.map(item => releasePublishingExecution(item.lease)),
+    ]);
+    throw error;
+  }
   let hadRunFailure = false;
   let runErrorMessage: string | undefined;
   const queues = new Map<string, PlatformUpload[]>();
@@ -531,6 +1146,7 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
   try {
     const accountQueues = [...queues.entries()];
     await runWithConcurrency(accountQueues, maxConcurrentAccounts(), async ([accountId, accountUploads]) => {
+      signal.throwIfAborted();
       const account = await getPublishingAccount(accountId);
       if (!account || !account.enabled) {
         const message = `Publishing account ${accountId} is missing or disabled.`;
@@ -544,7 +1160,7 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
       }
 
       try {
-        const accountHadFailure = await runAccountQueue(automationRunId, trigger, account, accountUploads, {
+        const accountHadFailure = await runAccountQueue(automationRunId, trigger, account, accountUploads, signal, {
           useSavedSessionOnly: true,
         });
         if (accountHadFailure) {
@@ -558,12 +1174,23 @@ async function runAutomationOnce({ mode = "ready", trigger = "manual", startedBy
         console.error(`Could not run account ${account.handle}:`, message);
       }
     });
+  } catch (error) {
+    hadRunFailure = true;
+    runErrorMessage ??= signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+    throw error;
   } finally {
-    await finishAutomationRun(
-      automationRunId,
-      hadRunFailure ? "failed" : "completed",
-      hadRunFailure ? runErrorMessage : undefined,
-    );
+    try {
+      await finishAutomationRun(
+        automationRunId,
+        hadRunFailure ? "failed" : "completed",
+        hadRunFailure ? runErrorMessage : undefined,
+      );
+    } finally {
+      await Promise.allSettled([
+        Promise.resolve(desktopHost?.finishPublishingRun()),
+        ...executableClaims.map(item => releasePublishingExecution(item.lease)),
+      ]);
+    }
   }
 }
 
@@ -579,11 +1206,13 @@ function startNextAutomationRun() {
   const next = pendingAutomationRuns.shift();
   if (!next) return;
 
-  activeAutomationRun = runAutomationOnce(next.options);
+  activeAutomationController = new AbortController();
+  activeAutomationRun = runAutomationOnce(next.options, activeAutomationController.signal);
   activeAutomationRun
     .then(next.resolve, next.reject)
     .finally(() => {
       activeAutomationRun = null;
+      activeAutomationController = null;
       startNextAutomationRun();
     });
 }

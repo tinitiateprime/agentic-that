@@ -9,13 +9,17 @@ import {
   ChevronRight,
   CircleAlert,
   Database,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
   KeyRound,
+  Link2,
   Loader2,
   LockKeyhole,
+  LogOut,
   MessageCircle,
+  MonitorCheck,
   Pencil,
   Plug,
   Plus,
@@ -23,30 +27,52 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Smartphone,
   Trash2,
   UsersRound,
   X,
   Zap
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { publishingFetch } from "../../lib/publishing-endpoint";
+import { getClientServiceToken } from "@platform/client-service-token";
+import MetaEmbeddedSignupButton from "@whatsapp/components/MetaEmbeddedSignupButton";
+import ProductShell from "@platform/ProductShell";
+import { useCompanionStatus } from "@platform/use-companion-status";
+import { rememberPublishingAccounts } from "@platform/use-product-status";
 
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
-const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
+const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
+  || "/companion/download";
+const publishingHealthUrl = "http://127.0.0.1:8792/api/health";
+const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"];
 const platformLabels = {
   instagram: "Instagram",
   facebook: "Facebook",
   x: "X",
   youtube: "YouTube",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  reddit: "Reddit"
 };
 const platformLogos = {
   instagram: "/instagram-logo.svg",
   facebook: "/facebook-logo.svg",
   x: "/x-logo.svg",
   youtube: "/youtube-logo.svg",
-  linkedin: "/linkedin-logo.png"
+  linkedin: "/linkedin-logo.png",
+  reddit: "/reddit-logo.svg"
 };
+const publishingEngineLabels = {
+  companion: "Companion",
+  external_browser: "External browser",
+  api: "Zernio"
+};
+const redditConnectionMessages = {
+  connected: { tone: "success", message: "Reddit is connected. Posts for this account now publish through Zernio." },
+  denied: { tone: "error", message: "Reddit access was not granted. Choose Connect with Reddit to try again." },
+  expired: { tone: "error", message: "The Reddit connection expired. Choose Connect with Reddit again." },
+  failed: { tone: "error", message: "Reddit could not be connected. Try Connect with Reddit again." }
+};
+const externalBrowserRequiredPlatforms = new Set(["facebook", "x", "youtube"]);
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingPlatformLabels = {
   telegram: "Telegram",
@@ -56,6 +82,12 @@ const messagingPlatformLogos = {
   telegram: "/telegram-logo.svg",
   whatsapp: "/whatsapp-logo.svg"
 };
+const whatsappProviders = [
+  { id: "meta", label: "Meta Cloud API", copy: "Facebook or Meta business account" },
+  { id: "wati", label: "WATI", copy: "Existing WATI workspace" }
+];
+const accessRank = { none: 0, view: 1, operate: 2, configure: 3 };
+const hasAccess = (access, resource, level) => (accessRank[access?.[resource] || "none"] || 0) >= accessRank[level];
 
 const services = [
   {
@@ -113,10 +145,32 @@ async function responsePayload(response) {
   return payload;
 }
 
-async function telegramRequest(path, init = {}) {
+// The WhatsApp API is same-origin and authorized by the AgenticThat session
+// cookie, so it needs no service identity token of its own.
+async function whatsappRequest(path, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const response = await fetch("/api/whatsapp" + path, {
+    cache: "no-store",
+    ...init,
+    headers,
+    credentials: "include"
+  });
+  return responsePayload(response);
+}
+
+function createWebhookSecret() {
+  const bytes = new Uint8Array(24);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function telegramRequest(path, identityToken, init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("telegram", identityToken));
   const response = await fetch("/api/telegram" + path, {
+    cache: "no-store",
     ...init,
     headers,
     credentials: "include"
@@ -127,10 +181,23 @@ async function telegramRequest(path, init = {}) {
 async function publishingRequest(path, token, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", "Bearer " + token);
-  const response = await publishingFetch(path, {
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
+  const normalized = path.startsWith("/api/") ? path.slice(4) : `/${path.replace(/^\//, "")}`;
+  const response = await fetch("/api/publishing" + normalized, {
     ...init,
-    headers
+    headers,
+    credentials: "include"
+  });
+  return responsePayload(response);
+}
+
+async function localCompanionRequest(path, token, init = {}) {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  headers.set("authorization", "Bearer " + await getClientServiceToken("publishing", token));
+  const response = await fetch("http://127.0.0.1:8792" + path, {
+    ...init,
+    cache: "no-store", headers, mode: "cors", targetAddressSpace: "loopback"
   });
   return responsePayload(response);
 }
@@ -163,12 +230,36 @@ function EmptyState({ icon: Icon, title, copy, action }) {
   );
 }
 
+function ConnectionSteps({ steps, activeIndex = 0, className = "" }) {
+  return (
+    <ol className={`config-connection-steps ${className}`.trim()} aria-label="Connection steps">
+      {steps.map((step, index) => {
+        const StepIcon = step.icon;
+        return (
+        <li className={index < activeIndex ? "complete" : index === activeIndex ? "active" : ""} key={step.title}>
+          <span className="config-step-icon"><StepIcon size={20} strokeWidth={1.9} /></span>
+          <div><strong>{step.title}</strong><small>{step.copy}</small></div>
+          {index < activeIndex && <i className="config-step-complete" aria-label="Completed"><Check size={12} strokeWidth={2.5} /></i>}
+        </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export default function ConfigManager({
   initialService,
   initialMessagingPlatform,
   initialPublishingPlatform,
+  initialTelegramConnect,
+  publishingIdentityToken,
+  telegramIdentityToken,
+  effectiveAccess,
   user,
   telegramDashboardUrl,
+  whatsappDashboardUrl,
+  metaAppId,
+  metaConfigId,
   publishQueueUrl
 }) {
   const [activeService, setActiveService] = useState(initialService);
@@ -177,59 +268,200 @@ export default function ConfigManager({
   const [telegramStatus, setTelegramStatus] = useState("checking");
   const [telegramUser, setTelegramUser] = useState(null);
   const [telegramAccounts, setTelegramAccounts] = useState([]);
+  const [telegramRequiresApiCredentials, setTelegramRequiresApiCredentials] = useState(false);
+  const [telegramError, setTelegramError] = useState("");
+  const [whatsappStatus, setWhatsappStatus] = useState("checking");
+  const [whatsappState, setWhatsappState] = useState(null);
+  const [whatsappSession, setWhatsappSession] = useState(null);
   const [publishingStatus, setPublishingStatus] = useState("checking");
   const [publishingSession, setPublishingSession] = useState(null);
   const [publishingAccounts, setPublishingAccounts] = useState([]);
+  const [publishingHasSuccessfulPost, setPublishingHasSuccessfulPost] = useState(false);
+  const [workspaceCompanion, setWorkspaceCompanion] = useState(null);
+  const allowedMessagingPlatforms = messagingPlatforms.filter((platform) => hasAccess(effectiveAccess, `messaging.${platform}`, "configure"));
+  const allowedPublishingPlatforms = publishPlatforms.filter((platform) => hasAccess(effectiveAccess, `publishing.${platform}`, "configure"));
+  const visibleServices = services.filter((service) => (
+    service.id === "messaging" ? allowedMessagingPlatforms.length > 0
+      : service.id === "publishing" ? allowedPublishingPlatforms.length > 0
+        : false
+  ));
 
   const loadTelegram = useCallback(async () => {
-    setTelegramStatus("checking");
+    if (!telegramIdentityToken) { setTelegramStatus("unauthorized"); return; }
     try {
-      const me = await telegramRequest("/me");
-      const accountData = await telegramRequest("/telegram/accounts");
+      const me = await telegramRequest("/me?include=accounts", telegramIdentityToken);
+      const accountData = Array.isArray(me.accounts)
+        ? me
+        : await telegramRequest("/telegram/accounts", telegramIdentityToken);
       setTelegramUser(me.user);
       setTelegramAccounts(accountData.accounts || []);
+      setTelegramRequiresApiCredentials(Boolean(me.requiresTelegramApiCredentials));
+      setTelegramError("");
       setTelegramStatus("ready");
     } catch (error) {
       setTelegramUser(null);
       setTelegramAccounts([]);
+      setTelegramError(error.message || "The Telegram API did not respond.");
       setTelegramStatus(error.status === 401 ? "needs-login" : "offline");
     }
-  }, []);
+  }, [telegramIdentityToken]);
+
+  // WhatsApp setup sits behind its own workspace login, so the session is
+  // resolved first: without one there is nothing to show but the login card.
+  const loadWhatsApp = useCallback(async () => {
+    if (!hasAccess(effectiveAccess, "messaging.whatsapp", "configure")) {
+      setWhatsappStatus("unauthorized");
+      return;
+    }
+    const failed = (error) => {
+      setWhatsappState(null);
+      setWhatsappStatus(error.status === 401 || error.status === 403 ? "unauthorized" : "offline");
+    };
+
+    let session;
+    try {
+      session = await whatsappRequest("/auth/session");
+    } catch (error) {
+      setWhatsappSession(null);
+      failed(error);
+      return;
+    }
+
+    setWhatsappSession(session);
+    if (!session.authenticated) {
+      setWhatsappState(null);
+      setWhatsappStatus("needs-login");
+      return;
+    }
+
+    try {
+      setWhatsappState(await whatsappRequest("/onboarding"));
+      setWhatsappStatus("ready");
+    } catch (error) {
+      failed(error);
+    }
+  }, [effectiveAccess]);
 
   const loadPublishing = useCallback(async (candidateSession) => {
-    const session = candidateSession ?? readPublishingSession();
+    // Publishing is authorized by the current AgenticThat workspace session.
+    // A previous local Publish Queue password must never become the authority.
+    const session = publishingIdentityToken
+      ? { token: publishingIdentityToken }
+      : candidateSession ?? readPublishingSession();
     if (!session) {
       setPublishingSession(null);
       setPublishingAccounts([]);
+      setPublishingHasSuccessfulPost(false);
+      rememberPublishingAccounts([]);
       setPublishingStatus("needs-login");
       return;
     }
-    setPublishingStatus("checking");
     try {
-      const me = await publishingRequest("/api/auth/me", session.token);
-      const accounts = await publishingRequest("/api/accounts", session.token);
+      const [me, accounts, uploads] = await Promise.all([
+        publishingRequest("/api/auth/me", session.token),
+        publishingRequest("/api/accounts", session.token),
+        publishingRequest("/api/uploads", session.token).catch(() => null)
+      ]);
       const current = { token: session.token, user: me };
       setPublishingSession(current);
-      setPublishingAccounts(Array.isArray(accounts) ? accounts : []);
+      const accountList = Array.isArray(accounts) ? accounts : [];
+      setPublishingAccounts(accountList);
+      if (Array.isArray(uploads)) setPublishingHasSuccessfulPost(uploads.some(upload => upload.status === "posted"));
+      rememberPublishingAccounts(accountList);
       setPublishingStatus(me.role === "operations_manager" ? "ready" : "needs-manager");
     } catch (error) {
       if (error.status === 401) {
         window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
         setPublishingSession(null);
         setPublishingAccounts([]);
+        setPublishingHasSuccessfulPost(false);
+        rememberPublishingAccounts([]);
         setPublishingStatus("needs-login");
       } else {
         setPublishingStatus("offline");
       }
     }
-  }, []);
+  }, [publishingIdentityToken]);
+
+  const connectPublishing = useCallback(async () => {
+    if (!publishingIdentityToken) { setPublishingStatus("unauthorized"); return; }
+    try {
+      const me = await publishingRequest("/api/auth/me", publishingIdentityToken);
+      const centralSession = { token: publishingIdentityToken, user: me };
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      return loadPublishing(centralSession);
+    } catch (error) {
+      window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
+      setPublishingSession(null);
+      setPublishingAccounts([]);
+      setPublishingStatus(
+        error.status === 401
+          ? "needs-upgrade"
+          : "offline"
+      );
+    }
+  }, [loadPublishing, publishingIdentityToken]);
+
+  const loadWorkspaceCompanion = useCallback(async () => {
+    if (!publishingIdentityToken) return;
+    try {
+      const data = await publishingRequest("/api/companion", publishingIdentityToken);
+      setWorkspaceCompanion(data.companion || null);
+    } catch {
+      setWorkspaceCompanion(null);
+    }
+  }, [publishingIdentityToken]);
+
+  const refreshPublishingAccounts = useCallback(async () => {
+    const token = publishingIdentityToken || publishingSession?.token;
+    if (!token) return;
+    try {
+      const [accounts, uploads] = await Promise.all([
+        publishingRequest("/api/accounts", token),
+        publishingRequest("/api/uploads", token).catch(() => null)
+      ]);
+      const accountList = Array.isArray(accounts) ? accounts : [];
+      setPublishingAccounts(accountList);
+      if (Array.isArray(uploads)) setPublishingHasSuccessfulPost(uploads.some(upload => upload.status === "posted"));
+      rememberPublishingAccounts(accountList);
+    } catch (error) {
+      if (error.status === 401) setPublishingStatus("needs-login");
+    }
+  }, [publishingIdentityToken, publishingSession?.token]);
 
   useEffect(() => {
-    void Promise.all([loadTelegram(), loadPublishing()]);
-  }, [loadPublishing, loadTelegram]);
+    if (activeService === "publishing") {
+      void Promise.all([connectPublishing(), loadWorkspaceCompanion()]);
+      return;
+    }
+    if (activeService === "messaging") {
+      if (messagingPlatform === "whatsapp") void loadWhatsApp();
+      else void loadTelegram();
+    }
+  }, [activeService, connectPublishing, loadTelegram, loadWhatsApp, loadWorkspaceCompanion, messagingPlatform]);
 
-  const connectedCount = telegramAccounts.length + publishingAccounts.length;
-  const activeDefinition = services.find(service => service.id === activeService) || services[0];
+  useEffect(() => {
+    if (activeService !== "publishing") return undefined;
+    const refreshVisiblePublishing = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadWorkspaceCompanion();
+      void refreshPublishingAccounts();
+    };
+    const timer = window.setInterval(refreshVisiblePublishing, 15_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshVisiblePublishing();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeService, loadWorkspaceCompanion, refreshPublishingAccounts]);
+
+  const whatsappConnected = Boolean(whatsappState?.connected && whatsappState?.account);
+  const whatsappSenderCount = whatsappConnected ? Math.max(1, (whatsappState.numbers || []).length) : 0;
+  const connectedCount = telegramAccounts.length + whatsappSenderCount + publishingAccounts.length;
+  const activeDefinition = visibleServices.find(service => service.id === activeService) || visibleServices[0];
 
   const selectService = (serviceId) => {
     setActiveService(serviceId);
@@ -251,43 +483,32 @@ export default function ConfigManager({
     window.history.replaceState({}, "", url);
   };
 
-  const canRefresh = activeService === "publishing" || (activeService === "messaging" && messagingPlatform === "telegram");
+  const canRefresh = activeService === "publishing" || activeService === "messaging";
+  const refreshActiveService = () => {
+    if (activeService !== "messaging") return void connectPublishing();
+    return messagingPlatform === "whatsapp" ? void loadWhatsApp() : void loadTelegram();
+  };
 
   return (
-    <main className="config-shell">
-      <header className="config-topbar">
-        <a className="config-brand" href="/">
-          <span>AT</span>
-          <strong>AgenticThat</strong>
-          <small>Config Manager</small>
-        </a>
-        <div className="config-workspace">
-          <span>{String(user.businessName || user.name || "W").charAt(0).toUpperCase()}</span>
-          <div><strong>{user.businessName || user.name}</strong><small>{user.email}</small></div>
-        </div>
-        <div className="config-top-actions">
-          <a className="config-secondary" href="/content-manager"><Database size={15} />Content Manager</a>
-          <a className="config-back" href="/"><ArrowLeft size={16} />Back to services</a>
-        </div>
-      </header>
+    <ProductShell user={user} active="connections">
+      <main className="config-shell">
+        <section className="config-hero">
+          <div>
+            <p className="config-kicker"><Settings2 size={15} />Account connections</p>
+            <h1>Connect and manage your accounts.</h1>
+            <p>Add an account, complete its login, then return to the Store to open the service workspace.</p>
+          </div>
+          <div className="config-summary">
+            <span><strong>{connectedCount}</strong><small>connected accounts</small></span>
+            <span><strong>2</strong><small>active integrations</small></span>
+            <span><strong>2</strong><small>planned integrations</small></span>
+          </div>
+        </section>
 
-      <section className="config-hero">
-        <div>
-          <p className="config-kicker"><Settings2 size={15} />Central service configuration</p>
-          <h1>Connect once. Use the account everywhere it belongs.</h1>
-          <p>Accounts are configured here and automatically appear inside their respective services for selection and automation.</p>
-        </div>
-        <div className="config-summary">
-          <span><strong>{connectedCount}</strong><small>connected accounts</small></span>
-          <span><strong>2</strong><small>active integrations</small></span>
-          <span><strong>2</strong><small>planned integrations</small></span>
-        </div>
-      </section>
-
-      <div className="config-layout">
+        <div className="config-layout">
         <aside className="config-service-nav">
           <div className="config-nav-heading"><span>Services</span><small>Choose a destination</small></div>
-          {services.map(service => (
+          {visibleServices.map(service => (
             <button
               key={service.id}
               className={activeService === service.id ? "active" : ""}
@@ -316,7 +537,7 @@ export default function ConfigManager({
               <button
                 type="button"
                 className="config-refresh"
-                onClick={() => activeService === "messaging" ? void loadTelegram() : void loadPublishing()}
+                onClick={refreshActiveService}
               >
                 <RefreshCw size={16} />Refresh
               </button>
@@ -331,9 +552,23 @@ export default function ConfigManager({
               onPlatformChange={selectMessagingPlatform}
               status={telegramStatus}
               user={telegramUser}
+              platformUser={user}
               accounts={telegramAccounts}
               dashboardUrl={telegramDashboardUrl}
+              continueTelegramConnect={initialTelegramConnect}
+              telegramIdentityToken={telegramIdentityToken}
+              requiresApiCredentials={telegramRequiresApiCredentials}
+              serviceError={telegramError}
+              allowedPlatforms={allowedMessagingPlatforms}
               onReload={loadTelegram}
+              whatsappStatus={whatsappStatus}
+              whatsappState={whatsappState}
+              whatsappSession={whatsappSession}
+              whatsappSenderCount={whatsappSenderCount}
+              whatsappDashboardUrl={whatsappDashboardUrl}
+              metaAppId={metaAppId}
+              metaConfigId={metaConfigId}
+              onWhatsAppReload={loadWhatsApp}
               setNotice={setNotice}
             />
           )}
@@ -342,13 +577,16 @@ export default function ConfigManager({
               status={publishingStatus}
               session={publishingSession}
               accounts={publishingAccounts}
+              hasSuccessfulPost={publishingHasSuccessfulPost}
               initialPlatform={initialPublishingPlatform}
               publishQueueUrl={publishQueueUrl}
-              onSession={session => {
-                setPublishingSession(session);
-                void loadPublishing(session);
-              }}
+              publishingIdentityToken={publishingIdentityToken}
+              allowedPlatforms={allowedPublishingPlatforms}
+              workspaceCompanion={workspaceCompanion}
+              accountEmail={user.email}
               onReload={() => loadPublishing(publishingSession)}
+              onReconnect={connectPublishing}
+              onCompanionSaved={setWorkspaceCompanion}
               setNotice={setNotice}
             />
           )}
@@ -360,8 +598,9 @@ export default function ConfigManager({
             />
           )}
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </ProductShell>
   );
 }
 
@@ -370,15 +609,29 @@ function MessagingManager({
   onPlatformChange,
   status,
   user,
+  platformUser,
   accounts,
   dashboardUrl,
+  continueTelegramConnect,
+  telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
+  allowedPlatforms,
   onReload,
+  whatsappStatus,
+  whatsappState,
+  whatsappSession,
+  whatsappSenderCount,
+  whatsappDashboardUrl,
+  metaAppId,
+  metaConfigId,
+  onWhatsAppReload,
   setNotice
 }) {
   return (
     <>
       <div className="config-platform-tabs messaging-tabs" role="tablist" aria-label="Messaging platform">
-        {messagingPlatforms.map(item => (
+        {allowedPlatforms.map(item => (
           <button
             type="button"
             role="tab"
@@ -389,7 +642,7 @@ function MessagingManager({
           >
             <img src={messagingPlatformLogos[item]} alt="" />
             <span>{messagingPlatformLabels[item]}</span>
-            <i className={item === "whatsapp" ? "planned" : ""}>{item === "telegram" ? accounts.length : "Soon"}</i>
+            <i>{item === "telegram" ? accounts.length : whatsappSenderCount}</i>
           </button>
         ))}
       </div>
@@ -398,19 +651,499 @@ function MessagingManager({
         <TelegramManager
           status={status}
           user={user}
+          platformUser={platformUser}
           accounts={accounts}
           dashboardUrl={dashboardUrl}
+          continueTelegramConnect={continueTelegramConnect}
+          telegramIdentityToken={telegramIdentityToken}
+          requiresApiCredentials={requiresApiCredentials}
+          serviceError={serviceError}
           onReload={onReload}
           setNotice={setNotice}
         />
       ) : (
-        <PlaceholderService
-          icon={MessageCircle}
-          title="WhatsApp configuration is reserved"
-          copy="WhatsApp Business numbers, provider credentials, templates, and sender selection will be configured from this shared messaging area when the connector is enabled."
+        <WhatsAppManager
+          status={whatsappStatus}
+          state={whatsappState}
+          session={whatsappSession}
+          dashboardUrl={whatsappDashboardUrl}
+          metaAppId={metaAppId}
+          metaConfigId={metaConfigId}
+          onReload={onWhatsAppReload}
+          setNotice={setNotice}
         />
       )}
     </>
+  );
+}
+
+// WhatsApp connections are set up here, in the Connection Manager, so the Store
+// only ever has to open the workspace. Every step talks to the same
+// /api/whatsapp/onboarding endpoint the standalone wizard uses, and provider
+// credentials are verified by that route before they are encrypted and stored.
+function WhatsAppManager({ status, state, session, dashboardUrl, metaAppId, metaConfigId, onReload, setNotice }) {
+  const [authMode, setAuthMode] = useState("signin");
+  const [authForm, setAuthForm] = useState({ username: "", password: "", displayName: "", businessName: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const account = state?.account || null;
+  const connected = Boolean(state?.connected && account);
+  const numbers = state?.numbers || [];
+  const savedProvider = account?.provider === "wati" ? "wati" : "meta";
+  // /dashboard bounces straight back here until setup is marked complete, so
+  // the open buttons stay inert while that is still outstanding.
+  const workspaceReady = Boolean(state?.connected && account && state?.onboarded && dashboardUrl);
+  const [connecting, setConnecting] = useState(false);
+  const [providerId, setProviderId] = useState(savedProvider);
+  const [busy, setBusy] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+  const [origin, setOrigin] = useState("");
+  const [meta, setMeta] = useState({ wabaId: "", accessToken: "", appId: "", appSecret: "", apiVersion: "v21.0" });
+  const [wati, setWati] = useState({ apiUrl: "", accessToken: "", webhookSecret: "" });
+
+  useEffect(() => setOrigin(window.location.origin), []);
+
+  // Prefill the login from the workspace the AgenticThat session already knows,
+  // so registering is mostly a matter of confirming a password.
+  useEffect(() => {
+    const hints = session?.workspace;
+    if (!hints) return;
+    setAuthForm(current => ({
+      ...current,
+      username: current.username || hints.username || "",
+      displayName: current.displayName || hints.displayName || "",
+      businessName: current.businessName || hints.businessName || ""
+    }));
+  }, [session?.workspace?.username, session?.workspace?.displayName, session?.workspace?.businessName]);
+
+  // Re-seed the form whenever the stored account changes, so "Change connection"
+  // opens on the provider and identifiers already in use. Secrets are never
+  // returned by the API and always have to be re-entered.
+  useEffect(() => {
+    setProviderId(account?.provider === "wati" ? "wati" : "meta");
+    setMeta(current => ({
+      ...current,
+      wabaId: account?.provider === "wati" ? "" : account?.waba_id || "",
+      appId: account?.app_id || "",
+      apiVersion: account?.api_version || "v21.0"
+    }));
+    setWati(current => ({ ...current, apiUrl: account?.provider === "wati" ? account?.service_url || "" : "" }));
+  }, [account?.provider, account?.waba_id, account?.app_id, account?.api_version, account?.service_url]);
+
+  const webhookUrl = `${origin || "https://your-domain"}/api/webhooks/wati?token=${
+    wati.webhookSecret ? encodeURIComponent(wati.webhookSecret) : "<your-webhook-secret>"
+  }`;
+
+  const authenticate = async (event) => {
+    event.preventDefault();
+    const registering = authMode === "register";
+    setBusy(true);
+    try {
+      const data = await whatsappRequest(registering ? "/auth/register" : "/auth/session", {
+        method: "POST",
+        body: JSON.stringify(
+          registering
+            ? {
+                username: authForm.username.trim(),
+                password: authForm.password,
+                displayName: authForm.displayName.trim(),
+                businessName: authForm.businessName.trim()
+              }
+            : { username: authForm.username.trim(), password: authForm.password }
+        )
+      });
+      setAuthForm(current => ({ ...current, password: "" }));
+      setShowPassword(false);
+      setNotice({
+        tone: "success",
+        message: registering
+          ? `WhatsApp workspace login created for ${data.user?.email || authForm.username.trim()}. Connect the WhatsApp account next.`
+          : `Signed in to WhatsApp as ${data.user?.name || data.user?.email || authForm.username.trim()}.`
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Leaving the WhatsApp workspace login without leaving AgenticThat, so a
+  // wrong login can be corrected from here.
+  const signOutWorkspace = async () => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/auth/session", { method: "DELETE" });
+      setAuthMode("signin");
+      setNotice({ tone: "success", message: "Signed out of the WhatsApp workspace." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeForm = () => {
+    setConnecting(false);
+    setShowToken(false);
+    setMeta(current => ({ ...current, accessToken: "", appSecret: "" }));
+    setWati(current => ({ ...current, accessToken: "" }));
+  };
+
+  // A stored provider plus a sender number is everything the workspace needs,
+  // so finishing is done here rather than sending the operator to the wizard.
+  // A failure is not fatal: the "Finish setup" card below stays available.
+  const markOnboarded = async () => {
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "complete" }) });
+    } catch {
+      /* handled by the finish-setup card once the reload reports it */
+    }
+  };
+
+  const submitMeta = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await whatsappRequest("/onboarding", {
+        method: "POST",
+        body: JSON.stringify({
+          step: "whatsapp",
+          wabaId: meta.wabaId.trim(),
+          accessToken: meta.accessToken.trim(),
+          appId: meta.appId.trim(),
+          appSecret: meta.appSecret.trim(),
+          apiVersion: meta.apiVersion.trim() || "v21.0"
+        })
+      });
+      await markOnboarded();
+      closeForm();
+      const count = (data.numbers || []).length;
+      setNotice({
+        tone: "success",
+        message: `WhatsApp is connected through Meta with ${count} sender number${count === 1 ? "" : "s"}. Open the dashboard from the Store or the button above.`
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitWati = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", {
+        method: "POST",
+        body: JSON.stringify({
+          step: "wati",
+          apiUrl: wati.apiUrl.trim(),
+          accessToken: wati.accessToken.trim(),
+          webhookSecret: wati.webhookSecret.trim()
+        })
+      });
+      await markOnboarded();
+      closeForm();
+      setNotice({
+        tone: "success",
+        message: "WATI is connected. Add the webhook URL shown in the form to your WATI account so replies reach this workspace."
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chooseDefault = async (phoneNumberId) => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "default-number", phoneNumberId }) });
+      setNotice({ tone: "success", message: "Default sender number updated." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finishSetup = async () => {
+    setBusy(true);
+    try {
+      await whatsappRequest("/onboarding", { method: "POST", body: JSON.stringify({ step: "complete" }) });
+      setNotice({ tone: "success", message: "WhatsApp setup is complete. The workspace is ready to open." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeEmbeddedSignup = async () => {
+    await markOnboarded();
+    closeForm();
+    setNotice({ tone: "success", message: "WhatsApp is connected through Meta Embedded Signup." });
+    await onReload();
+  };
+
+  if (status === "checking") {
+    return <div className="config-loading"><Loader2 className="spin" size={23} />Checking WhatsApp connection…</div>;
+  }
+
+  if (status === "unauthorized") {
+    return (
+      <EmptyState
+        icon={LockKeyhole}
+        title="WhatsApp connections need configure access"
+        copy="Ask a workspace administrator for the WhatsApp configure permission, then reopen this page."
+      />
+    );
+  }
+
+  if (status === "offline") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="WhatsApp service is unavailable"
+        copy="The WhatsApp workspace did not respond. Check the service connection, then try again."
+        action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
+      />
+    );
+  }
+
+  // The WhatsApp workspace login. It is the first thing an operator sees here,
+  // and "Register" sets the credentials on the workspace this AgenticThat
+  // account already owns rather than starting a second tenant.
+  if (status === "needs-login") {
+    const registering = authMode === "register";
+    return (
+      <div className="config-auth-card whatsapp-auth-card">
+        <div className="config-auth-copy">
+          <span><LockKeyhole size={25} /></span>
+          <p>One login for Connections and WhatsApp</p>
+          <h3>{registering ? "Create your WhatsApp workspace login" : "Sign in to your WhatsApp workspace"}</h3>
+          <div>{registering
+            ? "Choose the username and password your team will use for the WhatsApp workspace. It is created inside the workspace you already own — no second account."
+            : "Enter the username and password for your WhatsApp workspace. Signing in also links an existing Tinitiate WA workspace to this AgenticThat account. Setting one up for the first time? Choose Register."}</div>
+          <small><ShieldCheck size={14} />Passwords are hashed before storage and never shown back to the browser.</small>
+        </div>
+        <form onSubmit={authenticate}>
+          <div className="config-auth-mode" role="tablist" aria-label="WhatsApp workspace access">
+            <button type="button" role="tab" aria-selected={!registering} className={!registering ? "active" : ""} onClick={() => setAuthMode("signin")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={registering} className={registering ? "active" : ""} onClick={() => setAuthMode("register")}>Register</button>
+          </div>
+          {registering && (
+            <>
+              <label><span>Business name</span><input value={authForm.businessName} onChange={event => setAuthForm({ ...authForm, businessName: event.target.value })} placeholder="Your business" autoComplete="organization" /></label>
+              <label><span>Your name</span><input value={authForm.displayName} onChange={event => setAuthForm({ ...authForm, displayName: event.target.value })} placeholder="Your name" autoComplete="name" /></label>
+            </>
+          )}
+          <label><span>Username</span><input type="email" value={authForm.username} onChange={event => setAuthForm({ ...authForm, username: event.target.value })} placeholder="you@example.com" autoComplete="username" required /></label>
+          <label>
+            <span>Password</span>
+            <div className="config-secret-input">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={authForm.password}
+                onChange={event => setAuthForm({ ...authForm, password: event.target.value })}
+                autoComplete={registering ? "new-password" : "current-password"}
+                minLength={registering ? 8 : undefined}
+                required
+              />
+              <button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+            </div>
+          </label>
+          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{registering ? "Create login and continue" : "Sign in and continue"}</button>
+        </form>
+      </div>
+    );
+  }
+
+  const connectionForm = (
+    <section className="config-form-card">
+      <header>
+        <span><Plug size={21} /></span>
+        <div><p>{connected ? "Change WhatsApp connection" : "New WhatsApp connection"}</p><h3>Link the WhatsApp account you control</h3></div>
+        <button type="button" onClick={closeForm} aria-label="Close form"><X size={18} /></button>
+      </header>
+
+      <ConnectionSteps
+        activeIndex={1}
+        steps={[
+          { icon: Plug, title: "Choose a provider", copy: "Meta Cloud API or your WATI account." },
+          { icon: KeyRound, title: "Enter credentials", copy: "They are verified before they are stored." },
+          { icon: ShieldCheck, title: "Ready to open", copy: "Sender numbers sync and the workspace unlocks." }
+        ]}
+      />
+
+      <div className="config-form-section">
+        {state?.encryptionReady === false && (
+          <p className="config-engine-warning"><CircleAlert size={14} />CREDENTIAL_ENCRYPTION_KEY is missing on the server, so credentials cannot be stored securely yet.</p>
+        )}
+        <div className="config-engine-picker" role="group" aria-label="Choose a WhatsApp provider">
+          {whatsappProviders.map(item => (
+            <button
+              type="button"
+              key={item.id}
+              className={providerId === item.id ? "active" : ""}
+              aria-pressed={providerId === item.id}
+              onClick={() => setProviderId(item.id)}
+            >
+              <span className="config-account-logo"><img src={item.id === "wati" ? "/wati-logo.svg" : "/whatsapp-logo.svg"} alt="" /></span>
+              <span><strong>{item.label}</strong><small>{item.copy}</small></span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {providerId === "meta" ? (
+        <form onSubmit={submitMeta}>
+          {metaAppId && metaConfigId && (
+            <div className="config-embedded-signup">
+              <p>Connect with Meta in a guided popup — WhatsApp Business app coexistence included. No ids to copy.</p>
+              <MetaEmbeddedSignupButton appId={metaAppId} configId={metaConfigId} onSuccess={() => void completeEmbeddedSignup()} />
+              <span>Or enter Cloud API credentials manually below.</span>
+            </div>
+          )}
+          <div className="config-form-grid">
+            <label><span>WhatsApp Business Account ID</span><input value={meta.wabaId} onChange={event => setMeta({ ...meta, wabaId: event.target.value })} placeholder="1234567890" autoComplete="off" required /></label>
+            <label><span>Graph API version</span><input value={meta.apiVersion} onChange={event => setMeta({ ...meta, apiVersion: event.target.value })} placeholder="v21.0" autoComplete="off" /></label>
+            <label className="wide"><span>Permanent access token</span><div className="config-secret-input"><input type={showToken ? "text" : "password"} value={meta.accessToken} onChange={event => setMeta({ ...meta, accessToken: event.target.value })} autoComplete="off" required /><button type="button" onClick={() => setShowToken(value => !value)} aria-label={showToken ? "Hide token" : "Show token"}>{showToken ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+            <label><span>Meta app ID <small>optional</small></span><input value={meta.appId} onChange={event => setMeta({ ...meta, appId: event.target.value })} autoComplete="off" /></label>
+            <label><span>Meta app secret <small>optional</small></span><input type="password" value={meta.appSecret} onChange={event => setMeta({ ...meta, appSecret: event.target.value })} autoComplete="off" /></label>
+          </div>
+          <p className="config-form-help">The token is checked against Meta before it is saved, so a wrong value is rejected here instead of failing on the first send. Sender numbers sync automatically.</p>
+          <div className="config-form-actions">
+            <button className="config-secondary" type="button" onClick={closeForm}>Cancel</button>
+            <button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify and connect</button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={submitWati}>
+          <div className="config-form-grid">
+            <label className="wide"><span>WATI API endpoint</span><input type="url" value={wati.apiUrl} onChange={event => setWati({ ...wati, apiUrl: event.target.value })} placeholder="https://live-server-000.wati.io" autoComplete="off" required /></label>
+            <label className="wide"><span>WATI access token</span><div className="config-secret-input"><input type={showToken ? "text" : "password"} value={wati.accessToken} onChange={event => setWati({ ...wati, accessToken: event.target.value })} autoComplete="off" required /><button type="button" onClick={() => setShowToken(value => !value)} aria-label={showToken ? "Hide token" : "Show token"}>{showToken ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+            <label className="wide">
+              <span>Webhook secret</span>
+              <div className="config-secret-input">
+                <input value={wati.webhookSecret} onChange={event => setWati({ ...wati, webhookSecret: event.target.value })} minLength={24} placeholder="At least 24 characters" autoComplete="off" required />
+                <button type="button" onClick={() => setWati({ ...wati, webhookSecret: createWebhookSecret() })} aria-label="Generate a webhook secret"><RefreshCw size={16} /></button>
+              </div>
+            </label>
+          </div>
+          <div className="config-webhook-hint">
+            <span>Add this webhook URL in WATI so incoming replies reach this workspace:</span>
+            <code>{webhookUrl}</code>
+          </div>
+          <p className="config-form-help">The endpoint and token are checked against WATI before they are saved. The webhook secret is stored encrypted and never shown again.</p>
+          <div className="config-form-actions">
+            <button className="config-secondary" type="button" onClick={closeForm}>Cancel</button>
+            <button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify and connect</button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+
+  const signedInAs = session?.user?.name || session?.user?.email || "WhatsApp user";
+  const sessionBar = (
+    <div className="config-integration-bar">
+      <div>
+        <CheckCircle2 size={18} />
+        <span>
+          <strong>{connected ? "WhatsApp account connected" : "WhatsApp workspace signed in"}</strong>
+          <small>{connected
+            ? (savedProvider === "wati" ? `WATI · ${account.service_url || "endpoint saved"}` : `Meta Cloud API · WABA ${account.waba_id}`)
+            : `Signed in as ${signedInAs}`}</small>
+        </span>
+      </div>
+      <div className="config-integration-actions">
+        <button className="config-secondary" type="button" onClick={() => void signOutWorkspace()} disabled={busy}><LogOut size={16} />Sign out</button>
+        {connected && !connecting && <button className="config-secondary" type="button" onClick={() => setConnecting(true)}><Pencil size={16} />Change connection</button>}
+        {connected && (workspaceReady
+          ? <a className="config-primary" href={dashboardUrl}>Open dashboard<ArrowRight size={15} /></a>
+          : <button className="config-primary" type="button" disabled>Open dashboard<ArrowRight size={15} /></button>)}
+      </div>
+    </div>
+  );
+
+  if (!connected) {
+    return (
+      <div className="config-manager-body">
+        {sessionBar}
+        {connecting ? connectionForm : (
+          <EmptyState
+            icon={MessageCircle}
+            title="No WhatsApp account connected"
+            copy="Set up the account first: link Meta Cloud API or your WATI workspace here. The WhatsApp workspace in the Store stays locked until a connection is saved."
+            action={<button className="config-primary" type="button" onClick={() => setConnecting(true)}><Plus size={16} />Connect WhatsApp account</button>}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="config-manager-body">
+      {sessionBar}
+
+      {!state?.onboarded && (
+        <section className="config-form-card">
+          <header>
+            <span><MonitorCheck size={21} /></span>
+            <div><p>One step left</p><h3>Finish setup to unlock the workspace</h3></div>
+          </header>
+          <div className="config-form-section">
+            <p className="config-form-help">The account is connected but setup was never completed, so the WhatsApp workspace still redirects back here. Finish it to open the dashboard.</p>
+            <div className="config-form-actions">
+              <button className="config-primary" type="button" onClick={() => void finishSetup()} disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Finish setup</button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {connecting && connectionForm}
+
+      <AccountCollectionHeader
+        count={numbers.length}
+        title="Sender numbers"
+        copy="These numbers appear in the WhatsApp workspace sender selector. The default is used for new outbound messages."
+      />
+      {numbers.length === 0 ? (
+        <EmptyState
+          icon={Smartphone}
+          title={savedProvider === "wati" ? "WATI manages the sender number" : "No sender numbers synced yet"}
+          copy={savedProvider === "wati"
+            ? "Your WATI workspace owns the sender number, so there is nothing to choose here."
+            : "Add a phone number to this WhatsApp Business Account in Meta Business Manager, then reconnect to sync it."}
+          action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Refresh</button>}
+        />
+      ) : (
+        <div className="config-account-list">
+          {numbers.map(number => (
+            <article className="config-account-row" key={number.phone_number_id}>
+              <span className="config-account-logo"><img src="/whatsapp-logo.svg" alt="" /></span>
+              <span className="config-account-main">
+                <strong>{number.display_number || number.phone_number_id}</strong>
+                <small>{number.verified_name || "WhatsApp sender"}</small>
+              </span>
+              <span className="config-account-state"><i />{number.is_default ? "Default sender" : "Available"}</span>
+              <span className="config-account-meta">{number.quality_rating ? `Quality ${number.quality_rating}` : number.status || "Ready to send"}</span>
+              <div className="config-account-actions">
+                {number.is_default
+                  ? <button type="button" disabled><Check size={15} />Default</button>
+                  : <button className="open" type="button" onClick={() => void chooseDefault(number.phone_number_id)} disabled={busy}><Check size={15} />Make default</button>}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -426,26 +1159,77 @@ function PlaceholderService({ icon: Icon, title, copy }) {
   );
 }
 
-function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNotice }) {
+function TelegramManager({
+  status,
+  user,
+  platformUser,
+  accounts,
+  dashboardUrl,
+  continueTelegramConnect,
+  telegramIdentityToken,
+  requiresApiCredentials,
+  serviceError,
+  onReload,
+  setNotice
+}) {
   const [connecting, setConnecting] = useState(false);
-  const [stage, setStage] = useState("credentials");
+  const [stage, setStage] = useState("phone");
   const [challengeId, setChallengeId] = useState("");
+  const [phone, setPhone] = useState("");
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
-  const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showHash, setShowHash] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showApiHash, setShowApiHash] = useState(false);
+  const [workspaceAuthMode, setWorkspaceAuthMode] = useState("signin");
+  const [workspaceUsername, setWorkspaceUsername] = useState(platformUser?.email || "");
+  const [workspacePassword, setWorkspacePassword] = useState("");
+  const [workspaceDisplayName, setWorkspaceDisplayName] = useState(platformUser?.name || platformUser?.businessName || "");
+
+  useEffect(() => {
+    if (!continueTelegramConnect || status !== "ready") return;
+    setConnecting(true);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("continue");
+    window.history.replaceState({}, "", url);
+  }, [continueTelegramConnect, status]);
+
+  const authenticateWorkspace = async (event) => {
+    event.preventDefault();
+    const creating = workspaceAuthMode === "register";
+    setBusy(true);
+    try {
+      const data = await telegramRequest(creating ? "/auth/register" : "/auth/password", telegramIdentityToken, {
+        method: "POST",
+        body: JSON.stringify({
+          username: workspaceUsername.trim(),
+          password: workspacePassword,
+          ...(creating ? { displayName: workspaceDisplayName.trim() } : {})
+        })
+      });
+      setWorkspacePassword("");
+      setConnecting(true);
+      setNotice({
+        tone: "success",
+        message: "Telegram dashboard access is ready for " + (data.user?.displayName || workspaceUsername.trim()) + ". Add the Telegram account below."
+      });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const resetConnection = () => {
     setConnecting(false);
-    setStage("credentials");
+    setStage("phone");
     setChallengeId("");
+    setPhone("");
     setApiId("");
     setApiHash("");
-    setPhone("");
     setCode("");
     setPassword("");
   };
@@ -454,9 +1238,15 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/start", {
+      const data = await telegramRequest("/telegram/login/start", telegramIdentityToken, {
         method: "POST",
-        body: JSON.stringify({ telegramApiId: apiId.trim(), telegramApiHash: apiHash.trim(), phone: phone.trim() })
+        body: JSON.stringify({
+          phone: phone.trim(),
+          ...(requiresApiCredentials ? {
+            telegramApiId: apiId.trim(),
+            telegramApiHash: apiHash.trim()
+          } : {})
+        })
       });
       setChallengeId(data.challengeId);
       setStage("code");
@@ -475,7 +1265,7 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/code", {
+      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/code", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({ code: code.trim() })
       });
@@ -497,7 +1287,7 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
     event.preventDefault();
     setBusy(true);
     try {
-      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/password", {
+      const data = await telegramRequest("/telegram/login/" + encodeURIComponent(challengeId) + "/password", telegramIdentityToken, {
         method: "POST",
         body: JSON.stringify({ password })
       });
@@ -519,7 +1309,7 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
     if (!window.confirm("Disconnect " + (account.displayName || account.username || "this Telegram account") + "?")) return;
     setBusy(true);
     try {
-      await telegramRequest("/telegram/accounts/" + encodeURIComponent(account.id), { method: "DELETE" });
+      await telegramRequest("/telegram/accounts/" + encodeURIComponent(account.id), telegramIdentityToken, { method: "DELETE" });
       setNotice({ tone: "success", message: "Telegram account disconnected." });
       await onReload();
     } catch (error) {
@@ -538,7 +1328,7 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
       <EmptyState
         icon={CircleAlert}
         title="Telegram service is unavailable"
-        copy="Start the AgenticThat development workspace, then refresh this integration."
+        copy={serviceError || "The Telegram API did not respond. Refresh this integration or verify the deployment configuration."}
         action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
       />
     );
@@ -546,17 +1336,29 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
 
   if (status === "needs-login") {
     return (
-      <EmptyState
-        icon={LockKeyhole}
-        title="Sign in to the Telegram workspace once"
-        copy="Config Manager uses the Telegram workspace session to connect accounts securely. Sign in there, return to this tab, and recheck."
-        action={
-          <div className="config-empty-actions">
-            <a className="config-primary" href={dashboardUrl} target="_blank" rel="noreferrer">Open Telegram sign in<ExternalLink size={15} /></a>
-            <button className="config-secondary" type="button" onClick={() => void onReload()}><RefreshCw size={15} />I signed in</button>
+      <div className="config-auth-card telegram-auth-card">
+        <div className="config-auth-copy">
+          <span><LockKeyhole size={25} /></span>
+          <p>One login for Connections and Telegram</p>
+          <h3>{workspaceAuthMode === "register" ? "Create your Telegram dashboard login" : "Use your Telegram dashboard login"}</h3>
+          <div>{workspaceAuthMode === "register"
+            ? "This creates the same login used before the Telegram dashboard. Create it once here, then connect your Telegram number below."
+            : "Enter the same username and password used before opening the Telegram dashboard. The account form opens here immediately."}</div>
+          <small><ShieldCheck size={14} />The same secure session opens Connections and the Telegram dashboard.</small>
+        </div>
+        <form onSubmit={authenticateWorkspace}>
+          <div className="config-auth-mode" role="tablist" aria-label="Telegram workspace access">
+            <button type="button" role="tab" aria-selected={workspaceAuthMode === "signin"} className={workspaceAuthMode === "signin" ? "active" : ""} onClick={() => setWorkspaceAuthMode("signin")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={workspaceAuthMode === "register"} className={workspaceAuthMode === "register" ? "active" : ""} onClick={() => setWorkspaceAuthMode("register")}>Create dashboard login</button>
           </div>
-        }
-      />
+          {workspaceAuthMode === "register" && (
+            <label><span>Workspace name</span><input value={workspaceDisplayName} onChange={event => setWorkspaceDisplayName(event.target.value)} autoComplete="name" placeholder="Your name or business" required /></label>
+          )}
+          <label><span>Username</span><input value={workspaceUsername} onChange={event => setWorkspaceUsername(event.target.value)} autoComplete="username" placeholder="you@example.com" required /></label>
+          <label><span>Password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={workspacePassword} onChange={event => setWorkspacePassword(event.target.value)} autoComplete={workspaceAuthMode === "register" ? "new-password" : "current-password"} minLength={8} required /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}{workspaceAuthMode === "register" ? "Create login and add account" : "Sign in and add account"}</button>
+        </form>
+      </div>
     );
   }
 
@@ -571,18 +1373,33 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
         <section className="config-form-card">
           <header>
             <span><KeyRound size={21} /></span>
-            <div><p>New Telegram connection</p><h3>{stage === "credentials" ? "API credentials and phone" : stage === "code" ? "Verification code" : "Two-factor password"}</h3></div>
+            <div><p>New Telegram connection</p><h3>{stage === "phone" ? "Enter your phone number" : stage === "code" ? "Verification code" : "Two-factor password"}</h3></div>
             <button type="button" onClick={resetConnection} aria-label="Close form"><X size={18} /></button>
           </header>
 
-          {stage === "credentials" && (
+          <ConnectionSteps
+            activeIndex={stage === "phone" ? 0 : stage === "code" ? 1 : 2}
+            steps={[
+              { icon: Smartphone, title: "Phone number", copy: "Use the full country code." },
+              { icon: KeyRound, title: "Verification", copy: "Enter Telegram's newest code." },
+              { icon: ShieldCheck, title: "Secure finish", copy: "Use your 2-step password only if asked." }
+            ]}
+          />
+
+          {stage === "phone" && (
             <form onSubmit={startConnection}>
               <div className="config-form-grid">
-                <label><span>Telegram API ID</span><input value={apiId} onChange={event => setApiId(event.target.value)} inputMode="numeric" placeholder="12345678" required /></label>
-                <label><span>Telegram API hash</span><div className="config-secret-input"><input type={showHash ? "text" : "password"} value={apiHash} onChange={event => setApiHash(event.target.value)} placeholder="32-character API hash" required /><button type="button" onClick={() => setShowHash(value => !value)}>{showHash ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+                {requiresApiCredentials && (
+                  <>
+                    <label><span>Telegram API ID</span><input value={apiId} onChange={event => setApiId(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="12345678" required /></label>
+                    <label><span>Telegram API hash</span><div className="config-secret-input"><input type={showApiHash ? "text" : "password"} value={apiHash} onChange={event => setApiHash(event.target.value)} autoComplete="off" placeholder="32-character API hash" required /><button type="button" onClick={() => setShowApiHash(value => !value)} aria-label={showApiHash ? "Hide API hash" : "Show API hash"}>{showApiHash ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+                  </>
+                )}
                 <label className="wide"><span>Phone number with country code</span><input value={phone} onChange={event => setPhone(event.target.value)} type="tel" autoComplete="tel" placeholder="+91 98765 43210" required /></label>
               </div>
-              <p className="config-form-help">Create API credentials at my.telegram.org. Telegram will send a one-time verification code to this account.</p>
+              <p className="config-form-help">{requiresApiCredentials
+                ? <>Create an API ID and hash at <a href="https://my.telegram.org" target="_blank" rel="noreferrer">my.telegram.org</a>. They are encrypted with the account session and are never shown again.</>
+                : "AgenticThat securely handles the app connection. Telegram will send a one-time verification code to this account."}</p>
               <div className="config-form-actions"><button className="config-secondary" type="button" onClick={resetConnection}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Send verification code</button></div>
             </form>
           )}
@@ -591,7 +1408,7 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
             <form onSubmit={submitCode}>
               <label className="config-code-field"><span>Verification code</span><input value={code} onChange={event => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="12345" autoFocus required /></label>
               <p className="config-form-help">Enter the newest code sent by Telegram. It is used once and is not saved.</p>
-              <div className="config-form-actions"><button className="config-secondary" type="button" onClick={() => setStage("credentials")}>Start over</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify account</button></div>
+              <div className="config-form-actions"><button className="config-secondary" type="button" onClick={() => setStage("phone")}>Start over</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <Check size={16} />}Verify account</button></div>
             </form>
           )}
 
@@ -614,7 +1431,8 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
         <EmptyState
           icon={UsersRound}
           title="No Telegram accounts connected"
-          copy="Use Connect Telegram account above to add the first account."
+          copy="Connect one Telegram number. It will be available to permitted teammates in the Telegram workspace."
+          action={<button className="config-primary" type="button" onClick={() => setConnecting(true)}><Plus size={16} />Connect first account</button>}
         />
       ) : (
         <div className="config-account-list">
@@ -623,8 +1441,11 @@ function TelegramManager({ status, user, accounts, dashboardUrl, onReload, setNo
               <span className="config-account-logo"><img src="/telegram-logo.svg" alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName || "Telegram account"}</strong><small>{account.username ? "@" + account.username : "Telegram user " + account.telegramUserId}</small></span>
               <span className="config-account-state"><i />Connected</span>
-              <span className="config-account-meta">Available in Telegram</span>
-              <button className="config-icon-danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} aria-label={"Disconnect " + account.displayName}><Trash2 size={16} /></button>
+              <span className="config-account-meta">Ready to open in Telegram</span>
+              <div className="config-account-actions">
+                <button className="open" type="button" onClick={() => window.location.assign(dashboardUrl)} disabled={!dashboardUrl}><ArrowRight size={15} />Open</button>
+                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} aria-label={"Delete " + account.displayName}><Trash2 size={15} />Delete</button>
+              </div>
             </article>
           ))}
         </div>
@@ -646,52 +1467,62 @@ function PublishingManager({
   status,
   session,
   accounts,
+  hasSuccessfulPost,
   initialPlatform,
   publishQueueUrl,
-  onSession,
+  publishingIdentityToken,
+  allowedPlatforms,
+  workspaceCompanion,
+  accountEmail,
   onReload,
+  onReconnect,
+  onCompanionSaved,
   setNotice
 }) {
-  const [username, setUsername] = useState("operations.manager");
-  const [password, setPassword] = useState("");
   const [selectedPlatform, setSelectedPlatform] = useState(initialPlatform || "instagram");
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [companionBusy, setCompanionBusy] = useState(false);
+  const [redditApiConfigured, setRedditApiConfigured] = useState(false);
+  const { status: localCompanionStatus, refresh: refreshLocalCompanion } = useCompanionStatus();
+
+  const redditAllowed = allowedPlatforms.includes("reddit");
+  useEffect(() => {
+    if (!redditAllowed) return;
+    let active = true;
+    fetch("/api/publishing/reddit/connections", { credentials: "include", cache: "no-store" })
+      .then(response => response.ok ? response.json() : { configured: false })
+      .then(data => { if (active) setRedditApiConfigured(Boolean(data.configured)); })
+      .catch(() => undefined);
+    const params = new URLSearchParams(window.location.search);
+    const outcome = redditConnectionMessages[params.get("reddit")];
+    if (outcome) {
+      setNotice(outcome);
+      params.delete("reddit");
+      window.history.replaceState(null, "", window.location.pathname + (params.toString() ? "?" + params.toString() : ""));
+    }
+    return () => { active = false; };
+  }, [redditAllowed, setNotice]);
 
   const platformAccounts = useMemo(
     () => accounts.filter(account => account.platform === selectedPlatform),
     [accounts, selectedPlatform]
   );
+  const companionInstalled = localCompanionStatus.state === "connected" || Boolean(workspaceCompanion);
+  const companionPaired = Boolean(workspaceCompanion);
+  const connectedAccount = accounts.find(account => account.enabled && account.credentialConfigured);
+  const setupComplete = companionInstalled && companionPaired && Boolean(connectedAccount) && hasSuccessfulPost;
+  const setupActiveIndex = !companionInstalled ? 0 : !companionPaired ? 1 : !connectedAccount ? 2 : !hasSuccessfulPost ? 3 : 5;
 
-  const signIn = async (event) => {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const response = await publishingRequest("/api/auth/login", "", {
-        method: "POST",
-        body: JSON.stringify({ username: username.trim(), password })
-      });
-      if (response.user.role !== "operations_manager") {
-        throw new Error("Use an Operations Manager account to configure publishing accounts.");
-      }
-      const nextSession = { token: response.token, user: response.user };
-      window.sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(nextSession));
-      setPassword("");
-      onSession(nextSession);
-      setNotice({ tone: "success", message: "Publish Queue configuration access is ready." });
-    } catch (error) {
-      setNotice({ tone: "error", message: error.message });
-    } finally {
-      setBusy(false);
-    }
+  const beginFirstAccountConnection = () => {
+    const targetPlatform = allowedPlatforms.includes(selectedPlatform) ? selectedPlatform : allowedPlatforms[0];
+    if (!targetPlatform) return;
+    setSelectedPlatform(targetPlatform);
+    setEditing({ platform: targetPlatform, enabled: true });
+    window.setTimeout(() => document.getElementById("publishing-account-connections")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   };
 
-  const signOutPublishing = () => {
-    window.sessionStorage.removeItem(PUBLISH_SESSION_KEY);
-    onSession(null);
-  };
 
   const saveAccount = async (form) => {
     setBusy(true);
@@ -700,13 +1531,34 @@ function PublishingManager({
         displayName: form.displayName.trim(),
         handle: form.handle.trim(),
         loginIdentifier: form.loginIdentifier.trim(),
-        enabled: form.enabled
+        enabled: form.enabled,
+        executionEngine: form.executionEngine
       });
+      const existingAccount = form.id ? accounts.find(account => account.id === form.id) : null;
+      const isResumingSafetyPause = Boolean(existingAccount && !existingAccount.enabled && form.enabled);
+      if (isResumingSafetyPause) {
+        try {
+          // Safety pauses originate inside Companion. Clear that local state
+          // before updating the cloud record so the next heartbeat cannot
+          // immediately pause the account again.
+          await localCompanionRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, {
+            method: "PATCH",
+            body
+          });
+        } catch (error) {
+          throw new Error("Could not resume this account in Workspace Companion. Keep Companion open on this computer and try again. " + error.message);
+        }
+      }
       const account = form.id
         ? await publishingRequest("/api/accounts/" + encodeURIComponent(form.id), session.token, { method: "PATCH", body })
         : await publishingRequest("/api/platforms/" + selectedPlatform + "/accounts", session.token, { method: "POST", body });
       setEditing(null);
-      setNotice({ tone: "success", message: account.displayName + " is now available throughout Publish Queue Runner." });
+      setNotice({
+        tone: "success",
+        message: isResumingSafetyPause
+          ? account.displayName + " is resumed and ready for publishing."
+          : account.displayName + " now uses " + publishingEngineLabels[account.executionEngine || "companion"] + "."
+      });
       await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
@@ -729,15 +1581,100 @@ function PublishingManager({
     }
   };
 
-  const startLogin = async (account) => {
+  const startLogin = async (account, surface = "engine") => {
+    if (!workspaceCompanion) {
+      setNotice({ tone: "error", message: "Pair this manager device as the Workspace Companion before signing in to a social account." });
+      return;
+    }
     setLoginAccountId(account.id);
     try {
-      const result = await publishingRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, { method: "POST" });
-      setNotice({ tone: "success", message: result.message });
+      await localCompanionRequest("/api/companion/accounts/import", session.token, {
+        method: "POST",
+        body: JSON.stringify({ account })
+      });
+      const result = await localCompanionRequest("/api/accounts/" + encodeURIComponent(account.id) + "/manual-login", session.token, {
+        method: "POST",
+        body: JSON.stringify({ surface })
+      });
+      setNotice({ tone: "success", message: result.message || "Complete the sign-in in the Companion browser. The workspace will update automatically." });
+      await onReload();
     } catch (error) {
       setNotice({ tone: "error", message: error.message });
     } finally {
       setLoginAccountId("");
+    }
+  };
+
+  const connectReddit = (account) => {
+    window.location.assign("/api/publishing/reddit/connect?accountId=" + encodeURIComponent(account.id));
+  };
+
+  const disconnectReddit = async (account) => {
+    if (!window.confirm("Disconnect " + account.displayName + " from Reddit? Queued posts will wait until you connect Reddit again.")) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/publishing/reddit/connections?accountId=" + encodeURIComponent(account.id), { method: "DELETE", credentials: "include" });
+      await responsePayload(response);
+      setNotice({ tone: "success", message: account.displayName + " is disconnected. Choose Connect with Reddit to publish again." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openPublishingAccount = (account) => {
+    if (!account.enabled || !account.credentialConfigured) return;
+    const destination = new URL(publishQueueUrl, window.location.origin);
+    destination.searchParams.set("platform", account.platform);
+    destination.searchParams.set("account", account.id);
+    window.location.assign(destination.toString());
+  };
+
+  const pairWorkspaceCompanion = async () => {
+    setCompanionBusy(true);
+    try {
+      const healthResponse = await fetch(publishingHealthUrl, { cache: "no-store", mode: "cors", targetAddressSpace: "loopback" });
+      if (!healthResponse.ok) throw new Error("Install and open AgenticThat Companion on this device, then try again.");
+      const health = await healthResponse.json();
+      if (!health.automationReady || !health.companionInstanceId) throw new Error("AgenticThat Companion is still starting. Wait a moment and try again.");
+      const companionInstanceId = String(health.companionInstanceId);
+      const data = await publishingRequest("/api/companion/pair", session.token, {
+        method: "POST",
+        body: JSON.stringify({
+          label: "Workspace Companion",
+          companionInstanceId
+        })
+      });
+      const localPairing = await localCompanionRequest("/api/companion/pair", session.token, {
+        method: "POST",
+        body: JSON.stringify({
+          supabaseUrl: data.supabaseUrl,
+          supabaseApiKey: data.supabaseApiKey,
+          pairingCode: data.pairingCode
+        })
+      });
+      onCompanionSaved(localPairing.companion || null);
+      setNotice({ tone: "success", message: "This device is paired. It will publish for authorized workspace members automatically." });
+      await refreshLocalCompanion({ force: true });
+    } catch (error) {
+      setNotice({ tone: "error", message: error instanceof Error && /Companion|pair/i.test(error.message) ? error.message : "Could not pair this device. Open AgenticThat Companion here, then try again." });
+    } finally {
+      setCompanionBusy(false);
+    }
+  };
+
+  const removeWorkspaceCompanion = async () => {
+    setCompanionBusy(true);
+    try {
+      await publishingRequest("/api/companion", session.token, { method: "DELETE" });
+      onCompanionSaved(null);
+      setNotice({ tone: "success", message: "Workspace Companion pairing was removed." });
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setCompanionBusy(false);
     }
   };
 
@@ -749,31 +1686,62 @@ function PublishingManager({
     return (
       <EmptyState
         icon={CircleAlert}
-        title="Publish Queue service is unavailable"
-        copy="The publishing companion did not respond. Confirm the Chrome extension is installed and Start Publishing Companion.cmd is running."
-        action={<button className="config-primary" type="button" onClick={() => void onReload()}><RefreshCw size={16} />Try again</button>}
+        title="Companion is not ready on this device"
+        copy="Install and open AgenticThat Companion on this computer, then try again. Team members do not need to do this."
+        action={
+          <div className="config-empty-actions">
+            <a className="config-primary" href={publishingCompanionDownloadUrl}>Install Companion<ExternalLink size={15} /></a>
+            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
       />
     );
   }
 
-  if (status === "needs-login" || status === "needs-manager") {
+  if (status === "needs-upgrade") {
     return (
-      <div className="config-auth-card">
-        <div className="config-auth-copy">
-          <span><LockKeyhole size={25} /></span>
-          <p>Protected configuration</p>
-          <h3>Operations Manager access required</h3>
-          <div>Sign in here once. The same secure session opens Publish Queue Runner, while account configuration remains in Config Manager.</div>
-          <small><ShieldCheck size={14} />Use <strong>operations.manager</strong> with the publishing password assigned to this workspace.</small>
-          {status === "needs-manager" && <small><CircleAlert size={14} />The current Publish Queue role cannot manage accounts.</small>}
-        </div>
-        <form onSubmit={signIn}>
-          <label><span>Username</span><input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label><span>Password</span><div className="config-secret-input"><input type={showPassword ? "text" : "password"} value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required /><button type="button" onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
-          <button className="config-primary full" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ArrowRight size={16} />}Continue to accounts</button>
-          <a href={publishQueueUrl} target="_blank" rel="noreferrer">Open Publish Queue Runner<ExternalLink size={14} /></a>
-        </form>
-      </div>
+      <EmptyState
+        icon={CircleAlert}
+        title="Update the Publishing Companion"
+        copy="This computer is running an older Companion that cannot accept your AgenticThat workspace session. Close it, install the latest version, and try again."
+        action={
+          <div className="config-empty-actions">
+            <a className="config-primary" href={publishingCompanionDownloadUrl}>Download latest Companion<ExternalLink size={15} /></a>
+            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
+      />
+    );
+  }
+
+  if (status === "needs-manager") {
+    return (
+      <EmptyState
+        icon={CircleAlert}
+        title="This role cannot configure publishing accounts"
+        copy="Publishing accounts are managed by a workspace Publishing Manager. Ask a workspace admin to grant that role, then reload this page."
+        action={
+          <div className="config-empty-actions">
+            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
+      />
+    );
+  }
+
+  if (status === "needs-login" || status === "needs-setup") {
+    return (
+      <EmptyState
+        icon={LockKeyhole}
+        title="Publishing access needs a fresh sign-in"
+        copy={`Publishing is authorized by your AgenticThat workspace session${accountEmail ? ` (${accountEmail})` : ""}, which has expired or was signed out. Sign in again to continue - there is no separate publishing password.`}
+        action={
+          <div className="config-empty-actions">
+            <a className="config-primary" href={`/?auth=login&next=${encodeURIComponent("/config-manager?service=publishing")}`}>Sign in again</a>
+            <button className="config-secondary" type="button" onClick={() => void onReconnect()}><RefreshCw size={15} />Try again</button>
+          </div>
+        }
+      />
     );
   }
 
@@ -783,12 +1751,78 @@ function PublishingManager({
         <div><CheckCircle2 size={18} /><span><strong>Publish Queue access connected</strong><small>{session.user.fullName} · Operations Manager</small></span></div>
         <div className="config-integration-actions">
           <a className="config-secondary" href={publishQueueUrl} target="_blank" rel="noreferrer">Open runner<ExternalLink size={14} /></a>
-          <button className="config-tertiary" type="button" onClick={signOutPublishing}>Change login</button>
         </div>
       </div>
 
+      <section className={`config-companion-guide publishing-onboarding${setupComplete ? " setup-complete" : ""}`} aria-labelledby="companion-guide-title">
+        <header>
+          <span>{setupComplete ? <CheckCircle2 size={22} /> : <MonitorCheck size={20} />}</span>
+          <div><p>{setupComplete ? "Setup complete" : "First-time setup"}</p><h3 id="companion-guide-title">{setupComplete ? "Your publishing workspace is ready" : "Complete one clear step at a time"}</h3><small>{setupComplete ? "Companion, your account, and a successful first post are confirmed." : "Only one Publishing Manager completes this flow. Progress is saved automatically."}</small></div>
+        </header>
+        <ConnectionSteps
+          className="publishing-onboarding-steps"
+          activeIndex={setupActiveIndex}
+          steps={[
+            { icon: Download, title: "Install Companion", copy: localCompanionStatus.state === "connected" ? "Detected on this device." : companionInstalled ? "Registered for this workspace." : "Download, install, and open it." },
+            { icon: Link2, title: "Pair", copy: companionPaired ? "Workspace paired." : "Pair this manager computer." },
+            { icon: Plug, title: "Connect Account", copy: connectedAccount ? `${connectedAccount.displayName} is ready.` : "Add an account and complete Login." },
+            { icon: Send, title: "Test Post", copy: hasSuccessfulPost ? "First post confirmed." : "Publish one small post you approve." },
+            { icon: CheckCircle2, title: "Success", copy: setupComplete ? "Ready for your team." : "Unlocks after a confirmed post." }
+          ]}
+        />
+        <div className="config-companion-guide-actions">
+          {!companionInstalled && <>
+            <a className="config-secondary" href={publishingCompanionDownloadUrl}><Download size={15} />Install Companion</a>
+            <button className="config-primary" type="button" onClick={() => void refreshLocalCompanion({ force: true })}><RefreshCw size={15} />Check again</button>
+          </>}
+          {companionInstalled && !companionPaired && <button className="config-primary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}Pair this device</button>}
+          {companionPaired && !connectedAccount && <button className="config-primary" type="button" onClick={beginFirstAccountConnection}><Plus size={15} />Connect first account</button>}
+          {connectedAccount && !hasSuccessfulPost && <a className="config-primary" href={publishQueueUrl}><Send size={15} />Create test post</a>}
+          {setupComplete && <a className="config-primary" href={publishQueueUrl}><ArrowRight size={15} />Open publishing workspace</a>}
+        </div>
+        <p>{!companionInstalled
+          ? "Keep Companion open after installation, then return here and select Check again."
+          : !companionPaired
+            ? "Companion is open. Pair it once with this workspace."
+            : !connectedAccount
+              ? "Choose a platform below, add the account, and complete its secure Login action."
+              : !hasSuccessfulPost
+                ? "The test is a real social post and is published only after you review and confirm it."
+                : "Setup is complete. Future posts can be created by permitted workspace members."}</p>
+      </section>
+
+      {workspaceCompanion && (
+        <section className="config-shared-companion">
+          <div>
+            <span><MonitorCheck size={18} /></span>
+            <div>
+              <strong>Workspace Companion</strong>
+              <small>{workspaceCompanion.status === "online"
+                ? workspaceCompanion.accountHealth?.loginRequired > 0
+                  ? `Online — login required for ${workspaceCompanion.accountHealth.loginRequired} account${workspaceCompanion.accountHealth.loginRequired === 1 ? "" : "s"}.`
+                  : "Online — ready for workspace publishing."
+                : workspaceCompanion.status === "updating"
+                  ? "Updating — publishing will continue after Companion restarts."
+                  : workspaceCompanion.status === "outdated"
+                    ? `Update Companion to ${workspaceCompanion.minimumSupportedVersion || "the latest version"} to continue.`
+                    : workspaceCompanion.status === "error"
+                      ? workspaceCompanion.lastError || "Companion needs attention on the paired computer."
+                      : "Offline — queued posts will continue when it reconnects."}</small>
+              <small>{workspaceCompanion.version
+                ? `Version ${workspaceCompanion.version}${workspaceCompanion.lastSeenAt ? ` · Last heartbeat ${new Date(workspaceCompanion.lastSeenAt).toLocaleString()}` : ""}`
+                : "Waiting for the first secure heartbeat."}</small>
+            </div>
+          </div>
+          <div className="config-shared-companion-actions">
+            <button className="config-secondary" type="button" onClick={() => void pairWorkspaceCompanion()} disabled={companionBusy}>{companionBusy ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}Re-pair</button>
+            <button className="config-tertiary" type="button" onClick={() => void removeWorkspaceCompanion()} disabled={companionBusy}>Remove</button>
+          </div>
+          <p>Team members can use their normal workspace on any device.</p>
+        </section>
+      )}
+
       <div className="config-platform-tabs" role="tablist" aria-label="Publishing platform">
-        {publishPlatforms.map(platform => {
+        {allowedPlatforms.map(platform => {
           const count = accounts.filter(account => account.platform === platform).length;
           return (
             <button
@@ -810,8 +1844,8 @@ function PublishingManager({
         })}
       </div>
 
-      <div className="config-publishing-toolbar">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, schedules, and channel views.</p></div>
+      <div className="config-publishing-toolbar" id="publishing-account-connections">
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, queues, and channel views.</p></div>
         {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>
 
@@ -829,7 +1863,9 @@ function PublishingManager({
         <EmptyState
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
-          copy="Add the first account here. Publish Queue Runner will automatically display it as a selectable destination."
+          copy={selectedPlatform === "reddit"
+            ? redditApiConfigured ? "Add the account, then choose Connect with Reddit." : "Reddit publishing is not configured yet. Add ZERNIO_API_KEY to enable it."
+            : workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair the manager computer above, then add your first publishing account."}
           action={<button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button>}
         />
       ) : !editing && (
@@ -838,12 +1874,16 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? "Login ready" : "Login required"}</span>
-              <span className="config-account-meta">{account.loginIdentifier || "Manual Chrome login"}</span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.executionEngine === "api" || account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : account.platform === "reddit" ? "Not connected" : "Reconnect required"}</span>
+              <span className="config-account-meta config-account-engine">{account.executionEngine === "api" ? <Plug size={14} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
-                <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account"><Pencil size={15} /></button>
-                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Refresh saved account login" : "Connect account login"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}</button>
-                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} /></button>
+                <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
+                <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
+                {account.platform === "reddit" && account.credentialConfigured && <button type="button" onClick={() => void disconnectReddit(account)} disabled={busy} title="Remove this Reddit connection from Zernio"><LogOut size={15} />Disconnect Reddit</button>}
+                {account.platform === "reddit" && !account.credentialConfigured && <button type="button" onClick={() => connectReddit(account)} disabled={!account.enabled || busy || !redditApiConfigured} title={redditApiConfigured ? "Sign in to Reddit through Zernio" : "Add ZERNIO_API_KEY to enable Reddit publishing"}><Plug size={15} />Connect with Reddit</button>}
+                {account.executionEngine !== "api" && <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the selected engine session" : "Sign in with the selected engine"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={15} /> : <KeyRound size={15} />}Login</button>}
+                {(account.executionEngine || "companion") === "companion" && <button className="icon-only" type="button" onClick={() => void startLogin(account, "external")} disabled={!account.enabled || Boolean(loginAccountId)} title="Open system-browser login fallback" aria-label={"Open " + account.displayName + " login in the system browser"}><ExternalLink size={15} /></button>}
+                <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} />Delete</button>
               </div>
             </article>
           ))}
@@ -858,15 +1898,23 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
   const [handle, setHandle] = useState(account?.handle || "");
   const [loginIdentifier, setLoginIdentifier] = useState(account?.loginIdentifier || "");
   const [enabled, setEnabled] = useState(account?.enabled ?? true);
+  const externalBrowserRequired = externalBrowserRequiredPlatforms.has(platform);
+  const [executionEngine, setExecutionEngine] = useState(
+    externalBrowserRequired ? "external_browser" : account?.executionEngine || "companion"
+  );
+  const engineChanged = Boolean(account && executionEngine !== (account.executionEngine || "companion"));
+  const zernioOnly = platform === "reddit";
 
   const submit = (event) => {
     event.preventDefault();
+    if (engineChanged && account.credentialConfigured && !window.confirm("Changing the publishing engine signs this account out. Continue and log in again?")) return;
     void onSave({
       id: account?.id,
       displayName,
       handle,
       loginIdentifier,
-      enabled
+      enabled,
+      executionEngine
     });
   };
 
@@ -881,7 +1929,16 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
         <div className="config-form-grid">
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
           <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
-          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; enter login in Chrome" /></label>
+          <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; credentials stay on the provider sign-in page" /></label>
+          {zernioOnly ? <p className="config-engine-warning wide"><Plug size={14} />Reddit publishes through Zernio. After saving, choose Connect with Reddit in the account list.</p> : <fieldset className="config-engine-field wide">
+            <legend>Publishing engine</legend>
+            <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
+              <button type="button" disabled={externalBrowserRequired} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>{externalBrowserRequired ? "Embedded login is blocked by this provider" : "Runs in the background and opens only when attention is needed"}</small></span></button>
+              <button type="button" className={executionEngine === "external_browser" ? "active" : ""} aria-pressed={executionEngine === "external_browser"} onClick={() => setExecutionEngine("external_browser")}><ExternalLink size={18} /><span><strong>External browser</strong><small>Dedicated Chrome, Edge, or Chromium profile</small></span></button>
+            </div>
+            {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />Facebook, X, and YouTube use a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
+            {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
+          </fieldset>}
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>
         <div className="config-form-actions"><button className="config-secondary" type="button" onClick={onCancel}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}{account ? "Save changes" : "Add account"}</button></div>

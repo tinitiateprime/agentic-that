@@ -1,0 +1,384 @@
+import crypto from "node:crypto";
+import { redirect } from "next/navigation";
+import {
+  OPERATIONAL_ROLE_CATALOG,
+  LIVE_ACCESS_CATALOG,
+  SERVICE_AUDIENCE_CAPABILITIES,
+  SERVICE_AUDIENCE_RESOURCES,
+  accessCategory,
+  accessSatisfies,
+  capabilityModule,
+  fullAccessMap,
+  isKnownAccessResource,
+} from "../access-catalog.js";
+import {
+  capabilityAccessLevel,
+  evaluateAccess,
+  evaluateCapabilities,
+  restrictAccessToCapabilities,
+} from "./access-policy.js";
+import { resolveBillingStatus, selfServiceRoleGrants } from "./billing-policy.js";
+import {
+  getCurrentPlatformUser,
+  getPlatformSql,
+  activateWorkspaceTrial,
+  refreshPlatformBillingState,
+} from "./auth-store.js";
+import { signServiceAccessToken } from "../../../lib/service-access-token.js";
+import { teamTestingFullAccessEnabled } from "../../../lib/team-testing-access.js";
+import { readPrincipalAccessState } from "./principal-access-store.js";
+
+export class AccessDeniedError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function rbacEnforcementMode() {
+  return process.env.RBAC_ENFORCEMENT_MODE?.trim().toLowerCase() === "shadow" ? "shadow" : "enforce";
+}
+
+function activeStatus(status) {
+  return status === "active";
+}
+
+function localOperationalRoleGrants(inputUser) {
+  const selected = new Set(Array.isArray(inputUser?.assignedRoleIds) ? inputUser.assignedRoleIds.map(String) : []);
+  if (inputUser?.isWorkspaceOwner) selected.add("role_workspace_owner");
+  return OPERATIONAL_ROLE_CATALOG
+    .filter((role) => selected.has(role.id))
+    .flatMap((role) => role.grants.map((grant) => ({ ...grant, roleId: role.id })));
+}
+
+function moduleHasAccess(access, module, level) {
+  return [module, ...(LIVE_ACCESS_CATALOG[module] || [])]
+    .some((resource) => accessSatisfies(access?.[resource] || "none", level));
+}
+
+function capabilitiesWithinAccess(capabilities, access) {
+  return capabilities.filter((capability) => {
+    const module = capabilityModule(capability);
+    return module === "workspace" || moduleHasAccess(access, module, capabilityAccessLevel(capability));
+  });
+}
+
+async function activateTrialOnServiceUse(principal, serviceKey) {
+  if (
+    teamTestingFullAccessEnabled()
+    || !principal
+    || principal.billingStatus !== "trialing"
+    || principal.trialStartsAt
+    || !principal.workspaceId
+    || accessCategory(serviceKey) === "workspace"
+  ) return principal;
+  const activated = await activateWorkspaceTrial(principal.workspaceId, principal.userId);
+  return activated ? { ...principal, ...activated } : principal;
+}
+
+export async function getPrincipalForUser(inputUser) {
+  if (!inputUser?.id) return null;
+  const testingFullAccess = teamTestingFullAccessEnabled();
+
+  if (!process.env.DATABASE_URL?.trim() && !process.env.SUPABASE_DB_URL?.trim()) {
+    const status = inputUser.status || "active";
+    const isGlobalAdmin = Boolean(inputUser.isGlobalAdmin);
+    const testingAccessActive = testingFullAccess && activeStatus(status);
+    const ownerAccessActive = activeStatus(status) && Boolean(inputUser.workspaceId)
+      && (inputUser.isWorkspaceOwner === true || inputUser.assignedRoleIds?.includes("role_workspace_owner"));
+    const fullWorkspaceAccess = testingAccessActive || ownerAccessActive;
+    const billingStatus = fullWorkspaceAccess
+      ? "exempt"
+      : resolveBillingStatus(inputUser.billingStatus, inputUser.trialEndsAt);
+    const roleGrants = selfServiceRoleGrants({
+      selectedRoleIds: inputUser.selectedRoleIds,
+      billingStatus: inputUser.billingStatus,
+      trialEndsAt: inputUser.trialEndsAt,
+    });
+    const operationalRoleGrants = localOperationalRoleGrants(inputUser);
+    const operationalCapabilities = evaluateCapabilities({ roleGrants: operationalRoleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
+    const planAccess = fullWorkspaceAccess
+      ? fullAccessMap()
+      : evaluateAccess({ roleGrants, active: activeStatus(status), globalAdmin: isGlobalAdmin });
+    const access = testingAccessActive
+      ? planAccess
+      : restrictAccessToCapabilities(planAccess, operationalCapabilities);
+    return {
+      userId: String(inputUser.id),
+      workspaceId: inputUser.workspaceId || null,
+      name: inputUser.name || "Workspace user",
+      email: inputUser.email || "",
+      businessName: inputUser.businessName || inputUser.name || "Workspace",
+      status,
+      isGlobalAdmin,
+      mfaEnabled: Boolean(inputUser.mfaEnabled),
+      mfaVerified: Boolean(inputUser.mfaVerified),
+      mfaRequired: Boolean(inputUser.mfaRequired),
+      billingStatus,
+      trialStartsAt: fullWorkspaceAccess ? null : inputUser.trialStartsAt || null,
+      trialEndsAt: fullWorkspaceAccess ? null : inputUser.trialEndsAt || null,
+      access,
+      capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
+      roleIds: [...new Set(operationalRoleGrants.map((grant) => grant.roleId))],
+    };
+  }
+
+  const sql = await getPlatformSql();
+  let state = await readPrincipalAccessState(sql, inputUser.id);
+  if (!state) return null;
+  const ownerAccessActive = Boolean(state.workspaceOwner);
+  if (!testingFullAccess && !ownerAccessActive) {
+    await refreshPlatformBillingState(state.billingUserId);
+    // Billing refresh can expire entitlements. Always read grants afterward;
+    // never cache another request's permissions or use pre-refresh grants.
+    state = await readPrincipalAccessState(sql, inputUser.id);
+    if (!state) return null;
+  }
+  const { user, workspaceOwner, workspaceBillingUser, operationalRoleGrants } = state;
+  const moduleRoleGrants = state.workspaceModuleRoleGrants.length
+    ? state.workspaceModuleRoleGrants
+    : state.userModuleRoleGrants;
+  const status = String(user.status || "active");
+  const isGlobalAdmin = Boolean(user.is_global_admin);
+  const billingUser = workspaceBillingUser || workspaceOwner || user;
+  const testingAccessActive = testingFullAccess && activeStatus(status);
+  const fullWorkspaceAccess = (testingAccessActive || ownerAccessActive) && activeStatus(status);
+  const operationalCapabilities = evaluateCapabilities({
+    roleGrants: operationalRoleGrants,
+    active: activeStatus(status),
+    globalAdmin: isGlobalAdmin,
+  });
+  const planAccess = fullWorkspaceAccess
+    ? fullAccessMap()
+    : evaluateAccess({
+        roleGrants: moduleRoleGrants,
+        active: activeStatus(status),
+        globalAdmin: isGlobalAdmin,
+      });
+  const access = testingAccessActive
+    ? planAccess
+    : restrictAccessToCapabilities(planAccess, operationalCapabilities);
+  return {
+    userId: String(user.id),
+    workspaceId: user.workspace_id ? String(user.workspace_id) : null,
+    name: String(user.name || "Workspace user"),
+    email: String(user.email || ""),
+    businessName: String(user.business_name || user.name || "Workspace"),
+    status,
+    isGlobalAdmin,
+    mfaEnabled: Boolean(user.mfa_enabled),
+    mfaVerified: Boolean(inputUser.mfaVerified),
+    mfaRequired: Boolean(inputUser.mfaRequired),
+    billingStatus: fullWorkspaceAccess ? "exempt" : String(billingUser.billing_status || "active"),
+    trialStartsAt: fullWorkspaceAccess ? null : billingUser.trial_starts_at || null,
+    trialEndsAt: fullWorkspaceAccess ? null : billingUser.trial_ends_at || null,
+    access,
+    capabilities: capabilitiesWithinAccess(operationalCapabilities, access),
+    roleIds: [...new Set(operationalRoleGrants.map((grant) => String(grant.role_id)))],
+  };
+}
+
+export async function getCurrentPrincipal() {
+  return getPrincipalForUser(await getCurrentPlatformUser());
+}
+
+export function principalHasAccess(principal, resourceKey, requiredLevel = "view") {
+  if (!principal || !activeStatus(principal.status) || !principal.workspaceId) return false;
+  if (!isKnownAccessResource(resourceKey)) return false;
+  return accessSatisfies(principal.access?.[resourceKey] || "none", requiredLevel);
+}
+
+export function principalHasCapability(principal, capability) {
+  if (!principal || !activeStatus(principal.status) || !principal.workspaceId) return false;
+  if (!Array.isArray(principal.capabilities) || !principal.capabilities.includes(capability)) return false;
+  const module = capabilityModule(capability);
+  if (!module || module === "workspace") return true;
+  return moduleHasAccess(principal.access, module, capabilityAccessLevel(capability));
+}
+
+export async function recordAccessAudit({ actorUserId = null, targetType, targetId = null, action, before = null, after = null }) {
+  if (!process.env.DATABASE_URL?.trim() && !process.env.SUPABASE_DB_URL?.trim()) return;
+  const sql = await getPlatformSql();
+  await sql`
+    INSERT INTO rbac_audit_events
+      (id, actor_user_id, target_type, target_id, action, before_value, after_value)
+    VALUES
+      (${crypto.randomUUID()}, ${actorUserId}, ${targetType}, ${targetId}, ${action},
+       ${before ? sql.json(before) : null}, ${after ? sql.json(after) : null})`;
+}
+
+async function recordShadowDenial(principal, resourceKey, requiredLevel) {
+  console.warn("RBAC shadow denial", {
+    userId: principal?.userId || null,
+    workspaceId: principal?.workspaceId || null,
+    resourceKey,
+    requiredLevel,
+  });
+}
+
+export async function assertPrincipalAccess(principal, resourceKey, requiredLevel = "view") {
+  if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
+  if (principal.status === "pending") {
+    throw new AccessDeniedError(403, "APPROVAL_PENDING", "Your account is waiting for approval.");
+  }
+  if (principal.status !== "active") {
+    throw new AccessDeniedError(403, "ACCOUNT_DISABLED", "This account is not active.");
+  }
+  if (principal.isGlobalAdmin && principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
+  }
+  if (!principal.workspaceId) {
+    throw new AccessDeniedError(403, "WORKSPACE_REQUIRED", "This account is not assigned to a workspace.");
+  }
+  if (!principalHasAccess(principal, resourceKey, requiredLevel)) {
+    if (rbacEnforcementMode() === "shadow") {
+      await recordShadowDenial(principal, resourceKey, requiredLevel);
+      return activateTrialOnServiceUse(principal, resourceKey);
+    }
+    throw new AccessDeniedError(403, "ACCESS_DENIED", `Your role does not include ${requiredLevel} access to ${resourceKey}.`);
+  }
+  return activateTrialOnServiceUse(principal, resourceKey);
+}
+
+export async function assertPrincipalCapability(principal, capability) {
+  if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
+  if (principal.status !== "active") {
+    throw new AccessDeniedError(403, "ACCOUNT_DISABLED", "This account is not active.");
+  }
+  if (principal.isGlobalAdmin && principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
+  }
+  if (!principal.workspaceId) {
+    throw new AccessDeniedError(403, "WORKSPACE_REQUIRED", "This account is not assigned to a workspace.");
+  }
+  if (!principalHasCapability(principal, capability)) {
+    if (rbacEnforcementMode() === "shadow") {
+      await recordShadowDenial(principal, capability, "capability");
+      return activateTrialOnServiceUse(principal, capability);
+    }
+    throw new AccessDeniedError(403, "CAPABILITY_REQUIRED", `Your role does not include ${capability}.`);
+  }
+  return activateTrialOnServiceUse(principal, capability);
+}
+
+export async function requireAccess(resourceKey, requiredLevel = "view", returnTo = "/apps") {
+  const principal = await getCurrentPrincipal();
+  if (!principal) redirect(`/?auth=login&next=${encodeURIComponent(returnTo)}`);
+  if (principal.status === "pending") redirect("/pending-approval");
+  try {
+    return await assertPrincipalAccess(principal, resourceKey, requiredLevel);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) {
+      if (error.code === "MFA_REQUIRED") redirect(`/admin-mfa?next=${encodeURIComponent(returnTo)}`);
+      redirect(`/access-denied?resource=${encodeURIComponent(resourceKey)}&level=${encodeURIComponent(requiredLevel)}`);
+    }
+    throw error;
+  }
+}
+
+export async function requireGlobalAdmin(returnTo = "/admin-center") {
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
+  const next = encodeURIComponent(returnTo);
+  if (!principal) redirect(`/?auth=login&next=${next}`);
+  if (principal.status === "pending") redirect("/pending-approval");
+  if (principal.status !== "active" || !principal.isGlobalAdmin) redirect(`/access-denied?resource=${encodeURIComponent(returnTo.replace(/^\//, ""))}`);
+  if (principal.mfaRequired) redirect(`/admin-mfa?next=${next}`);
+  return principal;
+}
+
+export async function authorizeGlobalAdminApi() {
+  const user = await getCurrentPlatformUser();
+  const principal = user ? { ...user, userId: String(user.id) } : null;
+  if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
+  if (principal.status !== "active" || !principal.isGlobalAdmin) {
+    throw new AccessDeniedError(403, "ADMIN_REQUIRED", "Global administrator access is required.");
+  }
+  if (principal.mfaRequired) {
+    throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
+  }
+  return principal;
+}
+
+export function accessErrorResponse(error) {
+  if (error instanceof AccessDeniedError) {
+    return Response.json({ error: error.message, code: error.code }, { status: error.status });
+  }
+  throw error;
+}
+
+export async function authorizeApiAccess(resourceKey, requiredLevel = "view") {
+  const principal = await getCurrentPrincipal();
+  return assertPrincipalAccess(principal, resourceKey, requiredLevel);
+}
+
+export async function requireCapability(capability, returnTo = "/apps") {
+  const principal = await getCurrentPrincipal();
+  if (!principal) redirect(`/?auth=login&next=${encodeURIComponent(returnTo)}`);
+  if (principal.status === "pending") redirect("/pending-approval");
+  return requirePrincipalCapability(principal, capability, returnTo);
+}
+
+export async function requirePrincipalCapability(principal, capability, returnTo = "/apps") {
+  try {
+    return await assertPrincipalCapability(principal, capability);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) {
+      redirect(`/access-denied?capability=${encodeURIComponent(capability)}`);
+    }
+    throw error;
+  }
+}
+
+export async function authorizeApiCapability(capability) {
+  return assertPrincipalCapability(await getCurrentPrincipal(), capability);
+}
+
+export async function issueServiceToken(principal, audience) {
+  const resources = SERVICE_AUDIENCE_RESOURCES[audience];
+  if (!resources) throw new AccessDeniedError(400, "INVALID_AUDIENCE", "Unknown service audience.");
+  const viewerCapability = audience === "publishing"
+    ? "publishing.view"
+    : audience === "scraping"
+      ? "scraping.view"
+      : "messaging.view";
+  principal = await assertPrincipalCapability(principal, viewerCapability);
+  await assertPrincipalAccess(principal, resources[0], "view").catch(async (firstError) => {
+    const allowed = resources.some((resource) => principalHasAccess(principal, resource, "view"));
+    if (!allowed) throw firstError;
+  });
+  const grants = Object.fromEntries(resources.map((resource) => [resource, principal.access?.[resource] || "none"]));
+  const allowedCapabilities = new Set(SERVICE_AUDIENCE_CAPABILITIES[audience] || []);
+  const capabilities = (principal.capabilities || []).filter((capability) => allowedCapabilities.has(capability));
+  return signServiceAccessToken({
+    audience,
+    subject: principal.userId,
+    workspaceId: principal.workspaceId,
+    grants,
+    capabilities,
+    billingStatus: principal.billingStatus,
+    trialStartsAt: principal.trialStartsAt,
+    trialEndsAt: principal.trialEndsAt,
+    name: principal.name,
+    email: principal.email,
+  });
+}
+
+export function legacyFullAccessPrincipal(user) {
+  return {
+    userId: String(user.id),
+    workspaceId: user.workspaceId,
+    name: user.name,
+    email: user.email,
+    businessName: user.businessName,
+    status: "active",
+    isGlobalAdmin: false,
+    billingStatus: "exempt",
+    trialStartsAt: null,
+    trialEndsAt: null,
+    access: fullAccessMap(),
+    capabilities: OPERATIONAL_ROLE_CATALOG.find((role) => role.id === "role_workspace_owner")?.capabilities || [],
+    roleIds: ["role_workspace_owner"],
+  };
+}

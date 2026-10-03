@@ -3,6 +3,17 @@ import type { Page } from "playwright-core";
 export type AccountLogin = {
   useSavedSessionOnly?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
+  onFinalActionSubmitted?: () => Promise<void> | void;
+};
+
+type SavedSessionVerificationOptions = {
+  page: Page;
+  platform: string;
+  isLoggedIn: () => Promise<boolean>;
+  beforeCheck?: () => Promise<void>;
+  timeoutMs?: number;
+  pollMs?: number;
 };
 
 type ManualLoginFallbackOptions = {
@@ -18,10 +29,57 @@ type ManualLoginFallbackOptions = {
   shouldAbort?: (url: string) => Promise<string | null> | string | null;
   allowManualLoginFromStart?: boolean;
   ignoreLoginErrors?: boolean;
+  embeddedLogin?: boolean;
 };
+
+async function embeddedLoginBlockReason(page: Page) {
+  const blockedMessage = page.getByText(
+    /embedded browser (?:is |has been )?(?:disabled|blocked|not supported)|logging in .* from an embedded browser is disabled|browser or app may not be secure|browser is not supported|use a supported browser|open (?:this page|the link) in (?:your|a) browser/i,
+  ).first();
+  if (!await blockedMessage.isVisible().catch(() => false)) return null;
+  return (await blockedMessage.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim()
+    || "The provider does not support this embedded sign-in page.";
+}
 
 export function getManualActionTimeoutMs() {
   return Number(process.env.MANUAL_ACTION_TIMEOUT_MS ?? 600000);
+}
+
+function closedLoginWindowError(platform: string) {
+  return new Error(`${platform} login window was closed before sign-in completed. Open Login and try again.`);
+}
+
+function isClosedPageError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /target page, context or browser has been closed|page has been closed|browser has been closed/i.test(message);
+}
+
+export async function waitForSavedSessionVerification({
+  page,
+  platform,
+  isLoggedIn,
+  beforeCheck,
+  timeoutMs = Number(process.env.SAVED_SESSION_VERIFY_TIMEOUT_MS ?? 45000),
+  pollMs = 500,
+}: SavedSessionVerificationOptions) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (page.isClosed()) throw closedLoginWindowError(platform);
+    await beforeCheck?.();
+    if (await isLoggedIn()) {
+      console.log(`${platform} saved session verified.`);
+      return;
+    }
+    try {
+      await page.waitForTimeout(pollMs);
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
+  }
+
+  throw new Error(`${platform} saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.`);
 }
 
 export async function waitForLoginWithManualFallback({
@@ -37,6 +95,7 @@ export async function waitForLoginWithManualFallback({
   shouldAbort,
   allowManualLoginFromStart = false,
   ignoreLoginErrors = false,
+  embeddedLogin = false,
 }: ManualLoginFallbackOptions) {
   const normalDeadline = Date.now() + normalTimeoutMs;
   let manualDeadline: number | null = null;
@@ -47,7 +106,18 @@ export async function waitForLoginWithManualFallback({
   let ignoredLoginErrorLogged = false;
 
   while (Date.now() < (manualDeadline ?? normalDeadline)) {
-    const url = page.url();
+    if (page.isClosed()) throw closedLoginWindowError(platform);
+    let url: string;
+    try {
+      url = page.url();
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
+    const embeddedBlock = embeddedLogin ? await embeddedLoginBlockReason(page) : null;
+    if (embeddedBlock) {
+      throw new Error(`${platform} blocked sign-in inside Companion: ${embeddedBlock} Use the Chrome fallback.`);
+    }
     const abortReason = await shouldAbort?.(url);
 
     if (abortReason) {
@@ -61,7 +131,7 @@ export async function waitForLoginWithManualFallback({
       if (!ignoredLoginErrorLogged) {
         ignoredLoginErrorLogged = true;
         console.log(
-          `${platform} login page is showing: ${loginError}. Complete login manually in Chrome; bot will keep waiting for up to ${Math.round(
+          `${platform} login page is showing: ${loginError}. Complete login manually in the visible browser; publishing will keep waiting for up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -83,7 +153,7 @@ export async function waitForLoginWithManualFallback({
         manualDeadline = Date.now() + getManualActionTimeoutMs();
         manualLoginFallbackLogged = true;
         console.log(
-          `Complete the full ${platform} login manually in Chrome; bot will resume after the account opens. Waiting up to ${Math.round(
+          `Complete the full ${platform} login manually in the visible browser; publishing will resume after the account opens. Waiting up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -94,7 +164,7 @@ export async function waitForLoginWithManualFallback({
         manualActionLogged = true;
         manualWasVisible = true;
         console.log(
-          `${platform} needs manual verification. Complete it in Chrome; bot will resume automatically for up to ${Math.round(
+          `${platform} needs manual verification. Complete it in the visible browser; publishing will resume automatically for up to ${Math.round(
             getManualActionTimeoutMs() / 1000,
           )} seconds.`,
         );
@@ -108,12 +178,17 @@ export async function waitForLoginWithManualFallback({
         manualLoginFallbackLogged = true;
         manualDeadline ??= Date.now() + getManualActionTimeoutMs();
         console.log(
-          `${platform} still shows the login form after verification. Complete the full ${platform} login manually in Chrome; bot will resume after the account opens.`,
+          `${platform} still shows the login form after verification. Complete the full ${platform} login manually in the visible browser; publishing will resume after the account opens.`,
         );
       }
     }
 
-    await page.waitForTimeout(pollMs);
+    try {
+      await page.waitForTimeout(pollMs);
+    } catch (error) {
+      if (page.isClosed() || isClosedPageError(error)) throw closedLoginWindowError(platform);
+      throw error;
+    }
   }
 
   throw new Error(`${platform} login/manual verification did not finish in time.`);

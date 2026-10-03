@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+  [switch]$PortableOnly
+)
+
 $ErrorActionPreference = "Stop"
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $desktopRoot = Join-Path $projectRoot "apps\publishing-companion-desktop"
@@ -9,13 +14,34 @@ if (-not $artifactRoot.StartsWith($projectRoot + [System.IO.Path]::DirectorySepa
 }
 
 $manifest = Get-Content (Join-Path $desktopRoot "package.json") -Raw | ConvertFrom-Json
-$setup = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "AgenticThat-Publishing-Companion-Setup.exe" | Select-Object -First 1
-$portable = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "*.zip" | Select-Object -First 1
-if (-not $setup) { throw "Windows companion Setup executable was not produced." }
+$portable = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter ("*-{0}.zip" -f $manifest.version) | Select-Object -First 1
 if (-not $portable) { throw "Windows companion portable ZIP was not produced." }
 
+$setup = $null
+if (-not $PortableOnly) {
+  $setup = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "AgenticThat-Publishing-Companion-Setup.exe" | Select-Object -First 1
+  if (-not $setup) { throw "Windows companion Setup executable was not produced." }
+}
+
+$releaseManifest = $null
+$updatePackage = $null
+if (-not $PortableOnly) {
+  $releaseManifest = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "RELEASES" | Select-Object -First 1
+  $updatePackage = Get-ChildItem -LiteralPath $makeRoot -Recurse -File -Filter "*-full.nupkg" | Select-Object -First 1
+  if (-not $releaseManifest -or -not $updatePackage) {
+    throw "Squirrel update artifacts were not produced."
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Setup.exe") -Force
+if ($setup) {
+  Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Setup.exe") -Force
+  Copy-Item -LiteralPath $releaseManifest.FullName -Destination (Join-Path $artifactRoot "RELEASES") -Force
+  Copy-Item -LiteralPath $updatePackage.FullName -Destination (Join-Path $artifactRoot $updatePackage.Name) -Force
+}
 Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Publishing-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Publishing-Companion-Portable.zip") -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot ("AgenticThat-Companion-{0}-Portable.zip" -f $manifest.version)) -Force
+Copy-Item -LiteralPath $portable.FullName -Destination (Join-Path $artifactRoot "AgenticThat-Companion-Portable.zip") -Force
 
 Write-Host "Windows companion release artifacts copied to $artifactRoot" -ForegroundColor Green

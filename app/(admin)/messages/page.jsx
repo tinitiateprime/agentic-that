@@ -1,23 +1,26 @@
-import { requireUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, requireUser } from "@whatsapp/lib/auth";
 import { getBusiness, listContactThreads, listMessages } from "@whatsapp/lib/data";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import MessageCenter from "@whatsapp/components/MessageCenter";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 export const metadata = { title: "Messages — Tinitiate WA" };
 
 export default async function MessagesPage() {
   const user = await requireUser();
+  const operator = await getCurrentUser("operate");
+  const creds = await credsForBusiness(user.business_id);
   const business = await getBusiness(user.business_id);
   const contacts = await listContactThreads(business.id);
   const initialMessages = Object.fromEntries(
     await Promise.all(contacts.map(async (c) => [c.id, await listMessages(c.id)]))
   );
-  const provider = (process.env.WA_PROVIDER || "mock").toLowerCase();
+  const provider = creds.provider;
 
   // All sender numbers on the WABA (multi-number support) — discovered live so
   // adding a number in Meta Business Manager needs no config change here.
   const phoneNumbers =
-    provider === "meta" ? await metaListPhoneNumbers().catch(() => []) : [];
+    provider === "meta" ? await metaListPhoneNumbers(creds).catch(() => []) : [];
 
   return (
     <div className="space-y-4">
@@ -32,6 +35,7 @@ export default async function MessagesPage() {
         initialMessages={initialMessages}
         provider={provider}
         phoneNumbers={phoneNumbers}
+        canOperate={Boolean(operator)}
       />
     </div>
   );

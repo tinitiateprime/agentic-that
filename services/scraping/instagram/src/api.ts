@@ -1,12 +1,45 @@
-import { getInstagramSessionPoolInfo, runInstagramScrape } from "./scraper.ts";
-import { InstagramRunStore } from "./store.ts";
+import { dispatchBackgroundJob, BackgroundJobError } from "../../../../lib/background-jobs.js";
+import { getInstagramScraperInfo, instagramScrapeRange, runInstagramScrape } from "./scraper.ts";
+import {
+  InstagramRunStore,
+  selectRecentRunFallback,
+  type InstagramJob,
+  type InstagramJobInput
+} from "./store.ts";
+import {
+  requireScrapingServiceAccess,
+  ScrapingServiceAuthError
+} from "../../../../lib/scraping-service-auth.ts";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store, no-cache, must-revalidate",
+  pragma: "no-cache",
+  expires: "0",
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type"
+  "access-control-allow-headers": "authorization, content-type, cache-control, pragma"
 };
+const trialScrapeLimiter = new RollingTrialUsageLimiter();
+const TRIAL_SCRAPES_PER_PROFILE_PER_HOUR = 2;
+
+function enforceTrialScrapeLimit(identity: { workspaceId: string; billingStatus?: string }) {
+  if (identity.billingStatus !== "trialing") return;
+  const result = trialScrapeLimiter.consume(
+    `${identity.workspaceId}:instagram`,
+    TRIAL_SCRAPES_PER_PROFILE_PER_HOUR,
+    60 * 60_000,
+  );
+  if (!result.allowed) {
+    throw new ScrapingServiceAuthError(
+      `Trial limit reached for Instagram scraping. Try again in ${result.retryAfterSeconds} seconds.`,
+      429,
+    );
+  }
+}
+
+class InstagramRequestError extends Error {}
 
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { headers: jsonHeaders, status });
@@ -14,6 +47,19 @@ function json(value: unknown, status = 200) {
 
 function routePath(url: URL) {
   return url.pathname.replace(/^\/api\/scraping\/instagram\/?/, "").replace(/^\/+/, "");
+}
+
+function instagramUrlType(value: string) {
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(value) ? value : "https://" + value);
+    if (!/(^|\.)instagram\.com$/i.test(url.hostname)) return null;
+    const path = url.pathname.replace(/\/+$/, "");
+    if (/^\/(?:p|reel)\/[^/]+$/i.test(path)) return "post";
+    if (/^\/[A-Za-z0-9._]+$/.test(path)) return "profile";
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 async function readBody(request: Request) {
@@ -24,85 +70,289 @@ async function readBody(request: Request) {
   }
 }
 
+function requestError(message: string): never {
+  throw new InstagramRequestError(message);
+}
+
+export function prepareScrapeInput(body: Record<string, unknown>): InstagramJobInput {
+  const requestedMode = String(body.mode || body.inputMode || "").trim().toLowerCase();
+  let requestedQuery = String(body.query || body.keyword || "").trim();
+  if (requestedMode === "keyword" && requestedQuery && !requestedQuery.startsWith("#")) {
+    requestedQuery = `#${requestedQuery}`;
+  }
+  if (!requestedQuery) requestError("Query is required.");
+
+  const urlType = instagramUrlType(requestedQuery);
+  if (requestedMode === "profile_url" && urlType !== "profile") {
+    requestError("Enter an Instagram profile URL, not a post or reel URL.");
+  }
+  if (requestedMode === "post_url" && urlType !== "post") {
+    requestError("Enter an Instagram post or reel URL.");
+  }
+  const isSinglePost = requestedMode === "post_url";
+  const maxResults = isSinglePost
+    ? 1
+    : Math.max(1, Math.min(50, Number(body.max_results || body.maxResults) || 10));
+  const recentDays = Math.max(1, Math.min(365, Number(body.recent_days || body.recentDays) || 7));
+  const onlyPostsNewerThan = typeof body.only_posts_newer_than === "string"
+    ? body.only_posts_newer_than
+    : typeof body.onlyPostsNewerThan === "string"
+      ? body.onlyPostsNewerThan
+      : undefined;
+  const autoExpandDays = typeof body.auto_expand_days === "boolean"
+    ? body.auto_expand_days
+    : typeof body.autoExpandDays === "boolean"
+      ? body.autoExpandDays
+      : false;
+  const maxAutoExpandDays = Math.max(1, Number(body.max_auto_expand_days || body.maxAutoExpandDays) || recentDays);
+  const requestedCollectionMode = String(body.collection_mode || body.collectionMode || "").toLowerCase();
+  const selectedCollectionMode = (["latest", "range", "engagement"] as const)
+    .find((value) => value === requestedCollectionMode) || "latest";
+  const collectionMode = isSinglePost ? "latest" as const : selectedCollectionMode;
+  const requestedRangeType = String(body.range_type || body.rangeType || "").toLowerCase();
+  const rangeType = (["date", "month", "year"] as const).find((value) => value === requestedRangeType);
+  const rangeFrom = typeof (body.range_from ?? body.rangeFrom) === "string"
+    ? String(body.range_from ?? body.rangeFrom).trim()
+    : undefined;
+  const rangeTo = typeof (body.range_to ?? body.rangeTo) === "string"
+    ? String(body.range_to ?? body.rangeTo).trim()
+    : undefined;
+  if (collectionMode === "range" && (!rangeType || !rangeFrom || !rangeTo)) {
+    requestError("Choose a valid range type, start, and end.");
+  }
+  if (collectionMode === "engagement" && !["profile", "profile_url", "url"].includes(requestedMode)) {
+    requestError("Profile analysis is available only for Profile and Profile URL.");
+  }
+  const timezoneOffsetMinutes = Math.max(
+    -840,
+    Math.min(840, Number(body.timezone_offset_minutes ?? body.timezoneOffsetMinutes) || 0)
+  );
+  const sortBy = collectionMode === "engagement" ? "engagement" as const : "recent" as const;
+
+  const input: InstagramJobInput = {
+    requestedMode,
+    requestedQuery,
+    maxResults,
+    collectionMode,
+    recentDays,
+    onlyPostsNewerThan,
+    autoExpandDays,
+    maxAutoExpandDays,
+    rangeType,
+    rangeFrom,
+    rangeTo,
+    timezoneOffsetMinutes,
+    sortBy
+  };
+  if (collectionMode === "range") {
+    try {
+      instagramScrapeRange({ ...input, query: input.requestedQuery });
+    } catch (error) {
+      requestError(error instanceof Error ? error.message : "Choose a valid range.");
+    }
+  }
+  return input;
+}
+
 function friendlyScrapeMessage(error: unknown) {
   let message = error instanceof Error ? error.message : "Instagram scrape failed.";
   if (/browser|chromium|playwright|newContext|Target page/i.test(message)) {
-    message = "Instagram browser scraping is disabled on Netlify. Refresh the Instagram sessions and try again.";
+    message = "Instagram public browser scraping could not start. Try again in a minute.";
   } else if (/checkpoint|redirected|update_risky_contactpoint/i.test(message)) {
-    message = "Instagram rejected the saved scraper sessions with a checkpoint. Refresh the Instagram sessions, then redeploy.";
+    message = "Instagram redirected the public page. Try again in a minute.";
   } else if (/Instagram API returned 429|rate.?limit/i.test(message)) {
-    message = "Instagram temporarily rate-limited the saved scraper accounts. Wait a few minutes, then try again.";
+    message = "Instagram temporarily rate-limited public scraping. Wait a few minutes, then try again.";
   } else if (/fetch failed|network|timeout|aborted/i.test(message)) {
-    message = "Instagram request failed from Netlify. Try again in a minute; if it repeats, refresh the Instagram sessions.";
+    message = "Instagram public page request failed. Try again in a minute.";
   }
   return message.length > 280 ? `${message.slice(0, 277)}...` : message;
+}
+
+async function executeScrape(input: InstagramJobInput, store: InstagramRunStore, createdByUserId?: string) {
+  const scrape = await runInstagramScrape({
+    query: input.requestedQuery,
+    maxResults: input.maxResults,
+    collectionMode: input.collectionMode,
+    recentDays: input.recentDays,
+    onlyPostsNewerThan: input.onlyPostsNewerThan,
+    autoExpandDays: input.autoExpandDays,
+    maxAutoExpandDays: input.maxAutoExpandDays,
+    rangeType: input.rangeType,
+    rangeFrom: input.rangeFrom,
+    rangeTo: input.rangeTo,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
+    sortBy: input.sortBy
+  });
+  let results = scrape.results;
+  let analysis = scrape.analysis;
+  let discoveryStatus = scrape.discoveryStatus;
+  let dataSource: "live" | "recent_cache" = "live";
+  let sourceRunId: string | undefined;
+  let sourceCreatedAt: string | undefined;
+
+  if (!results.length && discoveryStatus !== "not_found" && input.collectionMode !== "range") {
+    const configuredMinutes = Number(process.env.INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MINUTES);
+    const maxAgeMinutes = Number.isFinite(configuredMinutes) && configuredMinutes > 0
+      ? Math.min(configuredMinutes, 24 * 60)
+      : 6 * 60;
+    const fallback = selectRecentRunFallback(
+      await store.listRuns(),
+      input,
+      Date.now(),
+      maxAgeMinutes * 60_000
+    );
+    if (fallback) {
+      results = fallback.results
+        .slice()
+        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+        .slice(0, input.maxResults);
+      analysis = input.collectionMode === "engagement" ? fallback.analysis : undefined;
+      discoveryStatus = "partial";
+      dataSource = "recent_cache";
+      sourceRunId = fallback.id;
+      sourceCreatedAt = fallback.createdAt;
+    }
+  }
+
+  return store.saveRun({
+    createdByUserId,
+    query: scrape.query,
+    requestedQuery: input.requestedQuery,
+    maxResults: input.maxResults,
+    recentDays: input.recentDays,
+    collectionMode: input.collectionMode,
+    rangeType: input.rangeType,
+    rangeFrom: input.rangeFrom,
+    rangeTo: input.rangeTo,
+    sortBy: input.sortBy,
+    results,
+    analysis,
+    discoveryStatus,
+    diagnostics: scrape.diagnostics,
+    dataSource,
+    sourceRunId,
+    sourceCreatedAt
+  });
+}
+
+async function jobResponse(job: InstagramJob, store: InstagramRunStore) {
+  const run = job.runId ? await store.getRun(job.runId) : null;
+  return {
+    job,
+    run,
+    results: run?.results,
+    analysis: run?.analysis,
+    discoveryStatus: run?.discoveryStatus,
+    discovery_status: run?.discoveryStatus,
+    dataSource: run?.dataSource,
+    sourceCreatedAt: run?.sourceCreatedAt,
+    diagnostics: run?.diagnostics,
+    message: job.status === "complete" && run ? `Scraped ${run.results.length} posts` : undefined
+  };
+}
+
+export async function executeInstagramJob(jobId: string, workspaceId: string) {
+  const store = new InstagramRunStore(workspaceId);
+  const current = await store.getJob(jobId);
+  if (!current) return null;
+  if (current.status === "complete" || current.status === "failed") return jobResponse(current, store);
+  if (current.status === "running") {
+    const age = Date.now() - new Date(current.updatedAt).getTime();
+    // Netlify retries a failed background invocation after about one minute.
+    if (age < 55_000) return jobResponse(current, store);
+  }
+
+  const running = await store.claimJob(jobId);
+  if (!running) return null;
+  try {
+    const run = await executeScrape(running.input, store, running.createdByUserId);
+    const complete = await store.updateJob(jobId, { status: "complete", runId: run.id, error: undefined });
+    return complete ? jobResponse(complete, store) : null;
+  } catch (error) {
+    const failed = await store.updateJob(jobId, {
+      status: "failed",
+      error: friendlyScrapeMessage(error)
+    });
+    return failed ? jobResponse(failed, store) : null;
+  }
 }
 
 export async function handleInstagramRequest(request: Request) {
   if (request.method === "OPTIONS") return new Response(null, { headers: jsonHeaders, status: 204 });
 
-  const url = new URL(request.url);
-  const route = routePath(url);
-  const store = new InstagramRunStore();
+  const route = routePath(new URL(request.url));
 
   try {
     if (request.method === "GET" && (route === "" || route === "health")) {
-      return json({ ok: true, service: "instagram-scraper", sessionPool: await getInstagramSessionPoolInfo() });
+      return json({ ok: true, service: "instagram-scraper", scraper: await getInstagramScraperInfo() });
     }
-
-    if (request.method === "GET" && route === "runs") {
-      return json({ runs: await store.listRuns() });
-    }
-
+    const identity = requireScrapingServiceAccess(
+      request,
+      "scraping.instagram",
+      request.method === "GET" ? "view" : "operate"
+    );
+    const store = new InstagramRunStore(identity.workspaceId);
+    if (request.method === "GET" && route === "runs") return json({ runs: await store.listRuns() });
     if (request.method === "GET" && route === "runs/keywords") {
       return json({ keywords: await store.listKeywords() });
     }
-
     if (request.method === "GET" && route.startsWith("runs/")) {
       const run = await store.getRun(route.slice("runs/".length));
       return run ? json({ run }) : json({ message: "Run not found" }, 404);
     }
 
+    if (request.method === "POST" && route === "jobs") {
+      const input = prepareScrapeInput(await readBody(request));
+      enforceTrialScrapeLimit(identity);
+      return json({ job: await store.createJob(input, String(identity.sub)) }, 201);
+    }
+    const runJobMatch = route.match(/^jobs\/([^/]+)\/run$/);
+    if (request.method === "POST" && runJobMatch) {
+      if (process.env.NODE_ENV === "production") {
+        const job = await store.getJob(runJobMatch[1]);
+        if (!job) return json({ message: "Job not found" }, 404);
+        if (job.status === "pending") await dispatchBackgroundJob({ version: 1, kind: "instagram", jobId: job.id, workspaceId: identity.workspaceId });
+        return json({ job }, 202);
+      }
+      const result = await executeInstagramJob(runJobMatch[1], identity.workspaceId);
+      return result ? json(result) : json({ message: "Job not found" }, 404);
+    }
+    const getJobMatch = route.match(/^jobs\/([^/]+)$/);
+    if (request.method === "GET" && getJobMatch) {
+      let job = await store.getJob(getJobMatch[1]);
+      if (!job) return json({ message: "Job not found" }, 404);
+      if (job.status === "running" && Date.now() - new Date(job.updatedAt).getTime() > 16 * 60_000) {
+        job = await store.updateJob(job.id, {
+          status: "failed",
+          error: "The scrape exceeded the background execution limit. Try a smaller count or range."
+        }) || job;
+      }
+      return json(await jobResponse(job, store));
+    }
+
     if (request.method === "POST" && route === "scrape") {
-      const body = await readBody(request);
-      const requestedQuery = String(body.query || body.keyword || "").trim();
-      if (!requestedQuery) return json({ message: "Query is required." }, 400);
-
-      const maxResults = Math.max(1, Math.min(50, Number(body.max_results || body.maxResults) || 10));
-      const recentDays = Math.max(1, Math.min(365, Number(body.recent_days || body.recentDays) || 7));
-      const onlyPostsNewerThan = typeof body.only_posts_newer_than === "string"
-        ? body.only_posts_newer_than
-        : typeof body.onlyPostsNewerThan === "string"
-          ? body.onlyPostsNewerThan
-          : undefined;
-      const autoExpandDays = typeof body.auto_expand_days === "boolean"
-        ? body.auto_expand_days
-        : typeof body.autoExpandDays === "boolean"
-          ? body.autoExpandDays
-          : true;
-      const maxAutoExpandDays = Math.max(1, Number(body.max_auto_expand_days || body.maxAutoExpandDays) || 365);
-
-      const scrape = await runInstagramScrape({
-        query: requestedQuery,
-        maxResults,
-        recentDays,
-        onlyPostsNewerThan,
-        autoExpandDays,
-        maxAutoExpandDays
+      const input = prepareScrapeInput(await readBody(request));
+      enforceTrialScrapeLimit(identity);
+      const run = await executeScrape(input, store, String(identity.sub));
+      return json({
+        run,
+        results: run.results,
+        analysis: run.analysis,
+        discoveryStatus: run.discoveryStatus,
+        discovery_status: run.discoveryStatus,
+        dataSource: run.dataSource,
+        sourceCreatedAt: run.sourceCreatedAt,
+        diagnostics: run.diagnostics,
+        message: `Scraped ${run.results.length} posts`
       });
-      const run = await store.saveRun({
-        query: scrape.query,
-        requestedQuery,
-        maxResults,
-        recentDays,
-        results: scrape.results
-      });
-
-      return json({ run, results: run.results, message: `Scraped ${run.results.length} posts` });
     }
 
     return json({ message: "Not found" }, 404);
   } catch (error) {
-    return json({ message: friendlyScrapeMessage(error) }, 500);
+    const message = friendlyScrapeMessage(error);
+    return json(
+      { message },
+      error instanceof BackgroundJobError ? error.status : error instanceof ScrapingServiceAuthError ? error.status : error instanceof InstagramRequestError ? 400 : 500
+    );
   }
 }

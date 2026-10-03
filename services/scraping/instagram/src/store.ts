@@ -1,96 +1,92 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { getStore } from "@netlify/blobs";
-import { instagramServiceInfo, type InstagramPost } from "./scraper.ts";
+import { WorkspaceScrapeStore } from "../../../../lib/workspace-scrape-store.ts";
+import {
+  instagramServiceInfo,
+  type InstagramDiscoveryStatus,
+  type InstagramPost,
+  type InstagramProfileAnalysis,
+  type InstagramScrapeDiagnostics
+} from "./scraper.ts";
 
 export type InstagramRun = {
   id: string;
+  workspaceId: string;
+  createdByUserId?: string;
   query: string;
   requestedQuery: string;
   maxResults: number;
-  recentDays: number;
+  collectionMode?: "latest" | "range" | "engagement";
+  recentDays?: number;
+  rangeType?: "date" | "month" | "year";
+  rangeFrom?: string;
+  rangeTo?: string;
+  sortBy?: "recent" | "engagement";
   createdAt: string;
   results: InstagramPost[];
+  analysis?: InstagramProfileAnalysis;
+  discoveryStatus?: InstagramDiscoveryStatus;
+  diagnostics?: InstagramScrapeDiagnostics;
+  dataSource?: "live" | "recent_cache";
+  sourceRunId?: string;
+  sourceCreatedAt?: string;
 };
 
-type RunsDatabase = {
-  version: 1;
-  runs: InstagramRun[];
+export type InstagramJobInput = {
+  requestedMode: string;
+  requestedQuery: string;
+  maxResults: number;
+  collectionMode: "latest" | "range" | "engagement";
+  recentDays: number;
+  onlyPostsNewerThan?: string;
+  autoExpandDays: boolean;
+  maxAutoExpandDays: number;
+  rangeType?: "date" | "month" | "year";
+  rangeFrom?: string;
+  rangeTo?: string;
+  timezoneOffsetMinutes: number;
+  sortBy: "recent" | "engagement";
 };
 
-const emptyDatabase = (): RunsDatabase => ({ version: 1, runs: [] });
-const shouldUseNetlifyBlobs = () => (
-  process.env.DATA_STORE === "netlify-blobs" ||
-  process.env.NETLIFY === "true" ||
-  Boolean(process.env.NETLIFY_BLOBS_CONTEXT)
-);
+export type InstagramJob = {
+  id: string;
+  workspaceId: string;
+  createdByUserId?: string;
+  status: "pending" | "running" | "complete" | "failed";
+  input: InstagramJobInput;
+  createdAt: string;
+  updatedAt: string;
+  runId?: string;
+  error?: string;
+};
 
-export class InstagramRunStore {
-  private readonly dataFile = path.join(instagramServiceInfo.dataDir, "runs.json");
-  private readonly useBlobs = shouldUseNetlifyBlobs();
+export const DEFAULT_INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MS = 6 * 60 * 60_000;
 
-  async listRuns() {
-    const database = await this.readDatabase();
-    return database.runs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  async listKeywords() {
-    const seen = new Set<string>();
-    for (const run of await this.listRuns()) {
-      seen.add(run.requestedQuery);
-      if (seen.size >= 12) break;
+export function selectRecentRunFallback(
+  runs: InstagramRun[],
+  input: InstagramJobInput,
+  now = Date.now(),
+  maxAgeMs = DEFAULT_INSTAGRAM_CACHE_FALLBACK_MAX_AGE_MS
+) {
+  if (input.collectionMode === "range" || maxAgeMs <= 0) return null;
+  const requestedQuery = input.requestedQuery.trim().toLowerCase();
+  const candidates = runs.filter((run) => {
+    const createdAt = new Date(run.createdAt).getTime();
+    const age = now - createdAt;
+    if (!Number.isFinite(createdAt) || age < 0 || age > maxAgeMs) return false;
+    if (run.requestedQuery.trim().toLowerCase() !== requestedQuery || !run.results.length) return false;
+    if (run.dataSource === "recent_cache") return false;
+    if (input.collectionMode === "engagement") {
+      return run.collectionMode === "engagement" && Boolean(run.analysis);
     }
-    return [...seen];
-  }
-
-  async getRun(id: string) {
-    return (await this.listRuns()).find((run) => run.id === id) || null;
-  }
-
-  async saveRun(input: Omit<InstagramRun, "id" | "createdAt">) {
-    const run: InstagramRun = {
-      ...input,
-      id: randomUUID(),
-      createdAt: new Date().toISOString()
-    };
-    const database = await this.readDatabase();
-    database.runs = [run, ...database.runs].slice(0, 50);
-    await this.writeDatabase(database);
-    return run;
-  }
-
-  private async readDatabase(): Promise<RunsDatabase> {
-    if (this.useBlobs) {
-      const store = getStore("instagram-scraper");
-      const value = await store.get("runs", { type: "json", consistency: "strong" });
-      return coerceDatabase(value);
-    }
-
-    try {
-      return coerceDatabase(JSON.parse(await readFile(this.dataFile, "utf8")));
-    } catch {
-      return emptyDatabase();
-    }
-  }
-
-  private async writeDatabase(database: RunsDatabase) {
-    if (this.useBlobs) {
-      const store = getStore("instagram-scraper");
-      await store.setJSON("runs", database);
-      return;
-    }
-
-    await mkdir(path.dirname(this.dataFile), { recursive: true });
-    await writeFile(this.dataFile, JSON.stringify(database, null, 2), "utf8");
-  }
+    return run.collectionMode === "latest" || run.collectionMode === "engagement";
+  });
+  return candidates.sort((a, b) => {
+    const aSameMode = a.collectionMode === input.collectionMode ? 1 : 0;
+    const bSameMode = b.collectionMode === input.collectionMode ? 1 : 0;
+    return bSameMode - aSameMode || b.createdAt.localeCompare(a.createdAt);
+  })[0] || null;
 }
 
-function coerceDatabase(value: unknown): RunsDatabase {
-  if (!value || typeof value !== "object") return emptyDatabase();
-  const input = value as Partial<RunsDatabase>;
-  return {
-    version: 1,
-    runs: Array.isArray(input.runs) ? input.runs as InstagramRun[] : []
-  };
+export class InstagramRunStore extends WorkspaceScrapeStore<InstagramRun, InstagramJob, InstagramJobInput> {
+  constructor(workspaceId: string) { super("instagram-scraper", instagramServiceInfo.dataDir, workspaceId); }
+  async listKeywords() { return [...new Set((await this.listRuns()).map(run => run.requestedQuery))].slice(0, 12); }
 }

@@ -1,14 +1,32 @@
-# AgenticThat Publishing Companion for Windows
+# AgenticThat Companion for Windows, macOS, and Linux
 
-This Electron application packages the persistent Publish Queue API, local JSON
-store, media uploads, scheduler, and isolated Chrome profiles into a normal
-Windows desktop installer.
+The Electron Companion is AgenticThat's focused desktop execution engine. The
+SaaS workspace stays in the user's normal browser while Companion owns the
+loopback login API, encrypted social-account sessions, visible browser
+publishing, and Instagram/Facebook scraping engines.
 
-On first launch it creates a random Operations Manager password and auth secret,
-stores them with Windows-protected Electron safe storage when available, starts
-the service on loopback port 8792, and enables launch at Windows sign-in. The
-control window shows health, Chrome availability, credentials, logs, and local
-data without requiring a terminal.
+The Chrome extension is optional and is not part of the core workflow. Website
+publishing and scraping enter the durable Supabase queue, and Companion claims
+them directly using its encrypted, revocable device token.
+
+Facebook, X, and YouTube sign-in opens in a Companion-managed Chrome, Edge, or
+Chromium profile by default because those providers can reject or repeatedly
+challenge embedded authentication. Companion
+retains that dedicated profile, verifies the signed-in state, and reuses it for
+publishing. Instagram and LinkedIn keep the embedded login flow with
+the same external-browser fallback available when needed. Passwords and
+verification codes are entered only on the provider page.
+
+Instagram and Facebook scraping share one local browser-resource slot and wait
+while publishing is active. Requested date ranges are timezone-aware and are
+reported as partial when the scraper cannot prove that it scanned through the
+range boundary; an incomplete scan is never represented as a trustworthy empty
+result.
+
+Publishing supports immediate jobs, exact publish times, and reusable schedule
+templates. Content Uploaders can hand fixed content and destinations to
+Schedulers for timing. Telegram scheduling remains intentionally unavailable;
+its manual **Post now** action remains available.
 
 ## Development
 
@@ -19,12 +37,26 @@ npm run publishing:desktop:install
 npm run publishing:desktop:start
 ```
 
+Set `AGENTICTHAT_DASHBOARD_URL` to an HTTPS dashboard URL (or an HTTP localhost
+URL for development) when testing a self-hosted deployment.
+
 ## Packaging
 
 ```text
-npm run publishing:release:windows
+npm run publishing:desktop:make:windows
+npm run publishing:desktop:make:macos
+npm run publishing:desktop:make:linux
 ```
 
-The Squirrel installer and portable ZIP are copied to the repository's ignored
-`artifacts/` directory. Set `WINDOWS_CERTIFICATE_FILE` and
-`WINDOWS_CERTIFICATE_PASSWORD` to sign the installer during a production build.
+Each target must be built on its native operating system. The tagged GitHub
+Actions release workflow builds Windows Setup/ZIP, a universal macOS DMG/ZIP,
+and Linux DEB/RPM/ZIP artifacts for x64 and ARM64. It publishes only after the
+owned-account matrix is approved, Windows is signed, and macOS is signed and
+notarized.
+
+Installed Windows and signed macOS builds check the public release feed
+automatically. Linux updates are delivered through a newly installed DEB/RPM or
+portable archive because Electron does not provide a native Linux auto-updater.
+
+On Linux, Companion refuses Electron's `basic_text` credential-storage fallback.
+GNOME Keyring/libsecret or KWallet must be installed and unlocked before pairing.

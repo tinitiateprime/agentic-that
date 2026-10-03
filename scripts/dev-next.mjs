@@ -15,6 +15,7 @@ const preferredPort = Number(process.env.PORT || process.env.DEV_PORT || 5173);
 const maxAttempts = Number(process.env.DEV_PORT_ATTEMPTS || 20);
 const projectRoot = process.cwd();
 const nextEnvPath = path.join(projectRoot, "next-env.d.ts");
+const useTurbopack = process.env.NEXT_USE_WEBPACK !== "true";
 
 function whatsappEnvironment() {
   const envFiles = [
@@ -46,7 +47,9 @@ function canonicalNextEnv() {
 function restoreCanonicalNextEnv() {
   if (!existsSync(nextEnvPath)) return;
   const current = readFileSync(nextEnvPath, "utf8");
-  if (!current.includes("AgenticThat/next-dev")) return;
+  const usesExternalDevTypes = current.includes("AgenticThat/next-dev");
+  const usesTurbopackJunctionTypes = /\.next\/dev-\d+-turbopack\/types\/routes\.d\.ts/.test(current);
+  if (!usesExternalDevTypes && !usesTurbopackJunctionTypes) return;
   writeFileSync(nextEnvPath, canonicalNextEnv(), "utf8");
 }
 
@@ -82,14 +85,25 @@ function developmentCache(port) {
     "AgenticThat",
     "next-dev",
     projectKey,
-    String(port)
+    String(port),
+    ...(useTurbopack ? ["turbopack"] : [])
   );
   const distPath = path.join(cacheRoot, "dist");
-  const distDir = portablePath(path.relative(projectRoot, distPath));
+  let distDir = portablePath(path.relative(projectRoot, distPath));
   const tsconfigPath = path.join(projectRoot, `.next-dev-${port}.tsconfig.json`);
   const nodeModulesLink = path.join(cacheRoot, "node_modules");
 
   mkdirSync(cacheRoot, { recursive: true });
+  if (useTurbopack) {
+    const localCacheRoot = path.join(projectRoot, ".next");
+    const localDistPath = path.join(localCacheRoot, `dev-${port}-turbopack`);
+    mkdirSync(distPath, { recursive: true });
+    mkdirSync(localCacheRoot, { recursive: true });
+    if (!existsSync(localDistPath)) {
+      symlinkSync(distPath, localDistPath, "junction");
+    }
+    distDir = portablePath(path.relative(projectRoot, localDistPath));
+  }
   if (!existsSync(nodeModulesLink)) {
     symlinkSync(
       path.join(projectRoot, "node_modules"),
@@ -146,9 +160,23 @@ async function findPort() {
   );
 }
 
+async function prewarmAppRoutes(url, port) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (!(await isPortFree(port))) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  for (const route of ["/scraper/instagram", "/scraper/facebook"]) {
+    const startedAt = Date.now();
+    const response = await fetch(`${url}${route}`, { redirect: "manual" });
+    console.log(`[dev] Precompiled ${route} (${response.status}) in ${Date.now() - startedAt}ms`);
+  }
+}
+
 const port = await findPort();
 const url = `http://${host}:${port}`;
 const cache = developmentCache(port);
+const bundlerArgs = useTurbopack ? ["--turbopack"] : [];
 
 if (port !== preferredPort) {
   console.log(`[dev] Port ${preferredPort} is busy. Starting AgenticThat on ${url}`);
@@ -162,7 +190,7 @@ if (cache.external) {
 
 const child = spawn(
   process.execPath,
-  [nextBin, "dev", "-H", host, "-p", String(port)],
+  [nextBin, "dev", ...bundlerArgs, "-H", host, "-p", String(port)],
   {
     env: {
       ...whatsappEnvironment(),
@@ -175,13 +203,16 @@ const child = spawn(
   }
 );
 
+if (process.env.NEXT_PREWARM_ROUTES !== "false") {
+  void prewarmAppRoutes(url, port).catch((error) => {
+    console.warn(`[dev] Route precompile skipped: ${error instanceof Error ? error.message : error}`);
+  });
+}
+
 if (cache.external) {
-  let checksRemaining = 80;
   const nextEnvTimer = setInterval(() => {
     restoreCanonicalNextEnv();
-    checksRemaining -= 1;
-    if (checksRemaining <= 0) clearInterval(nextEnvTimer);
-  }, 250);
+  }, 1000);
   nextEnvTimer.unref();
 }
 

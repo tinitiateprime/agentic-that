@@ -1,0 +1,128 @@
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createTelegramHttpServer } from "../../../services/messaging/telegram/src/server.ts";
+import { telegramProxyHeaders } from "./telegram-proxy-origin.ts";
+
+type LocalServer = {
+  origin: string;
+  server: Server;
+};
+
+let localServerPromise: Promise<LocalServer> | null = null;
+
+async function getLocalServer() {
+  process.env.SERVERLESS = "true";
+  // The deployed function bundle is read-only. Account/session records use
+  // PostgreSQL; transient upload parts must live in Lambda's writable temp
+  // directory so media initialization cannot take the whole Telegram API down.
+  process.env.DATA_DIR ||= path.join(tmpdir(), "agenticthat-telegram");
+
+  localServerPromise ??= (async () => {
+    const server = await createTelegramHttpServer({ startListeners: false });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address() as AddressInfo;
+    return {
+      origin: `http://127.0.0.1:${address.port}`,
+      server
+    };
+  })();
+
+  try {
+    return await localServerPromise;
+  } catch (error) {
+    // Let the next invocation recover from a transient cold-start failure.
+    localServerPromise = null;
+    throw error;
+  }
+}
+
+function telegramPath(pathname: string) {
+  if (pathname.startsWith("/api/telegram")) {
+    return "/v1" + pathname.slice("/api/telegram".length);
+  }
+  return pathname;
+}
+
+function requestBody(request: Request) {
+  if (request.method === "GET" || request.method === "HEAD") return undefined;
+  return request.arrayBuffer();
+}
+
+function responseHeaders(headers: Headers) {
+  const output = new Headers(headers);
+  output.delete("connection");
+  output.delete("content-encoding");
+  output.delete("content-length");
+  output.delete("keep-alive");
+  output.delete("transfer-encoding");
+  return output;
+}
+
+function startupFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("SESSION_ENCRYPTION_KEY is required")) {
+    return {
+      code: "telegram_encryption_key_missing",
+      error: "Telegram needs SESSION_ENCRYPTION_KEY in the server environment."
+    };
+  }
+  if (message.includes("SESSION_ENCRYPTION_KEY must be")) {
+    return {
+      code: "telegram_encryption_key_invalid",
+      error: "SESSION_ENCRYPTION_KEY must be a base64url-encoded 32-byte key."
+    };
+  }
+  if (message.includes("USER_PROVISIONING_KEY is required")) {
+    return {
+      code: "telegram_provisioning_key_missing",
+      error: "Telegram needs USER_PROVISIONING_KEY in the server environment."
+    };
+  }
+  if (/blob|data store/i.test(message)) {
+    return {
+      code: "telegram_storage_unavailable",
+      error: "Telegram could not open its database. Please try again."
+    };
+  }
+  if (/EROFS|EACCES|read-only|permission denied/i.test(message)) {
+    return {
+      code: "telegram_temporary_storage_unavailable",
+      error: "Telegram could not open its temporary media storage. Please try again."
+    };
+  }
+  return {
+    code: "telegram_startup_failed",
+    error: "Telegram could not start. Check the server logs and try again."
+  };
+}
+
+export async function handleTelegramRequest(request: Request) {
+  try {
+    const local = await getLocalServer();
+    const incomingUrl = new URL(request.url);
+    const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
+    const headers = telegramProxyHeaders(request);
+
+    const response = await fetch(targetUrl, {
+      body: await requestBody(request),
+      headers,
+      method: request.method,
+      redirect: "manual"
+    });
+
+    return new Response(response.body, {
+      headers: responseHeaders(response.headers),
+      status: response.status,
+      statusText: response.statusText
+    });
+  } catch (error) {
+    console.error("Telegram serverless request failed:", error instanceof Error ? error.message : "Unknown startup error");
+    return Response.json({ ok: false, ...startupFailure(error) }, { status: 503 });
+  }
+}

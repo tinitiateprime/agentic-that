@@ -15,11 +15,14 @@ async function seed() {
 
   // Wipe (order respects FKs). DELETE works regardless of existing rows.
   for (const t of [
+    "calls",
     "messages",
     "group_members",
     "groups",
     "templates",
     "contacts",
+    "whatsapp_numbers",
+    "whatsapp_accounts",
     "sessions",
     "users",
     "businesses",
@@ -28,8 +31,8 @@ async function seed() {
   }
 
   const [{ id: businessId }] = await sql`
-    INSERT INTO businesses (name, admin_number, provider, currency)
-    VALUES ('Tinitiate AI Services', '+919800000000', ${process.env.WA_PROVIDER || "mock"}, 'INR')
+    INSERT INTO businesses (name, admin_number, provider, currency, onboarded_at)
+    VALUES ('Tinitiate AI Services', '+919800000000', ${process.env.WA_PROVIDER || "mock"}, 'INR', now())
     RETURNING id`;
 
   await sql`

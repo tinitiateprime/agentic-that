@@ -2,10 +2,18 @@
 
 import { useState, useRef, useEffect } from "react";
 import MessageBubble from "@whatsapp/components/MessageBubble";
+import EmojiPicker from "@whatsapp/components/EmojiPicker";
 
 const PHONE_COLORS = ["#128c7e", "#6366f1", "#ea580c", "#db2777"];
 
-export default function Chat({ contactId, initialMessages, templates, provider, phoneNumbers = [] }) {
+export default function Chat({
+  contactId,
+  initialMessages,
+  templates,
+  provider,
+  phoneNumbers = [],
+  canOperate = false,
+}) {
   const [messages, setMessages] = useState(() => mergeMessages([], initialMessages));
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -16,7 +24,9 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
   const [watiTemplate, setWatiTemplate] = useState("");
   const [fromPhoneId, setFromPhoneId] = useState(""); // "" = auto (follow conversation)
   const endRef = useRef(null);
+  const inputRef = useRef(null);
   const lastIdRef = useRef(initialMessages.reduce((max, m) => Math.max(max, m.id), 0));
+  const reactionsSinceRef = useRef(new Date(0).toISOString());
   const isMock = provider === "mock";
   const isWati = provider === "wati";
   const isMeta = provider === "meta";
@@ -30,6 +40,31 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
     const maxId = incoming.reduce((max, m) => Math.max(max, Number(m.id) || 0), 0);
     if (maxId > lastIdRef.current) lastIdRef.current = maxId;
     setMessages((current) => mergeMessages(current, incoming));
+  }
+
+  function applyReactions(reactions) {
+    if (!reactions?.length) return;
+    const byId = new Map(reactions.map((reaction) => [Number(reaction.id), reaction]));
+    setMessages((current) => current.map((message) => {
+      const update = byId.get(Number(message.id));
+      return update ? { ...message, reaction: update.reaction || null } : message;
+    }));
+  }
+
+  function insertEmoji(emoji) {
+    const input = inputRef.current;
+    if (!input) {
+      setText((current) => current + emoji);
+      return;
+    }
+    const start = input.selectionStart ?? text.length;
+    const end = input.selectionEnd ?? text.length;
+    setText(text.slice(0, start) + emoji + text.slice(end));
+    requestAnimationFrame(() => {
+      input.focus();
+      const position = start + emoji.length;
+      input.setSelectionRange(position, position);
+    });
   }
 
   // { phoneNumberId: { short, label, color } } for the per-bubble source tags
@@ -61,13 +96,16 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/contacts/${contactId}/messages?afterId=${lastIdRef.current}`, {
-          cache: "no-store",
-        });
+        const res = await fetch(
+          `/api/contacts/${contactId}/messages?afterId=${lastIdRef.current}&reactionsSince=${encodeURIComponent(reactionsSinceRef.current)}`,
+          { cache: "no-store" }
+        );
         const data = await res.json();
         if (data.messages?.length) {
           appendMessages(data.messages);
         }
+        if (data.reactions?.length) applyReactions(data.reactions);
+        if (data.reactionCursor) reactionsSinceRef.current = data.reactionCursor;
       } catch {
         // Transient network error — next tick retries.
       }
@@ -131,6 +169,32 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
     }
   }
 
+  async function react(messageId, emoji) {
+    const reaction = emoji || null;
+    const previous = messages.find((message) => Number(message.id) === Number(messageId))?.reaction || null;
+    setMessages((current) => current.map((message) =>
+      Number(message.id) === Number(messageId) ? { ...message, reaction } : message
+    ));
+    setError("");
+    try {
+      const response = await fetch("/api/messages/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, emoji: emoji || "" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Reaction failed");
+      if (data.message) applyReactions([data.message]);
+    } catch (requestError) {
+      setMessages((current) => current.map((message) =>
+        Number(message.id) === Number(messageId) && message.reaction === reaction
+          ? { ...message, reaction: previous }
+          : message
+      ));
+      setError(requestError.message || "Reaction failed");
+    }
+  }
+
   // Mock-only: pretend the customer tapped a button so the capture loop is visible.
   async function simulateTap(buttonText) {
     const data = await post("/api/messages/simulate-reply", {
@@ -153,7 +217,13 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
         {messages.map((m) => {
           const buttons = m.buttons ? safeParse(m.buttons) : null;
           return (
-            <MessageBubble key={m.id} m={m} phones={phoneMap}>
+            <MessageBubble
+              key={m.id}
+              m={m}
+              phones={phoneMap}
+              onReact={canOperate ? react : undefined}
+              fallbackProvider={provider}
+            >
               {/* Interactive buttons rendered under the bubble */}
               {buttons && buttons.length > 0 && (
                 <div className="mt-2 flex flex-col gap-1">
@@ -308,7 +378,9 @@ export default function Chat({ contactId, initialMessages, templates, provider, 
             ))}
           </select>
         )}
+        <EmojiPicker onPick={insertEmoji} />
         <input
+          ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Type a message…"

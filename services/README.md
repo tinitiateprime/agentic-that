@@ -8,7 +8,7 @@ Current structure:
 services/
   messaging/
     telegram/      live Telegram workflow console and backend API
-    whatsapp/      placeholder for WhatsApp automation
+    whatsapp/      live WhatsApp workflow console, providers, CRM, and tenant backend
   scraping/        scraper service placeholders by platform
   publishing/
     queue-runner/  live multi-platform queue UI, scheduler, API, and browser publishers

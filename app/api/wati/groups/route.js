@@ -1,7 +1,8 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { importContacts } from "@whatsapp/lib/data";
 import { normalizeWaNumber, watiConfigured, watiGetContacts } from "@whatsapp/lib/wa/provider";
+import { credsForProvider } from "@whatsapp/lib/tenant";
 
 // Create a CRM group directly from WATI contacts.
 // Body:
@@ -11,9 +12,10 @@ import { normalizeWaNumber, watiConfigured, watiGetContacts } from "@whatsapp/li
 // WATI's WhatsApp APIs send to individual numbers, so this app stores groups
 // locally and uses WATI only for contact import + outbound messaging.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!watiConfigured()) {
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
+  const creds = await credsForProvider(user.business_id, "wati");
+  if (!watiConfigured(creds)) {
     return Response.json({ error: "WATI isn't configured." }, { status: 400 });
   }
 
@@ -23,7 +25,7 @@ export async function POST(req) {
 
   let watiContacts;
   try {
-    watiContacts = await watiGetContacts({ pageSize: 100 });
+    watiContacts = await watiGetContacts({ pageSize: 100 }, creds);
   } catch (err) {
     return Response.json({ error: err.message }, { status: 502 });
   }

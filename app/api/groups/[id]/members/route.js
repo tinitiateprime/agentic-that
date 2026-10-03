@@ -1,11 +1,11 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 
 // Add one or more contacts to a group.
 // Body: { contactIds: number[] }
 export async function POST(req, { params }) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const { id } = await params;
 
   const sql = await getSql();
@@ -27,8 +27,8 @@ export async function POST(req, { params }) {
 
 // Remove a single contact.  Body: { contactId: number }
 export async function DELETE(req, { params }) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const { id } = await params;
   const { contactId } = await req.json();
   const sql = await getSql();

@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
-import { getCurrentPlatformUser } from "@platform/server/auth-store";
+import { createPublishingIdentityToken, createServiceIdentityToken } from "@platform/server/auth-store";
+import { principalHasAccess, principalHasCapability, requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
 import { serviceEndpoints } from "@platform/service-catalog";
 import ConfigManager from "./ConfigManager";
 
@@ -9,9 +9,6 @@ export const metadata = {
 };
 
 export default async function ConfigManagerPage({ searchParams }) {
-  const user = await getCurrentPlatformUser();
-  if (!user) redirect("/?auth=login&next=/config-manager");
-
   const params = await searchParams;
   const legacyMessagingService = ["telegram", "whatsapp"].includes(params?.service);
   const requestedService = legacyMessagingService
@@ -22,17 +19,33 @@ export default async function ConfigManagerPage({ searchParams }) {
   const requestedMessagingPlatform = params?.service === "whatsapp" || params?.platform === "whatsapp"
     ? "whatsapp"
     : "telegram";
-  const requestedPublishingPlatform = ["instagram", "facebook", "x", "youtube", "linkedin"].includes(params?.platform)
+  const requestedPublishingPlatform = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"].includes(params?.platform)
     ? params.platform
     : "instagram";
+  const requestedResource = requestedService === "publishing"
+    ? `publishing.${requestedPublishingPlatform}`
+    : `messaging.${requestedMessagingPlatform}`;
+  let user = await requireAccess(requestedResource, "configure", "/config-manager");
+  user = await requirePrincipalCapability(user, requestedService === "publishing" ? "publishing.accounts.configure" : "messaging.configure", "/config-manager");
+  const canUsePublishing = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"]
+    .some((platform) => principalHasAccess(user, `publishing.${platform}`, "view"))
+    && principalHasCapability(user, "publishing.view");
+  const canUseTelegram = principalHasAccess(user, "messaging.telegram", "view") && principalHasCapability(user, "messaging.view");
 
   return (
     <ConfigManager
       initialService={requestedService}
       initialMessagingPlatform={requestedMessagingPlatform}
       initialPublishingPlatform={requestedPublishingPlatform}
-      user={{ name: user.name, email: user.email, businessName: user.businessName }}
+      initialTelegramConnect={params?.continue === "telegram-connect"}
+      publishingIdentityToken={canUsePublishing ? await createPublishingIdentityToken(user) : ""}
+      telegramIdentityToken={canUseTelegram ? await createServiceIdentityToken(user, "telegram") : ""}
+      effectiveAccess={user.access}
+      user={{ name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialStartsAt: user.trialStartsAt, trialEndsAt: user.trialEndsAt, capabilities: user.capabilities }}
       telegramDashboardUrl={serviceEndpoints.telegram.dashboardUrl}
+      whatsappDashboardUrl={serviceEndpoints.whatsapp.dashboardUrl}
+      metaAppId={process.env.META_APP_ID || ""}
+      metaConfigId={process.env.META_CONFIGURATION_ID || ""}
       publishQueueUrl={serviceEndpoints.publishQueue.consoleUrl}
     />
   );

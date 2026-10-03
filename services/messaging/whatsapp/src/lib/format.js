@@ -13,8 +13,8 @@ export function parseMoneyToCents(input) {
   return Math.round((Number.isFinite(n) ? n : 0) * 100);
 }
 
-// PostgreSQL timestamps normally include a timezone. Add one only when it is
-// absent, so a bare "YYYY-MM-DD HH:mm:ss" is still read as UTC.
+// Supabase returns ISO timestamps with a timezone. Add a timezone only when
+// one is absent, so a bare "YYYY-MM-DD HH:mm:ss" is still read as UTC.
 function parseDate(value) {
   if (value instanceof Date) return value;
   const normalized = String(value).trim().replace(" ", "T");
@@ -35,6 +35,21 @@ export function timeAgo(iso) {
   const days = Math.round(hrs / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(then).toLocaleDateString();
+}
+
+// Mirror of timeAgo for future timestamps — "in 23h", used for temp-group TTLs.
+export function timeUntil(iso) {
+  if (!iso) return "—";
+  const then = parseDate(iso).getTime();
+  if (!Number.isFinite(then)) return "—";
+  const diff = then - Date.now();
+  if (diff <= 0) return "soon";
+  const mins = Math.round(diff / 60000);
+  if (mins < 1) return "in under a minute";
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `in ${hrs}h`;
+  return `in ${Math.round(hrs / 24)}d`;
 }
 
 export function formatTime(iso) {

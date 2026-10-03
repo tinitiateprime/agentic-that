@@ -1,0 +1,85 @@
+name: Publishing Companion Microsoft Store Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_identity_name:
+        description: "Partner Center package identity name"
+        required: true
+        type: string
+      publisher:
+        description: "Partner Center publisher value, including CN="
+        required: true
+        type: string
+      publisher_display_name:
+        description: "Publisher display name shown in Windows"
+        required: true
+        default: "AgenticThat"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows-store-package:
+    runs-on: windows-latest
+    env:
+      WINDOWS_MSIX_IDENTITY_NAME: ${{ inputs.package_identity_name }}
+      WINDOWS_MSIX_PUBLISHER: ${{ inputs.publisher }}
+      WINDOWS_MSIX_PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/publishing-companion-desktop/package-lock.json
+
+      - name: Install website dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        run: npm ci --prefix apps/publishing-companion-desktop
+
+      - name: Locate Windows SDK
+        shell: pwsh
+        run: |
+          $sdkRoot = "C:\Program Files (x86)\Windows Kits\10\bin"
+          $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "x64\MakeAppx.exe") } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+          if (-not $sdk) {
+            throw "A Windows SDK containing MakeAppx.exe is required."
+          }
+          "WINDOWS_KIT_VERSION=$($sdk.Name)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using Windows SDK $($sdk.Name)"
+
+      - name: Build Microsoft Store MSIX
+        run: |
+          npm run publishing:brand-assets
+          npm --prefix apps/publishing-companion-desktop run make:store
+
+      - name: Validate Store package exists
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem -LiteralPath "apps/publishing-companion-desktop/out/make/msix" -Recurse -File -Filter "*.msix" | Select-Object -First 1
+          if (-not $package) {
+            throw "The Microsoft Store MSIX package was not produced."
+          }
+          if ($package.Length -lt 1MB) {
+            throw "The Microsoft Store MSIX package is unexpectedly small."
+          }
+          Write-Host "Store package ready: $($package.FullName) ($($package.Length) bytes)"
+
+      - name: Upload Microsoft Store package
+        uses: actions/upload-artifact@v4
+        with:
+          name: publishing-companion-microsoft-store-msix
+          path: apps/publishing-companion-desktop/out/make/msix/**/*.msix
+          if-no-files-found: error

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Keyword research">
+  <rect width="64" height="64" rx="18" fill="#edf5ff"/>
+  <circle cx="28" cy="28" r="13" fill="#fff" stroke="#2563a6" stroke-width="4"/>
+  <path d="m38 38 10 10" fill="none" stroke="#2563a6" stroke-linecap="round" stroke-width="5"/>
+  <path d="M21 25h14M21 31h9" fill="none" stroke="#2563a6" stroke-linecap="round" stroke-width="3"/>
+</svg>

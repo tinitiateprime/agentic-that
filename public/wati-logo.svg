@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="62" height="62" viewBox="0 0 61.303 61.405" role="img" aria-labelledby="title">
+  <title id="title">WATI</title>
+  <defs>
+    <clipPath id="wati-clip">
+      <rect width="32.763" height="28.228" fill="#fff"/>
+    </clipPath>
+  </defs>
+  <g transform="translate(-1079.029 -1429.931)">
+    <g transform="translate(1079.28 1430.284)">
+      <rect width="61.052" height="61.052" rx="30.526" fill="#00e785"/>
+      <rect width="59.676" height="59.676" rx="29.838" transform="translate(.249 .147)" fill="none" stroke="#1d1d1b"/>
+    </g>
+    <g transform="translate(1093.816 1446.758)" clip-path="url(#wati-clip)">
+      <path d="M939.907 1074.789h9.66l5.772 5.769v-5.769h2.467a5.359 5.359 0 0 0 5.35-5.347v-7.594a5.359 5.359 0 0 0-5.35-5.347h-17.9a5.359 5.359 0 0 0-5.35 5.347v7.594a5.359 5.359 0 0 0 5.351 5.347Z" transform="translate(-930.395 -1052.334)" fill="#fff"/>
+      <path d="m952.828 1079.513-6.208-6.2h-9.23a6.4 6.4 0 0 1-6.39-6.389v-7.594a6.4 6.4 0 0 1 6.39-6.389h17.9a6.4 6.4 0 0 1 6.39 6.389v7.594a6.4 6.4 0 0 1-6.39 6.389h-2.467v-2.083h2.467a4.312 4.312 0 0 0 4.308-4.306v-7.594a4.312 4.312 0 0 0-4.308-4.306h-17.9a4.312 4.312 0 0 0-4.308 4.306v7.594a4.312 4.312 0 0 0 4.308 4.306h10.092l5.364 5.359-.017 2.925Z" transform="translate(-931 -1052.94)" fill="#1d1d1b"/>
+    </g>
+  </g>
+</svg>

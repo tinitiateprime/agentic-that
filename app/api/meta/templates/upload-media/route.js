@@ -1,15 +1,17 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { metaUploadTemplateImage, metaConfigured } from "@whatsapp/lib/wa/provider";
+import { credsForBusiness } from "@whatsapp/lib/tenant";
 
 const MAX_BYTES = 5 * 1024 * 1024; // Meta's limit for template header images
 
 // Uploads an image for use as a template HEADER and returns its handle, which
 // gets passed to POST /api/meta/templates as headerImageHandle.
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
+  const creds = await credsForBusiness(user.business_id);
 
-  if (!metaConfigured()) {
+  if (!metaConfigured(creds)) {
     return Response.json({ error: "Meta isn't configured — set META_ACCESS_TOKEN in .env.local." }, { status: 400 });
   }
 
@@ -27,7 +29,7 @@ export async function POST(req) {
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const handle = await metaUploadTemplateImage({ buffer, mimeType: file.type });
+    const handle = await metaUploadTemplateImage({ buffer, mimeType: file.type, creds });
     return Response.json({ ok: true, handle });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 502 });

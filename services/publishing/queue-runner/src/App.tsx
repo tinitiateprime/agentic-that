@@ -6,14 +6,14 @@ import {
   ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
-  Bookmark, Check, Clock3, Download, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
+  Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
-import type { ActivityLog, Platform, PlatformAccount, PlatformUpload, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
-import { platformLabels, platformPostRules, platforms, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
-import { api, assetUrl, setAuthToken, type AuthResponse } from "./lib/api.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FaFacebook, FaInstagram, FaLinkedin, FaReddit, FaXTwitter, FaYoutube } from "react-icons/fa6";
+import type { ActivityLog, ContentSubmission, LinkedInManagedPage, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
+import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
+import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 
 // --- PLATFORM BRAND ICONS ---
@@ -25,6 +25,7 @@ const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number
     case 'instagram': return <FaInstagram {...iconProps} color="#E4405F" />;
     case 'linkedin': return <FaLinkedin {...iconProps} color="#0A66C2" />;
     case 'facebook': return <FaFacebook {...iconProps} color="#1877F2" />;
+    case 'reddit': return <FaReddit {...iconProps} color="#FF4500" />;
     default: return null;
   }
 };
@@ -37,15 +38,41 @@ function StatusStateIcon({ state, size = 18 }: { state: string; size?: number })
   return <CircleAlert size={size} />;
 }
 
+function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 'paused' | 'restricted' {
+  if (!account.enabled) return account.safetyStatus === 'restricted' ? 'restricted' : 'paused';
+  return account.safetyStatus ?? 'healthy';
+}
+
+function accountConnectionLabel(account: PlatformAccount) {
+  if (!account.enabled) return 'Paused';
+  if (account.readiness === 'reconnect_required' || account.sessionStatus === 'reconnect_required' || !account.credentialConfigured) return 'Reconnect Required';
+  if (account.executionEngine !== 'api' && (account.readiness === 'waiting_for_companion' || account.companionStatus === 'offline')) return 'Waiting for Companion';
+  return 'Ready';
+}
+
+function accountPublishingEngine(account: PlatformAccount) {
+  return account.executionEngine === 'api' ? 'api' as const : 'companion' as const;
+}
+
+
+const accountHealthLabels = {
+  healthy: 'Green',
+  warning: 'Warning',
+  paused: 'Paused',
+  restricted: 'Restricted',
+} as const;
+
 const platformColor: Record<Platform, string> = {
   youtube: '#FF0000',
   x: '#000000',
   instagram: '#E1306C',
   linkedin: '#0A66C2',
-  facebook: '#1877F2'
+  facebook: '#1877F2',
+  reddit: '#FF4500'
 };
 
 const DONUT_CIRCUMFERENCE = 263.89;
+const PUBLISHING_SCHEDULING_ENABLED = true;
 
 function toLocalDateTimeInputValue(date: Date) {
   const localTime = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -55,6 +82,16 @@ function toLocalDateTimeInputValue(date: Date) {
 type AuthSession = {
   token: string;
   user: UserProfile;
+};
+
+type PlatformAccessStatus = {
+  state: 'checking' | 'ready' | 'error';
+  configured: boolean;
+  username: string;
+  workspaceId: string;
+  message?: string;
+  upgradeRequired?: boolean;
+  connectionHelpRequired?: boolean;
 };
 
 type RolePermissions = {
@@ -74,14 +111,17 @@ type AutomationNotice = {
 
 const AUTH_SESSION_KEY = 'agenticthat-publish-queue-session';
 const companionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
-  || 'https://github.com/tintiatekaushik-spec/agentic-that/releases/latest/download/AgenticThat-Publishing-Companion-Setup.exe';
-const extensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
+  || 'https://agenticthat.com/companion/download';
+const configuredExtensionInstallUrl = process.env.NEXT_PUBLIC_PUBLISHING_EXTENSION_URL?.trim() || '';
+const extensionInstallUrl = configuredExtensionInstallUrl
+  || 'https://github.com/tinitiateprime/agentic-that/releases/latest/download/AgenticThat-Publishing-Extension.zip';
+const localCompanionHealthUrl = 'http://127.0.0.1:8792/api/health';
 
 const loginRoleOptions: Array<{ role: UserRole; username: string; description: string }> = [
   { role: 'operations_manager', username: 'operations.manager', description: 'Full workspace, users, audit, and automation access' },
-  { role: 'post_uploader', username: 'content.uploader', description: 'Review imported posts and edit captions or titles' },
-  { role: 'scheduler', username: 'post.scheduler', description: 'Create schedules and assign publish times' },
-  { role: 'viewer', username: 'workspace.viewer', description: 'Read-only workspace overview' },
+  { role: 'post_uploader', username: 'content.uploader', description: 'Create finished content and hand it to scheduling' },
+  { role: 'scheduler', username: 'post.scheduler', description: 'Review selected destinations and assign publish times' },
+  { role: 'viewer', username: 'workspace.viewer', description: 'Read-only access with no publishing actions' },
 ];
 
 const roleInitials: Record<UserRole, string> = {
@@ -91,7 +131,25 @@ const roleInitials: Record<UserRole, string> = {
   viewer: 'VW',
 };
 
-function permissionsForRole(role: UserRole): RolePermissions {
+function permissionsForRole(role: UserRole, centralAccessLevel?: 'view' | 'operate' | 'configure', capabilities?: string[]): RolePermissions {
+  if (centralAccessLevel && Array.isArray(capabilities)) {
+    return {
+      canManageUsers: false,
+      canViewActivity: capabilities.includes('publishing.view'),
+      canManageAccounts: capabilities.includes('publishing.accounts.configure'),
+      canEditContent: capabilities.includes('publishing.content.create') || capabilities.includes('publishing.content.edit'),
+      canSchedulePosts: capabilities.includes('publishing.schedule.manage'),
+      canRunAutomation: capabilities.includes('publishing.execute'),
+    };
+  }
+  if (centralAccessLevel) return {
+    canManageUsers: false,
+    canViewActivity: centralAccessLevel === 'configure',
+    canManageAccounts: centralAccessLevel === 'configure',
+    canEditContent: centralAccessLevel !== 'view',
+    canSchedulePosts: centralAccessLevel !== 'view',
+    canRunAutomation: centralAccessLevel === 'configure',
+  };
   return {
     canManageUsers: role === 'operations_manager',
     canViewActivity: role === 'operations_manager',
@@ -115,10 +173,52 @@ function readSavedSession(): AuthSession | null {
   }
 }
 
-export default function App() {
+export default function App({ publishingIdentityToken }: { publishingIdentityToken?: string }) {
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [platformStatus, setPlatformStatus] = useState<PlatformAccessStatus>({
+    state: publishingIdentityToken ? 'checking' : 'ready',
+    configured: false,
+    username: '',
+    workspaceId: '',
+  });
 
   useEffect(() => {
+    if (publishingIdentityToken) {
+      let cancelled = false;
+      setCentralAuthToken(publishingIdentityToken);
+      window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+      api.me()
+        .then(user => {
+          if (cancelled) return;
+          setSession({ token: publishingIdentityToken, user });
+          setPlatformStatus({ state: 'ready', configured: true, username: user.email || user.username, workspaceId: user.workspaceId });
+        })
+        .catch(error => {
+          if (cancelled) return;
+          setCentralAuthToken(null);
+          window.sessionStorage.removeItem(AUTH_SESSION_KEY);
+          setSession(null);
+          const rawMessage = error instanceof Error ? error.message : 'The publishing workspace could not be opened.';
+          const upgradeRequired = /sign in|session expired/i.test(rawMessage);
+          const connectionHelpRequired = /companion|extension|unavailable|failed to fetch/i.test(rawMessage);
+          setPlatformStatus({
+            state: 'error',
+            configured: false,
+            username: '',
+            workspaceId: '',
+            message: upgradeRequired
+              ? 'This computer is running an older Publishing Companion that cannot verify AgenticThat access tokens.'
+              : rawMessage,
+            upgradeRequired,
+            connectionHelpRequired,
+          });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCentralAuthToken(null);
     const savedSession = readSavedSession();
     if (!savedSession) return;
 
@@ -140,9 +240,10 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [publishingIdentityToken]);
 
   const signIn = (response: AuthResponse) => {
+    setCentralAuthToken(null);
     const nextSession = { token: response.token, user: response.user };
     setAuthToken(response.token);
     window.sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(nextSession));
@@ -150,14 +251,143 @@ export default function App() {
   };
 
   const signOut = () => {
-    setAuthToken(null);
+    setCentralAuthToken(null);
     window.sessionStorage.removeItem(AUTH_SESSION_KEY);
     setSession(null);
+    if (publishingIdentityToken) {
+      void fetch('/api/platform-auth/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/';
+      });
+    }
   };
 
   return session
     ? <Dashboard session={session} onSignOut={signOut} />
+    : publishingIdentityToken
+      ? <main className='auth-page'><section className='auth-card'>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
+          <h1>{platformStatus.state === 'error' ? 'Publishing access could not be opened.' : 'Opening your publishing workspace…'}</h1>
+          <p>{platformStatus.state === 'error' ? platformStatus.message : 'Verifying your AgenticThat role and workspace.'}</p>
+          {platformStatus.state === 'error' && <a className='button primary' href='/apps'>Go back to Home</a>}
+        </section></main>
     : <LandingPage onSignIn={signIn} />;
+}
+
+function PlatformManagerAccess({
+  identityToken,
+  status,
+  onSignIn,
+  onConfigured,
+}: {
+  identityToken: string;
+  status: PlatformAccessStatus;
+  onSignIn: (response: AuthResponse) => void;
+  onConfigured: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [teamUsername, setTeamUsername] = useState('');
+  const [accessMode, setAccessMode] = useState<'manager' | 'team'>('manager');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const firstSetup = !status.configured;
+  const teamAccess = !firstSetup && accessMode === 'team';
+
+  const submit = async () => {
+    setError('');
+    if (teamAccess && !teamUsername.trim()) return setError('Enter the username assigned by your Operations Manager.');
+    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (firstSetup && password !== confirmPassword) return setError('Passwords do not match.');
+    setLoading(true);
+    try {
+      const response = teamAccess
+        ? await api.login({ username: teamUsername.trim(), password })
+        : firstSetup
+          ? await api.setupPlatformManager(identityToken, password)
+          : await api.loginPlatformManager(identityToken, password);
+      if (response.user.workspaceId !== status.workspaceId) {
+        throw new Error('These credentials belong to a different publishing workspace.');
+      }
+      if (firstSetup) onConfigured();
+      onSignIn(response);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Unable to continue.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className='auth-page'>
+      <section className='auth-visual' aria-label='Social publishing workspace'>
+        <div className='auth-visual-content'>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
+          <div className='auth-message'>
+            <p className='auth-kicker'>Your private publishing workspace</p>
+            <h1>{firstSetup ? 'Create your manager access.' : 'Welcome back.'}</h1>
+            <p>Publishing accounts, users, posts, and schedules stay isolated inside this workspace.</p>
+          </div>
+        </div>
+      </section>
+      <section className='auth-access' aria-labelledby='manager-access-title'>
+        <div className='auth-access-inner'>
+          <div className='auth-heading'>
+            <p className='auth-kicker'>{teamAccess ? 'Assigned team access' : 'Operations Manager'}</p>
+            <h2 id='manager-access-title'>{firstSetup ? 'Set your password' : teamAccess ? 'Team member sign in' : 'Enter your password'}</h2>
+            <p>{teamAccess
+              ? 'Use the username, password, and role assigned in Manage users.'
+              : firstSetup
+              ? 'Choose the Operations Manager password for this account. You will use it for future publishing logins.'
+              : 'Use the Operations Manager password you created for this account.'}</p>
+          </div>
+          {status.state === 'checking' ? (
+            <div className='temporary-access'><Loader2 className='spin' size={18} /><span>Checking workspace setup…</span></div>
+          ) : status.state === 'error' ? (
+            <>
+              <p className='auth-error' role='alert'>{status.message}</p>
+              {status.upgradeRequired && <div className='publishing-setup-actions'>
+                <a href={companionDownloadUrl}><Download size={15} />Download latest Companion</a>
+                <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
+              </div>}
+              {status.connectionHelpRequired && !status.upgradeRequired && <>
+                <p className='temporary-access'>Refresh the page. If publishing is still unavailable, ask the Workspace Manager to open the paired Companion.</p>
+                <div className='publishing-setup-actions'>
+                  <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Try again</button>
+                </div>
+              </>}
+            </>
+          ) : (
+            <form className='auth-form' onSubmit={event => { event.preventDefault(); void submit(); }}>
+              {!firstSetup && <div className='workspace-access-switch' role='group' aria-label='Choose workspace sign-in type'>
+                <button type='button' className={accessMode === 'manager' ? 'active' : ''} onClick={() => { setAccessMode('manager'); setPassword(''); setError(''); }}>Operations Manager</button>
+                <button type='button' className={accessMode === 'team' ? 'active' : ''} onClick={() => { setAccessMode('team'); setPassword(''); setError(''); }}>Team member</button>
+              </div>}
+              {teamAccess ? <label>
+                <span>Assigned username</span>
+                <div className='auth-input'><KeyRound size={17} /><input value={teamUsername} onChange={event => setTeamUsername(event.target.value)} autoComplete='username' placeholder='Enter assigned username' /></div>
+              </label> : <label>
+                <span>Manager username</span>
+                <div className='auth-input'><KeyRound size={17} /><input value={status.username} readOnly /></div>
+              </label>}
+              <label>
+                <span>{firstSetup ? 'Create password' : teamAccess ? 'Assigned password' : 'Operations Manager password'}</span>
+                <div className='auth-input'><LockKeyhole size={17} /><input type='password' value={password} onChange={event => setPassword(event.target.value)} autoComplete={firstSetup ? 'new-password' : 'current-password'} /></div>
+              </label>
+              {firstSetup && <label>
+                <span>Confirm password</span>
+                <div className='auth-input'><ShieldCheck size={17} /><input type='password' value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete='new-password' /></div>
+              </label>}
+              {error && <p className='auth-error' role='alert'>{error}</p>}
+              <button type='submit' className='auth-submit' disabled={loading}>
+                {loading ? <Loader2 className='spin' size={18} /> : <ArrowRight size={18} />}
+                {firstSetup ? 'Create manager access' : teamAccess ? 'Sign in with assigned role' : 'Open publishing workspace'}
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void }) {
@@ -167,19 +397,19 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [connectionState, setConnectionState] = useState<'checking' | 'extension-missing' | 'companion-missing' | 'chrome-missing' | 'ready'>('checking');
+  const [extensionDetected, setExtensionDetected] = useState(false);
+  const [desktopBridgeDetected, setDesktopBridgeDetected] = useState(false);
 
   const checkConnection = useCallback(async () => {
     setConnectionState('checking');
     const extension = await detectPublishingExtension(true);
-    if (!extension) {
-      setConnectionState('extension-missing');
-      return;
-    }
+    setExtensionDetected(Boolean(extension));
+    setDesktopBridgeDetected(extension?.version === 'desktop');
     try {
       const health = await api.health();
-      setConnectionState(!health.chromeInstalled ? 'chrome-missing' : health.automationReady ? 'ready' : 'companion-missing');
+      setConnectionState(health.automationReady ? 'ready' : !health.chromeInstalled ? 'chrome-missing' : 'companion-missing');
     } catch {
-      setConnectionState('companion-missing');
+      setConnectionState(extension ? 'companion-missing' : 'extension-missing');
     }
   }, []);
 
@@ -215,7 +445,7 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
     <main className='auth-page'>
       <section className='auth-visual' aria-label='Social publishing workspace'>
         <div className='auth-visual-content'>
-          <a className='auth-brand' href='/'>AgenticThat<span> / Publish Queue</span></a>
+          <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
           <div className='auth-message'>
             <p className='auth-kicker'>Social publishing operations</p>
             <h1>Plan the work. Publish at the right moment.</h1>
@@ -236,20 +466,20 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
           </div>
 
           <div className='publishing-setup-card'>
-            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>One-time publishing setup</strong><small>Install both once. No project download or commands.</small></span></div>
+            <div className='publishing-setup-title'><MonitorCheck size={19} /><span><strong>{desktopBridgeDetected ? 'Companion publishing ready' : 'One-time Companion setup'}</strong><small>{desktopBridgeDetected ? 'Dashboard and live publishing browser are built into this app.' : 'Install the desktop Companion once. The browser extension is optional.'}</small></span></div>
             <div className='publishing-setup-checks'>
-              <span className={connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>Chrome extension</b><small>{connectionState === 'extension-missing' ? 'Install required' : connectionState === 'checking' ? 'Checking…' : 'Ready'}</small></span>
-              <span className={connectionState === 'companion-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Windows companion</b><small>{connectionState === 'companion-missing' ? 'Install or open' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Waiting'}</small></span>
+              <span className={connectionState === 'checking' ? '' : 'ready'}><Puzzle size={16} /><b>{desktopBridgeDetected ? 'Companion bridge' : 'Browser bridge'}</b><small>{desktopBridgeDetected ? 'Built in' : extensionDetected ? 'Optional bridge installed' : 'Optional - not required'}</small></span>
+              <span className={connectionState === 'companion-missing' || connectionState === 'extension-missing' ? 'needs-action' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'ready' : ''}><Download size={16} /><b>Desktop companion</b><small>{connectionState === 'companion-missing' ? 'Local service offline' : connectionState === 'extension-missing' ? 'Connection not confirmed' : connectionState === 'ready' || connectionState === 'chrome-missing' ? 'Running' : 'Checking'}</small></span>
             </div>
-            <div className='publishing-setup-actions'>
-              {extensionInstallUrl
-                ? <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Install extension</a>
-                : <button type='button' disabled title='Add NEXT_PUBLIC_PUBLISHING_EXTENSION_URL after Chrome Web Store approval'><Puzzle size={15} />Web Store approval pending</button>}
-              <a href={companionDownloadUrl}><Download size={15} />Install Windows companion</a>
-              <button type='button' onClick={() => window.location.reload()}><RefreshCw size={15} />Check again</button>
-            </div>
-            {connectionState === 'chrome-missing' && <p>Google Chrome is missing. Open the Companion app and choose <strong>Install Google Chrome</strong>.</p>}
-            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready. Copy the dashboard login from the Companion app.</p>}
+            {!desktopBridgeDetected && <div className='publishing-setup-actions'>
+              <a href={companionDownloadUrl}><Download size={15} />Install desktop companion</a>
+              <a href={localCompanionHealthUrl} target='_blank' rel='noreferrer'><CircleCheckBig size={15} />Test local service</a>
+              <button type='button' onClick={() => void checkConnection()}><RefreshCw size={15} />Check again</button>
+              <a href={extensionInstallUrl} target='_blank' rel='noreferrer'><Puzzle size={15} />Optional browser bridge</a>
+            </div>}
+            {connectionState === 'extension-missing' && <p>Open the desktop Companion and allow Local network access if the browser asks. The optional bridge is needed only when browser policy blocks the direct local diagnostic connection.</p>}
+            {connectionState === 'chrome-missing' && <p>Install Google Chrome, Microsoft Edge, or Chromium to use the system-browser login fallback.</p>}
+            {connectionState === 'ready' && <p className='setup-ready-message'><CircleCheckBig size={15} />Publishing connection ready{desktopBridgeDetected ? ' inside Companion' : extensionDetected ? ' through the Chrome bridge' : ' through the direct local connection'}.</p>}
           </div>
 
           <div className='role-options' aria-label='Choose login type'>
@@ -298,13 +528,14 @@ function LandingPage({ onSignIn }: { onSignIn: (response: AuthResponse) => void 
 
 function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: () => void }) {
   const user = session.user;
-  const permissions = useMemo(() => permissionsForRole(user.role), [user.role]);
+  const permissions = useMemo(() => permissionsForRole(user.role, user.centralAccessLevel, user.capabilities), [user.role, user.centralAccessLevel, user.capabilities]);
   const [uploads, setUploads] = useState<PlatformUpload[]>([]);
+  const [submissions, setSubmissions] = useState<ContentSubmission[]>([]);
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
   const [schedules, setSchedules] = useState<PublishingSchedule[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [connectionMode, setConnectionMode] = useState<'extension' | 'direct' | 'checking'>('checking');
+  const [connectionMode, setConnectionMode] = useState<'central' | 'desktop' | 'extension' | 'direct' | 'checking'>('checking');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -312,42 +543,47 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
   const [userManagerOpen, setUserManagerOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [editingUpload, setEditingUpload] = useState<PlatformUpload | null>(null);
+  const [schedulingSubmission, setSchedulingSubmission] = useState<ContentSubmission | null>(null);
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async (showLoading = true) => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setError(null);
     if (showLoading) setLoading(true);
     try {
-      const baseRequests = [
-        api.health(),
-        api.uploads(),
-        api.accounts(),
-        api.schedules(),
-      ] as const;
-      const [health, latestUploads, latestAccounts, latestSchedules] = await Promise.all(baseRequests);
-      setConnectionMode(health.transport);
-      setUploads(latestUploads);
-      setAccounts(latestAccounts);
-      setSchedules(latestSchedules);
-      if (permissions.canManageUsers) {
-        const [latestUsers, latestActivity] = await Promise.all([
-          api.users(),
-          api.activityLogs(100),
-        ]);
-        setUsers(latestUsers);
-        setActivityLogs(latestActivity);
-      }
+      const snapshot = await api.workspaceSnapshot(permissions.canManageUsers);
+      setConnectionMode(snapshot.health.transport);
+      setIsRunning(snapshot.health.automationRunning);
+      setUploads(snapshot.uploads);
+      setSubmissions(snapshot.submissions);
+      setAccounts(snapshot.accounts);
+      setSchedules(snapshot.schedules);
+      setUsers(snapshot.users);
+      setActivityLogs(snapshot.activityLogs);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed.');
     } finally {
+      refreshInFlight.current = false;
       if (showLoading) setLoading(false);
     }
   }, [permissions.canManageUsers]);
 
   useEffect(() => {
     void refresh();
-    const refreshTimer = window.setInterval(() => void refresh(false), 5000);
-    return () => window.clearInterval(refreshTimer);
+    const refreshVisibleWorkspace = () => {
+      if (document.visibilityState === 'visible') void refresh(false);
+    };
+    const refreshTimer = window.setInterval(refreshVisibleWorkspace, 15000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisibleWorkspace();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(refreshTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [refresh]);
 
   const handleRun = async () => {
@@ -357,18 +593,39 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
       await api.runAutomation();
       setAutomationNotice({
         variant: 'success',
-        title: 'Automation started',
-        message: 'Publishing will use saved manual sessions only. Accounts without an active saved session will fail for review.',
+        title: connectionMode === 'central' ? 'Posts queued' : 'Automation started',
+        message: connectionMode === 'central'
+          ? 'The workspace Companion will publish automatically when it is online.'
+          : 'Publishing will use saved manual sessions only. Accounts without an active saved session will fail for review.',
       });
       window.setTimeout(() => void refresh(false), 5000);
     } catch (e) {
+      setIsRunning(false);
       setAutomationNotice({
         variant: 'error',
         title: 'Automation could not start',
         message: e instanceof Error ? e.message : 'Unknown error',
       });
-    } finally {
+    }
+  };
+
+  const handleStop = async () => {
+    if (!permissions.canRunAutomation) return;
+    try {
+      const result = await api.stopAutomation();
       setIsRunning(false);
+      setAutomationNotice({
+        variant: 'success',
+        title: result.stopped ? 'Emergency stop requested' : 'Publishing is already stopped',
+        message: result.message,
+      });
+      window.setTimeout(() => void refresh(false), 750);
+    } catch (e) {
+      setAutomationNotice({
+        variant: 'error',
+        title: 'Publishing could not be stopped',
+        message: e instanceof Error ? e.message : 'Unknown error',
+      });
     }
   };
 
@@ -378,6 +635,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         user={user}
         permissions={permissions}
         uploads={uploads}
+        submissions={submissions}
         accounts={accounts}
         schedules={schedules}
         connectionMode={connectionMode}
@@ -387,6 +645,7 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         error={error}
         isRunning={isRunning}
         onRun={handleRun}
+        onStop={handleStop}
         onRefresh={() => void refresh()}
         onSignOut={onSignOut}
         onOpenAccounts={(platform) => {
@@ -399,8 +658,9 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         editingUpload={editingUpload}
         onCloseEdit={() => setEditingUpload(null)}
         onCreated={() => void refresh(false)}
+        onScheduleSubmission={setSchedulingSubmission}
       />
-      {scheduleManagerOpen && (
+      {PUBLISHING_SCHEDULING_ENABLED && scheduleManagerOpen && (
         <ScheduleManagerModal
           schedules={schedules}
           uploads={uploads}
@@ -426,6 +686,18 @@ function Dashboard({ session, onSignOut }: { session: AuthSession; onSignOut: ()
         <AutomationNoticeModal
           notice={automationNotice}
           onClose={() => setAutomationNotice(null)}
+        />
+      )}
+      {PUBLISHING_SCHEDULING_ENABLED && schedulingSubmission && permissions.canSchedulePosts && (
+        <ScheduleSubmissionModal
+          submission={schedulingSubmission}
+          accounts={accounts}
+          schedules={schedules}
+          onClose={() => setSchedulingSubmission(null)}
+          onSuccess={() => {
+            setSchedulingSubmission(null);
+            void refresh(false);
+          }}
         />
       )}
     </>
@@ -472,11 +744,20 @@ function getAuditTimestamp(upload: PlatformUpload) {
   return upload.scheduledAt ?? upload.updatedAt ?? upload.uploadedAt;
 }
 
+function isWaitingForCompanion(upload: PlatformUpload) {
+  return upload.statusDetail === 'waiting_for_companion';
+}
+
 function getAuditAction(upload: PlatformUpload) {
   if (upload.status === 'posted') return 'Published';
+  if (upload.statusDetail === 'reconnect_required') return 'Reconnect Required';
   if (upload.status === 'failed') return 'Needs attention';
+  if (upload.statusDetail === 'opening_platform') return 'Opening Platform';
+  if (upload.statusDetail === 'uploading') return 'Uploading';
+  if (upload.statusDetail === 'publishing') return 'Publishing';
   if (upload.status === 'processing') return 'Publishing now';
-  if (upload.scheduledAt) return 'Scheduled';
+  if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
+  if (upload.scheduledAt || upload.scheduleId) return 'Scheduled';
   return 'Queued';
 }
 
@@ -487,6 +768,83 @@ function formatEventTime(value: string) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function companionAvailabilityLabel(account?: PlatformAccount) {
+  if (account?.companionStatus === 'outdated') return 'Companion Update Required';
+  if (account?.companionStatus === 'error') return 'Companion Needs Attention';
+  if (account?.companionStatus === 'updating') return 'Companion Updating';
+  if (account?.companionStatus === 'online') return 'Companion Online';
+  return 'Companion Offline';
+}
+
+function isOverdueForCompanion(upload: PlatformUpload, timestamp = Date.now()) {
+  if (!isWaitingForCompanion(upload) || !upload.scheduledAt) return false;
+  const scheduledTimestamp = Date.parse(upload.scheduledAt);
+  return Number.isFinite(scheduledTimestamp) && scheduledTimestamp <= timestamp;
+}
+
+function WaitingForCompanionTimeline({ upload, account }: { upload: PlatformUpload; account?: PlatformAccount }) {
+  if (!isWaitingForCompanion(upload)) return null;
+  const firstStep = upload.scheduledAt
+    ? `Scheduled ${formatEventTime(upload.scheduledAt)}`
+    : upload.scheduleId
+      ? `Schedule #${upload.scheduleId} is ready`
+      : 'Ready to publish';
+  const overdue = isOverdueForCompanion(upload);
+
+  return <span className={`delivery-wait-timeline${overdue ? ' overdue' : ''}`} aria-label={`${firstStep}, ${companionAvailabilityLabel(account)}, Waiting for Companion`}>
+    {overdue && <em>Overdue</em>}
+    <span>{firstStep}</span>
+    <ChevronRight size={11} />
+    <span>{companionAvailabilityLabel(account)}</span>
+    <ChevronRight size={11} />
+    <span>Waiting for Companion</span>
+  </span>;
+}
+
+type DeliveryOutcomeTone = 'posted' | 'failed' | 'uncertain' | 'processing' | 'deferred' | 'scheduled' | 'queued';
+
+function getDeliveryOutcome(upload: PlatformUpload, account?: PlatformAccount): { tone: DeliveryOutcomeTone; label: string; detail: string; timestamp: string } {
+  const timestamp = upload.postedAt ?? upload.lastAttemptAt ?? upload.updatedAt ?? upload.uploadedAt;
+  if (upload.status === 'posted') {
+    return { tone: 'posted', label: 'Posted', detail: `Confirmed delivered ${formatEventTime(timestamp)}`, timestamp };
+  }
+  if (upload.publishActionState === 'uncertain') {
+    if (upload.platform === 'youtube' && upload.postFormat === 'video') {
+      return { tone: 'uncertain', label: 'Check YouTube Studio', detail: upload.failureReason || 'YouTube accepted Publish, but final upload or processing could not be confirmed. Inspect Studio before trying again.', timestamp };
+    }
+    return { tone: 'uncertain', label: 'Confirmation unclear', detail: upload.failureReason || 'The final action was not retried. Inspect the platform before trying again.', timestamp };
+  }
+  if (upload.statusDetail === 'reconnect_required') {
+    return { tone: 'failed', label: 'Reconnect Required', detail: upload.failureReason || 'The saved social-media session needs to be reconnected by a Publishing Manager.', timestamp };
+  }
+  if (upload.status === 'failed') {
+    return { tone: 'failed', label: 'Failed', detail: upload.failureReason || 'Publishing stopped and needs review.', timestamp };
+  }
+  if (upload.status === 'processing') {
+    const detailLabel = upload.statusDetail === 'opening_platform' ? 'Opening Platform'
+      : upload.statusDetail === 'uploading' ? 'Uploading'
+        : upload.statusDetail === 'publishing' ? 'Publishing'
+          : 'Publishing now';
+    return { tone: 'processing', label: detailLabel, detail: 'The local Companion is working on this destination.', timestamp };
+  }
+  if (upload.safetyDeferredUntil) {
+    return { tone: 'deferred', label: 'Safety paused', detail: `${upload.safetyReason || 'Held by a safety limit.'} Resumes after ${formatEventTime(upload.safetyDeferredUntil)}.`, timestamp };
+  }
+  if (isWaitingForCompanion(upload)) {
+    const scheduledDetail = upload.scheduledAt && isOverdueForCompanion(upload)
+      ? `The ${formatEventTime(upload.scheduledAt)} publish time has passed. `
+      : '';
+    return { tone: 'scheduled', label: 'Waiting for Companion', detail: `${scheduledDetail}${companionAvailabilityLabel(account)}. The post is safely queued and will continue automatically when Companion is available.`, timestamp: upload.scheduledAt ?? timestamp };
+  }
+  if (upload.scheduledAt) {
+    return { tone: 'scheduled', label: 'Scheduled', detail: `Will publish ${formatEventTime(upload.scheduledAt)}`, timestamp: upload.scheduledAt };
+  }
+  if (upload.scheduleId) {
+    return { tone: 'scheduled', label: 'Scheduled', detail: `Assigned to schedule template #${upload.scheduleId}.`, timestamp };
+  }
+  return { tone: 'queued', label: 'Queued', detail: 'Ready for the Companion to publish now.', timestamp };
 }
 
 function formatCalendarHeading(dayKey: string) {
@@ -516,7 +874,46 @@ type PlatformEligibility = {
   reason: string;
 };
 
+type ComposerDestinationChoice = {
+  key: string;
+  account: PlatformAccount;
+  linkedinPage?: LinkedInManagedPage;
+  displayName: string;
+  detail: string;
+};
+
+function composerDestinationKey(accountId: string, linkedinPageId?: string) {
+  return `${accountId}::${linkedinPageId || 'personal'}`;
+}
+
+function composerDestinationChoices(account: PlatformAccount): ComposerDestinationChoice[] {
+  const personal: ComposerDestinationChoice = {
+    key: composerDestinationKey(account.id),
+    account,
+    displayName: account.displayName,
+    detail: account.platform === 'linkedin' ? 'Personal profile' : account.handle,
+  };
+  if (account.platform !== 'linkedin') return [personal];
+  return [personal, ...(account.linkedinManagedPages ?? []).map(linkedinPage => ({
+    key: composerDestinationKey(account.id, linkedinPage.id),
+    account,
+    linkedinPage,
+    displayName: linkedinPage.name,
+    detail: `Managed Page · ${account.displayName}`,
+  }))];
+}
+
 const emptyComposerSchedule = (): ComposerScheduleDraft => ({ mode: 'now', exactAt: '', scheduleId: '' });
+const defaultSchedulerTiming = (): ComposerScheduleDraft => ({
+  mode: 'exact',
+  exactAt: toLocalDateTimeInputValue(new Date(Date.now() + 60 * 60_000)),
+  scheduleId: '',
+});
+const composerFormatOptions: Array<{ id: PostFormat; label: string; detail: string; icon: ReactNode }> = [
+  { id: 'image', label: 'Image', detail: 'Single visual post', icon: <ImageIcon size={22} /> },
+  { id: 'video', label: 'Video', detail: 'Short or long-form video', icon: <Video size={22} /> },
+  { id: 'text', label: 'Text', detail: 'No media required', icon: <FileText size={22} /> },
+];
 
 function localScheduleDateTime(dateValue: string | undefined, time: string) {
   if (!dateValue) return null;
@@ -533,23 +930,28 @@ function scheduleCanReceivePosts(schedule: PublishingSchedule) {
   return Boolean(runAt && runAt.getTime() > Date.now());
 }
 
-function getPlatformEligibility(platform: Platform, file: File | null, title: string, description: string): PlatformEligibility {
-  if (!file) return { allowed: false, mediaCompatible: false, reason: 'Add media to check compatibility' };
-  const kind = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null;
-  if (!kind) return { allowed: false, mediaCompatible: false, reason: 'Images and videos only' };
+function getPlatformEligibility(platform: Platform, postFormat: PostFormat | null, file: File | null, title: string, description: string): PlatformEligibility {
+  if (!postFormat) return { allowed: false, mediaCompatible: false, reason: 'Choose a post format first' };
   const rules = platformPostRules[platform];
-  if (!rules.media.includes(kind)) {
-    return { allowed: false, mediaCompatible: false, reason: `${platformLabels[platform]} requires ${rules.media.join(' or ')}` };
+  if (!rules.formats.includes(postFormat)) {
+    return { allowed: false, mediaCompatible: false, reason: 'Text-only posts are not supported' };
   }
-  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(kind);
-  if (titleRequired && !title.trim()) return { allowed: false, mediaCompatible: true, reason: 'Add YouTube title' };
-  if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: 'Add a description' };
+  if (postFormat !== 'text' && !file) {
+    return { allowed: false, mediaCompatible: true, reason: `Add ${postFormat} to continue` };
+  }
+  if (file && postFormat !== 'text') {
+    const fileFormat = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null;
+    if (fileFormat !== postFormat) return { allowed: false, mediaCompatible: false, reason: `Choose a valid ${postFormat}` };
+  }
+  const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(postFormat);
+  if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: postFormat === 'text' ? 'Write your post text' : 'Add a description' };
   if (rules.titleLimit && title.length > rules.titleLimit) {
     return { allowed: false, mediaCompatible: true, reason: `Title limit: ${rules.titleLimit} characters` };
   }
   if (description.length > rules.descriptionLimit) {
     return { allowed: true, mediaCompatible: true, reason: `Edit text for ${rules.descriptionLimit.toLocaleString()} limit` };
   }
+  if (titleRequired && !title.trim()) return { allowed: true, mediaCompatible: true, reason: 'Select to add YouTube details' };
   return { allowed: true, mediaCompatible: true, reason: 'Ready for this post' };
 }
 
@@ -562,6 +964,38 @@ function platformDescriptionError(platform: Platform, text: string) {
   const limit = platformPostRules[platform].descriptionLimit;
   if (text.length > limit) return `${platformLabels[platform]} limit is ${limit.toLocaleString()} characters.`;
   return '';
+}
+
+function DescriptionLimitGuide({ characterCount, postFormat }: { characterCount: number; postFormat: PostFormat }) {
+  const limits = [...platforms]
+    .filter(platform => platformPostRules[platform].formats.includes(postFormat))
+    .sort((first, second) => (
+      platformPostRules[first].descriptionLimit - platformPostRules[second].descriptionLimit
+    ));
+
+  return <section className='composer-limit-guide' aria-label='Description character limits'>
+    <header>
+      <span><SlidersHorizontal size={14} /></span>
+      <div><strong>App character limits</strong><small>These markers show exactly how far this shared description fits.</small></div>
+    </header>
+    <div className='composer-limit-list'>
+      {limits.map(platform => {
+        const limit = platformPostRules[platform].descriptionLimit;
+        const remaining = limit - characterCount;
+        const state = remaining < 0 ? 'over-limit' : remaining === 0 ? 'at-limit' : 'within-limit';
+        const detail = remaining < 0
+          ? `Shorten by ${Math.abs(remaining).toLocaleString()}`
+          : remaining === 0
+            ? `Supports up to here · ${limit.toLocaleString()}`
+            : `${limit.toLocaleString()} max · ${remaining.toLocaleString()} left`;
+        return <span className={`composer-limit-marker ${state}`} key={platform}>
+          <i><CustomIcon platform={platform} size={14} /></i>
+          <span><strong>{platformLabels[platform]}</strong><small>{detail}</small></span>
+          {remaining >= 0 ? <CircleCheckBig size={13} /> : <CircleAlert size={13} />}
+        </span>;
+      })}
+    </div>
+  </section>;
 }
 
 function scheduleDraftError(draft: ComposerScheduleDraft, schedules: PublishingSchedule[]) {
@@ -586,7 +1020,8 @@ function destinationSchedule(draft: ComposerScheduleDraft): Omit<UnifiedPostDest
   return {};
 }
 
-function ComposerPreviewMedia({ file, previewUrl, platform }: { file: File | null; previewUrl: string; platform: Platform }) {
+function ComposerPreviewMedia({ file, previewUrl, platform, postFormat }: { file: File | null; previewUrl: string; platform: Platform; postFormat: PostFormat }) {
+  if (postFormat === 'text') return null;
   if (!file || !previewUrl) return <div className='composer-preview-empty'>Add media</div>;
   const className = `composer-preview-media ${platform} ${file.type.startsWith('video/') ? 'video' : 'image'}`;
   return file.type.startsWith('video/')
@@ -600,17 +1035,19 @@ function ComposerPlatformPreview({
   previewUrl,
   title,
   description,
+  postFormat,
 }: {
   platform: Platform;
   file: File | null;
   previewUrl: string;
   title: string;
   description: string;
+  postFormat: PostFormat;
 }) {
-  const isVideo = Boolean(file?.type.startsWith('video/'));
+  const isVideo = postFormat === 'video';
   const name = 'AgenticThat';
   const handle = platform === 'x' ? '@agenticthat' : '';
-  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} />;
+  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} postFormat={postFormat} />;
 
   if (platform === 'linkedin') return <article className='composer-preview-card linkedin'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>8m · Public</small></div><MoreHorizontal size={17} /></header>
@@ -620,7 +1057,7 @@ function ComposerPlatformPreview({
 
   if (platform === 'facebook') return <article className='composer-preview-card facebook'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>13m · Public</small></div><MoreHorizontal size={17} /></header>
-    <p>{description}</p><div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>
+    <p>{description}</p>{postFormat !== 'text' && <div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>}
     <footer><ThumbsUp size={18} /><MessageCircle size={18} /><Share2 size={18} /></footer>
   </article>;
 
@@ -633,7 +1070,13 @@ function ComposerPlatformPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={17} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={17} /><MessageCircle size={17} /><Send size={17} /><Bookmark size={17} /></footer></aside>
   </article>;
 
-  if (platform === 'youtube' && !isVideo) return <article className='composer-preview-card youtube-community'>
+  if (platform === 'reddit') return <article className='composer-preview-card linkedin reddit'>
+    <header><span className='avatar' /><div><strong>r/community</strong><small>Posted by u/{name.toLowerCase()} · now</small></div><MoreHorizontal size={17} /></header>
+    <p><strong>{title || 'Post title'}</strong></p>{postFormat === 'text' ? <p>{description}</p> : media}
+    <footer><span><ThumbsUp size={16} />Vote</span><span><MessageCircle size={16} />Comment</span><span><Share2 size={16} />Share</span></footer>
+  </article>;
+
+  if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={17} /></header>
     <p>{description}</p>{media}
     <footer><span><ThumbsUp size={16} />Like</span><span><MessageCircle size={16} />Comment</span><span><Share2 size={16} />Share</span></footer>
@@ -653,15 +1096,17 @@ function PolishedComposerPreview({
   previewUrl,
   title,
   description,
+  postFormat,
 }: {
   platform: Platform;
   file: File | null;
   previewUrl: string;
   title: string;
   description: string;
+  postFormat: PostFormat;
 }) {
-  const isVideo = Boolean(file?.type.startsWith('video/'));
-  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} />;
+  const isVideo = postFormat === 'video';
+  const media = <ComposerPreviewMedia file={file} previewUrl={previewUrl} platform={platform} postFormat={postFormat} />;
   const name = 'AgenticThat';
 
   if (platform === 'linkedin') return <article className='composer-preview-card linkedin polished'>
@@ -672,7 +1117,7 @@ function PolishedComposerPreview({
 
   if (platform === 'facebook') return <article className='composer-preview-card facebook polished'>
     <header><span className='avatar' /><div><strong>{name}</strong><small>13m · Public</small></div><MoreHorizontal size={18} /></header>
-    <p>{description}</p><div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>
+    <p>{description}</p>{postFormat !== 'text' && <div className='facebook-media-wrap'>{media}{isVideo && <span className='video-time'>0:06 / 0:06</span>}</div>}
     <footer><span><ThumbsUp size={21} /></span><span><MessageCircle size={21} /></span><span><Share2 size={21} /></span></footer>
     <div className='facebook-comment'><span className='avatar small' /><em>Write a comment...</em></div>
   </article>;
@@ -686,7 +1131,13 @@ function PolishedComposerPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={18} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={20} /><MessageCircle size={20} /><Send size={20} /><Bookmark size={20} /></footer><small>Add a comment...</small></aside>
   </article>;
 
-  if (platform === 'youtube' && !isVideo) return <article className='composer-preview-card youtube-community polished'>
+  if (platform === 'reddit') return <article className='composer-preview-card linkedin reddit polished'>
+    <header><span className='avatar' /><div><strong>r/community</strong><small>Posted by u/{name.toLowerCase()} · now</small></div><MoreHorizontal size={18} /></header>
+    <p><strong>{title || 'Post title'}</strong></p>{postFormat === 'text' ? <p>{description}</p> : media}
+    <footer><span><ThumbsUp size={18} />Vote</span><span><MessageCircle size={18} />Comment</span><span><Share2 size={18} />Share</span></footer>
+  </article>;
+
+  if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community polished ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={18} /></header>
     <p>{description}</p>{media}
     <footer><span><ThumbsUp size={18} />Like</span><span><MessageCircle size={18} />Comment</span><span><Share2 size={18} />Share</span></footer>
@@ -704,6 +1155,7 @@ function UnifiedComposer({
   accounts,
   schedules,
   canSchedule,
+  handoffOnly,
   canManageAccounts,
   canPublishNow,
   onOpenAccounts,
@@ -712,24 +1164,36 @@ function UnifiedComposer({
   accounts: PlatformAccount[];
   schedules: PublishingSchedule[];
   canSchedule: boolean;
+  handoffOnly: boolean;
   canManageAccounts: boolean;
   canPublishNow: boolean;
   onOpenAccounts: (platform: Platform) => void;
   onCreated: () => void;
 }) {
+  const [postFormat, setPostFormat] = useState<PostFormat | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [youtubeAudience, setYoutubeAudience] = useState<'' | 'made_for_kids' | 'not_made_for_kids'>('');
+  const [youtubeVisibility, setYoutubeVisibility] = useState<'' | 'private' | 'unlisted' | 'public'>('');
+  const [redditSubreddit, setRedditSubreddit] = useState('');
+  const [redditTitle, setRedditTitle] = useState('');
+  const [redditNsfw, setRedditNsfw] = useState(false);
+  const [redditSpoiler, setRedditSpoiler] = useState(false);
   const [description, setDescription] = useState('');
   const [platformDescriptions, setPlatformDescriptions] = useState<Partial<Record<Platform, string>>>({});
+  const [destinationDescriptions, setDestinationDescriptions] = useState<Record<string, string>>({});
   const [copyMode, setCopyMode] = useState<ComposerCopyMode>('preview');
   const [activeCopyPlatform, setActiveCopyPlatform] = useState<Platform>('instagram');
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [selectedDestinationKeys, setSelectedDestinationKeys] = useState<string[]>([]);
   const [sharedSchedule, setSharedSchedule] = useState<ComposerScheduleDraft>(emptyComposerSchedule);
   const [scheduleOverrides, setScheduleOverrides] = useState<Record<string, ComposerScheduleDraft>>({});
   const [dragActive, setDragActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [preparationProgress, setPreparationProgress] = useState<{ label: string; percent?: number } | null>(null);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -741,32 +1205,52 @@ function UnifiedComposer({
     return () => URL.revokeObjectURL(nextUrl);
   }, [file]);
 
+  useEffect(() => {
+    setPendingPreflightWarnings([]);
+    setMessage(current => current?.type === 'warning' ? null : current);
+  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, redditSubreddit, redditTitle, description, platformDescriptions, destinationDescriptions, selectedDestinationKeys, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
-    getPlatformEligibility(platform, file, title, description),
-  ])) as Record<Platform, PlatformEligibility>, [file, title, description]);
+    getPlatformEligibility(platform, postFormat, file, title, description),
+  ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
 
   const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled), [accounts]);
-  const eligibleAccountIds = useMemo(() => new Set(enabledAccounts
-    .filter(account => eligibility[account.platform].allowed)
-    .map(account => account.id)), [enabledAccounts, eligibility]);
+  const availableDestinations = useMemo(() => enabledAccounts.flatMap(composerDestinationChoices), [enabledAccounts]);
+  const eligibleDestinationKeys = useMemo(() => new Set(availableDestinations
+    .filter(destination => eligibility[destination.account.platform].allowed)
+    .map(destination => destination.key)), [availableDestinations, eligibility]);
 
   useEffect(() => {
-    setSelectedAccountIds(current => current.filter(accountId => eligibleAccountIds.has(accountId)));
-    setScheduleOverrides(current => Object.fromEntries(Object.entries(current).filter(([accountId]) => eligibleAccountIds.has(accountId))));
-  }, [eligibleAccountIds]);
+    setSelectedDestinationKeys(current => current.filter(key => eligibleDestinationKeys.has(key)));
+    setScheduleOverrides(current => Object.fromEntries(Object.entries(current).filter(([key]) => eligibleDestinationKeys.has(key))));
+    setDestinationDescriptions(current => Object.fromEntries(Object.entries(current).filter(([key]) => eligibleDestinationKeys.has(key))));
+  }, [eligibleDestinationKeys]);
 
-  const selectedAccounts = useMemo(() => selectedAccountIds
-    .map(accountId => accounts.find(account => account.id === accountId))
-    .filter((account): account is PlatformAccount => Boolean(account)), [accounts, selectedAccountIds]);
+  const selectedDestinations = useMemo(() => selectedDestinationKeys
+    .map(key => availableDestinations.find(destination => destination.key === key))
+    .filter((destination): destination is ComposerDestinationChoice => Boolean(destination)), [availableDestinations, selectedDestinationKeys]);
+  const selectedAccounts = useMemo(() => selectedDestinations.map(destination => destination.account), [selectedDestinations]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
-  const showYoutubeTitle = Boolean(file?.type.startsWith('video/') && (enabledAccounts.some(account => account.platform === 'youtube') || selectedPlatforms.includes('youtube')));
-  const selectedNeedsTitle = Boolean(file?.type.startsWith('video/') && selectedPlatforms.includes('youtube'));
+  const descriptionForDestination = (destination: ComposerDestinationChoice) => (
+    destinationDescriptions[destination.key]?.trim()
+    || effectivePlatformDescription(destination.account.platform, description, platformDescriptions)
+  );
+  const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
+  const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
+  const youtubeDetailsReady = !selectedNeedsTitle || Boolean(title.trim() && youtubeAudience && youtubeVisibility);
+  const selectedNeedsReddit = selectedPlatforms.includes('reddit');
+  const redditSubredditName = redditSubreddit.trim().replace(/^\/?r\//i, '').replace(/\/+$/, '');
+  const redditDetailsError = !selectedNeedsReddit ? ''
+    : !/^[A-Za-z0-9_]{2,21}$/.test(redditSubredditName) ? 'Enter the subreddit for the Reddit post, such as r/marketing.'
+      : !redditTitle.trim() ? 'Enter a Reddit post title.'
+        : redditTitle.trim().length > 300 ? 'Reddit titles must be 300 characters or fewer.' : '';
+  const destinationsReady = Boolean(selectedDestinations.length && youtubeDetailsReady && !redditDetailsError);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
   useEffect(() => {
-    if (!showYoutubeTitle && title) setTitle('');
-  }, [showYoutubeTitle, title]);
+    if (postFormat !== 'video' && title) setTitle('');
+  }, [postFormat, title]);
 
   useEffect(() => {
     setPlatformDescriptions(current => Object.fromEntries(Object.entries(current).filter(([platform]) => selectedPlatforms.includes(platform as Platform))) as Partial<Record<Platform, string>>);
@@ -779,25 +1263,38 @@ function UnifiedComposer({
       setMessage({ type: 'error', text: 'Choose one image or video file.' });
       return;
     }
+    if (nextFile && postFormat && !nextFile.type.startsWith(`${postFormat}/`)) {
+      setMessage({ type: 'error', text: `Choose a ${postFormat} file for the selected format.` });
+      return;
+    }
     setFile(nextFile);
+    setRightsConfirmed(false);
   };
 
-  const toggleAccount = (accountId: string) => {
-    setSelectedAccountIds(current => current.includes(accountId)
-      ? current.filter(id => id !== accountId)
-      : [...current, accountId]);
+  const chooseFormat = (nextFormat: PostFormat) => {
+    setMessage(null);
+    setPostFormat(nextFormat);
+    setFile(null);
+    setRightsConfirmed(false);
+    if (nextFormat !== 'video') setTitle('');
+  };
+
+  const toggleDestination = (destinationKey: string) => {
+    setSelectedDestinationKeys(current => current.includes(destinationKey)
+      ? current.filter(key => key !== destinationKey)
+      : [...current, destinationKey]);
   };
 
   const togglePlatform = (platform: Platform) => {
-    const platformAccountIds = enabledAccounts
-      .filter(account => account.platform === platform && eligibility[platform].allowed)
-      .map(account => account.id);
-    if (!platformAccountIds.length) return;
-    setSelectedAccountIds(current => {
-      const allSelected = platformAccountIds.every(accountId => current.includes(accountId));
+    const platformDestinationKeys = availableDestinations
+      .filter(destination => destination.account.platform === platform && eligibility[platform].allowed)
+      .map(destination => destination.key);
+    if (!platformDestinationKeys.length) return;
+    setSelectedDestinationKeys(current => {
+      const allSelected = platformDestinationKeys.every(key => current.includes(key));
       return allSelected
-        ? current.filter(accountId => !platformAccountIds.includes(accountId))
-        : [...new Set([...current, ...platformAccountIds])];
+        ? current.filter(key => !platformDestinationKeys.includes(key))
+        : [...new Set([...current, ...platformDestinationKeys])];
     });
   };
 
@@ -832,115 +1329,215 @@ function UnifiedComposer({
   };
 
   const resetComposer = () => {
+    setPostFormat(null);
     setFile(null);
     setTitle('');
+    setYoutubeAudience('');
+    setYoutubeVisibility('');
+    setRedditTitle('');
+    setRedditNsfw(false);
+    setRedditSpoiler(false);
     setDescription('');
     setPlatformDescriptions({});
+    setDestinationDescriptions({});
     setCopyMode('preview');
-    setSelectedAccountIds([]);
+    setSelectedDestinationKeys([]);
+    setRightsConfirmed(false);
+    setPendingPreflightWarnings([]);
     setScheduleOverrides({});
     setSharedSchedule(emptyComposerSchedule());
   };
 
-  const submit = async () => {
+  const submit = async (confirmWarnings = false) => {
     setMessage(null);
-    if (!file) return setMessage({ type: 'error', text: 'Choose one image or video.' });
-    if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: 'Enter a YouTube title.' });
-    if (!description.trim()) return setMessage({ type: 'error', text: 'Enter a post description.' });
-    if (!selectedAccounts.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing account.' });
+    if (!postFormat) return setMessage({ type: 'error', text: 'Choose an image, video, or text post format.' });
+    if (postFormat !== 'text' && !file) return setMessage({ type: 'error', text: `Choose one ${postFormat} file.` });
+    if (postFormat !== 'text' && !rightsConfirmed) return setMessage({ type: 'error', text: 'Confirm that you own this media or have permission to publish it.' });
+    if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: handoffOnly ? 'Enter a video title.' : 'Enter a YouTube title.' });
+    if (selectedNeedsTitle && (!youtubeAudience || !youtubeVisibility)) return setMessage({ type: 'error', text: 'Choose the YouTube audience and visibility before publishing.' });
+    if (redditDetailsError) return setMessage({ type: 'error', text: redditDetailsError });
+    const platformOptions = (selectedNeedsTitle && youtubeAudience && youtubeVisibility) || selectedNeedsReddit
+      ? {
+        ...(selectedNeedsTitle && youtubeAudience && youtubeVisibility ? { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } } : {}),
+        ...(selectedNeedsReddit ? { reddit: { subreddit: redditSubredditName, title: redditTitle.trim(), nsfw: redditNsfw, spoiler: redditSpoiler } } : {}),
+      } : undefined;
+    if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
+    if (handoffOnly) {
+      if (!selectedDestinations.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing destination.' });
+      setSubmitting(true);
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Preparing posts…' });
+      try {
+        await api.createSubmission({
+          postFormat,
+          file,
+          title: selectedNeedsTitle ? title.trim() : '',
+          platformOptions,
+          description: description.trim(),
+          rightsConfirmed,
+          destinations: selectedDestinations.map(destination => ({
+            accountId: destination.account.id,
+            linkedinPageId: destination.linkedinPage?.id,
+            description: descriptionForDestination(destination),
+          })),
+          confirmWarnings,
+          onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+            ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+            : { label: 'Creating destination posts…', percent: 100 }),
+        });
+        resetComposer();
+        setMessage({ type: 'success', text: 'Saved and sent to the scheduler. This submission remains available after you sign out.' });
+        onCreated();
+      } catch (error) {
+        if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+          const warnings = [...new Set(error.issues.map(issue => issue.message))];
+          setPendingPreflightWarnings(warnings);
+          setMessage({ type: 'warning', text: `Review before continuing: ${warnings.join(' ')}` });
+        } else {
+          setPendingPreflightWarnings([]);
+          setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The content could not be handed to scheduling.' });
+        }
+      } finally {
+        setSubmitting(false);
+        setPreparationProgress(null);
+      }
+      return;
+    }
+    if (!selectedDestinations.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing destination.' });
     const invalidAccount = selectedAccounts.find(account => !eligibility[account.platform].allowed);
     if (invalidAccount) return setMessage({ type: 'error', text: `${platformLabels[invalidAccount.platform]} is not compatible with the current post.` });
 
     if (canSchedule) {
       const sharedError = scheduleDraftError(sharedSchedule, schedules);
       if (sharedError) return setMessage({ type: 'error', text: `Shared timing: ${sharedError}` });
-      for (const account of selectedAccounts) {
-        const override = scheduleOverrides[account.id];
+      for (const destination of selectedDestinations) {
+        const override = scheduleOverrides[destination.key];
         if (!override) continue;
         const overrideError = scheduleDraftError(override, schedules);
-        if (overrideError) return setMessage({ type: 'error', text: `${account.displayName}: ${overrideError}` });
+        if (overrideError) return setMessage({ type: 'error', text: `${destination.displayName}: ${overrideError}` });
       }
     }
 
-    for (const platform of selectedPlatforms) {
-      const error = platformDescriptionError(platform, effectivePlatformDescription(platform, description, platformDescriptions));
-      if (error) return setMessage({ type: 'error', text: `${platformLabels[platform]}: ${error}` });
+    for (const destination of selectedDestinations) {
+      const error = platformDescriptionError(destination.account.platform, descriptionForDestination(destination));
+      if (error) return setMessage({ type: 'error', text: `${destination.displayName}: ${error}` });
     }
 
-    const destinations: UnifiedPostDestinationInput[] = selectedAccounts.map(account => ({
-      accountId: account.id,
-      description: effectivePlatformDescription(account.platform, description, platformDescriptions),
-      ...(canSchedule ? destinationSchedule(scheduleOverrides[account.id] ?? sharedSchedule) : {}),
+    const destinations: UnifiedPostDestinationInput[] = selectedDestinations.map(destination => ({
+      accountId: destination.account.id,
+      linkedinPageId: destination.linkedinPage?.id,
+      description: descriptionForDestination(destination),
+      ...(canSchedule ? destinationSchedule(scheduleOverrides[destination.key] ?? sharedSchedule) : {}),
     }));
 
     setSubmitting(true);
+    setPreparationProgress({ label: 'Checking destinations…' });
     try {
-      const created = await api.createUnifiedPost({ file, title: selectedNeedsTitle ? title.trim() : '', description: description.trim(), destinations });
+      const safety = await api.assessPublishingSafety(postFormat, destinations);
+      setPreparationProgress({ label: 'Authorizing publishing…' });
+      await api.authorizePublishing();
+      setPreparationProgress({ label: file ? 'Starting media upload…' : 'Creating destination posts…' });
+      const created = await api.createUnifiedPost({
+        postFormat,
+        file,
+        title: selectedNeedsTitle ? title.trim() : '',
+        platformOptions,
+        description: description.trim(),
+        destinations,
+        rightsConfirmed,
+        confirmWarnings,
+        onProgress: progress => setPreparationProgress(progress.phase === 'uploading'
+          ? { label: `Uploading ${postFormat}… ${progress.percent}%`, percent: progress.percent }
+          : { label: 'Creating destination posts…', percent: 100 }),
+      });
       const channelCount = new Set(created.map(upload => upload.platform)).size;
-      const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId);
-      let publishingError = '';
-      if (canPublishNow && immediateUploads.length > 0) {
-        try {
-          await api.runAutomation(immediateUploads.map(upload => upload.id));
-        } catch (error) {
-          publishingError = error instanceof Error ? error.message : 'Publisher automation could not start.';
-        }
-      }
+      const immediateUploads = created.filter(upload => !upload.scheduledAt && !upload.scheduleId && !upload.safetyDeferredUntil);
+      const safetyWaitCount = safety.issues.length;
+      const safetyWaitNote = safetyWaitCount
+        ? ` ${safetyWaitCount} ${safetyWaitCount === 1 ? 'destination is' : 'destinations are'} waiting automatically for the next safe publishing window.`
+        : '';
       resetComposer();
-      if (publishingError) {
-        setMessage({ type: 'error', text: `${created.length} destination ${created.length === 1 ? 'was' : 'were'} saved, but publishing could not start: ${publishingError}` });
-      } else if (canPublishNow && immediateUploads.length > 0) {
+      if (canPublishNow && immediateUploads.length > 0) {
         const scheduledCount = created.length - immediateUploads.length;
         setMessage({
           type: 'success',
-          text: `Publishing started for ${immediateUploads.length} ${immediateUploads.length === 1 ? 'post' : 'posts'} across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}${scheduledCount ? `; ${scheduledCount} scheduled ${scheduledCount === 1 ? 'post remains' : 'posts remain'} queued` : ''}.`,
+          text: `Publishing started for ${immediateUploads.length} ${immediateUploads.length === 1 ? 'post' : 'posts'} across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}${scheduledCount ? `; ${scheduledCount} scheduled ${scheduledCount === 1 ? 'post remains' : 'posts remain'} queued` : ''}.${safetyWaitNote}`,
         });
       } else {
-        setMessage({ type: 'success', text: `${created.length} ${created.length === 1 ? 'post' : 'destination posts'} queued across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}.` });
+        setMessage({ type: 'success', text: `${created.length} ${created.length === 1 ? 'post' : 'destination posts'} queued across ${channelCount} ${channelCount === 1 ? 'app' : 'apps'}.${safetyWaitNote}` });
       }
       onCreated();
     } catch (error) {
-      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The post could not be created.' });
+      if (error instanceof PublishingSafetyApiError) {
+        setPendingPreflightWarnings([]);
+        setMessage({ type: 'warning', text: `Choose a safer time: ${error.issues.map(issue => issue.message).join(' ') || error.message}` });
+      } else if (error instanceof ContentPreflightApiError && error.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+        const warnings = [...new Set(error.issues.map(issue => issue.message))];
+        setPendingPreflightWarnings(warnings);
+        setMessage({ type: 'warning', text: `Review before publishing: ${warnings.join(' ')}` });
+      } else {
+        setPendingPreflightWarnings([]);
+        setMessage({ type: 'error', text: error instanceof Error ? error.message : 'The post could not be created.' });
+      }
     } finally {
       setSubmitting(false);
+      setPreparationProgress(null);
     }
   };
 
   return (
     <section className='unified-composer' aria-labelledby='unified-composer-heading'>
       <header className='unified-composer-heading'>
-        <div><p className='section-kicker'>Universal post</p><h1 id='unified-composer-heading'>Create once. Publish everywhere it fits.</h1><span>One media file, one title, and one description become destination-ready posts for every account you choose.</span></div>
-        <div className='composer-progress' aria-label='Post creation steps'><span className={file ? 'done' : 'active'}>1<i>Content</i></span><span className={file && selectedAccounts.length ? 'done' : file ? 'active' : ''}>2<i>Destinations</i></span><span className={selectedAccounts.length ? 'active' : ''}>3<i>Timing</i></span></div>
+        <div><p className='section-kicker'>{handoffOnly ? 'Content handoff' : 'Universal post'}</p><h1 id='unified-composer-heading'>{handoffOnly ? 'Prepare content for scheduling.' : 'Create once. Publish everywhere it fits.'}</h1><span>{handoffOnly ? 'Upload the finished content and choose its destination accounts. The scheduler only assigns the publishing time.' : 'Choose a format, tailor the content, and send it to every compatible account from one controlled workflow.'}</span></div>
+        <div className='composer-progress' aria-label='Post creation steps'><span className={contentReady ? 'done' : 'active'}>1<i>Content</i></span><span className={destinationsReady ? 'done' : contentReady ? 'active' : ''}>2<i>{handoffOnly ? 'Handoff' : 'Destinations'}</i></span>{!handoffOnly && <span className={destinationsReady ? 'active' : ''}>3<i>Timing</i></span>}</div>
       </header>
 
       <div className='composer-content-grid'>
         <div className='composer-input-column'>
-          <div
-            className={`composer-upload ${dragActive ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
-            onDragEnter={event => { event.preventDefault(); setDragActive(true); }}
-            onDragOver={event => event.preventDefault()}
-            onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragActive(false); }}
-            onDrop={event => { event.preventDefault(); setDragActive(false); chooseFile(event.dataTransfer.files[0] ?? null); }}
-          >
-            <input id='unified-post-file' type='file' accept='image/*,video/*' onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
-            {file && previewUrl ? <div className='composer-media-preview'>
-              {file.type.startsWith('video/') ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
-              <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
-              <span>{file.type.startsWith('video/') ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
-            </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one image or video here</strong><span>or choose a file from your device</span><small>Maximum file size: 500 MB</small></label>}
+          <div className='composer-format-picker'>
+            <div className='composer-format-heading'><span><small className='section-kicker'>Step 1 · Content</small><strong>What are you publishing?</strong><em>Choose a format, add the media, then write one clear description.</em></span>{postFormat && <small>Selected: {postFormat}</small>}</div>
+            <div className='composer-format-options' role='group' aria-label='Choose post format'>
+              {composerFormatOptions.map(option => <button type='button' key={option.id} className={postFormat === option.id ? 'selected' : ''} aria-pressed={postFormat === option.id} onClick={() => chooseFormat(option.id)}>
+                <span>{option.icon}</span><strong>{option.label}</strong><small>{option.detail}</small>{postFormat === option.id && <i><Check size={13} /></i>}
+              </button>)}
+            </div>
           </div>
 
-          {showYoutubeTitle && <label className='composer-field'><span>YouTube title <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder='Required only when YouTube is selected' maxLength={100} /></label>}
-          <label className='composer-field'><span>Description <small>{description.length} characters</small></span><textarea value={description} onChange={event => setDescription(event.target.value)} placeholder='Default caption for all apps. YouTube uses this as the video description.' rows={6} /></label>
+          {postFormat && <div key={postFormat} className={`composer-format-stage format-${postFormat}`}>
+            {postFormat !== 'text' && <div
+              className={`composer-upload ${dragActive ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
+              onDragEnter={event => { event.preventDefault(); setDragActive(true); }}
+              onDragOver={event => event.preventDefault()}
+              onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragActive(false); }}
+              onDrop={event => { event.preventDefault(); setDragActive(false); chooseFile(event.dataTransfer.files[0] ?? null); }}
+            >
+              <input id='unified-post-file' type='file' accept={`${postFormat}/*`} onChange={event => chooseFile(event.target.files?.[0] ?? null)} />
+              {file && previewUrl ? <div className='composer-media-preview'>
+                {postFormat === 'video' ? <video src={previewUrl} muted controls playsInline /> : <img src={previewUrl} alt='Selected post media' />}
+                <button type='button' aria-label='Remove selected media' onClick={() => chooseFile(null)}><X size={16} /></button>
+                <span>{postFormat === 'video' ? <Video size={15} /> : <ImageIcon size={15} />}<strong>{file.name}</strong><small>{formatComposerFileSize(file.size)}</small></span>
+              </div> : <label htmlFor='unified-post-file'><Upload size={25} /><strong>Drop one {postFormat} here</strong><span>or choose a file from your device</span><small>Maximum file size: 2 GB</small></label>}
+            </div>}
+
+            <label className={`composer-field ${postFormat === 'text' ? 'composer-text-field' : ''}`}>
+              <span>{postFormat === 'text' ? 'Post text' : 'Description'} <small>{description.length} characters</small></span>
+              <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={postFormat === 'text' ? 'Write the text you want to publish…' : 'Default caption for all apps. YouTube uses this as the video description.'} rows={postFormat === 'text' ? 10 : 6} />
+              {postFormat === 'text' && <small className='composer-text-support'><CircleCheckBig size={13} />Available for X, Facebook, LinkedIn, and YouTube Community. Instagram is excluded.</small>}
+            </label>
+            <DescriptionLimitGuide characterCount={description.length} postFormat={postFormat} />
+            {postFormat !== 'text' && <label className='composer-rights-confirmation'><input type='checkbox' checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)} /><ShieldCheck size={16} /><span><strong>Media rights confirmed</strong><small>I own this media or have permission to publish it.</small></span></label>}
+          </div>}
+
+          {!postFormat && <div className='composer-format-prompt'><span><ArrowRight size={18} /></span><div><strong>Select a format to continue</strong><small>The composer will reveal only the fields and channels that apply.</small></div></div>}
         </div>
 
         <div className='composer-destination-column'>
-          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Channel control</small><strong>Publishing channels</strong><small>Choose accounts, edit app text, and preview before creating destinations.</small></span><span className='composer-selected-count'>{selectedAccounts.length} selected</span></div>
+          <div className='composer-section-title composer-channel-title'><span><small className='section-kicker'>Step 2 · Destinations</small><strong>Where should this be published?</strong><small>Select the personal profile, any managed LinkedIn Pages, and other app accounts independently.</small></span><span className='composer-selected-count'>{selectedDestinations.length} selected</span></div>
           <div className='composer-platform-grid'>
             {platforms.map(platform => {
               const state = eligibility[platform];
               const platformAccounts = enabledAccounts.filter(account => account.platform === platform);
-              const selectedCount = platformAccounts.filter(account => selectedAccountIds.includes(account.id)).length;
+              const platformDestinations = availableDestinations.filter(destination => destination.account.platform === platform);
+              const selectedCount = platformDestinations.filter(destination => selectedDestinationKeys.includes(destination.key)).length;
               const selectable = state.allowed && platformAccounts.length > 0;
               const activePanel = selectedCount > 0 && activeCopyPlatform === platform;
               const platformText = effectivePlatformDescription(platform, description, platformDescriptions);
@@ -949,15 +1546,38 @@ function UnifiedComposer({
                 <button type='button' className='composer-platform-toggle' disabled={!selectable} onClick={() => togglePlatform(platform)}>
                   <span className='composer-platform-logo'><CustomIcon platform={platform} size={27} /></span>
                   <span><strong>{platformLabels[platform]}</strong><small>{state.reason}</small></span>
-                  <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformAccounts.length : '—'}</i>
+                  <i>{selectedCount ? <Check size={14} /> : state.allowed ? platformDestinations.length : '—'}</i>
                 </button>
                 {state.allowed && platformAccounts.length > 0 && <div className='composer-account-choices'>
-                  {platformAccounts.map(account => <label key={account.id} className={account.credentialConfigured ? 'session-ready' : 'session-required'}><input type='checkbox' checked={selectedAccountIds.includes(account.id)} onChange={() => toggleAccount(account.id)} /><span><strong>{account.displayName}</strong><small>{account.handle} · {account.credentialConfigured ? 'Login ready' : 'Login required before publishing'}</small></span></label>)}
+                  {platformAccounts.map(account => <div className={`composer-account-group ${account.platform === 'linkedin' ? 'linkedin-destinations' : ''}`} key={account.id}>
+                    {composerDestinationChoices(account).map(destination => <label key={destination.key} className={`${accountConnectionLabel(account) === 'Ready' ? 'session-ready' : 'session-required'}${destination.linkedinPage ? ' managed-linkedin-page' : account.platform === 'linkedin' ? ' linkedin-personal-profile' : ''}`}><input type='checkbox' checked={selectedDestinationKeys.includes(destination.key)} onChange={() => toggleDestination(destination.key)} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {publishingEngineLabels[accountPublishingEngine(account)]} · {accountConnectionLabel(account)}</small></span></label>)}
+                  </div>)}
                 </div>}
+                {platform === 'linkedin' && selectedCount > 0 && <div className='composer-linkedin-copy-list'>
+                  {selectedDestinations.filter(destination => destination.account.platform === 'linkedin').map(destination => {
+                    const destinationText = destinationDescriptions[destination.key] ?? platformText;
+                    const destinationError = platformDescriptionError('linkedin', destinationText);
+                    return <label key={destination.key} className={`composer-platform-copy ${destinationError ? 'error' : ''}`}><span><strong>{destination.displayName} post text</strong><small>{destinationText.length}/{platformPostRules.linkedin.descriptionLimit.toLocaleString()}</small></span><textarea value={destinationText} onChange={event => setDestinationDescriptions(current => ({ ...current, [destination.key]: event.target.value }))} rows={4} />{destinationDescriptions[destination.key] !== undefined && <button type='button' onClick={() => setDestinationDescriptions(current => { const next = { ...current }; delete next[destination.key]; return next; })}>Use LinkedIn default text</button>}{destinationError && <em>{destinationError}</em>}</label>;
+                  })}
+                </div>}
+                {platform === 'youtube' && postFormat === 'video' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
+                  <legend><span><CustomIcon platform='youtube' size={16} /></span><span><strong>YouTube video details</strong><small>Required only for the selected YouTube destination.</small></span></legend>
+                  <label className='composer-field'><span>YouTube title <small>{title.length}/100</small></span><input value={title} onChange={event => setTitle(event.target.value)} placeholder='Enter the video title' maxLength={100} required /></label>
+                  <label className='composer-field'><span>YouTube audience</span><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
+                  <label className='composer-field'><span>YouTube visibility</span><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
+                </fieldset>}
+                {platform === 'reddit' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
+                  <legend><span><CustomIcon platform='reddit' size={16} /></span><span><strong>Reddit post details</strong><small>Used for every selected Reddit account. {postFormat === 'text' ? 'The post text becomes the Reddit body.' : 'The description is added as body text where the subreddit allows it.'}</small></span></legend>
+                  <label className='composer-field'><span>Subreddit</span><input value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' maxLength={24} required /></label>
+                  <label className='composer-field'><span>Reddit title <small>{redditTitle.length}/300</small></span><input value={redditTitle} onChange={event => setRedditTitle(event.target.value)} placeholder='Enter the post title' maxLength={300} required /></label>
+                  <label className='composer-rights-confirmation'><input type='checkbox' checked={redditNsfw} onChange={event => setRedditNsfw(event.target.checked)} /><span><strong>NSFW</strong><small>Mark the post as not safe for work.</small></span></label>
+                  <label className='composer-rights-confirmation'><input type='checkbox' checked={redditSpoiler} onChange={event => setRedditSpoiler(event.target.checked)} /><span><strong>Spoiler</strong><small>Blur the post until readers open it.</small></span></label>
+                  {redditDetailsError && <em>{redditDetailsError}</em>}
+                </fieldset>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
-                <div className='composer-platform-tools'><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button><button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
+                <div className='composer-platform-tools'>{!handoffOnly && <button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button>}<button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
                 {activePanel && <div className={`composer-platform-panel ${copyMode}`}>
-                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} description</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default description</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={title} description={platformText} /></div>}
+                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} {postFormat === 'text' ? 'post text' : 'description'}</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default {postFormat === 'text' ? 'post text' : 'description'}</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={platform === 'reddit' ? redditTitle : title} description={platformText} postFormat={postFormat ?? 'image'} /></div>}
                 </div>}
               </article>;
             })}
@@ -966,29 +1586,32 @@ function UnifiedComposer({
       </div>
 
       <div className='composer-timing'>
-        <div className='composer-section-title'><span><strong>Publishing time</strong><small>Use one setting for every destination, then override only where needed.</small></span><Clock3 size={20} /></div>
+        <div className='composer-section-title'><span><small className='section-kicker'>Step 3 · Timing</small><strong>When should it publish?</strong><small>Use one setting for every destination, then override only where needed.</small></span><Clock3 size={20} /></div>
         {canSchedule ? <>
           <div className='composer-shared-schedule'>
             <label><span>Shared timing</span><select value={sharedSchedule.mode} onChange={event => updateSharedSchedule({ mode: event.target.value as ComposerScheduleMode })}><option value='now'>Add to queue now</option><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
             {sharedSchedule.mode === 'exact' && <label><span>Date and time</span><input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={sharedSchedule.exactAt} onChange={event => updateSharedSchedule({ exactAt: event.target.value })} /></label>}
             {sharedSchedule.mode === 'template' && <label><span>Template</span><select value={sharedSchedule.scheduleId} onChange={event => updateSharedSchedule({ scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
           </div>
-          {selectedAccounts.length > 0 && <div className='composer-destination-timing'>
-            {selectedAccounts.map(account => {
-              const override = scheduleOverrides[account.id];
-              return <article key={account.id}>
-                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{account.displayName}</strong><small>{account.handle} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
-                <label className='composer-override-toggle'><input type='checkbox' checked={Boolean(override)} onChange={() => toggleOverride(account.id)} /><SlidersHorizontal size={14} />Override</label>
-                {override && <div className='composer-override-fields'><select value={override.mode} onChange={event => updateOverride(account.id, { mode: event.target.value as ComposerScheduleMode })}><option value='now'>Queue now</option><option value='exact'>Exact time</option><option value='template'>Template</option></select>{override.mode === 'exact' && <input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={override.exactAt} onChange={event => updateOverride(account.id, { exactAt: event.target.value })} />}{override.mode === 'template' && <select value={override.scheduleId} onChange={event => updateOverride(account.id, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.time}</option>)}</select>}</div>}
+          {selectedDestinations.length > 0 && <div className='composer-destination-timing'>
+            {selectedDestinations.map(destination => {
+              const account = destination.account;
+              const override = scheduleOverrides[destination.key];
+              return <article key={destination.key}>
+                <div className='composer-destination-account'><CustomIcon platform={account.platform} size={21} /><span><strong>{destination.displayName}</strong><small>{destination.detail} · {override ? 'Custom timing' : 'Uses shared timing'}</small></span></div>
+                <label className='composer-override-toggle'><input type='checkbox' checked={Boolean(override)} onChange={() => toggleOverride(destination.key)} /><SlidersHorizontal size={14} />Override</label>
+                {override && <div className='composer-override-fields'><select value={override.mode} onChange={event => updateOverride(destination.key, { mode: event.target.value as ComposerScheduleMode })}><option value='now'>Queue now</option><option value='exact'>Exact time</option><option value='template'>Template</option></select>{override.mode === 'exact' && <input type='datetime-local' min={toLocalDateTimeInputValue(new Date(Date.now() + 60_000))} value={override.exactAt} onChange={event => updateOverride(destination.key, { exactAt: event.target.value })} />}{override.mode === 'template' && <select value={override.scheduleId} onChange={event => updateOverride(destination.key, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.time}</option>)}</select>}</div>}
               </article>;
             })}
           </div>}
-        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>Posts will enter the queue immediately.</strong><small>Your role can prepare content; a scheduler can assign publishing times afterward.</small></span></div>}
+        </> : <div className='composer-role-note'><TimerReset size={18} /><span><strong>{handoffOnly ? 'Selected destinations are locked for the scheduler.' : 'Posts will enter the queue immediately.'}</strong><small>{handoffOnly ? 'Your upload and destination accounts are saved together; the scheduler only chooses when they publish.' : 'Your role can prepare content; a scheduler can assign publishing times afterward.'}</small></span></div>}
       </div>
 
       <footer className='composer-footer'>
-        <div>{message && <p className={`composer-message ${message.type}`} role='status'>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
-        <button type='button' className='composer-publish-button' disabled={submitting || !file || !selectedAccounts.length} onClick={submit}>{submitting ? <Loader2 className='spin' size={18} /> : <Send size={18} />}{submitting ? 'Preparing posts…' : canPublishNow ? `Publish to ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedAccounts.length || ''} ${selectedAccounts.length === 1 ? 'destination' : 'destinations'}`}</button>
+        <div>{submitting && preparationProgress?.percent !== undefined
+          ? <div className='composer-upload-progress' role='progressbar' aria-valuemin={0} aria-valuemax={100} aria-valuenow={preparationProgress.percent}><span>{preparationProgress.label}</span><i><b style={{ width: `${preparationProgress.percent}%` }} /></i></div>
+          : message && <p className={`composer-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.type === 'success' ? <CircleCheckBig size={17} /> : <CircleAlert size={17} />}{message.text}</p>}</div>
+        <button type='button' className='composer-publish-button' disabled={submitting || !contentReady || !destinationsReady} onClick={() => void submit(pendingPreflightWarnings.length > 0)}>{submitting ? <Loader2 className='spin' size={18} /> : pendingPreflightWarnings.length ? <ShieldCheck size={18} /> : <Send size={18} />}{submitting ? preparationProgress?.label || 'Preparing posts…' : pendingPreflightWarnings.length ? 'Confirm and continue' : handoffOnly ? `Send ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'} to scheduler` : canPublishNow ? `Publish to ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'}` : `Create ${selectedDestinations.length || ''} ${selectedDestinations.length === 1 ? 'destination' : 'destinations'}`}</button>
       </footer>
     </section>
   );
@@ -998,6 +1621,7 @@ function Workboard({
   user,
   permissions,
   uploads,
+  submissions,
   accounts,
   schedules,
   connectionMode,
@@ -1007,6 +1631,7 @@ function Workboard({
   error,
   isRunning,
   onRun,
+  onStop,
   onRefresh,
   onSignOut,
   onOpenAccounts,
@@ -1017,19 +1642,22 @@ function Workboard({
   editingUpload,
   onCloseEdit,
   onCreated,
+  onScheduleSubmission,
 }: {
   user: UserProfile;
   permissions: RolePermissions;
   uploads: PlatformUpload[];
+  submissions: ContentSubmission[];
   accounts: PlatformAccount[];
   schedules: PublishingSchedule[];
-  connectionMode: 'extension' | 'direct' | 'checking';
+  connectionMode: 'central' | 'desktop' | 'extension' | 'direct' | 'checking';
   users: UserProfile[];
   activityLogs: ActivityLog[];
   loading: boolean;
   error: string | null;
   isRunning: boolean;
   onRun: () => void;
+  onStop: () => void;
   onRefresh: () => void;
   onSignOut: () => void;
   onOpenAccounts: (platform: Platform) => void;
@@ -1040,6 +1668,7 @@ function Workboard({
   editingUpload: PlatformUpload | null;
   onCloseEdit: () => void;
   onCreated: () => void;
+  onScheduleSubmission: (submission: ContentSubmission) => void;
 }) {
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
@@ -1053,7 +1682,7 @@ function Workboard({
     const posted = uploads.filter(upload => upload.status === 'posted').length;
     const failed = uploads.filter(upload => upload.status === 'failed').length;
     const queued = uploads.filter(upload => upload.status === 'queued').length;
-    const scheduled = uploads.filter(upload => upload.status === 'queued' && upload.scheduledAt).length;
+    const scheduled = uploads.filter(upload => upload.status === 'queued' && (upload.scheduledAt || upload.scheduleId)).length;
     return { posted, failed, queued, scheduled, total: uploads.length };
   }, [uploads]);
 
@@ -1086,8 +1715,8 @@ function Workboard({
     .slice(0, 1), [uploads]);
 
   const statusMix = useMemo(() => [
-    { id: 'scheduled', label: 'Scheduled', detail: 'Timed', value: uploads.filter(upload => upload.status === 'queued' && upload.scheduledAt).length, color: '#318EC2' },
-    { id: 'queued', label: 'In queue', detail: 'Needs a time', value: uploads.filter(upload => upload.status === 'queued' && !upload.scheduledAt).length, color: '#B17A08' },
+    { id: 'scheduled', label: 'Scheduled', detail: 'Timed', value: uploads.filter(upload => upload.status === 'queued' && (upload.scheduledAt || upload.scheduleId)).length, color: '#318EC2' },
+    { id: 'queued', label: 'In queue', detail: 'Publish now', value: uploads.filter(upload => upload.status === 'queued' && !upload.scheduledAt && !upload.scheduleId).length, color: '#B17A08' },
     { id: 'processing', label: 'Publishing', detail: 'In progress', value: uploads.filter(upload => upload.status === 'processing').length, color: '#7367D8' },
     { id: 'posted', label: 'Delivered', detail: 'Complete', value: uploads.filter(upload => upload.status === 'posted').length, color: '#14895E' },
     { id: 'failed', label: 'Review', detail: 'Needs input', value: uploads.filter(upload => upload.status === 'failed').length, color: '#C65448' },
@@ -1115,6 +1744,16 @@ function Workboard({
         return aTime - bTime || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
       });
   }, [uploads]);
+  const recentDeliveries = useMemo(() => [...uploads]
+    .sort((a, b) => Date.parse(b.postedAt ?? b.lastAttemptAt ?? b.updatedAt ?? b.uploadedAt) - Date.parse(a.postedAt ?? a.lastAttemptAt ?? a.updatedAt ?? a.uploadedAt))
+    .slice(0, 18), [uploads]);
+  const waitingForCompanionUploads = useMemo(() => uploads.filter(isWaitingForCompanion), [uploads]);
+  const overdueWaitingCount = waitingForCompanionUploads.filter(upload => isOverdueForCompanion(upload)).length;
+  const earliestWaitingUpload = [...waitingForCompanionUploads]
+    .filter(upload => upload.scheduledAt)
+    .sort((a, b) => Date.parse(a.scheduledAt ?? '') - Date.parse(b.scheduledAt ?? ''))[0];
+  const representativeWaitingUpload = earliestWaitingUpload ?? waitingForCompanionUploads[0];
+  const waitingCompanionLabel = companionAvailabilityLabel(representativeWaitingUpload ? accountById.get(representativeWaitingUpload.accountId) : undefined);
   const deliveredTotal = broadcastMix.reduce((total, channel) => total + channel.value, 0);
   const broadcastSegments = useMemo(() => {
     if (!deliveredTotal) return [];
@@ -1127,19 +1766,16 @@ function Workboard({
     });
   }, [broadcastMix, deliveredTotal]);
   const trackingSummary = `${metrics.total} tracked ${metrics.total === 1 ? 'post' : 'posts'} across ${accounts.length} publishing ${accounts.length === 1 ? 'account' : 'accounts'}`;
-  const canEditPosts = permissions.canEditContent || permissions.canSchedulePosts;
+  const canEditPosts = permissions.canRunAutomation || permissions.canSchedulePosts;
+  const awaitingSubmissions = submissions.filter(submission => submission.status === 'awaiting_schedule');
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
   const activeSchedulesCount = schedules.filter(schedule => schedule.status === 'active').length;
-  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed' || (upload.status === 'queued' && !upload.scheduledAt)).length;
-  const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && account.enabled)).length;
-  const todayEvents = eventByDay[toLocalDayKey(new Date())] ?? [];
-  const nextScheduledPosts = uploads
-    .filter(upload => upload.scheduledAt && upload.status !== 'posted' && Date.parse(upload.scheduledAt) >= Date.now())
-    .sort((a, b) => Date.parse(a.scheduledAt ?? '') - Date.parse(b.scheduledAt ?? ''))
-    .slice(0, 4);
+  const accountAttentionCount = accounts.filter(account => accountHealthStatus(account) !== 'healthy').length;
+  const attentionCount = reviewQueue.filter(upload => upload.status === 'failed').length + awaitingSubmissions.length + accountAttentionCount + waitingForCompanionUploads.length;
+  const healthyChannelCount = platforms.filter(platform => accounts.some(account => account.platform === platform && accountHealthStatus(account) === 'healthy')).length;
   const overviewCards = [
     { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
-    { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${reviewQueue.length} open items`, icon: <CircleAlert size={18} />, tone: 'attention' },
+    { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${accountAttentionCount} account alerts`, icon: <CircleAlert size={18} />, tone: 'attention' },
     { id: 'delivered', label: 'Delivered', value: metrics.posted, detail: `${metrics.failed} failed`, icon: <CircleCheckBig size={18} />, tone: 'success' },
     { id: 'channels', label: 'Channels', value: healthyChannelCount, detail: `${enabledAccountsCount} enabled accounts`, icon: <UsersRound size={18} />, tone: 'channels' },
   ];
@@ -1159,17 +1795,20 @@ function Workboard({
     <main className='workboard-app'>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/' title='Back to AgenticThat'><span>AT</span><div><strong>AgenticThat</strong><small>Publish Queue</small></div></a>
+        <a className='workboard-brand' href='/apps' title='Back to Home'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
-          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length}</small></button>
-          <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>
+          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
+          {PUBLISHING_SCHEDULING_ENABLED && <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>}
         </nav>
         <div className='workboard-actions'>
-          <span className='workboard-status' title={connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
+          <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
+          <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
           {permissions.canViewActivity && <button className='workboard-tool' title='Activity log' onClick={onOpenActivity}><ListFilter size={18} /></button>}
-          {permissions.canRunAutomation && <button className='workboard-run' onClick={onRun} disabled={isRunning}>{isRunning ? <Loader2 className='spin' size={16} /> : <Send size={16} />}{isRunning ? 'Publishing' : 'Run automation'}</button>}
+          {permissions.canRunAutomation && (isRunning
+            ? <button className='workboard-stop' onClick={onStop}><X size={16} />Emergency stop</button>
+            : <button className='workboard-run' onClick={onRun}><Send size={16} />Run automation</button>)}
           <button className='workboard-tool' title='Refresh workspace' onClick={onRefresh}><RefreshCw size={18} className={loading ? 'spin' : ''} /></button>
           <span className='workboard-user' title={`${user.fullName} - ${userRoleLabels[user.role]}`}>{roleInitials[user.role]}</span>
           <button className='workboard-tool signout-tool' title='Sign out' onClick={onSignOut}><LogOut size={18} /></button>
@@ -1178,15 +1817,27 @@ function Workboard({
 
       {error && <div className='workspace-error' role='alert'><CircleAlert size={18} /><span><strong>Workspace data could not refresh</strong><small>{error}</small></span><button type='button' onClick={onRefresh}><RefreshCw size={14} />Retry</button></div>}
 
+      {waitingForCompanionUploads.length > 0 && <section className='companion-waiting-alert' role='status' aria-label='Posts waiting for Companion'>
+        <span className='companion-waiting-alert-icon'><MonitorCheck size={21} /></span>
+        <div>
+          <strong>{overdueWaitingCount > 0
+            ? `${overdueWaitingCount} scheduled ${overdueWaitingCount === 1 ? 'post is' : 'posts are'} past the publish time`
+            : `${waitingForCompanionUploads.length} ${waitingForCompanionUploads.length === 1 ? 'post is' : 'posts are'} waiting for Companion`}</strong>
+          <small>{earliestWaitingUpload?.scheduledAt
+            ? `Scheduled ${formatEventTime(earliestWaitingUpload.scheduledAt)} → ${waitingCompanionLabel} → Waiting for Companion`
+            : `${waitingCompanionLabel} → Posts are safely queued → Publishing continues automatically when it reconnects`}</small>
+        </div>
+        <a href='/config-manager?service=publishing'>Open Companion setup<ArrowRight size={14} /></a>
+      </section>}
+
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>
-          <p className='section-kicker'>Workspace</p>
-          <h1 id='dashboard-overview-heading'>Dashboard</h1>
-          <span>{user.fullName} - {userRoleLabels[user.role]}</span>
-          <div className='dashboard-action-row'>
-            {permissions.canEditContent && <button type='button' className='dashboard-primary-action' onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create post</button>}
-            <button type='button' className='dashboard-secondary-action' onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review queue</button>
-            {permissions.canSchedulePosts && <button type='button' className='dashboard-secondary-action' onClick={onOpenSchedules}><CalendarClock size={16} />Schedules</button>}
+          <p className='section-kicker'>Operational overview</p>
+          <h1 id='dashboard-overview-heading'>Publishing workspace</h1>
+          <span>{user.fullName} · {userRoleLabels[user.role]}</span>
+          <div className={`dashboard-context ${attentionCount ? 'needs-attention' : 'healthy'}`}>
+            {attentionCount ? <CircleAlert size={17} /> : <CircleCheckBig size={17} />}
+            <span><strong>{attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'item needs' : 'items need'} attention` : 'Publishing operations are clear'}</strong><small>{activeSchedulesCount} active {activeSchedulesCount === 1 ? 'schedule' : 'schedules'} · {healthyChannelCount} connected {healthyChannelCount === 1 ? 'channel' : 'channels'}</small></span>
           </div>
         </div>
         <div className='dashboard-stat-grid'>
@@ -1199,52 +1850,96 @@ function Workboard({
         </div>
       </section>
 
+      <section className='safety-control-strip' aria-labelledby='safety-controls-heading'>
+        <header>
+          <span><ShieldCheck size={20} /></span>
+          <div><strong id='safety-controls-heading'>Publishing safeguards active</strong><small>Checks run at the stage where they matter. They reduce avoidable risk, but no browser publisher can guarantee zero platform restrictions.</small></div>
+          <em>5 layers on</em>
+        </header>
+        <div className='safety-control-grid'>
+          <article><CircleCheckBig size={15} /><span><strong>Pre-flight checks</strong><small>Before a post enters the queue</small></span></article>
+          <article><TimerReset size={15} /><span><strong>Dynamic pacing</strong><small>Immediately before publishing</small></span></article>
+          <article><LockKeyhole size={15} /><span><strong>One job per account</strong><small>While a browser job is active</small></span></article>
+          <article><CircleAlert size={15} /><span><strong>Stop on risk</strong><small>CAPTCHA, warning, checkpoint or 429</small></span></article>
+          <article><ShieldCheck size={15} /><span><strong>No blind final retry</strong><small>Unclear results require inspection</small></span></article>
+        </div>
+      </section>
+
+      {!loading && accounts.length === 0 && (
+        <section className='publishing-context-guide' aria-labelledby='publishing-context-guide-title'>
+          <div className='publishing-context-heading'>
+            <span><MonitorCheck size={23} /></span>
+            <div>
+              <p className='section-kicker'>Before your first post</p>
+              <h2 id='publishing-context-guide-title'>{permissions.canManageAccounts ? 'Prepare your publishing workspace' : 'Publishing is waiting for an account'}</h2>
+              <small>{permissions.canManageAccounts ? 'This one-time setup makes the account available to your permitted teammates.' : 'A Publishing Manager completes this one-time setup. You can create content as soon as an account appears.'}</small>
+            </div>
+          </div>
+          <ol className='publishing-context-steps' aria-label='Publishing setup steps'>
+            <li><i><MonitorCheck size={19} /></i><strong>Pair Companion</strong><small>Manager computer only</small></li>
+            <li><i><KeyRound size={19} /></i><strong>Sign in once</strong><small>Use the account login</small></li>
+            <li><i><Send size={19} /></i><strong>Create a post</strong><small>Choose account and publish</small></li>
+          </ol>
+          {permissions.canManageAccounts
+            ? <a href='/config-manager?service=publishing'><Settings2 size={15} />Open Connections<ArrowRight size={15} /></a>
+            : <em>Manager setup required</em>}
+        </section>
+      )}
+
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
-          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content upload is available to operations managers and post uploaders.</span></div><LockKeyhole size={28} /></section>}
+          {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={!permissions.canRunAutomation} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content creation is available to Publishing Managers and Content Uploaders.</span></div><LockKeyhole size={28} /></section>}
         </div>
-
-        <aside className='dashboard-side-stack' aria-label='Priority workspace panels'>
-          <article className='dashboard-panel priority-panel'>
-            <header><span><ListFilter size={16} />Open queue</span><strong>{reviewQueue.length}</strong></header>
-            <div className='priority-list'>
-              {reviewQueue.length === 0 ? <div className='panel-empty'><CircleCheckBig size={21} /><strong>All clear</strong><small>No posts are waiting.</small></div> : reviewQueue.slice(0, 4).map(upload => (
-                <button key={upload.id} type='button' className={`priority-row priority-${upload.status}`} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
-                  <span className='priority-platform'><CustomIcon platform={upload.platform} size={18} /></span>
-                  <span><strong>{upload.title || upload.originalName}</strong><small>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} - {upload.status === 'failed' ? 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs time'}</small></span>
-                  <StatusStateIcon state={upload.scheduledAt && upload.status === 'queued' ? 'scheduled' : upload.status} size={15} />
-                </button>
-              ))}
-            </div>
-            {reviewQueue.length > 4 && <button type='button' className='panel-link' onClick={() => navigateWorkboard('operations')}>View all {reviewQueue.length}</button>}
-          </article>
-
-          <article className='dashboard-panel next-panel'>
-            <header><span><CalendarDays size={16} />Today</span><strong>{todayEvents.length}</strong></header>
-            <div className='mini-schedule-list'>
-              {todayEvents.length === 0 ? <div className='panel-empty compact'><CalendarClock size={20} /><strong>No posts today</strong><small>Next scheduled posts appear below.</small></div> : todayEvents.slice(0, 3).map(upload => (
-                <button key={upload.id} type='button' className='mini-schedule-row' onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
-                  <CustomIcon platform={upload.platform} size={16} />
-                  <span><strong>{upload.title || upload.originalName}</strong><small>{new Date(getAuditTimestamp(upload)).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</small></span>
-                </button>
-              ))}
-            </div>
-          </article>
-
-          <article className='dashboard-panel setup-panel'>
-            <header><span><ShieldCheck size={16} />Workspace setup</span></header>
-            <div className='setup-grid'>
-              <span><strong>{enabledAccountsCount}</strong><small>accounts</small></span>
-              <span><strong>{activeSchedulesCount}</strong><small>schedules</small></span>
-              <span><strong>{metrics.queued}</strong><small>queued</small></span>
-            </div>
-            {nextScheduledPosts.length > 0 && <div className='next-posts'>
-              <small>Next scheduled</small>
-              {nextScheduledPosts.slice(0, 2).map(upload => <button key={upload.id} type='button' onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}><CustomIcon platform={upload.platform} size={15} /><span>{formatEventTime(upload.scheduledAt ?? upload.updatedAt)}</span></button>)}
-            </div>}
-          </article>
-        </aside>
       </section>
+
+      <section className='delivery-ledger' aria-labelledby='delivery-ledger-heading'>
+        <header className='delivery-ledger-head'>
+          <div><p className='section-kicker'>Destination-by-destination proof</p><h2 id='delivery-ledger-heading'>Recent publishing results</h2><span>Each app and account has its own clear outcome. The same post sent to five apps appears as five results.</span></div>
+          <div className='delivery-ledger-summary' aria-label={`${metrics.posted} posted, ${metrics.failed} failed, ${metrics.total - metrics.posted - metrics.failed} open`}>
+            <span className='posted'><strong>{metrics.posted}</strong><small>Posted</small></span>
+            <span className='failed'><strong>{metrics.failed}</strong><small>Failed</small></span>
+            <span><strong>{metrics.total - metrics.posted - metrics.failed}</strong><small>Open</small></span>
+          </div>
+        </header>
+        {recentDeliveries.length === 0 ? (
+          <div className='delivery-ledger-empty'><Send size={24} /><span><strong>No destination results yet</strong><small>Create a post to see separate results for every selected app and account.</small></span></div>
+        ) : (
+          <div className='delivery-ledger-list'>
+            {recentDeliveries.map(upload => {
+              const account = accountById.get(upload.accountId);
+              const outcome = getDeliveryOutcome(upload, account);
+              return <button type='button' className={`delivery-ledger-row tone-${outcome.tone}`} key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
+                <span className='delivery-ledger-media'><PostMediaPreview upload={upload} compact /></span>
+                <span className='delivery-ledger-destination'><CustomIcon platform={upload.platform} size={20} /><span><strong>{upload.linkedinTarget?.name || account?.displayName || platformLabels[upload.platform]}</strong><small>{upload.linkedinTarget ? `Managed Page · ${account?.displayName || 'LinkedIn'}` : account?.handle || platformLabels[upload.platform]}</small></span></span>
+                <span className='delivery-ledger-content'><strong>{upload.title || upload.originalName}</strong><small title={outcome.detail}>{outcome.detail}</small><WaitingForCompanionTimeline upload={upload} account={account} /></span>
+                <span className={`delivery-outcome tone-${outcome.tone}`}><StatusStateIcon state={outcome.tone} size={15} /><span><strong>{outcome.label}</strong><small>{upload.attemptCount ? `${upload.attemptCount} ${upload.attemptCount === 1 ? 'attempt' : 'attempts'}` : formatEventTime(outcome.timestamp)}</small></span></span>
+                {canEditPosts && <ChevronRight size={16} />}
+              </button>;
+            })}
+          </div>
+        )}
+      </section>
+
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='handoff-queue' aria-labelledby='handoff-queue-heading'>
+        <header className='workboard-section-head'>
+          <div><p className='section-kicker'>Uploader to scheduler</p><h2 id='handoff-queue-heading'>Content handoff queue</h2></div>
+          <span>{awaitingSubmissions.length} awaiting schedule</span>
+        </header>
+        <div className='handoff-list'>
+          {submissions.length === 0 ? (
+            <div className='handoff-empty'><FolderOpen size={24} /><span><strong>No content submissions yet</strong><small>Uploads saved by a post uploader will remain here after sign-out.</small></span></div>
+          ) : submissions.slice(0, 12).map(submission => (
+            <article className={`handoff-row ${submission.status}`} key={submission.id}>
+              <span className='handoff-format'><SubmissionMediaPreview submission={submission} /></span>
+              <span className='handoff-copy'><strong>{submission.title || submission.originalName}</strong><small>{submission.description} · Created by {submission.createdByName || submission.createdByUserId} · {submission.scheduledByUserId ? `Scheduled by ${submission.scheduledByName || submission.scheduledByUserId}` : `Saved ${formatEventTime(submission.createdAt)}`}</small></span>
+              <span className={`handoff-status ${submission.status}`}>{submission.status === 'awaiting_schedule' ? 'Awaiting schedule' : submission.status === 'scheduling' ? 'Scheduling' : 'Scheduled'}</span>
+              {submission.status === 'awaiting_schedule' && permissions.canSchedulePosts
+                ? <button type='button' className='btn-primary' onClick={() => onScheduleSubmission(submission)}><CalendarClock size={15} />Choose schedule</button>
+                : <span className='handoff-readonly'>{submission.status === 'scheduled' ? `${submission.destinationUploadIds.length} destinations` : user.role === 'viewer' ? 'View only' : 'Scheduler will complete this'}</span>}
+            </article>
+          ))}
+        </div>
+      </section>}
 
       <section className='platform-metrics' id='channels' aria-labelledby='post-metrics-heading'>
         <header className='workboard-section-head'><div><p className='section-kicker'>Channel control</p><h2 id='post-metrics-heading'>Publishing channels</h2></div><span>{trackingSummary}</span></header>
@@ -1264,6 +1959,18 @@ function Workboard({
               </article>
             );
           })}
+        </div>
+        <div className='account-health-dashboard' aria-label='Publishing account health'>
+          <div className='account-health-heading'><ShieldCheck size={17} /><span><strong>Account health</strong><small>Live safety state for every connected account</small></span></div>
+          <div className='account-health-list'>{accounts.length === 0 ? <span className='account-health-empty'>No publishing accounts connected.</span> : accounts.map(account => {
+            const health = accountHealthStatus(account);
+            return <article key={account.id} className={`account-health-row ${health}`}>
+              <CustomIcon platform={account.platform} size={18} />
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {accountConnectionLabel(account)} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
+              <em>{accountHealthLabels[health]}</em>
+              {account.safetyReason && <small title={account.safetyReason}>{account.safetyReason}</small>}
+            </article>;
+          })}</div>
         </div>
       </section>
 
@@ -1285,7 +1992,7 @@ function Workboard({
         </section>
       )}
 
-      <section className='workboard-schedule-manager' aria-labelledby='schedule-manager-heading'>
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='workboard-schedule-manager' aria-labelledby='schedule-manager-heading'>
         <header className='workboard-section-head'>
           <div><p className='section-kicker'>Reusable timing</p><h2 id='schedule-manager-heading'>Schedule manager</h2></div>
           {permissions.canSchedulePosts && <button className='btn-primary' onClick={onOpenSchedules}><CalendarClock size={16} />Add or manage</button>}
@@ -1302,7 +2009,7 @@ function Workboard({
             </button>;
           })}
         </div>
-      </section>
+      </section>}
 
       <section className='workboard-focus-grid' id='operations'>
         <section className='operations-summary-grid'>
@@ -1317,7 +2024,7 @@ function Workboard({
             <div className='review-queue-list'>{reviewQueue.length === 0 ? <div className='review-queue-empty'><CircleCheckBig size={24} /><strong>Nothing waiting for review.</strong><span>Every tracked post has been delivered.</span></div> : reviewQueue.map(upload => (
               <button className='review-queue-row' key={upload.id} onClick={() => canEditPosts && onEdit(upload)} disabled={!canEditPosts}>
                 <div className={`review-queue-media review-${upload.status}`}><PostMediaPreview upload={upload} compact /><i><CustomIcon platform={upload.platform} size={17} /></i></div>
-                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.status === 'processing' ? 'Publishing now' : 'Needs a publish time'}</small></span>
+                <span><strong>{upload.title || upload.originalName}</strong><small title={upload.failureReason}>{accountById.get(upload.accountId)?.handle ?? platformLabels[upload.platform]} · {upload.status === 'failed' ? upload.failureReason || 'Needs review' : isWaitingForCompanion(upload) ? 'Waiting safely for the assigned Companion' : upload.scheduledAt ? formatEventTime(upload.scheduledAt) : upload.scheduleId ? `Template #${upload.scheduleId}` : upload.status === 'processing' ? 'Publishing now' : 'Ready to publish'}</small></span>
                 <Pencil size={14} />
               </button>
             ))}</div>
@@ -1345,7 +2052,7 @@ function Workboard({
           <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Delivery results will appear here as channels publish posts.'}</footer>
         </article>
 
-        <article className='legacy-next-action-board'>
+        {PUBLISHING_SCHEDULING_ENABLED && <article className='legacy-next-action-board'>
           <header className='workboard-section-head'><div><p className='section-kicker'>Next action</p><h2>{nextAction ? 'Ready for its moment' : 'Nothing scheduled yet'}</h2></div><CalendarClock size={20} /></header>
           {nextAction ? (
             <button className='next-action-content' onClick={() => canEditPosts && onEdit(nextAction)} disabled={!canEditPosts}>
@@ -1354,10 +2061,10 @@ function Workboard({
               <Pencil size={16} />
             </button>
           ) : <div className='next-action-empty'><CalendarDays size={24} /><span>Choose a post and set its date from the channel portfolio.</span></div>}
-        </article>
+        </article>}
       </section>
 
-      <section className='workboard-calendar-section' id='schedule'>
+      {PUBLISHING_SCHEDULING_ENABLED && <section className='workboard-calendar-section' id='schedule'>
         <article className='calendar-board'>
           <header className='workboard-section-head'><div><p className='section-kicker'>Schedule map</p><h2>{monthLabel}</h2></div><div className='calendar-navigation'><button className='workboard-tool' title='Previous month' onClick={() => shiftCalendarMonth(-1)}><ChevronLeft size={18} /></button><button className='workboard-tool' title='Next month' onClick={() => shiftCalendarMonth(1)}><ChevronRight size={18} /></button></div></header>
           <div className='workboard-calendar'>
@@ -1388,9 +2095,9 @@ function Workboard({
           </div>
           <footer className='broadcast-mix-footer'>{deliveredTotal ? 'Share of successful deliveries across every channel.' : 'Your broadcast mix will appear as channels complete deliveries.'}</footer>
         </article>
-      </section>
+      </section>}
 
-      {schedulePlatform && permissions.canSchedulePosts && (
+      {PUBLISHING_SCHEDULING_ENABLED && schedulePlatform && permissions.canSchedulePosts && (
         <PlatformScheduleModal
           platform={schedulePlatform}
           uploads={uploads.filter(upload => upload.platform === schedulePlatform)}
@@ -1405,6 +2112,148 @@ function Workboard({
       {editingUpload && canEditPosts && <EditPostModal upload={editingUpload} accounts={accounts.filter(item => item.platform === editingUpload.platform)} schedules={schedules} permissions={permissions} onClose={onCloseEdit} onSuccess={onRefresh} />}
       </section>
     </main>
+  );
+}
+
+function ScheduleSubmissionModal({
+  submission,
+  accounts,
+  schedules,
+  onClose,
+  onSuccess,
+}: {
+  submission: ContentSubmission;
+  accounts: PlatformAccount[];
+  schedules: PublishingSchedule[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const requestedDestinations = useMemo<Array<{ accountId: string; linkedinPageId?: string; description?: string }>>(() => submission.selectedDestinations?.length
+    ? submission.selectedDestinations
+    : submission.selectedAccountIds.map(accountId => ({ accountId })), [submission]);
+  const destinationsLocked = requestedDestinations.length > 0;
+  const compatibleDestinations = useMemo(() => requestedDestinations.flatMap(requested => {
+    const account = accounts.find(candidate => candidate.id === requested.accountId);
+    if (!account?.enabled) return [];
+    const linkedinPage = requested.linkedinPageId
+      ? account.linkedinManagedPages?.find(page => page.id === requested.linkedinPageId)
+      : undefined;
+    if (requested.linkedinPageId && !linkedinPage) return [];
+    const rules = platformPostRules[account.platform];
+    const destinationDescription = requested.description?.trim() || submission.description;
+    if (!rules.formats.includes(submission.postFormat) || destinationDescription.length > rules.descriptionLimit) return [];
+    const needsTitle = rules.titleRequired || rules.titleRequiredFor?.includes(submission.postFormat);
+    if (needsTitle && !submission.title?.trim()) return [];
+    if (rules.titleLimit && (submission.title?.length ?? 0) > rules.titleLimit) return [];
+    return [{
+      key: composerDestinationKey(account.id, linkedinPage?.id),
+      account,
+      linkedinPage,
+      displayName: linkedinPage?.name || account.displayName,
+      detail: linkedinPage ? `Managed Page · ${account.displayName}` : account.platform === 'linkedin' ? 'Personal profile' : account.handle,
+      description: destinationDescription,
+    }];
+  }), [accounts, requestedDestinations, submission]);
+  const activeSchedules = schedules.filter(scheduleCanReceivePosts);
+  const selectedDestinationKeys = requestedDestinations.map(destination => composerDestinationKey(destination.accountId, destination.linkedinPageId));
+  const [destinationTimings, setDestinationTimings] = useState<Record<string, ComposerScheduleDraft>>(() => Object.fromEntries(
+    selectedDestinationKeys.map(key => [key, defaultSchedulerTiming()]),
+  ));
+  const [minimumSchedule] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60_000)));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [pendingPreflightWarnings, setPendingPreflightWarnings] = useState<string[]>([]);
+
+  const updateDestinationTiming = (destinationKey: string, patch: Partial<ComposerScheduleDraft>) => {
+    setDestinationTimings(current => ({
+      ...current,
+      [destinationKey]: { ...(current[destinationKey] ?? defaultSchedulerTiming()), ...patch },
+    }));
+    setPendingPreflightWarnings([]);
+  };
+
+  const submit = async (confirmWarnings = false) => {
+    setError('');
+    if (!selectedDestinationKeys.length) return setError('Choose at least one compatible publishing destination.');
+    if (compatibleDestinations.length !== selectedDestinationKeys.length) {
+      return setError('One or more locked destinations are no longer available. Ask a Publishing Manager to reconnect or enable them.');
+    }
+    const destinations: UnifiedPostDestinationInput[] = [];
+    for (const destination of compatibleDestinations) {
+      const account = destination.account;
+      const scheduleDraft = destinationTimings[destination.key];
+      const timingError = scheduleDraft ? scheduleDraftError(scheduleDraft, schedules) : 'Choose a publish time.';
+      if (timingError) return setError(`${platformLabels[account.platform]} · ${destination.displayName}: ${timingError}`);
+      destinations.push({ accountId: account.id, linkedinPageId: destination.linkedinPage?.id, description: destination.description, ...destinationSchedule(scheduleDraft) });
+    }
+    setLoading(true);
+    try {
+      await api.assessPublishingSafety(submission.postFormat, destinations);
+      await api.scheduleSubmission(
+        submission.id,
+        destinations,
+        confirmWarnings,
+      );
+      onSuccess();
+    } catch (submissionError) {
+      if (submissionError instanceof PublishingSafetyApiError) {
+        setPendingPreflightWarnings([]);
+        setError(`Choose a safer time: ${submissionError.issues.map(issue => issue.message).join(' ') || submissionError.message}`);
+      } else if (submissionError instanceof ContentPreflightApiError && submissionError.code === 'CONTENT_PREFLIGHT_WARNINGS') {
+        const warnings = [...new Set(submissionError.issues.map(issue => issue.message))];
+        setPendingPreflightWarnings(warnings);
+        setError(`Review before scheduling: ${warnings.join(' ')}`);
+      } else {
+        setPendingPreflightWarnings([]);
+        setError(submissionError instanceof Error ? submissionError.message : 'The submission could not be scheduled.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className='modal-overlay' onClick={onClose}>
+      <div className='modal-panel submission-schedule-modal' role='dialog' aria-modal='true' aria-labelledby='submission-schedule-heading' onClick={event => event.stopPropagation()}>
+        <div className='modal-head'><span id='submission-schedule-heading'>Schedule selected destinations</span><button onClick={onClose}><X size={22} /></button></div>
+        <div className='modal-body'>
+          <div className='submission-schedule-summary'>
+            <span className='handoff-format'><SubmissionMediaPreview submission={submission} /></span>
+            <span><strong>{submission.title || submission.originalName}</strong><small>{submission.description}</small></span>
+          </div>
+          <section className='submission-destination-section'>
+            <div className='workboard-section-head'><div><p className='section-kicker'>Destinations</p><h2>{destinationsLocked ? 'Selected by uploader' : 'Compatible legacy destinations'}</h2></div><span>{selectedDestinationKeys.length} {destinationsLocked ? 'locked' : 'selected'}</span></div>
+            <div className='submission-account-grid'>
+              {compatibleDestinations.length === 0 ? <div className='handoff-empty'><CircleAlert size={22} /><span><strong>No compatible enabled destinations</strong><small>A Publishing Manager may need to reconnect LinkedIn to refresh managed Pages.</small></span></div> : compatibleDestinations.map(destination => (
+                <label key={destination.key} className='selected'>
+                  <input type='checkbox' checked readOnly disabled />
+                  <CustomIcon platform={destination.account.platform} size={22} />
+                  <span><strong>{destination.displayName}</strong><small>{platformLabels[destination.account.platform]} · {destination.detail}</small></span>
+                </label>
+              ))}
+            </div>
+          </section>
+          <section className='submission-timing-section'>
+            <div className='workboard-section-head'><div><p className='section-kicker'>Timing</p><h2>Set each destination separately</h2></div><span>{compatibleDestinations.length} individual {compatibleDestinations.length === 1 ? 'time' : 'times'}</span></div>
+            <div className='submission-timing-grid'>
+              {compatibleDestinations.map(destination => {
+                const account = destination.account;
+                const timing = destinationTimings[destination.key] ?? defaultSchedulerTiming();
+                return <article className='submission-destination-timing' key={destination.key}>
+                  <div className='submission-timing-account'><CustomIcon platform={account.platform} size={22} /><span><strong>{destination.displayName}</strong><small>{platformLabels[account.platform]} · {destination.detail}</small></span></div>
+                  <label className='submission-timing-field'><span>Timing type</span><select aria-label={`${destination.displayName} timing type`} value={timing.mode} onChange={event => updateDestinationTiming(destination.key, { mode: event.target.value as 'exact' | 'template' })}><option value='exact'>Exact date and time</option><option value='template'>Schedule template</option></select></label>
+                  {timing.mode === 'exact'
+                    ? <label className='submission-timing-field'><span>Date and time</span><input aria-label={`${destination.displayName} date and time`} type='datetime-local' min={minimumSchedule} value={timing.exactAt} onChange={event => updateDestinationTiming(destination.key, { exactAt: event.target.value })} /></label>
+                    : <label className='submission-timing-field'><span>Schedule template</span><select aria-label={`${destination.displayName} schedule template`} value={timing.scheduleId} onChange={event => updateDestinationTiming(destination.key, { scheduleId: event.target.value })}><option value=''>Choose schedule</option>{activeSchedules.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.name} · {scheduleFrequencyLabels[schedule.frequency]} at {schedule.time}</option>)}</select></label>}
+                </article>;
+              })}
+            </div>
+          </section>
+          {error && <div className='workspace-error' role='alert'><CircleAlert size={17} /><span><strong>Cannot schedule this content</strong><small>{error}</small></span></div>}
+          <div className='account-form-actions'><button className='btn-outline' onClick={onClose}>Cancel</button><button className='btn-primary' onClick={() => void submit(pendingPreflightWarnings.length > 0)} disabled={loading || compatibleDestinations.length !== selectedDestinationKeys.length}>{loading ? <Loader2 className='spin' size={17} /> : pendingPreflightWarnings.length ? <ShieldCheck size={17} /> : <CalendarClock size={17} />}{pendingPreflightWarnings.length ? 'Confirm and schedule' : `Schedule ${selectedDestinationKeys.length || ''} ${selectedDestinationKeys.length === 1 ? 'destination' : 'destinations'}`}</button></div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1443,6 +2292,7 @@ function PlatformScheduleModal({
   const scheduleLabel = (upload: PlatformUpload) => {
     if (upload.status === 'failed') return 'Needs review';
     if (upload.status === 'processing') return 'Publishing now';
+    if (isWaitingForCompanion(upload)) return 'Waiting for Companion';
     if (upload.scheduledAt) return formatEventTime(upload.scheduledAt);
     if (upload.scheduleId) return `Template #${upload.scheduleId}`;
     return 'Needs a publish time';
@@ -1640,6 +2490,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
   const [handle, setHandle] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [enabled, setEnabled] = useState(true);
+  const [safetyMode, setSafetyMode] = useState<'standard' | 'protected'>('protected');
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
 
@@ -1649,6 +2501,8 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle(account?.handle ?? '');
     setLoginIdentifier(account?.loginIdentifier ?? '');
     setEnabled(account?.enabled ?? true);
+    setSafetyMode(account?.safetyMode ?? (account ? 'standard' : 'protected'));
+    setTwoFactorEnabled(account?.twoFactorEnabled ?? false);
   };
 
   const closeForm = () => {
@@ -1657,12 +2511,14 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
     setHandle('');
     setLoginIdentifier('');
     setEnabled(true);
+    setSafetyMode('protected');
+    setTwoFactorEnabled(false);
   };
 
-  const openManualLogin = async (account: PlatformAccount) => {
+  const openManualLogin = async (account: PlatformAccount, surface: 'engine' | 'embedded' | 'external' = 'engine') => {
     setLoginAccountId(account.id);
     try {
-      const result = await api.startManualLogin(account.id);
+      const result = await api.startManualLogin(account.id, surface);
       alert(result.message);
       onSuccess();
     } catch (error) {
@@ -1682,6 +2538,9 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
         handle: handle.trim(),
         loginIdentifier: loginIdentifier.trim(),
         enabled,
+        executionEngine: 'companion' as const,
+        safetyMode,
+        twoFactorEnabled,
       };
       const account = editing === 'new'
         ? await api.createAccount(platform, payload)
@@ -1714,12 +2573,15 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
       <div className='modal-head'><span>{platformLabels[platform]} accounts</span><button onClick={onClose}><X size={22} /></button></div>
       <div className='modal-body'>
         {editing ? <div className='account-form'>
-          <div className='account-form-heading'><KeyRound size={34} /><div><strong>{editing === 'new' ? 'Add account' : 'Edit account'}</strong><span>Manual login creates the saved browser session used at schedule time.</span></div></div>
+          <div className='account-form-heading'><KeyRound size={34} /><div><strong>{editing === 'new' ? 'Add account' : 'Edit account'}</strong><span>Secure login creates the saved browser session used at schedule time.</span></div></div>
           <div className='account-form-grid'>
             <div className='field'><label>Account name</label><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder='Brand Instagram' /></div>
             <div className='field'><label>Handle</label><input value={handle} onChange={event => setHandle(event.target.value)} placeholder='@brand' /></div>
-            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; enter login in Chrome' /></div>
+            <div className='field'><label>Login hint (optional)</label><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder='Only a label; credentials stay on the provider sign-in page' /></div>
+            <div className='field'><label>Account pacing</label><select value={safetyMode} onChange={event => setSafetyMode(event.target.value as 'standard' | 'protected')}><option value='protected'>Protected — newer accounts</option><option value='standard'>Standard — established accounts</option></select><small>Protected mode lowers posting pace; it does not block the account.</small></div>
+            <div className='account-engine-field account-form-wide'><label>Publishing location</label><div className='account-engine-picker'><button type='button' className='active' aria-pressed='true' disabled><MonitorCheck size={18} /><span><strong>Companion</strong><small>All uploads and publishing run in visible protected Companion tabs. Chrome, Edge, or Chromium is used only as a login fallback.</small></span></button></div></div>
             <label className='account-enabled-toggle'><input type='checkbox' checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span>Enabled for publishing</span></label>
+            <label className='account-enabled-toggle'><input type='checkbox' checked={twoFactorEnabled} onChange={event => setTwoFactorEnabled(event.target.checked)} /><span>2FA is enabled on this account</span></label>
           </div>
           <div className='account-form-actions'>
             <button className='btn-outline' onClick={closeForm}>Cancel</button>
@@ -1731,12 +2593,15 @@ function AccountManagerModal({ platform, accounts, onClose, onSuccess }: {
           <div className='storage-access-list'>
             {accounts.length === 0 ? <div className='account-list-empty'><UsersRound size={27} /><strong>No publishing accounts yet</strong><span>Add an account, then open its login page and sign in manually.</span><button className='btn-primary' onClick={() => openForm()}>Add first account</button></div> : accounts.map(account => <article className='storage-access-row account-session-row' key={account.id}>
               <span className='publishing-account-icon'><CustomIcon platform={account.platform} size={18} /></span>
-              <span><strong>{account.displayName}</strong><small>{platformLabels[account.platform]} · {account.handle}</small></span>
+              <span><strong>{account.displayName}</strong><small>{account.handle} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'protected pace' : 'standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ''}</small></span>
               <span className={`schedule-status ${account.enabled ? 'active' : 'inactive'}`}>{account.enabled ? 'active' : 'paused'}</span>
-              <span className='storage-access-path'>{account.loginIdentifier || 'Manual Chrome login'}</span>
+              <span className='storage-access-path'>{account.loginIdentifier || publishingEngineLabels[accountPublishingEngine(account)]}</span>
               <button className='btn-outline' onClick={() => openForm(account)} disabled={loading}><Pencil size={14} />Edit</button>
               <button className='btn-outline' onClick={() => openManualLogin(account)} disabled={Boolean(loginAccountId) || !account.enabled}>
                 {loginAccountId === account.id ? <Loader2 className='spin' size={14} /> : <KeyRound size={14} />}Login
+              </button>
+              <button className='btn-outline account-browser-fallback' onClick={() => openManualLogin(account, 'external')} disabled={Boolean(loginAccountId) || !account.enabled} title='Log in with the system browser, then transfer the verified session into Companion' aria-label={`Open ${account.displayName} login in the system browser`}>
+                <ExternalLink size={14} />Browser
               </button>
               <button className='btn-danger ghost-danger' onClick={() => removeAccount(account)} disabled={loading}><Trash2 size={14} /></button>
             </article>)}
@@ -1832,7 +2697,7 @@ function UserManagementModal({ currentUser, users, onClose, onSuccess }: {
           </div>
           <div className='account-form-actions'><button className='btn-outline' onClick={closeForm}>Cancel</button><button className='btn-primary' onClick={saveUser} disabled={loading}>{loading ? <Loader2 className='spin' size={17} /> : <ShieldCheck size={17} />}Save user</button></div>
         </div> : <div className='account-list-view'>
-          <div className='account-list-intro'><div><strong>{users.length} workspace {users.length === 1 ? 'user' : 'users'}</strong><span>Assign upload, schedule, manager, or view-only access.</span></div><button className='btn-primary' onClick={() => openForm()}><UsersRound size={16} />Add user</button></div>
+          <div className='account-list-intro'><div><strong>{users.length} workspace {users.length === 1 ? 'user' : 'users'}</strong><span>Assign a role and password, then give the user both. They sign in through Team member access.</span></div><button className='btn-primary' onClick={() => openForm()}><UsersRound size={16} />Add user</button></div>
           <div className='user-role-list'>{users.map(user => <article className='user-role-row' key={user.id}>
             <span className='workboard-user'>{roleInitials[user.role]}</span>
             <span><strong>{user.fullName}</strong><small>{user.username} - {userRoleLabels[user.role]}</small></span>
@@ -1867,14 +2732,50 @@ function ActivityLogModal({ activityLogs, onClose }: {
   </div>;
 }
 
+function uploadPostFormat(upload: PlatformUpload): PostFormat {
+  if (upload.postFormat) return upload.postFormat;
+  if (upload.mimeType.startsWith('image/')) return 'image';
+  if (upload.mimeType.startsWith('video/')) return 'video';
+  return 'text';
+}
+
+function useSecurePublishingMedia(fileName: string, enabled: boolean) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!enabled || !fileName) { setUrl(''); return; }
+    let active = true;
+    let objectUrl = '';
+    api.media(fileName).then(blob => {
+      if (!active) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    }).catch(() => active && setUrl(''));
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [enabled, fileName]);
+  return url;
+}
+
 function PostMediaPreview({ upload, compact = false, networkPreview = false }: { upload: PlatformUpload; compact?: boolean; networkPreview?: boolean }) {
-  const mediaUrl = assetUrl(upload.url, { compact, controls: !compact && !networkPreview });
-  if (mediaUrl.startsWith('chrome-extension://')) {
-    return <iframe className='extension-media-preview' src={mediaUrl} title={upload.originalName} loading='lazy' />;
+  const postFormat = uploadPostFormat(upload);
+  const browserPreviewAvailable = Number(upload.size || 0) <= 5 * 1024 * 1024;
+  const mediaUrl = useSecurePublishingMedia(upload.fileName, postFormat !== 'text' && browserPreviewAvailable);
+  if (postFormat === 'text') {
+    return compact ? <div className='post-preview-text'><FileText size={22} /><span>Text</span></div> : null;
   }
+  if (!browserPreviewAvailable) return <div className='post-preview-file'>{postFormat === 'video' ? <Video size={28} /> : <ImageIcon size={28} />}<span>{upload.originalName}</span></div>;
+  if (!mediaUrl) return <div className='post-preview-file'><Loader2 className='spin' size={22} /><span>Loading media</span></div>;
   if (upload.mimeType.startsWith('image/')) return <img src={mediaUrl} alt='' />;
   if (upload.mimeType.startsWith('video/')) return <video src={mediaUrl} controls={!compact && !networkPreview} muted playsInline autoPlay={compact} loop={compact} />;
   return <div className='post-preview-file'><FileText size={28} /><span>{upload.originalName}</span></div>;
+}
+
+function SubmissionMediaPreview({ submission }: { submission: ContentSubmission }) {
+  const mediaUrl = useSecurePublishingMedia(submission.fileName, submission.postFormat !== 'text');
+  if (submission.postFormat === 'text') return <FileText size={24} />;
+  if (!mediaUrl) return <Loader2 className='spin' size={22} />;
+  return submission.mimeType.startsWith('image/')
+    ? <img src={mediaUrl} alt='' />
+    : <video src={mediaUrl} muted controls playsInline />;
 }
 
 function PlatformPostPreview({
@@ -1887,7 +2788,8 @@ function PlatformPostPreview({
   caption: string;
 }) {
   const displayTitle = title.trim() || upload.originalName;
-  const isYouTubeCommunity = upload.platform === 'youtube' && upload.mimeType.startsWith('image/');
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeCommunity = upload.platform === 'youtube' && postFormat !== 'video';
   const handle = upload.platform === 'youtube' ? 'AgenticThat' : '@agenticthat';
   const networkLabel = upload.platform === 'x' ? 'Post' : isYouTubeCommunity ? 'Community post preview' : upload.platform === 'youtube' ? 'Video preview' : 'Post preview';
 
@@ -1897,7 +2799,7 @@ function PlatformPostPreview({
       <article className='preview-post-card'>
         <div className='preview-post-account'><CustomIcon platform={upload.platform} size={28} /><div><strong>{handle}</strong><small>{networkLabel}</small></div><span>•••</span></div>
         {(upload.platform !== 'youtube' || isYouTubeCommunity) && <p className='preview-post-caption'>{caption || 'Write a caption to see it here.'}</p>}
-        <div className='preview-post-media'><PostMediaPreview upload={upload} /></div>
+        {postFormat !== 'text' && <div className='preview-post-media'><PostMediaPreview upload={upload} /></div>}
         {upload.platform === 'youtube' && !isYouTubeCommunity && <div className='preview-youtube-copy'><strong>{displayTitle}</strong><span>{caption || 'Write a description to see it here.'}</span></div>}
         {(upload.platform !== 'youtube' || isYouTubeCommunity) && <div className='preview-post-actions'><span>{upload.platform === 'x' ? 'Reply  Repost  Like' : upload.platform === 'linkedin' ? 'Like  Comment  Repost' : 'Like  Comment  Share'}</span><small>Preview only</small></div>}
       </article>
@@ -1918,15 +2820,16 @@ function NetworkPostPreview({
   caption: string;
 }) {
   const displayTitle = title.trim() || upload.originalName;
-  const isYouTubeCommunity = upload.platform === 'youtube' && upload.mimeType.startsWith('image/');
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeCommunity = upload.platform === 'youtube' && postFormat !== 'video';
   const postText = caption.trim() || (upload.platform === 'youtube' ? 'Write a description to see it here.' : 'Write a caption to see it here.');
-  const previewNames: Record<Platform, string> = { instagram: 'AgenticThat', x: 'AgenticThat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: 'AgenticThat' };
-  const previewHandles: Record<Platform, string> = { instagram: '@agenticthat', x: '@agenticthat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: '@agenticthat' };
+  const previewNames: Record<Platform, string> = { instagram: 'AgenticThat', x: 'AgenticThat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: 'AgenticThat', reddit: 'AgenticThat' };
+  const previewHandles: Record<Platform, string> = { instagram: '@agenticthat', x: '@agenticthat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: '@agenticthat', reddit: 'u/agenticthat' };
   const accountName = account?.displayName ?? previewNames[upload.platform];
   const accountHandle = account?.handle ?? previewHandles[upload.platform];
   const avatarLetter = (accountName.trim()[0] || 't').toLowerCase();
   const profile = (name: string, detail: string) => <div className='network-profile'><span className={`network-avatar ${upload.platform === 'youtube' ? 'yt-letter' : ''}`}>{upload.platform === 'youtube' ? avatarLetter : ''}</span><span><strong>{name}</strong><small>{detail}</small></span><MoreHorizontal size={18} /></div>;
-  const media = <div className={`network-media ${upload.mimeType.startsWith('video/') ? 'network-video' : ''}`}><PostMediaPreview upload={upload} networkPreview /></div>;
+  const media = postFormat === 'text' ? null : <div className={`network-media ${postFormat === 'video' ? 'network-video' : ''}`}><PostMediaPreview upload={upload} networkPreview /></div>;
 
   return (
     <section className={`platform-post-preview network-preview preview-${upload.platform}`} aria-label={`${platformLabels[upload.platform]} post preview`}>
@@ -1968,6 +2871,13 @@ function NetworkPostPreview({
         <div className='youtube-copy'><strong>{displayTitle}</strong><span>{accountName} · {accountHandle}</span><p>{postText}</p></div>
       </article>}
 
+      {upload.platform === 'reddit' && <article className='network-post linkedin-post'>
+        {profile(upload.platformOptions?.reddit?.subreddit ? `r/${upload.platformOptions.reddit.subreddit}` : 'r/community', `Posted by ${accountHandle} · now`)}
+        <p className='linkedin-copy'><strong>{title.trim() || 'Post title'}</strong></p>
+        {postFormat === 'text' ? <p className='linkedin-copy'>{postText}</p> : media}
+        <div className='linkedin-actions'><span><ThumbsUp size={16} /> Vote</span><span><MessageCircle size={16} /> Comment</span><span><Share2 size={16} /> Share</span></div>
+      </article>}
+
       {upload.platform === 'youtube' && isYouTubeCommunity && <article className='network-post youtube-community-post'>
         {profile(accountName, `${accountHandle} · Community`)}
         <p className='youtube-community-copy'>{postText}</p>
@@ -1995,8 +2905,12 @@ function EditPostModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [title, setTitle] = useState(upload.title ?? upload.caption);
-  const [caption, setCaption] = useState(upload.caption);
+  const [title, setTitle] = useState(upload.title ?? upload.caption ?? "");
+  const [youtubeAudience, setYoutubeAudience] = useState(upload.platformOptions?.youtube?.audience || '');
+  const [youtubeVisibility, setYoutubeVisibility] = useState(upload.platformOptions?.youtube?.visibility || '');
+  const [redditSubreddit, setRedditSubreddit] = useState(upload.platformOptions?.reddit?.subreddit || '');
+  const [redditTitle, setRedditTitle] = useState(upload.platformOptions?.reddit?.title || '');
+  const [caption, setCaption] = useState(upload.caption ?? "");
   const [accountId, setAccountId] = useState(upload.accountId);
   const [scheduleMode, setScheduleMode] = useState<'none' | 'exact' | 'template'>(upload.scheduleId ? 'template' : upload.scheduledAt ? 'exact' : 'none');
   const [scheduleId, setScheduleId] = useState<number | ''>(upload.scheduleId ?? '');
@@ -2006,13 +2920,17 @@ function EditPostModal({
   const [minimumSchedule] = useState(() => toLocalDateTimeInputValue(new Date(Date.now() + 60_000)));
   const [loading, setLoading] = useState(false);
   const isYouTube = upload.platform === "youtube";
-  const isYouTubeVideo = isYouTube && upload.mimeType.startsWith("video/");
+  const postFormat = uploadPostFormat(upload);
+  const isYouTubeVideo = isYouTube && postFormat === "video";
+  const isReddit = upload.platform === "reddit";
   const canEditContent = permissions.canEditContent;
   const canEditSchedule = permissions.canSchedulePosts;
 
   const save = async () => {
-    if (canEditContent && !caption.trim()) return alert("Caption is required");
+    if (canEditContent && !caption.trim()) return alert(postFormat === "text" ? "Post text is required" : "Caption is required");
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
+    if (canEditContent && isYouTubeVideo && (!youtubeAudience || !youtubeVisibility)) return alert("Choose the YouTube audience and visibility.");
+    if (canEditContent && isReddit && (!redditSubreddit.trim() || !redditTitle.trim())) return alert("Enter the subreddit and Reddit title.");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
     if (canEditSchedule && scheduleMode === 'exact' && !scheduledDate) return alert("Choose a scheduled date and time.");
@@ -2028,16 +2946,31 @@ function EditPostModal({
         payload.title = isYouTubeVideo ? title.trim() : undefined;
         payload.caption = caption.trim();
         payload.accountId = accountId;
+        if (isYouTubeVideo) payload.platformOptions = { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } };
+        if (isReddit) payload.platformOptions = { reddit: { ...upload.platformOptions?.reddit, subreddit: redditSubreddit.trim().replace(/^\/?r\//i, ''), title: redditTitle.trim() } };
       }
       if (canEditSchedule) {
         payload.scheduledAt = scheduleMode === 'exact' ? scheduledDate?.toISOString() ?? null : null;
         payload.scheduleId = scheduleMode === 'template' ? Number(scheduleId) : null;
       }
+      if (canEditSchedule && scheduleMode !== 'none') {
+        const destinations: UnifiedPostDestinationInput[] = [{
+          accountId,
+          ...(scheduleMode === 'exact'
+            ? { scheduledAt: scheduledDate!.toISOString() }
+            : { scheduleId: Number(scheduleId) }),
+        }];
+        await api.assessPublishingSafety(postFormat, destinations);
+
+if (permissions.canRunAutomation) {
+  await api.authorizePublishing();
+}
+      }
       await api.updateUploadDetails(upload.id, payload as any);
       onSuccess();
       onClose();
     } catch (error) {
-      alert("Error: " + (error instanceof Error ? error.message : "Could not save post"));
+      alert((error instanceof PublishingSafetyApiError ? "Safety warning: " : "Error: ") + (error instanceof Error ? error.message : "Could not save post"));
     } finally {
       setLoading(false);
     }
@@ -2055,12 +2988,20 @@ function EditPostModal({
                 <CustomIcon platform={upload.platform} size={28} />
                 <div><strong>{upload.originalName}</strong><span>{platformLabels[upload.platform]}</span></div>
               </div>
-              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}){account.enabled ? '' : ' — paused'}</option>)}</select></div>
+              <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={!canEditContent}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
+              {isReddit && <>
+                <div className='field'><label>Subreddit</label><input type='text' value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' disabled={!canEditContent} /></div>
+                <div className='field'><label>Reddit title</label><input type='text' value={redditTitle} onChange={event => setRedditTitle(event.target.value)} maxLength={300} disabled={!canEditContent} /></div>
+              </>}
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}
+              {isYouTubeVideo && <>
+                <div className='field'><label>YouTube audience</label><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value)} disabled={!canEditContent}><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></div>
+                <div className='field'><label>YouTube visibility</label><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value)} disabled={!canEditContent}><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></div>
+              </>}
               <div className="field">
-                <label>{isYouTube ? "Description" : "Caption"}</label>
+                <label>{postFormat === "text" ? "Post text" : isYouTube ? "Description" : "Caption"}</label>
                 <textarea rows={5} value={caption} onChange={event => setCaption(event.target.value)} disabled={!canEditContent} />
               </div>
               <div className="field">
@@ -2084,7 +3025,7 @@ function EditPostModal({
                 <small className='field-help'>This applies only to this post.</small>
               </div>}
             </div>
-            <NetworkPostPreview upload={upload} account={accounts.find(account => account.id === accountId)} title={title} caption={caption} />
+            <NetworkPostPreview upload={upload} account={accounts.find(account => account.id === accountId)} title={isReddit ? redditTitle : title} caption={caption} />
           </div>
         </div>
         <div className="modal-foot">

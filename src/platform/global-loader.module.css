@@ -1,0 +1,52 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: grid;
+  place-items: center;
+  background: rgba(248, 250, 252, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: fadeIn 160ms ease-out;
+}
+
+.badge {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  z-index: 2147483000;
+  padding: 7px 16px 7px 8px;
+  border: 1px solid rgba(217, 154, 6, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14);
+  transform: translateX(-50%);
+  animation: dropIn 180ms ease-out;
+  pointer-events: none;
+}
+
+.page {
+  display: grid;
+  min-height: 60vh;
+  place-items: center;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dropIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .badge {
+    animation: none;
+  }
+}

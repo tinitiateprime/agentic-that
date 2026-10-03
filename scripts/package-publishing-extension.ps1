@@ -13,6 +13,7 @@ if (-not $stagingRoot.StartsWith($artifactRoot + [System.IO.Path]::DirectorySepa
 
 $manifest = Get-Content (Join-Path $extensionRoot "manifest.json") -Raw | ConvertFrom-Json
 $zipPath = Join-Path $artifactRoot ("AgenticThat-Publishing-Extension-{0}.zip" -f $manifest.version)
+$stableZipPath = Join-Path $artifactRoot "AgenticThat-Publishing-Extension.zip"
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 if (Test-Path -LiteralPath $stagingRoot) { Remove-Item -LiteralPath $stagingRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
@@ -20,8 +21,25 @@ New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 Get-ChildItem -LiteralPath $extensionRoot -Force | Where-Object { $_.Name -notin @("README.md") } | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination $stagingRoot -Recurse -Force
 }
+
+# The source manifest supports unpacked local development. The Web Store build
+# exposes the dashboard bridge only to the production dashboard.
+$stagedManifestPath = Join-Path $stagingRoot "manifest.json"
+$stagedManifest = Get-Content -LiteralPath $stagedManifestPath -Raw | ConvertFrom-Json
+$productionMatch = "https://agenticthat.com/*"
+foreach ($contentScript in $stagedManifest.content_scripts) {
+  $contentScript.matches = @($productionMatch)
+}
+$manifestJson = $stagedManifest | ConvertTo-Json -Depth 20
+[System.IO.File]::WriteAllText(
+  $stagedManifestPath,
+  $manifestJson + [Environment]::NewLine,
+  [System.Text.UTF8Encoding]::new($false)
+)
+
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Copy-Item -LiteralPath $zipPath -Destination $stableZipPath -Force
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force
 
-Write-Host "Chrome Web Store package created: $zipPath" -ForegroundColor Green
+Write-Host "Optional Chrome extension packages created: $zipPath and $stableZipPath" -ForegroundColor Green

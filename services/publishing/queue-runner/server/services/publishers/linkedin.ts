@@ -1,19 +1,194 @@
 import type { Locator, Page } from "playwright-core";
-import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import type { LinkedInManagedPage, PlatformUpload } from "../../../shared/schema.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { activateComposerControl } from "./composer-control.js";
 
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
+export const LINKEDIN_POST_ACCEPTED_TEXT = /Post successful|Your post (?:has been shared|was published)|Post published|View post/i;
+export const LINKEDIN_UPLOAD_ACTIVE_TEXT = /^(?:Uploading(?:\.{3}|…)?(?:\s+(?:video|post))?(?:\.{3}|…)?(?:\s*[·:—-]?\s*\d{1,3}(?:\.\d+)?%)?(?:\s+Keep the page open to finish uploading)?|Keep the page open to finish uploading|Processing(?:\.{3}|…)?(?:\s+(?:video|post))?|Posting(?:\.{3}|…)?|Your (?:video|post) is (?:being processed|processing)|Processing will begin shortly)(?:\s*[·:—-]?\s*\d{1,3}(?:\.\d+)?%)?$/i;
+
+export const LINKEDIN_COMPOSER_EDITOR_SELECTORS = [
+  '[role="dialog"] [contenteditable="true"]',
+  '[role="dialog"] [role="textbox"]',
+  '[role="dialog"] textarea',
+  '.share-creation-state__text-editor [contenteditable="true"]',
+  '.ql-editor[contenteditable="true"]',
+  '.tiptap.ProseMirror[contenteditable="true"]',
+  '.ProseMirror[contenteditable="true"][role="textbox"]',
+] as const;
 
 function getLoginHoldMs() {
   return Number(process.env.LINKEDIN_LOGIN_HOLD_MS ?? 15000);
 }
 
+function getPostHoldMs() {
+  return Number(process.env.LINKEDIN_POST_HOLD_MS ?? 5000);
+}
+
+function getPostConfirmationTimeoutMs() {
+  const configured = Number(process.env.LINKEDIN_POST_CONFIRMATION_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(30_000, Math.min(300_000, configured))
+    : 180_000;
+}
+
+function getUploadCompletionTimeoutMs() {
+  const configured = Number(process.env.LINKEDIN_UPLOAD_COMPLETION_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(300_000, Math.min(14_400_000, configured))
+    : 7_200_000;
+}
+
+export function linkedinMediaSettleMs(configured = Number(process.env.LINKEDIN_MEDIA_SETTLE_MS)) {
+  return Number.isFinite(configured)
+    ? Math.max(30_000, Math.min(300_000, configured))
+    : 90_000;
+}
+
+export function isLinkedInPublishResponse(method: string, url: string, status: number) {
+  return method.toUpperCase() === "POST"
+    && status >= 200
+    && status < 300
+    && /linkedin\.com\/voyager\/api\//i.test(url)
+    && /contentcreation|dashshares|ugcposts|(?:^|[/?])shares(?:[/?#&=]|$)|(?:^|[/?])posts(?:[/?#&=]|$)/i.test(url);
+}
+
+export function linkedInManagedPageFromLink(nameInput: string, hrefInput: string): LinkedInManagedPage | null {
+  try {
+    const url = new URL(hrefInput, LINKEDIN_FEED_URL);
+    if (!/(?:^|\.)linkedin\.com$/i.test(url.hostname)) return null;
+    const match = /^\/company\/([^/]+)(?:\/|$)/i.exec(url.pathname);
+    const id = match?.[1] ? decodeURIComponent(match[1]).trim() : "";
+    const name = nameInput.replace(/\s+/g, " ").trim();
+    if (!id || !name || !/^[A-Za-z0-9._~-]+$/.test(id) || /^Manage$/i.test(name)) return null;
+    const encodedId = encodeURIComponent(id);
+    return {
+      id,
+      name: name.slice(0, 200),
+      pageUrl: `https://www.linkedin.com/company/${encodedId}/admin/`,
+      pagePostsUrl: `https://www.linkedin.com/company/${encodedId}/admin/page-posts/published/`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isLinkedInManagedPagePostsUrl(urlInput: string, expectedId?: string) {
+  try {
+    const url = new URL(urlInput);
+    if (!/(?:^|\.)linkedin\.com$/i.test(url.hostname)) return false;
+    const match = /^\/company\/([^/]+)\/admin\/page-posts(?:\/|$)/i.exec(url.pathname);
+    if (!match) return false;
+    return !expectedId || decodeURIComponent(match[1]).toLowerCase() === expectedId.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+export function shouldOpenLinkedInManagedPageFromManage(targetId: string) {
+  // LinkedIn's admin URLs are stable for numeric organization IDs. Public
+  // slugs can instead redirect to the first Page the member administers, so
+  // those Pages must be selected through the exact link in the Manage card.
+  return !/^\d+$/.test(targetId.trim());
+}
+
+export async function discoverLinkedInManagedPages(page: Page): Promise<LinkedInManagedPage[]> {
+  if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+    await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+  }
+
+  // Authentication is confirmed as soon as LinkedIn reaches /feed, while the
+  // left rail (including Manage) is rendered later. Wait specifically for the
+  // card instead of treating that short loading window as an empty Page list.
+  await page.getByText(/^Manage$/i).first().waitFor({ state: "visible", timeout: 12000 }).catch(() => undefined);
+  const adminLinks = page.locator('a[href*="/company/"][href*="/admin"]');
+  const manageHeading = await firstVisible([
+    page.getByText(/^Manage$/i),
+    page.locator("h2, h3, [role='heading']").filter({ hasText: /^Manage$/i }),
+  ]);
+  if (manageHeading) {
+    await manageHeading.evaluate((element: HTMLElement) => element.scrollIntoView({ block: "center" })).catch(() => undefined);
+    const toggle = manageHeading.locator("xpath=ancestor-or-self::*[self::button or @role='button'][1]");
+    const toggleCount = await toggle.count().catch(() => 0);
+    if (toggleCount) {
+      const expanded = await toggle.first().getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") await clickIfVisible(toggle.first(), 2000);
+    } else if (await adminLinks.count().catch(() => 0) === 0) {
+      // LinkedIn sometimes binds the collapse action to a non-button card
+      // heading. Clicking it is safe when no managed Page links are present.
+      await clickIfVisible(manageHeading, 2000);
+    }
+    await page.waitForTimeout(750);
+
+    const manageRegion = manageHeading.locator("xpath=ancestor::*[.//a[contains(@href, '/company/')]][1]");
+    if (await manageRegion.count().catch(() => 0)) {
+      // Some accounts initially render only a subset of their administered
+      // Pages. Expand the in-card list without touching unrelated feed panels.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const showMore = await firstVisible([
+          manageRegion.first().getByRole("button", { name: /^(?:Show more|See all)$/i }),
+        ]);
+        if (!showMore) break;
+        const before = await adminLinks.count().catch(() => 0);
+        if (!await clickIfVisible(showMore, 2000)) break;
+        await page.waitForTimeout(400);
+        const after = await adminLinks.count().catch(() => 0);
+        if (after <= before) break;
+      }
+    }
+    await adminLinks.first().waitFor({ state: "attached", timeout: 3000 }).catch(() => undefined);
+  }
+
+  const adminPageLinks = await adminLinks.evaluateAll((anchors) => anchors.map(anchor => {
+    const element = anchor as HTMLAnchorElement;
+    const labelled = element.getAttribute("aria-label") || element.getAttribute("title") || "";
+    const lines = (element.innerText || element.textContent || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const imageAlt = element.querySelector("img")?.getAttribute("alt") || "";
+    return { href: element.href, name: labelled || lines[0] || imageAlt };
+  })).catch(() => [] as Array<{ href: string; name: string }>);
+
+  // Some LinkedIn layouts use the public company URL in the Manage card and
+  // switch to admin view through client-side state. Scope this fallback to the
+  // nearest Manage card so company mentions in the feed are never collected.
+  const managedCardLinks = manageHeading
+    ? await manageHeading.evaluate((heading) => {
+      let region: Element | null = heading;
+      for (let depth = 0; region && depth < 10; depth += 1, region = region.parentElement) {
+        const anchors = [...region.querySelectorAll<HTMLAnchorElement>('a[href*="/company/"]')];
+        if (!anchors.length) continue;
+        return anchors.map(element => {
+          const labelled = element.getAttribute("aria-label") || element.getAttribute("title") || "";
+          const lines = (element.innerText || element.textContent || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+          const imageAlt = element.querySelector("img")?.getAttribute("alt") || "";
+          return { href: element.href, name: labelled || lines[0] || imageAlt };
+        });
+      }
+      return [] as Array<{ href: string; name: string }>;
+    }).catch(() => [] as Array<{ href: string; name: string }>)
+    : [];
+
+  const pages = [...adminPageLinks, ...managedCardLinks]
+    .map(link => linkedInManagedPageFromLink(link.name, link.href))
+    .filter((candidate): candidate is LinkedInManagedPage => Boolean(candidate));
+  return [...new Map(pages.map(candidate => [candidate.id, candidate])).values()]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, 100);
+}
+
 async function clickIfVisible(locator: Locator, timeout = 1500) {
   try {
-    await locator.first().click({ timeout });
+    const candidate = locator.first();
+    if (!await candidate.isVisible()) return false;
+    await candidate.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus();
+      element.click();
+    }).catch(() => candidate.click({ force: true, timeout }));
     return true;
   } catch {
     return false;
@@ -37,6 +212,60 @@ async function firstVisible(locators: Locator[]) {
     }
   }
 
+  return null;
+}
+
+type ViewportTarget = {
+  locator: Locator;
+  point: { x: number; y: number };
+};
+
+export function visibleIntersectionPoint(
+  box: { x: number; y: number; width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  if (box.width <= 0 || box.height <= 0) return null;
+  const left = Math.max(0, box.x);
+  const top = Math.max(0, box.y);
+  const right = Math.min(viewport.width, box.x + box.width);
+  const bottom = Math.min(viewport.height, box.y + box.height);
+  if (right - left < 4 || bottom - top < 4) return null;
+  return { x: left + (right - left) / 2, y: top + (bottom - top) / 2 };
+}
+
+async function firstInViewport(page: Page, locators: Locator[]): Promise<ViewportTarget | null> {
+  const viewport = page.viewportSize() ?? await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+
+  for (const locator of locators) {
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < Math.min(count, 12); index += 1) {
+      const candidate = locator.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      const box = await candidate.boundingBox().catch(() => null);
+      const point = box ? visibleIntersectionPoint(box, viewport) : null;
+      if (point) return { locator: candidate, point };
+    }
+  }
+  return null;
+}
+
+function linkedInComposerEditorLocators(page: Page) {
+  return LINKEDIN_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
+}
+
+async function waitForLinkedInComposer(page: Page, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    // Publishing browser views can be positioned outside the desktop while
+    // still having a valid rendered editor. LinkedIn's current TipTap editor
+    // may also be page-level instead of nested below role=dialog.
+    const editor = await firstVisible(linkedInComposerEditorLocators(page));
+    if (editor) return editor;
+    await page.waitForTimeout(250);
+  }
   return null;
 }
 
@@ -82,99 +311,253 @@ async function getLoginError(page: Page) {
   return text || null;
 }
 
-async function clickStartPost(page: Page) {
+export async function clickStartPost(page: Page) {
   console.log("Opening LinkedIn post composer...");
 
-  const startPostButton = await firstVisible([
+  // LinkedIn's current UI navigates to /sharing/compose and renders a TipTap
+  // editor without placing it below the legacy role=dialog container.
+  if (/linkedin\.com\/sharing\/compose/i.test(page.url()) && await waitForLinkedInComposer(page, 1000)) {
+    console.log("LinkedIn post composer already open.");
+    return;
+  }
+
+  const controls = () => [
     page.getByRole("button", { name: /Start a post/i }),
+    page.locator('button[class*="share-box-feed-entry__trigger"]'),
+    page.locator('[data-view-name*="start-post" i]'),
+    page.locator('[data-control-name*="sharebox" i]'),
     page.locator("button").filter({ hasText: /Start a post/i }),
-    page.getByText(/Start a post/i),
+    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
+    page.locator('[aria-label*="Start a post" i]'),
+  ];
+
+  const openingDeadline = Date.now() + 45000;
+  for (let attempt = 1; attempt <= 3 && Date.now() < openingDeadline; attempt += 1) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
+    await page.waitForTimeout(attempt === 1 ? 750 : 1500);
+
+    const onScreen = await firstInViewport(page, controls());
+    if (onScreen) {
+      await activateComposerControl(onScreen.locator).catch(() => undefined);
+      if (await waitForLinkedInComposer(page, 5000)) {
+        await page.waitForTimeout(750);
+        console.log("LinkedIn post composer opened.");
+        return;
+      }
+    }
+
+    // LinkedIn can retain a functional share control in a rendered duplicate
+    // that sits outside the browser viewport. A DOM click avoids Playwright's
+    // viewport actionability failure while still targeting the exact control.
+    for (const locator of controls()) {
+      if (Date.now() >= openingDeadline) break;
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 12); index += 1) {
+        if (Date.now() >= openingDeadline) break;
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await activateComposerControl(candidate).catch(() => undefined);
+        if (await waitForLinkedInComposer(page, 3000)) {
+          await page.waitForTimeout(750);
+          console.log("LinkedIn post composer opened.");
+          return;
+        }
+      }
+    }
+  }
+
+  throw new Error("LinkedIn Start a post control did not open the post editor after three verified attempts.");
+}
+
+async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedPage) {
+  let trustedCanonicalNavigation = false;
+  const onExpectedPage = () => isLinkedInManagedPagePostsUrl(
+    page.url(),
+    trustedCanonicalNavigation ? undefined : target.id,
+  );
+
+  const waitForPagePostsControl = async (timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const control = await firstVisible([
+        page.getByRole("link", { name: /^Page posts$/i }),
+        page.getByRole("button", { name: /^Page posts$/i }),
+        page.locator('a[href*="/admin/page-posts"]'),
+      ]);
+      if (control) return control;
+      await page.waitForTimeout(250);
+    }
+    return null;
+  };
+
+  const openFromManageCard = async () => {
+    if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+      await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+      await page.waitForLoadState("domcontentloaded");
+    }
+    const manageHeading = page.getByText(/^Manage$/i).first();
+    await manageHeading.waitFor({ state: "visible", timeout: 15000 }).catch(() => undefined);
+    if (!await manageHeading.isVisible().catch(() => false)) return false;
+    await manageHeading.evaluate((element: HTMLElement) => element.scrollIntoView({ block: "center" })).catch(() => undefined);
+
+    const toggle = manageHeading.locator("xpath=ancestor-or-self::*[self::button or @role='button'][1]");
+    if (await toggle.count().catch(() => 0)) {
+      const expanded = await toggle.first().getAttribute("aria-expanded").catch(() => null);
+      if (expanded === "false") {
+        await clickIfVisible(toggle.first(), 2000);
+        await page.waitForTimeout(500);
+      }
+    }
+
+    const manageRegion = manageHeading.locator("xpath=ancestor::*[.//a[contains(@href, '/company/')]][1]");
+    if (!await manageRegion.count().catch(() => 0)) return false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const showMore = await firstVisible([
+        manageRegion.first().getByRole("button", { name: /^(?:Show more|See all)$/i }),
+      ]);
+      if (!showMore) break;
+      const before = await manageRegion.locator('a[href*="/company/"]').count().catch(() => 0);
+      if (!await clickIfVisible(showMore, 2000)) break;
+      await page.waitForTimeout(400);
+      const after = await manageRegion.locator('a[href*="/company/"]').count().catch(() => 0);
+      if (after <= before) break;
+    }
+    const links = manageRegion.locator('a[href*="/company/"]');
+    const linkCount = await links.count().catch(() => 0);
+    for (let index = 0; index < Math.min(linkCount, 100); index += 1) {
+      const link = links.nth(index);
+      const candidate = await link.evaluate((element: HTMLAnchorElement) => ({
+        href: element.href,
+        name: element.getAttribute("aria-label") || element.getAttribute("title")
+          || (element.innerText || element.textContent || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean)[0]
+          || element.querySelector("img")?.getAttribute("alt") || "",
+      })).catch(() => null);
+      const managedPage = candidate ? linkedInManagedPageFromLink(candidate.name, candidate.href) : null;
+      if (!managedPage || (managedPage.id !== target.id && managedPage.name !== target.name)) continue;
+      const previousUrl = page.url();
+      const clicked = await link.scrollIntoViewIfNeeded({ timeout: 5000 })
+        .then(() => link.click({ force: true, timeout: 10000 }))
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) {
+        await page.waitForTimeout(750);
+      }
+      if (page.url() === previousUrl) {
+        // Some LinkedIn Manage cards suppress HTMLElement.click() and even a
+        // trusted pointer click on their first Page. The href came from the
+        // exact, validated Manage item above, so opening it directly preserves
+        // destination identity without trying another administered Page.
+        console.log(`LinkedIn kept the selected Manage link on ${previousUrl}; opening its verified destination directly.`);
+        await page.goto(candidate!.href, { timeout: 60000 });
+      }
+      trustedCanonicalNavigation = true;
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await page.waitForTimeout(1500);
+      console.log(`LinkedIn opened ${target.name} from Manage at ${page.url()}.`);
+      return true;
+    }
+    return false;
+  };
+
+  console.log(`Opening managed LinkedIn Page posts for ${target.name}...`);
+  const openPagePostsControl = async (pagePostsControl: Locator) => {
+    const href = await pagePostsControl.getAttribute("href").catch(() => null);
+    if (href) {
+      await page.goto(new URL(href, page.url()).href, { timeout: 60000 });
+    } else {
+      await pagePostsControl.click({ timeout: 10000 });
+    }
+    trustedCanonicalNavigation = true;
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+    await page.waitForTimeout(1500);
+  };
+
+  if (shouldOpenLinkedInManagedPageFromManage(target.id)) {
+    if (!await openFromManageCard()) {
+      throw new Error(`LinkedIn could not find ${target.name} in the Manage card. Nothing was published.`);
+    }
+    const pagePostsControl = await waitForPagePostsControl();
+    if (!pagePostsControl) {
+      throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
+    }
+    await openPagePostsControl(pagePostsControl);
+  } else {
+    await page.goto(target.pagePostsUrl, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(1500);
+    await dismissCookiePrompt(page);
+    // LinkedIn may preserve or canonicalize a numeric organization ID after
+    // opening the exact saved Page-posts destination.
+    if (isLinkedInManagedPagePostsUrl(page.url(), target.id)) trustedCanonicalNavigation = true;
+  }
+
+  if (!onExpectedPage()) {
+    await page.goto(target.pageUrl, { timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(1500);
+    let pagePostsControl = await waitForPagePostsControl(5000);
+    if (!pagePostsControl && await openFromManageCard()) {
+      pagePostsControl = await waitForPagePostsControl();
+    }
+    if (!pagePostsControl) {
+      throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
+    }
+    await openPagePostsControl(pagePostsControl);
+  }
+
+  if (!onExpectedPage()) {
+    throw new Error(`LinkedIn did not open the selected managed Page ${target.name}. Nothing was published.`);
+  }
+  const pagePostsReady = await firstVisible([
+    page.getByRole("heading", { name: /^Page posts$/i }),
+    page.getByText(/^Page posts$/i),
+    page.getByRole("button", { name: /Start a post/i }),
   ]);
-
-  if (!startPostButton) {
-    throw new Error("Could not find LinkedIn Start a post button.");
+  if (!pagePostsReady) {
+    throw new Error(`LinkedIn Page posts did not finish loading for ${target.name}. Nothing was published.`);
   }
-
-  await startPostButton.scrollIntoViewIfNeeded();
-  await startPostButton.click({ force: true, timeout: 10000 });
-
-  try {
-    await page.getByText(/What do you want to talk about/i).first().waitFor({ state: "visible", timeout: 8000 });
-  } catch {
-    const startPostBox = await startPostButton.boundingBox().catch(() => null);
-    if (!startPostBox) throw new Error("LinkedIn post composer did not open.");
-
-    await page.mouse.click(startPostBox.x + startPostBox.width / 2, startPostBox.y + startPostBox.height / 2);
-    await page.getByText(/What do you want to talk about/i).first().waitFor({ state: "visible", timeout: 8000 });
-  }
-
-  await page.waitForTimeout(1000);
+  console.log(`Managed LinkedIn Page ${target.name} is ready.`);
 }
 
 async function typeLinkedInPostText(page: Page, text: string) {
   console.log("Entering LinkedIn post text...");
-  const textPreview = text.replace(/\s+/g, " ").trim().slice(0, 30);
+  const expectedText = text.replace(/\s+/g, " ").trim();
 
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const placeholder = page.getByText(/What do you want to talk about/i).first();
-    const editor = await firstVisible([
-      page.locator('[role="dialog"] [contenteditable="true"][data-placeholder*="What" i]'),
-      page.locator('[role="dialog"] .ql-editor[contenteditable="true"]'),
-      page.locator('[role="dialog"] [contenteditable="true"]'),
-      page.locator('[role="dialog"] [role="textbox"]'),
-      page.locator(".share-creation-state__text-editor [contenteditable='true']"),
-      page.locator(".ql-editor[contenteditable='true']"),
-    ]);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const editor = await waitForLinkedInComposer(page, 15000);
+    if (!editor) throw new Error("Could not find LinkedIn's empty post text area.");
 
-    const placeholderBox = await placeholder.boundingBox().catch(() => null);
+    console.log("Clicking LinkedIn empty post text area...");
+    await editor.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.click();
+      element.focus();
+    });
+    await page.waitForTimeout(300);
 
-    if (placeholderBox) {
-      console.log("Clicking LinkedIn empty post text area...");
-      await page.mouse.click(placeholderBox.x + 24, placeholderBox.y + Math.max(12, placeholderBox.height / 2));
-    } else if (editor) {
-      console.log("Clicking LinkedIn post text editor...");
-      await editor.scrollIntoViewIfNeeded();
-      const editorBox = await editor.boundingBox().catch(() => null);
-      if (editorBox) {
-        await page.mouse.click(editorBox.x + 24, editorBox.y + Math.min(40, Math.max(16, editorBox.height / 2)));
-      } else {
-        await editor.click({ force: true, timeout: 10000 });
-      }
-    } else {
-      const dialog = page.locator('[role="dialog"]').last();
-      const dialogBox = await dialog.boundingBox().catch(() => null);
-      if (!dialogBox) throw new Error("Could not find LinkedIn post text box.");
-
-      console.log("Clicking LinkedIn post text area by dialog position...");
-      await page.mouse.click(dialogBox.x + 40, dialogBox.y + 150);
+    const focused = await editor.evaluate(element => (
+      document.activeElement === element || Boolean(element.contains(document.activeElement))
+    )).catch(() => false);
+    if (!focused) {
+      await editor.focus();
+      await page.waitForTimeout(200);
     }
 
-    await page.waitForTimeout(500);
+    // Set the requested caption exactly so a retained LinkedIn draft cannot
+    // duplicate text during a safe retry.
+    await editor.fill(text, { timeout: 10000 }).catch(async () => {
+      await editor.focus();
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.insertText(text);
+    });
+    await page.waitForTimeout(750);
 
-    const focusedEditor = await firstVisible([
-      page.locator('[role="dialog"] [contenteditable="true"][data-placeholder*="What" i]'),
-      page.locator('[role="dialog"] .ql-editor[contenteditable="true"]'),
-      page.locator('[role="dialog"] [contenteditable="true"]'),
-      page.locator('[role="dialog"] [role="textbox"]'),
-    ]);
-
-    if (focusedEditor) {
-      await focusedEditor.focus();
-      await focusedEditor.pressSequentially(text, { delay: 25 });
-    } else {
-      await page.keyboard.type(text, { delay: 25 });
-    }
-
-    await page.waitForTimeout(1000);
-
-    const textAppeared = await page
-      .locator('[role="dialog"]')
-      .getByText(textPreview, { exact: false })
-      .first()
-      .isVisible()
-      .catch(() => false);
-
-    if (!textPreview || textAppeared) {
+    const enteredText = await editor.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
+      "value" in element ? element.value : element.innerText || element.textContent || ""
+    )).catch(() => "");
+    const normalizedEnteredText = enteredText.replace(/\s+/g, " ").trim();
+    if (normalizedEnteredText === expectedText || normalizedEnteredText.includes(expectedText)) {
       console.log("LinkedIn post text entered.");
       return;
     }
@@ -185,23 +568,27 @@ async function typeLinkedInPostText(page: Page, text: string) {
 
 async function attachLinkedInMedia(page: Page, filePath: string) {
   console.log("Attaching LinkedIn media...");
-  const dialog = page.locator('[role="dialog"]').last();
-  await dialog.waitFor({ state: "visible", timeout: 15000 });
+  const editor = await waitForLinkedInComposer(page, 15000);
+  if (!editor) throw new Error("LinkedIn post editor closed before media could be attached.");
+  const editorDialog = page.locator('[role="dialog"]').filter({ has: editor });
+  const dialog = await firstVisible([editorDialog]);
+  const root = dialog ?? page;
 
-  const existingFileInputs = dialog.locator('input[type="file"]');
+  const existingFileInputs = root.locator('input[type="file"]');
   if ((await existingFileInputs.count()) > 0) {
-    await existingFileInputs.last().setInputFiles(filePath);
+    await setLocalInputFile(page, existingFileInputs.last(), filePath);
   } else {
     const mediaButton = await firstVisible([
-      dialog.getByRole("button", { name: /Add media/i }),
-      dialog.getByRole("button", { name: /Media/i }),
-      dialog.getByRole("button", { name: /Photo/i }),
-      dialog.getByRole("button", { name: /Video/i }),
-      dialog.locator('button[aria-label*="Add media" i]'),
-      dialog.locator('button[aria-label*="Media" i]'),
+      root.getByRole("button", { name: /Add media/i }),
+      root.getByRole("button", { name: /Media/i }),
+      root.getByRole("button", { name: /Photo/i }),
+      root.getByRole("button", { name: /Video/i }),
+      root.locator('button[aria-label*="Add media" i]'),
+      root.locator('button[aria-label*="Media" i]'),
       page.locator('[role="dialog"] button[aria-label*="Add media" i]'),
       page.locator('[role="dialog"] button[aria-label*="Photo" i]'),
       page.locator('[role="dialog"] button[aria-label*="Video" i]'),
+      page.getByRole("button", { name: /Add media|Photo|Video/i }),
     ]);
 
     if (!mediaButton) {
@@ -213,11 +600,15 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
-      await fileChooser.setFiles(filePath);
+      await setLocalFileChooserFile(fileChooser, filePath);
     } else {
       await page.keyboard.press("Escape").catch(() => undefined);
       await page.waitForTimeout(500);
-      await dialog.locator('input[type="file"]').last().setInputFiles(filePath);
+      const fallbackInputs = page.locator('input[type="file"]');
+      if (!await fallbackInputs.count()) {
+        throw new Error("LinkedIn media picker opened without exposing a file input.");
+      }
+      await setLocalInputFile(page, fallbackInputs.last(), filePath);
     }
   }
 
@@ -238,20 +629,32 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
   console.log("LinkedIn media attached.");
 }
 
-async function clickPostWhenReady(page: Page) {
-  const postButton = page.getByRole("button", { name: /^Post$/i }).last();
-  await postButton.waitFor({ state: "visible", timeout: 60000 });
+type LinkedInSubmissionEvidence = {
+  acceptedResponse: Promise<boolean>;
+};
 
+async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void): Promise<LinkedInSubmissionEvidence> {
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
-    try {
-      if (await postButton.isEnabled()) {
-        console.log("Clicking LinkedIn Post button...");
-        await postButton.click({ force: true, timeout: 10000 });
-        return;
-      }
-    } catch {
-      // Try again until LinkedIn enables the button.
+    const postButton = await firstVisible([
+      page.locator('[role="dialog"] button').filter({ hasText: /^Post$/i }),
+      page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Post$/i }),
+      page.getByRole("button", { name: /^Post$/i }),
+    ]);
+    if (postButton && await postButton.isEnabled().catch(() => false)) {
+      const acceptedResponse = page.waitForResponse(response => isLinkedInPublishResponse(
+        response.request().method(),
+        response.url(),
+        response.status(),
+      ), { timeout: getPostConfirmationTimeoutMs() }).then(() => true).catch(() => false);
+      console.log("Clicking LinkedIn Post button...");
+      await postButton.evaluate((element: HTMLElement) => {
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.focus();
+        element.click();
+      }).catch(() => postButton.click({ force: true, timeout: 10000 }));
+      await onSubmitted?.();
+      return { acceptedResponse };
     }
 
     await page.waitForTimeout(1000);
@@ -260,27 +663,97 @@ async function clickPostWhenReady(page: Page) {
   throw new Error("LinkedIn Post button did not become enabled.");
 }
 
-async function waitForPostComplete(page: Page) {
-  console.log("Waiting for LinkedIn post to finish...");
+async function linkedInPublishError(page: Page) {
+  const error = await firstVisible([
+    page.locator('[role="alert"]').filter({ hasText: /couldn(?:'|\u2019)t post|post failed|something went wrong|try again/i }),
+    page.getByText(/We couldn(?:'|\u2019)t publish|We couldn(?:'|\u2019)t post|Your post failed|Post failed/i),
+  ]);
+  return (await error?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || null;
+}
 
-  const dialog = page.locator('[role="dialog"]').filter({ hasText: /What do you want to talk about|Post/i }).first();
+async function linkedInBackgroundWork(page: Page) {
+  return firstVisible([
+    page.getByText(LINKEDIN_UPLOAD_ACTIVE_TEXT),
+    page.locator('[role="status"], [role="alert"]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+    page.locator('[aria-live="polite"], [aria-live="assertive"]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+    page.locator('.artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_UPLOAD_ACTIVE_TEXT }),
+  ]);
+}
 
-  try {
-    await dialog.waitFor({ state: "hidden", timeout: 90000 });
-  } catch {
-    const successToast = await firstVisible([
-      page.getByText(/Post successful/i),
-      page.getByText(/Your post has been shared/i),
-      page.getByText(/View post/i),
-    ]);
+async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000, minimumSettleMs = 0) {
+  const startedAt = Date.now();
+  const deadline = Date.now() + getUploadCompletionTimeoutMs();
+  let quietSince: number | null = Date.now();
+  let backgroundWorkSeen = false;
+  while (Date.now() < deadline) {
+    const error = await linkedInPublishError(page);
+    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
 
-    if (!successToast) {
-      throw new Error("LinkedIn post did not finish within 90 seconds.");
+    const backgroundWork = await linkedInBackgroundWork(page);
+    if (backgroundWork) {
+      if (!backgroundWorkSeen) {
+        console.log("LinkedIn is still uploading or processing the post. Keeping the browser open until it finishes...");
+      }
+      backgroundWorkSeen = true;
+      quietSince = null;
+    } else {
+      quietSince ??= Date.now();
+      const requiredQuietMs = backgroundWorkSeen ? Math.max(15_000, initialQuietMs) : initialQuietMs;
+      if (Date.now() - quietSince >= requiredQuietMs && Date.now() - startedAt >= minimumSettleMs) return;
     }
+
+    await page.waitForTimeout(500);
   }
 
-  await page.waitForTimeout(2000);
-  console.log("LinkedIn post published.");
+  throw new Error(`LinkedIn upload or processing did not finish within ${Math.round(getUploadCompletionTimeoutMs() / 60_000)} minutes.`);
+}
+
+async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvidence, mediaUploadExpected = false) {
+  console.log("Waiting for LinkedIn post to finish...");
+  const deadline = Date.now() + getPostConfirmationTimeoutMs();
+  let networkAccepted = false;
+  let composerHiddenSince: number | null = null;
+  void evidence.acceptedResponse.then(accepted => { networkAccepted = accepted; });
+
+  while (Date.now() < deadline) {
+    const error = await linkedInPublishError(page);
+    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
+
+    const success = await firstVisible([
+      page.locator('[role="status"], [role="alert"]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+      page.locator('[aria-live="polite"], [aria-live="assertive"]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+      page.locator('.artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
+    ]);
+    if (success || networkAccepted) {
+      const minimumSettleMs = mediaUploadExpected ? linkedinMediaSettleMs() : 0;
+      if (minimumSettleMs > 0) {
+        console.log(`LinkedIn accepted the post. Keeping the browser open for a ${minimumSettleMs / 1000}-second media-upload safety window.`);
+      }
+      await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
+      console.log("LinkedIn confirmed the post was accepted.");
+      return;
+    }
+
+    const composerVisible = Boolean(await firstVisible(linkedInComposerEditorLocators(page)));
+    if (composerVisible) {
+      composerHiddenSince = null;
+    } else {
+      composerHiddenSince ??= Date.now();
+      if (Date.now() - composerHiddenSince >= 12_000) {
+        const minimumSettleMs = mediaUploadExpected ? linkedinMediaSettleMs() : 0;
+        if (minimumSettleMs > 0) {
+          console.log(`LinkedIn closed the composer. Keeping the browser open for a ${minimumSettleMs / 1000}-second media-upload safety window.`);
+        }
+        await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
+        console.log("LinkedIn finished uploading and kept the composer closed after accepting the post.");
+        return;
+      }
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(`LinkedIn did not confirm the post within ${Math.round(getPostConfirmationTimeoutMs() / 1000)} seconds.`);
 }
 
 async function loginFormIsVisible(page: Page) {
@@ -318,7 +791,7 @@ async function isManualVerificationVisible(page: Page, url: string) {
   return Boolean(signal);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "LinkedIn",
@@ -331,6 +804,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     beforeCheck: () => dismissCookiePrompt(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -347,35 +821,44 @@ export async function loginToLinkedIn(page: Page, _upload?: PlatformUpload, acco
   if (await isLoggedIn(page)) {
     console.log("LinkedIn session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("LinkedIn saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "LinkedIn",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: () => dismissCookiePrompt(page),
+    });
   } else {
-    console.log("Complete the full LinkedIn login manually in Chrome; bot will save the session after the account opens.");
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    console.log("Complete the full LinkedIn login manually in the visible browser; Companion will save the session after the account opens.");
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
-  await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
-  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+  if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
+    await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+  }
+  await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
 
   console.log("LinkedIn ready.");
   return { success: true };
 }
 
 export async function postToLinkedIn(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
-  const filePath = publishingUploadFilePath(upload.fileName);
-  if (!fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
+  if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`LinkedIn upload file not found: ${filePath}`);
 
   if (!upload.caption?.trim()) {
     throw new Error("LinkedIn post text is required.");
   }
 
   await loginToLinkedIn(page, upload, accountLogin);
+  if (upload.linkedinTarget) await openLinkedInManagedPagePosts(page, upload.linkedinTarget);
   await clickStartPost(page);
-  await attachLinkedInMedia(page, filePath);
+  if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
-  await clickPostWhenReady(page);
-  await waitForPostComplete(page);
+  const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
+  await waitForPostComplete(page, submissionEvidence, !isTextOnly);
 
-  const holdTime = getLoginHoldMs();
+  const holdTime = getPostHoldMs();
   if (holdTime > 0) {
     console.log(`LinkedIn post complete. Holding for ${holdTime / 1000} seconds...`);
     await page.waitForTimeout(holdTime);

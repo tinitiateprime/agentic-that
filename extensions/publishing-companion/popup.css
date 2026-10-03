@@ -10,3 +10,13 @@ h1 { margin: 0 0 18px; font-size: 20px; }
 #detail { min-height: 40px; color: #5c687b; }
 button { width: 100%; padding: 10px 12px; border: 0; border-radius: 8px; color: white; background: #2466d1; font-weight: 750; cursor: pointer; }
 button:disabled { cursor: wait; opacity: .65; }
+.trust-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid #d7deea; }
+.trust-panel h2 { margin: 0 0 5px; font-size: 15px; }
+.trust-panel p { margin: 0 0 9px; color: #5c687b; font-size: 12px; }
+.trust-panel code { font-size: 11px; }
+#trust-form { display: grid; gap: 8px; }
+input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #cbd4e2; border-radius: 8px; font: inherit; }
+#trust-message { min-height: 18px; margin-top: 8px; }
+.trusted-origin { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.trusted-origin span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.trusted-origin button { width: auto; padding: 5px 8px; color: #9b2c2c; background: #fde8e8; font-size: 11px; }

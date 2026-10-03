@@ -26,7 +26,10 @@ services/**/account_config/sessions/
 services/**/uploads/*
 !services/**/uploads/.gitkeep
 public/console/
+public/telegram-console-assets/
 /data/
+/.data/
 /artifacts/
 apps/publishing-companion-desktop/out/
 apps/publishing-companion-desktop/runtime/
+apps/publishing-companion-desktop/assets/app-icon.icns

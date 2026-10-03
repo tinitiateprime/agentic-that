@@ -1,12 +1,18 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import path from "path";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
+import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
+import type { YouTubeOptions } from "../../../shared/schema.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import {
+  prepareYouTubeCommunityMedia,
+  youtubeCommunityImagePreviewTimeout,
+} from "./youtube-community-media.js";
 
-const YES_MADE_FOR_KIDS_TEXT = /Yes.*made for kids/i;
-const PUBLIC_VISIBILITY_TEXT = /Public/i;
 const YOUTUBE_HOME_URL = "https://www.youtube.com/";
 const YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload";
 
@@ -169,74 +175,6 @@ async function scrollUploadDialogToTop(page: Page) {
   await page.waitForTimeout(700);
 }
 
-async function clickPublicVisibilityByMouse(page: Page) {
-  const publicLabel = page.locator("ytcp-uploads-dialog").getByText(/^Public$/i).first();
-
-  try {
-    await publicLabel.scrollIntoViewIfNeeded({ timeout: 5000 });
-    await publicLabel.click({ force: true, timeout: 3000 });
-    await page.waitForTimeout(1000);
-    return true;
-  } catch {
-    // Try a direct click on the radio circle next to the label.
-  }
-
-  const labelBox = await publicLabel.boundingBox();
-  if (!labelBox) return false;
-
-  await page.mouse.click(Math.max(labelBox.x - 22, 1), labelBox.y + labelBox.height / 2);
-  await page.waitForTimeout(1000);
-  return true;
-}
-
-async function publicVisibilityIsSelected(page: Page) {
-  const selectedPublic = page.locator(
-    'ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"][aria-checked="true"], ' +
-      'ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"][checked], ' +
-      'ytcp-uploads-dialog [role="radio"][aria-label*="Public"][aria-checked="true"]',
-  );
-
-  return (await selectedPublic.count()) > 0;
-}
-
-async function waitForPublishButton(page: Page, timeout = 7000) {
-  try {
-    await page.locator("ytcp-uploads-dialog ytcp-button").filter({ hasText: /^Publish$/i }).last().waitFor({
-      state: "visible",
-      timeout,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function selectMadeForKids(page: Page) {
-  console.log("Scrolling to the Made for Kids audience radio...");
-
-  const radioLocators = [
-    page.getByRole("radio", { name: YES_MADE_FOR_KIDS_TEXT }).first(),
-    page.locator("tp-yt-paper-radio-button").filter({ hasText: YES_MADE_FOR_KIDS_TEXT }).first(),
-    page.getByText(YES_MADE_FOR_KIDS_TEXT).first(),
-  ];
-
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    for (const radio of radioLocators) {
-      try {
-        await radio.scrollIntoViewIfNeeded({ timeout: 2500 });
-        await radio.click({ force: true, timeout: 2500 });
-        console.log("Selected 'Yes, it's made for kids'.");
-        return;
-      } catch {
-        // Try the next selector/scroll position.
-      }
-    }
-
-    await scrollUploadDialogDown(page);
-  }
-
-  throw new Error("Could not find or click the 'Yes, it's made for kids' radio button.");
-}
 
 async function waitForVideoPreview(page: Page) {
   console.log("Waiting for uploaded video preview/link...");
@@ -269,8 +207,13 @@ async function waitForUploadDialogText(page: Page, text: RegExp, screenName: str
   console.log(`${screenName} page is visible.`);
 }
 
-async function clickDialogButtonWhenReady(page: Page, labels: string[], actionName: string) {
-  const labelMatcher = new RegExp(labels.map(escapeRegExp).join("|"), "i");
+async function clickDialogButtonWhenReady(
+  page: Page,
+  labels: string[],
+  actionName: string,
+  onClicked?: () => Promise<void> | void,
+) {
+  const labelMatcher = new RegExp(`^\\s*(?:${labels.map(escapeRegExp).join("|")})\\s*$`, "i");
   const button = page.locator("ytcp-uploads-dialog ytcp-button").filter({ hasText: labelMatcher }).last();
 
   await button.waitFor({ state: "visible", timeout: 60000 });
@@ -300,6 +243,7 @@ async function clickDialogButtonWhenReady(page: Page, labels: string[], actionNa
 
   console.log(`Clicking ${actionName}...`);
   await button.click({ timeout: 30000 });
+  await onClicked?.();
   await page.waitForTimeout(1800);
 }
 
@@ -307,72 +251,237 @@ async function clickNextWhenReady(page: Page) {
   await clickDialogButtonWhenReady(page, ["Next"], "Next");
 }
 
-async function selectPublicVisibility(page: Page) {
-  await waitForUploadDialogText(page, /Choose when to publish/i, "Visibility");
-  await scrollUploadDialogToTop(page);
-  console.log("Selecting Public visibility...");
 
-  const publicLocators = [
-    page.locator('ytcp-uploads-dialog tp-yt-paper-radio-button[name="PUBLIC"]').first(),
-    page.locator('tp-yt-paper-radio-button[name="PUBLIC"]').first(),
-    page.locator('ytcp-uploads-dialog tp-yt-paper-radio-button[aria-label*="Public"]').first(),
-    page.locator("ytcp-uploads-dialog").getByRole("radio", { name: PUBLIC_VISIBILITY_TEXT }).first(),
-    page.locator("ytcp-uploads-dialog tp-yt-paper-radio-button").filter({ hasText: /^Public$/i }).first(),
-    page.locator("ytcp-uploads-dialog").getByText(/^Public$/i).first(),
-  ];
+export const YOUTUBE_PUBLISH_CONFIRMATION_TEXT = /Video (?:published|saved|processing)|Your video has been published|Processing will begin shortly/i;
+export const YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT = /\bVideo processing\b/i;
+export const YOUTUBE_VIDEO_REJECTION_TEXT = /Upload failed|Checks failed|Daily upload limit|Processing abandoned|Could not save video/i;
+export const YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT = /Video uploading|still uploading|Uploading\s+(?:\d{1,3}(?:\.\d+)?%|video)|Upload in progress|Keep this browser tab open until uploading completes/i;
+export const YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT = /Uploading\s+100(?:\.0+)?\s*%|Upload complete(?:d)?|Finished uploading|Video uploaded/i;
+const YOUTUBE_UPLOAD_COMPLETE_STABLE_MS = 2_000;
 
-  for (const publicRadio of publicLocators) {
-    try {
-      await publicRadio.scrollIntoViewIfNeeded({ timeout: 2500 });
-      await publicRadio.click({ force: true, timeout: 2500 });
-      await page.waitForTimeout(750);
-      if (await waitForPublishButton(page)) {
-        console.log("Selected Public visibility.");
-        return;
-      }
-    } catch {
-      // Try the next selector; YouTube changes this markup regularly.
-    }
-  }
-
-  if (await clickPublicVisibilityByMouse(page)) {
-    if ((await publicVisibilityIsSelected(page)) || (await waitForPublishButton(page))) {
-      console.log("Selected Public visibility with mouse fallback.");
-      return;
-    }
-
-    throw new Error("Clicked Public visibility, but the Publish button did not appear.");
-  }
-
-  throw new Error("Could not find or click the Public visibility radio button.");
+export function youtubeVideoUploadPercent(text: string) {
+  const match = text.match(/Uploading\s+(\d{1,3}(?:\.\d+)?)\s*%/i);
+  if (!match) return null;
+  const percent = Number(match[1]);
+  return Number.isFinite(percent) && percent >= 0 && percent <= 100 ? percent : null;
 }
 
-async function waitForPublishComplete(page: Page) {
-  console.log("Waiting for YouTube publish confirmation...");
+export function youtubeVideoDialogState(text: string) {
+  if (YOUTUBE_VIDEO_REJECTION_TEXT.test(text)) return "rejected" as const;
+  if (YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT.test(text)) return "uploaded" as const;
+  // The active-upload dialog can also mention that processing will happen
+  // later. Uploading must therefore win over any broader confirmation copy.
+  if (YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT.test(text)) return "uploading" as const;
+  if (YOUTUBE_PUBLISH_CONFIRMATION_TEXT.test(text)) return "confirmed" as const;
+  return "unknown" as const;
+}
 
-  const publishSignals = [
-    page.getByText(/Video processing/i).first(),
-    page.getByText(/public on YouTube/i).first(),
-    page.getByText(/Video published/i).first(),
-    page.getByText(/Your video has been published/i).first(),
-  ];
+export function youtubeVideoUploadCanFinish(
+  state: ReturnType<typeof youtubeVideoDialogState>,
+  completionStateStableMs: number,
+) {
+  // Both states are post-upload evidence on the active Studio surface. The
+  // classifier checks active uploading text first, so a dialog that still
+  // says to keep the tab open can never finish through this path.
+  return (state === "uploaded" || state === "confirmed")
+    && completionStateStableMs >= YOUTUBE_UPLOAD_COMPLETE_STABLE_MS;
+}
 
-  try {
-    await Promise.any(publishSignals.map((signal) => signal.waitFor({ state: "visible", timeout: 120000 })));
-  } catch {
-    throw new Error("YouTube publish confirmation did not appear.");
+export function youtubeVideoCompletionTimeout(sizeBytes: number) {
+  const configured = Number(process.env.YOUTUBE_VIDEO_UPLOAD_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 60_000) return configured;
+
+  // Keep Studio alive long enough to send the file even on a slow upstream
+  // connection. Server-side processing may continue after the bytes finish.
+  const estimatedAtHalfMegabit = (Math.max(0, sizeBytes) * 8 * 1000) / 500_000;
+  return Math.max(15 * 60_000, Math.min(2 * 60 * 60_000, estimatedAtHalfMegabit + 5 * 60_000));
+}
+
+async function currentYouTubeVideoRow(page: Page, title: string) {
+  const normalizedTitle = title.trim().slice(0, 160);
+  if (!normalizedTitle) return null;
+  const titleMatcher = new RegExp(escapeRegExp(normalizedTitle), "i");
+  return firstVisible([
+    page.locator("ytcp-video-row").filter({ hasText: titleMatcher }),
+    page.locator("#row-container").filter({ hasText: titleMatcher }),
+  ]);
+}
+
+async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes: number) {
+  console.log("Waiting for YouTube video upload to complete...");
+  const timeout = youtubeVideoCompletionTimeout(sizeBytes);
+  const deadline = Date.now() + timeout;
+  let sawCurrentUploadProgress = false;
+  let uploadCompleted = false;
+  let completionStateStableAt: number | null = null;
+  let lastProgress = "";
+  let loggedProcessingHandoff = false;
+  let confirmed: Locator | null = null;
+  while (Date.now() < deadline) {
+    const currentDialog = await firstVisible([
+      page.locator('tp-yt-paper-dialog[aria-labelledby="uploads-still-processing-dialog-title"]'),
+      page.locator("ytcp-video-share-dialog"),
+      page.locator("ytcp-uploads-dialog"),
+    ]);
+    if (currentDialog) {
+      const dialogText = (await currentDialog.textContent().catch(() => "")) || "";
+      const dialogState = youtubeVideoDialogState(dialogText);
+      if (dialogState === "rejected") {
+        const detail = dialogText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
+        throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
+      }
+      if (YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT.test(dialogText)) {
+        console.log("YouTube Video processing dialog is visible. Publishing is complete; closing the browser.");
+        return;
+      }
+      if (dialogState === "uploaded") {
+        sawCurrentUploadProgress = true;
+        if (!uploadCompleted) console.log("YouTube confirmed that the video upload is complete.");
+        uploadCompleted = true;
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          dialogState,
+          Date.now() - completionStateStableAt,
+        )) {
+          confirmed = currentDialog;
+          break;
+        }
+        await page.waitForTimeout(250);
+        continue;
+      }
+      if (dialogState === "confirmed") {
+        if (!loggedProcessingHandoff) {
+          loggedProcessingHandoff = true;
+          console.log("YouTube confirmed the video is processing. The upload has safely handed off to Studio.");
+        }
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          dialogState,
+          Date.now() - completionStateStableAt,
+        )) {
+          confirmed = currentDialog;
+          break;
+        }
+        await page.waitForTimeout(250);
+        continue;
+      }
+      if (dialogState === "uploading") {
+        completionStateStableAt = null;
+        const uploadPercent = youtubeVideoUploadPercent(dialogText);
+        const progress = uploadPercent === null ? "the video" : `Uploading ${uploadPercent}%`;
+        sawCurrentUploadProgress = true;
+        if (progress !== lastProgress) {
+          lastProgress = progress;
+          console.log(`YouTube video is still ${progress.toLowerCase()}. Keeping Studio open.`);
+        }
+      } else {
+        completionStateStableAt = null;
+      }
+      await page.waitForTimeout(500);
+      continue;
+    }
+
+    const rejectedToast = await waitForVisible([
+      page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_VIDEO_REJECTION_TEXT }),
+    ], 100);
+    if (rejectedToast) {
+      const detail = (await rejectedToast.textContent())?.trim() || "YouTube did not finish the video upload.";
+      throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
+    }
+
+    const confirmationToast = await waitForVisible([
+      page.locator("ytcp-toast, tp-yt-paper-toast").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
+    ], 100);
+    if (confirmationToast) {
+      completionStateStableAt ??= Date.now();
+      if (youtubeVideoUploadCanFinish(
+        "confirmed",
+        Date.now() - completionStateStableAt,
+      )) {
+        confirmed = confirmationToast;
+        break;
+      }
+    }
+
+    const currentRow = await currentYouTubeVideoRow(page, videoTitle);
+    if (currentRow) {
+      const rowText = (await currentRow.textContent().catch(() => "")) || "";
+      const rowState = youtubeVideoDialogState(rowText);
+      if (rowState === "rejected") {
+        const detail = rowText.match(YOUTUBE_VIDEO_REJECTION_TEXT)?.[0] || "YouTube did not finish the video upload.";
+        throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
+      }
+      const uploadPercent = youtubeVideoUploadPercent(rowText);
+      const progress = uploadPercent === null ? "" : `Uploading ${uploadPercent}%`;
+      if (rowState === "uploading") {
+        completionStateStableAt = null;
+        sawCurrentUploadProgress = true;
+        if (progress && progress !== lastProgress) {
+          lastProgress = progress;
+          console.log(`YouTube video is still ${progress.toLowerCase()}. Keeping Studio open.`);
+        }
+        await page.waitForTimeout(750);
+        continue;
+      }
+      if (rowState === "uploaded") {
+        sawCurrentUploadProgress = true;
+        if (!uploadCompleted) console.log("YouTube confirmed that the video upload is complete.");
+        uploadCompleted = true;
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          rowState,
+          Date.now() - completionStateStableAt,
+        )) {
+          console.log("YouTube upload is complete. Server-side processing can continue after the browser closes.");
+          return;
+        }
+        await page.waitForTimeout(250);
+        continue;
+      }
+      if (rowState === "confirmed") {
+        if (!loggedProcessingHandoff) {
+          loggedProcessingHandoff = true;
+          console.log("YouTube confirmed the video is processing. The upload has safely handed off to Studio.");
+        }
+        completionStateStableAt ??= Date.now();
+        if (youtubeVideoUploadCanFinish(
+          rowState,
+          Date.now() - completionStateStableAt,
+        )) {
+          console.log(uploadCompleted
+            ? "YouTube upload is complete. Server-side processing can continue after the browser closes."
+            : "YouTube processing is confirmed. Server-side processing can continue after the browser closes.");
+          return;
+        }
+        await page.waitForTimeout(500);
+        continue;
+      }
+      completionStateStableAt = null;
+    }
+
+    await page.waitForTimeout(500);
+  }
+  if (!confirmed) {
+    const stage = uploadCompleted
+      ? "the completed-upload confirmation did not remain stable"
+      : sawCurrentUploadProgress
+        ? "the video upload did not reach a stable completion or processing handoff"
+        : "the current video upload could not be verified";
+    throw new Error(`YouTube accepted Publish, but ${stage} within ${Math.round(timeout / 60_000)} minutes. Check YouTube Studio before retrying.`);
   }
 
-  console.log("YouTube publish confirmation is visible. Closing confirmation dialog...");
+  console.log("YouTube upload completion is visible. Closing the completed upload dialog...");
 
-  const closeButtons = [
-    page.getByRole("button", { name: /^Close$/i }).last(),
-    page.locator('button:has-text("Close")').last(),
-    page.locator('ytcp-button:has-text("Close")').last(),
-    page.locator("ytcp-uploads-dialog").getByRole("button", { name: /Close/i }).last(),
-    page.locator('ytcp-uploads-dialog ytcp-button:has-text("Close")').last(),
-    page.locator("ytcp-uploads-dialog #close-button").last(),
-  ];
+  const confirmationDialog = confirmed && await confirmed.isVisible().catch(() => false) ? confirmed : await firstVisible([
+    page.locator("ytcp-video-share-dialog").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
+    page.locator("ytcp-uploads-dialog").filter({ hasText: YOUTUBE_PUBLISH_CONFIRMATION_TEXT }),
+  ]);
+  const closeButtons = confirmationDialog ? [
+    confirmationDialog.getByRole("button", { name: /^Close$/i }).last(),
+    confirmationDialog.locator('button:has-text("Close")').last(),
+    confirmationDialog.locator('ytcp-button:has-text("Close")').last(),
+    confirmationDialog.locator("#close-button").last(),
+  ] : [];
 
   for (const closeButton of closeButtons) {
     if (await clickIfVisible(closeButton, 3000)) {
@@ -383,7 +492,8 @@ async function waitForPublishComplete(page: Page) {
     }
   }
 
-  throw new Error("Publish confirmation appeared, but the Close button could not be clicked.");
+  if (confirmationDialog) console.warn("YouTube publish was confirmed, but the confirmation dialog could not be closed automatically.");
+  else console.log("YouTube publish was confirmed without an open dialog. Publish flow completed.");
 }
 
 async function openYouTubeCreateMenu(page: Page) {
@@ -441,47 +551,121 @@ async function getCommunityComposer(page: Page) {
   return composer;
 }
 
-async function waitForCommunityImagePreview(page: Page, timeout = 60000) {
-  const composer = await getCommunityComposer(page);
+async function completeCommunityImageEditor(page: Page) {
+  const editor = await firstVisible([
+    page.locator("ytd-backstage-image-editor-renderer, ytd-backstage-image-dialog-renderer").last(),
+    page.locator("[role='dialog']").filter({ hasText: /Crop|Edit (?:image|photo)|Adjust (?:image|photo)/i }).last(),
+    page.locator("tp-yt-paper-dialog").filter({ hasText: /Crop|Edit (?:image|photo)|Adjust (?:image|photo)/i }).last(),
+  ]);
+  if (!editor) return false;
 
-  const previewActions = await waitForVisible([
-    composer.getByText(/Edit preview/i).first(),
-    composer.getByText(/^Delete$/i).first(),
-  ], Math.min(timeout, 15000));
+  const confirmation = await firstVisible([
+    editor.getByRole("button", { name: /^(?:Done|Save|Apply)$/i }).last(),
+    editor.locator("button, yt-button-shape button, tp-yt-paper-button, [role='button']")
+      .filter({ hasText: /^\s*(?:Done|Save|Apply)\s*$/i }).last(),
+  ]);
+  if (!confirmation) return false;
 
-  if (previewActions) {
-    console.log("YouTube Community image preview action is visible.");
-    return;
-  }
+  const disabled = await confirmation.evaluate((element) => Boolean(
+    element.closest("[disabled], [aria-disabled='true']"),
+  )).catch(() => true);
+  if (disabled) return false;
 
-  try {
-    await page.waitForFunction(() => {
-      const roots = Array.from(document.querySelectorAll<HTMLElement>(
-        "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
-      )).filter((root) => {
-        const text = root.textContent ?? "";
-        const rect = root.getBoundingClientRect();
-        const style = window.getComputedStyle(root);
-        return /Image poll|Text poll|Quiz|Video|Visibility/i.test(text)
-          && rect.width > 0
-          && rect.height > 0
-          && style.display !== "none"
-          && style.visibility !== "hidden";
+  console.log("Confirming the YouTube Community image editor...");
+  await confirmation.click({ timeout: 5000 });
+  await page.waitForTimeout(1000);
+  return true;
+}
+
+async function communityImagePreviewState(page: Page) {
+  return page.evaluate(() => {
+    const isVisible = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== "none"
+        && style.visibility !== "hidden";
+    };
+    const roots = Array.from(document.querySelectorAll<HTMLElement>(
+      "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
+    )).filter((root) => {
+      const text = root.textContent ?? "";
+      return isVisible(root) && (
+        root.matches("ytd-backstage-post-dialog-renderer")
+        || (/Visibility/i.test(text) && /Post/i.test(text))
+        || Boolean(root.querySelector("#contenteditable-root, [contenteditable='true'], textarea"))
+      );
+    });
+
+    for (const root of roots) {
+      const rejection = Array.from(root.querySelectorAll<HTMLElement>(
+        "[role='alert'], yt-formatted-string#message, #message, .message, [class*='error']",
+      ))
+        .filter(isVisible)
+        .map((element) => element.textContent?.replace(/\s+/g, " ").trim() || "")
+        .find((text) => /could(?:n't| not) upload|upload failed|file.{0,30}too (?:large|big)|unsupported.{0,30}(?:image|file)|invalid.{0,30}file|something went wrong/i.test(text));
+      if (rejection) return { ready: false, rejection };
+
+      const previewAction = Array.from(root.querySelectorAll<HTMLElement>(
+        "button, yt-button-shape button, ytd-button-renderer, tp-yt-paper-button, [role='button']",
+      )).some((element) => {
+        const text = element.textContent?.replace(/\s+/g, " ").trim() || "";
+        const label = element.getAttribute("aria-label") || "";
+        const isPreviewAction = /^(?:Edit preview|Edit image|Edit photo|Remove image|Remove photo|Delete)$/i;
+        return isVisible(element) && (isPreviewAction.test(text) || isPreviewAction.test(label));
       });
+      if (previewAction) return { ready: true, rejection: "" };
 
-      return roots.some((root) => Array.from(root.querySelectorAll<HTMLImageElement>("img")).some((image) => {
+      const renderedAttachment = Array.from(root.querySelectorAll<HTMLElement>(
+        "ytd-backstage-image-renderer, ytd-backstage-image-preview-renderer, ytd-backstage-attachment-renderer, [class*='image-preview'], [id*='image-preview'], [aria-label*='Remove image' i], [aria-label*='Edit image' i]",
+      )).some((element) => {
+        const rect = element.getBoundingClientRect();
+        return isVisible(element) && rect.width >= 90 && rect.height >= 90;
+      });
+      if (renderedAttachment) return { ready: true, rejection: "" };
+
+      const renderedImage = Array.from(root.querySelectorAll<HTMLImageElement>("img")).some((image) => {
         const rect = image.getBoundingClientRect();
         const src = image.currentSrc || image.src || "";
-        const looksLikePostImage = rect.width >= 90 && rect.height >= 90 && image.naturalWidth >= 40 && image.naturalHeight >= 40;
+        const looksLikePostImage = rect.width >= 90
+          && rect.height >= 90
+          && image.naturalWidth >= 40
+          && image.naturalHeight >= 40;
         const looksLikeAvatar = /avatar|profile|yt3\.ggpht|s32-|s48-|s88-/i.test(src);
-        return looksLikePostImage && !looksLikeAvatar;
-      }));
-    }, undefined, { timeout });
-    console.log("YouTube Community image preview is visible.");
-    return;
-  } catch {
-    throw new Error("YouTube Community image preview did not appear after upload.");
+        return isVisible(image) && looksLikePostImage && !looksLikeAvatar;
+      });
+      if (renderedImage) return { ready: true, rejection: "" };
+
+      const renderedBackground = Array.from(root.querySelectorAll<HTMLElement>("*"))
+        .filter(isVisible)
+        .some((element) => {
+          const rect = element.getBoundingClientRect();
+          const background = window.getComputedStyle(element).backgroundImage;
+          return rect.width >= 90
+            && rect.height >= 90
+            && background !== "none"
+            && /(?:blob:|data:image|googleusercontent|ggpht)/i.test(background);
+        });
+      if (renderedBackground) return { ready: true, rejection: "" };
+    }
+    return { ready: false, rejection: "" };
+  });
+}
+
+async function waitForCommunityImagePreview(page: Page, timeout = 90000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    await completeCommunityImageEditor(page);
+    const state = await communityImagePreviewState(page);
+    if (state.rejection) throw new Error(`YouTube rejected the Community image: ${state.rejection}`);
+    if (state.ready) {
+      console.log("YouTube Community image preview is visible.");
+      return;
+    }
+    await page.waitForTimeout(500);
   }
+  throw new Error("YouTube Community image preview did not appear after upload.");
 }
 
 async function clickCommunityBlankTextSpace(page: Page) {
@@ -519,75 +703,68 @@ async function fillCommunityPostDescription(page: Page, description: string) {
 }
 
 async function clickVisibleCommunityImageControl(page: Page) {
-  const target = await page.evaluate(() => {
-    const isVisible = (element: HTMLElement) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      return rect.width > 0
-        && rect.height > 0
-        && style.display !== "none"
-        && style.visibility !== "hidden";
-    };
+  const composer = await getCommunityComposer(page);
+  const controls = [
+    composer.locator('button[aria-label="Add an image"]').filter({ visible: true }).last(),
+    composer.locator("ytd-button-renderer#image-button button").filter({ visible: true }).last(),
+    composer.locator("#image-button button").filter({ visible: true }).last(),
+    composer.getByRole("button", { name: /^Image$/i }).filter({ visible: true }).last(),
+  ];
 
-    const roots = Array.from(document.querySelectorAll<HTMLElement>(
-      "ytd-backstage-post-dialog-renderer, [role='dialog'], tp-yt-paper-dialog",
-    )).filter((root) => {
-      const text = root.textContent ?? "";
-      return /Image|Image poll|Text poll|Quiz|Video|Post|Visibility/i.test(text) && isVisible(root);
-    });
+  for (const control of controls) {
+    if ((await control.count().catch(() => 0)) === 0) continue;
+    try {
+      // A long description pushes the attachment controls below the browser
+      // viewport. Locator.click scrolls the composer before clicking, whereas
+      // a raw mouse coordinate silently misses an off-screen Image button.
+      await control.scrollIntoViewIfNeeded({ timeout: 5000 });
+      console.log("Clicking YouTube Community Image control...");
+      await control.click({ timeout: 5000 });
+      await page.waitForTimeout(700);
+      return true;
+    } catch {
+      // YouTube keeps hidden duplicate controls in the composer; try the next
+      // concrete button before using the position fallback.
+    }
+  }
 
-    const candidates = roots.flatMap((root) => Array.from(root.querySelectorAll<HTMLElement>("*")))
-      .filter((element) => element.textContent?.trim() === "Image" && isVisible(element))
-      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-    const label = candidates[0];
-    if (!label) return null;
-
-    const clickable =
-      label.closest<HTMLElement>("button, [role='button'], ytd-button-renderer, tp-yt-paper-button, ytd-backstage-image-upload-renderer, ytd-backstage-attachment-upload-renderer")
-      ?? label.parentElement
-      ?? label;
-    const rect = clickable.getBoundingClientRect();
-    const labelRect = label.getBoundingClientRect();
-
-    return {
-      x: rect.width > 10 ? rect.left + rect.width / 2 : labelRect.left + labelRect.width / 2,
-      y: rect.height > 10 ? rect.top + rect.height / 2 : labelRect.top + labelRect.height / 2,
-    };
-  });
-
-  if (!target) return false;
-
-  console.log("Clicking visible YouTube Image control by mouse fallback...");
-  await page.mouse.click(target.x, target.y);
-  await page.waitForTimeout(700);
-  return true;
+  return false;
 }
 
 async function setCommunityImageInputFiles(page: Page, composer: Locator, imagePath: string, previousInputCount: number) {
-  const imageInputSelector = 'input[type="file"][accept*="image"], input[type="file"][accept*=".png"], input[type="file"][accept*=".jpg"], input[type="file"][accept*=".jpeg"], input[type="file"]';
-  await page.waitForFunction((count) => document.querySelectorAll('input[type="file"]').length > count, previousInputCount, { timeout: 4000 }).catch(() => undefined);
+  const imageInputSelector = [
+    'input[type="file"][accept*="image" i]',
+    'input[type="file"][accept*=".png" i]',
+    'input[type="file"][accept*=".jpg" i]',
+    'input[type="file"][accept*=".jpeg" i]',
+    'input[type="file"][accept*=".gif" i]',
+    'input[type="file"][accept*=".webp" i]',
+  ].join(", ");
+  await page.waitForFunction(({ count, selector }) => (
+    document.querySelectorAll('input[type="file"]').length > count
+    || document.querySelectorAll(selector).length > 0
+  ), { count: previousInputCount, selector: imageInputSelector }, { timeout: 5000 }).catch(() => undefined);
 
   const composerInputs = composer.locator(imageInputSelector);
   const pageInputs = page.locator(imageInputSelector);
   const composerCount = await composerInputs.count().catch(() => 0);
   const pageCount = await pageInputs.count().catch(() => 0);
-  console.log(`YouTube Community file inputs available: composer=${composerCount}, page=${pageCount}`);
+  console.log(`YouTube Community image inputs available: composer=${composerCount}, page=${pageCount}`);
 
   if (composerCount > 0) {
-    await composerInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, composerInputs.last(), imagePath);
     return true;
   }
 
   if (pageCount > 0) {
-    await pageInputs.last().setInputFiles(imagePath);
+    await setLocalInputFile(page, pageInputs.last(), imagePath);
     return true;
   }
 
   return false;
 }
 
-async function dropCommunityImageOnComposer(page: Page, imagePath: string) {
+async function dropCommunityImageOnComposer(page: Page, imagePath: string, previewTimeout: number) {
   console.log("Dropping image file directly onto YouTube Community composer...");
   const payload = {
     base64: fs.readFileSync(imagePath).toString("base64"),
@@ -632,64 +809,75 @@ async function dropCommunityImageOnComposer(page: Page, imagePath: string) {
 
   await page.waitForTimeout(3000);
   try {
-    await waitForCommunityImagePreview(page, 10000);
+    await waitForCommunityImagePreview(page, previewTimeout);
     return true;
   } catch {
     return false;
   }
 }
 
-async function attachCommunityPostImage(page: Page, imagePath: string) {
+async function attachCommunityPostImage(page: Page, imagePath: string, previewTimeout: number) {
   console.log(`Adding image to YouTube Community post: ${imagePath} (${imageMimeType(imagePath)})`);
 
   const composer = await getCommunityComposer(page);
 
   const fileInputCountBefore = await page.locator('input[type="file"]').count().catch(() => 0);
-  const fileChooserPromise = page.waitForEvent("filechooser", { timeout: 12000 }).catch(() => null);
+  const fileChooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
   const box = await composer.boundingBox();
   if (!box) throw new Error("YouTube Community composer position was not available.");
 
   console.log("Opening YouTube Community image uploader, then setting uploaded file path...");
-  const imageSlotX = box.x + 74;
-  const imageSlotY = box.y + Math.max(96, Math.min(166, box.height - 92));
-  await page.mouse.click(imageSlotX, imageSlotY);
+  const clickedImageControl = await clickVisibleCommunityImageControl(page);
+  if (!clickedImageControl) {
+    const imageSlotX = box.x + 74;
+    const imageSlotY = box.y + Math.max(96, Math.min(166, box.height - 92));
+    await page.mouse.click(imageSlotX, imageSlotY);
+  }
   await page.waitForTimeout(700);
 
   const fileChooser = await fileChooserPromise;
+  let attached = false;
   if (fileChooser) {
     console.log("Uploading YouTube Community image through native file chooser handle...");
-    await fileChooser.setFiles(imagePath);
+    await setLocalFileChooserFile(fileChooser, imagePath);
+    attached = true;
   } else {
-    if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
-      const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 8000 }).catch(() => null);
+    attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
+    if (!attached) {
+      const retryChooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
       await clickVisibleCommunityImageControl(page);
       const retryChooser = await retryChooserPromise;
 
       if (retryChooser) {
         console.log("Uploading YouTube Community image through retry file chooser handle...");
-        await retryChooser.setFiles(imagePath);
-      } else if (!await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore)) {
-        if (!await dropCommunityImageOnComposer(page, imagePath)) {
-          throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
-        }
-        return;
+        await setLocalFileChooserFile(retryChooser, imagePath);
+        attached = true;
+      } else {
+        attached = await setCommunityImageInputFiles(page, composer, imagePath, fileInputCountBefore);
       }
     }
   }
 
-  await page.waitForTimeout(2500);
-  try {
-    await waitForCommunityImagePreview(page, 20000);
-  } catch {
-    if (!await dropCommunityImageOnComposer(page, imagePath)) {
-      throw new Error("YouTube Community image preview did not appear after upload.");
+  if (!attached) {
+    if (!await dropCommunityImageOnComposer(page, imagePath, previewTimeout)) {
+      throw new Error("YouTube Community image could not be attached by file input, file chooser, or drag/drop.");
     }
+    return;
   }
+
+  await page.waitForTimeout(2500);
+  // A successful file assignment can take time to decode and upload. Do not
+  // dispatch the same image again while YouTube is still processing it.
+  await waitForCommunityImagePreview(page, previewTimeout);
 }
 
-async function clickCommunityPostWhenReady(page: Page) {
+async function clickCommunityPostWhenReady(
+  page: Page,
+  requireImagePreview = true,
+  onSubmitted?: () => Promise<void> | void,
+) {
   console.log("Clicking YouTube Community Post button...");
-  await waitForCommunityImagePreview(page, 30000);
+  if (requireImagePreview) await waitForCommunityImagePreview(page, 30000);
   const composer = await getCommunityComposer(page);
 
   await page.waitForFunction(() => {
@@ -735,7 +923,10 @@ async function clickCommunityPostWhenReady(page: Page) {
   ];
 
   for (const postButton of postButtons) {
-    if (await clickIfVisible(postButton, 4000)) return;
+    if (await clickIfVisible(postButton, 4000)) {
+      await onSubmitted?.();
+      return;
+    }
   }
 
   const box = await composer.boundingBox();
@@ -743,6 +934,7 @@ async function clickCommunityPostWhenReady(page: Page) {
 
   console.log("Clicking black Community Post button by mouse fallback...");
   await page.mouse.click(box.x + box.width - 86, box.y + box.height - 28);
+  await onSubmitted?.();
 }
 
 async function waitForCommunityPostComplete(page: Page) {
@@ -842,7 +1034,7 @@ async function getGoogleLoginError(page: Page) {
   return null;
 }
 
-async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "YouTube",
@@ -855,6 +1047,7 @@ async function waitForYouTubeLoginResult(page: Page, allowManualLoginFromStart =
     beforeCheck: () => dismissChromeSignInPrompt(page),
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -863,7 +1056,7 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   const manualLoginOnly = !savedSessionOnly;
 
   console.log("Navigating to YouTube upload page...");
-  await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000 });
+  await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
   await page.waitForLoadState("domcontentloaded");
   await page.waitForTimeout(3000);
   await dismissChromeSignInPrompt(page);
@@ -871,15 +1064,20 @@ export async function loginToYouTube(page: Page, accountLogin?: AccountLogin) {
   if (await isYouTubeLoggedIn(page)) {
     console.log("YouTube session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("YouTube saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "YouTube",
+      isLoggedIn: () => isYouTubeLoggedIn(page),
+      beforeCheck: () => dismissChromeSignInPrompt(page),
+    });
   } else {
-    console.log("Complete the full YouTube login manually in Chrome; bot will save the session after the account opens.");
-    await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    console.log("Complete the full YouTube login manually in the visible browser; Companion will save the session after the account opens.");
+    await waitForYouTubeLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (!await isYouTubeLoggedIn(page)) {
     await page.goto(YOUTUBE_UPLOAD_URL, { timeout: 60000 });
-    await waitForYouTubeLoginResult(page, true, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForYouTubeLoginResult(page, true, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   await dismissChromeSignInPrompt(page);
@@ -891,34 +1089,122 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
   await loginToYouTube(page, accountLogin);
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
-  await fillCommunityPostDescription(page, upload.caption);
-  await attachCommunityPostImage(page, imagePath);
-  await waitForCommunityImagePreview(page, 30000);
-  await clickCommunityPostWhenReady(page);
+  await fillCommunityPostDescription(page, upload.caption ?? "");
+  const prepared = await prepareYouTubeCommunityMedia(imagePath, upload.mimeType || imageMimeType(imagePath));
+  const previewTimeout = youtubeCommunityImagePreviewTimeout(prepared.sourceByteSize);
+  try {
+    if (prepared.normalized) {
+      console.log(
+        `Prepared a YouTube Community image without cropping: ${prepared.width}x${prepared.height}, ${prepared.byteSize} bytes.`,
+      );
+    }
+    await attachCommunityPostImage(page, prepared.filePath, previewTimeout);
+    await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
+    await waitForCommunityPostComplete(page);
+    console.log("Step completed: YouTube Community image post published.");
+    return { success: true };
+  } finally {
+    await prepared.cleanup();
+  }
+}
+
+async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  await loginToYouTube(page, accountLogin);
+  await openYouTubeCreateMenu(page);
+  await clickCreateCommunityPost(page);
+  await fillCommunityPostDescription(page, upload.caption ?? "");
+  await clickCommunityPostWhenReady(page, false, accountLogin?.onFinalActionSubmitted);
   await waitForCommunityPostComplete(page);
-  console.log("Step completed: YouTube Community image post published.");
+  console.log("Step completed: YouTube Community text post published.");
   return { success: true };
 }
 
+async function attachYouTubeVideoFile(page: Page, videoPath: string) {
+  const inputSelector = 'ytcp-uploads-dialog input[type="file"], input[type="file"][accept*="video"], input[type="file"]';
+
+  const useExistingInput = async () => {
+    const inputs = page.locator(inputSelector);
+    if ((await inputs.count().catch(() => 0)) === 0) return false;
+    await setLocalInputFile(page, inputs.last(), videoPath);
+    return true;
+  };
+
+  const clickUploadControl = async (control: Locator) => {
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null);
+    await control.click({ force: true, timeout: 10000 });
+    const chooser = await chooserPromise;
+    if (chooser) {
+      await setLocalFileChooserFile(chooser, videoPath);
+      return true;
+    }
+    await page.waitForTimeout(700);
+    return useExistingInput();
+  };
+
+  if (await useExistingInput()) return;
+
+  const selectFiles = await waitForVisible([
+    page.getByRole("button", { name: /Select files/i }),
+    page.getByText(/^Select files$/i),
+    page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+  ], 5000);
+  if (selectFiles && await clickUploadControl(selectFiles)) return;
+
+  console.log("Opening the YouTube Studio upload dialog...");
+  const directUpload = await waitForVisible([
+    page.getByRole("button", { name: /^Upload videos$/i }),
+    page.getByText(/^Upload videos$/i),
+    page.locator("ytcp-button").filter({ hasText: /^Upload videos$/i }),
+  ], 8000);
+  if (directUpload && await clickUploadControl(directUpload)) return;
+
+  const createButton = await waitForVisible([
+    page.getByRole("button", { name: /^Create$/i }),
+    page.locator("ytcp-button#create-icon"),
+    page.locator("#create-icon").filter({ hasText: /Create/i }),
+    page.getByText(/^Create$/i),
+  ], 12000);
+  if (createButton) {
+    await createButton.click({ force: true, timeout: 10000 });
+    await page.waitForTimeout(500);
+    const uploadVideos = await waitForVisible([
+      page.getByRole("menuitem", { name: /Upload videos/i }),
+      page.locator('[role="menuitem"]').filter({ hasText: /Upload videos/i }),
+      page.getByText(/^Upload videos$/i),
+    ], 10000);
+    if (uploadVideos && await clickUploadControl(uploadVideos)) return;
+  }
+
+  const finalSelectFiles = await waitForVisible([
+    page.getByRole("button", { name: /Select files/i }),
+    page.getByText(/^Select files$/i),
+    page.locator("ytcp-button").filter({ hasText: /Select files/i }),
+  ], 10000);
+  if (finalSelectFiles && await clickUploadControl(finalSelectFiles)) return;
+  if (await useExistingInput()) return;
+
+  throw new Error("YouTube Studio did not expose an Upload videos or Select files control.");
+}
+
 async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath: string, accountLogin?: AccountLogin) {
+  const options = requireYouTubeOptions("youtube", "video", upload.platformOptions)!.youtube as YouTubeOptions;
   await loginToYouTube(page, accountLogin);
 
   console.log("Uploading file...");
-  const fileInput = page.locator('input[type="file"]');
-  await fileInput.setInputFiles(videoPath);
+  await attachYouTubeVideoFile(page, videoPath);
 
   console.log("Waiting for title field...");
   await page.waitForSelector("#title-textarea", { timeout: 60000 });
   await page.waitForTimeout(2000);
 
   console.log("Filling metadata...");
-  const videoTitle = upload.title || upload.caption;
+  const videoTitle = upload.title || upload.caption || upload.originalName;
 
   await fillEditable(page, page.locator("#title-textarea"), videoTitle);
-  await fillEditable(page, page.locator("#description-textarea"), upload.caption);
+  await fillEditable(page, page.locator("#description-textarea"), upload.caption ?? "");
   await page.waitForTimeout(1000);
 
-  await selectMadeForKids(page);
+  await selectYouTubeOption(page, "audience", options);
   await waitForVideoPreview(page);
 
   console.log("Moving to Video elements...");
@@ -930,15 +1216,20 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await waitForUploadDialogText(page, /check your video for issues/i, "Checks");
   await clickNextWhenReady(page);
 
-  await selectPublicVisibility(page);
-  await clickDialogButtonWhenReady(page, ["Publish"], "Publish");
-  await waitForPublishComplete(page);
+  await waitForUploadDialogText(page, /Choose when to publish|Save or publish|Visibility/i, "Visibility");
+  await selectYouTubeOption(page, "visibility", options);
+  const action = youtubeFinalAction(options.visibility);
+  await clickDialogButtonWhenReady(page, [action], action, accountLogin?.onFinalActionSubmitted);
+  await waitForPublishComplete(page, videoTitle, upload.size);
 
   console.log("Step completed: video published.");
   return { success: true };
 }
 
 export async function postToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  if (isTextOnly) return postCommunityTextToYouTube(page, upload, accountLogin);
+
   const filePath = publishingUploadFilePath(upload.fileName);
   if (!fs.existsSync(filePath)) throw new Error(`YouTube upload file not found: ${filePath}`);
 

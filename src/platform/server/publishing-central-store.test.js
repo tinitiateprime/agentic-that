@@ -1,0 +1,349 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { centralPublishingTestHelpers } from "./publishing-central-store.js";
+
+test("central publishing polling does not rewrite an unchanged workspace document", () => {
+  const updatedAt = "2026-09-05T10:00:00.000Z";
+  const document = {
+    jobs: [{
+      id: "job_1", workspaceId: "workspace_1", uploadId: "upload_1", state: "queued",
+      message: null, attemptCount: 0, leaseOwner: null, leaseExpiresAt: null, updatedAt,
+    }],
+    uploads: [{
+      id: "upload_1", workspaceId: "workspace_1", status: "queued", updatedAt,
+    }],
+  };
+  const remote = [{
+    id: "job_1", type: "publish", status: "queued", message: null, attemptCount: 0,
+    assignedDeviceId: null, leaseExpiresAt: null, updatedAt, completedAt: null,
+  }];
+
+  assert.equal(centralPublishingTestHelpers.applyRemotePublishingJobs(document, "workspace_1", remote), false);
+  remote[0].status = "running";
+  remote[0].updatedAt = "2026-09-05T10:01:00.000Z";
+  assert.equal(centralPublishingTestHelpers.applyRemotePublishingJobs(document, "workspace_1", remote), true);
+  assert.equal(document.jobs[0].state, "running");
+  assert.equal(document.uploads[0].status, "processing");
+});
+
+test("central publishing resumes reconnect-required jobs only after the paired Companion is online", () => {
+  const timestamp = Date.now();
+  const companion = { id: "companion_1", status: "online", version: "2.1.29", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
+  const account = { id: "account_1", workspaceId: "workspace_1", credentialConfigured: true };
+  const document = {
+    uploads: [
+      { id: "upload_due", status: "failed", failureReason: "Session expired" },
+      { id: "upload_later", status: "failed", failureReason: "Session expired" },
+    ],
+    jobs: [
+      { id: "job_due", workspaceId: "workspace_1", accountId: "account_1", uploadId: "upload_due", state: "reconnect_required", notBefore: null },
+      { id: "job_later", workspaceId: "workspace_1", accountId: "account_1", uploadId: "upload_later", state: "reconnect_required", notBefore: new Date(timestamp + 60_000).toISOString() },
+    ],
+  };
+
+  centralPublishingTestHelpers.resumeReconnectJobs(document, account, companion, timestamp);
+
+  assert.equal(document.jobs[0].state, "queued");
+  assert.equal(document.jobs[1].state, "waiting_for_companion");
+  assert.equal(document.uploads[0].status, "queued");
+  assert.equal(document.uploads[0].failureReason, null);
+  assert.equal(document.uploads[1].status, "queued");
+});
+
+test("central publishing reports account readiness and accepts only the active Companion job lease", () => {
+  const timestamp = Date.now();
+  const online = { status: "online", version: "2.1.29", runtimeStatus: "ready", lastSeenAt: new Date(timestamp).toISOString() };
+  const offline = { status: "offline", lastSeenAt: new Date(timestamp).toISOString() };
+  assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, online), "ready");
+  assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: true }, offline), "waiting_for_companion");
+  assert.equal(centralPublishingTestHelpers.accountReadiness({ enabled: true, credentialConfigured: false }, online), "reconnect_required");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("instagram", "companion"), "companion");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("instagram", "external_browser"), "external_browser");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("facebook", "companion"), "external_browser");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("x", "companion"), "external_browser");
+  assert.equal(centralPublishingTestHelpers.companionPublishingEngine("youtube", "companion"), "external_browser");
+
+  assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp + 1_000).toISOString() }, "companion_1", timestamp), true);
+  assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_2", leaseExpiresAt: new Date(timestamp + 1_000).toISOString() }, "companion_1", timestamp), false);
+  assert.equal(centralPublishingTestHelpers.hasActiveJobLease({ leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1_000).toISOString() }, "companion_1", timestamp), false);
+});
+
+test("central publishing distinguishes future schedules from overdue Companion waits", () => {
+  const timestamp = Date.now();
+  const offlineCompanion = {
+    id: "companion_1", workspaceId: "workspace_1", status: "offline", version: "2.1.8",
+    lastSeenAt: new Date(timestamp - 10 * 60_000).toISOString(), updatedAt: new Date(timestamp - 10 * 60_000).toISOString(),
+  };
+  const document = {
+    companions: [offlineCompanion],
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", companionId: "companion_1",
+      enabled: true, credentialConfigured: true,
+    }],
+    jobs: [
+      { id: "job_future", uploadId: "upload_future", state: "waiting_for_companion", notBefore: new Date(timestamp + 60_000).toISOString(), updatedAt: new Date(timestamp).toISOString() },
+      { id: "job_overdue", uploadId: "upload_overdue", state: "waiting_for_companion", notBefore: new Date(timestamp - 60_000).toISOString(), updatedAt: new Date(timestamp).toISOString() },
+    ],
+  };
+  const future = centralPublishingTestHelpers.uploadPublic(document, {
+    id: "upload_future", accountId: "account_1", status: "queued", scheduledAt: new Date(timestamp + 60_000).toISOString(),
+  });
+  const overdue = centralPublishingTestHelpers.uploadPublic(document, {
+    id: "upload_overdue", accountId: "account_1", status: "queued", scheduledAt: new Date(timestamp - 60_000).toISOString(),
+  });
+
+  assert.equal(future.statusDetail, "queued");
+  assert.equal(overdue.statusDetail, "waiting_for_companion");
+  assert.equal(overdue.companionStatus, "offline");
+});
+
+test("central publishing accepts a confirmed late success without reopening other failed work", () => {
+  const timestamp = Date.now();
+  const failedJob = { state: "failed", leaseOwner: null, leaseExpiresAt: null };
+
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "published", timestamp), true);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed(failedJob, "companion_1", "publishing", timestamp), false);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed({ state: "published" }, "companion_1", "published", timestamp), false);
+  assert.equal(centralPublishingTestHelpers.centralJobUpdateIsAllowed({ state: "uncertain" }, "companion_1", "published", timestamp), true);
+});
+
+test("central publishing enforces Companion compatibility and reports operational states", () => {
+  const timestamp = Date.now();
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.29"), true);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.28"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.27"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.26"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.25"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.24"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.21"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.18"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.17"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.16"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.15"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.6"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.5"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("1.9.0"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("1.8.9"), false);
+  assert.equal(centralPublishingTestHelpers.versionAtLeast("2.1.2"), false);
+  assert.equal(centralPublishingTestHelpers.companionCompatibility({ version: "1.8.0" }), "outdated");
+  assert.equal(centralPublishingTestHelpers.companionStatus({
+    status: "online", version: "2.1.29", runtimeStatus: "ready", updateStatus: "downloading",
+    lastSeenAt: new Date(timestamp).toISOString(),
+  }), "updating");
+  assert.equal(centralPublishingTestHelpers.companionStatus({
+    status: "online", version: "2.1.29", runtimeStatus: "error", lastSeenAt: new Date(timestamp).toISOString(),
+  }), "error");
+});
+
+test("expired publishing leases become UNCERTAIN while pre-submit work is safely requeued", () => {
+  const timestamp = Date.now();
+  const document = {
+    jobs: [
+      { id: "final", workspaceId: "workspace_1", uploadId: "upload_final", state: "publishing", leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1).toISOString() },
+      { id: "safe", workspaceId: "workspace_1", uploadId: "upload_safe", state: "uploading", leaseOwner: "companion_1", leaseExpiresAt: new Date(timestamp - 1).toISOString() },
+    ],
+    uploads: [
+      { id: "upload_final", status: "processing", publishActionState: "submitted" },
+      { id: "upload_safe", status: "processing", publishActionState: "not_started" },
+    ],
+  };
+  centralPublishingTestHelpers.recoverExpiredCentralJobLeases(document, "workspace_1", timestamp);
+  assert.equal(document.jobs[0].state, "uncertain");
+  assert.equal(document.uploads[0].publishActionState, "uncertain");
+  assert.match(document.uploads[0].failureReason, /uncertain/i);
+  assert.equal(document.jobs[1].state, "queued");
+  assert.equal(document.uploads[1].status, "queued");
+});
+
+test("central publishing skips a disconnected account without starving later ready jobs", () => {
+  const timestamp = Date.now();
+  const document = {
+    accounts: [
+      { id: "account_disconnected", enabled: true, credentialConfigured: false },
+      { id: "account_ready", enabled: true, credentialConfigured: true },
+    ],
+    uploads: [
+      { id: "upload_disconnected" },
+      { id: "upload_ready" },
+    ],
+    jobs: [
+      { id: "job_disconnected", workspaceId: "workspace_1", accountId: "account_disconnected", uploadId: "upload_disconnected", state: "queued", attemptCount: 0 },
+      { id: "job_ready", workspaceId: "workspace_1", accountId: "account_ready", uploadId: "upload_ready", state: "queued", attemptCount: 0 },
+    ],
+  };
+
+  const selected = centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp, 1);
+
+  assert.equal(document.jobs[0].state, "waiting_for_companion");
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].job.id, "job_ready");
+});
+
+test("central publishing creates a multi-destination release atomically in one document mutation", () => {
+  const platforms = ["instagram", "facebook", "x", "linkedin", "youtube"];
+  const document = {
+    accounts: platforms.map((platform, index) => ({
+      id: `account_${index}`,
+      workspaceId: "workspace_1",
+      platform,
+      enabled: true,
+      credentialConfigured: true,
+    })),
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+
+  const uploads = platforms.map((platform, index) => centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: `account_${index}`,
+    postFormat: "image",
+    originalName: "release.jpg",
+    mimeType: "image/jpeg",
+    caption: `${platform} caption`,
+    rightsConfirmed: true,
+  }));
+
+  assert.equal(uploads.length, 5);
+  assert.equal(document.uploads.length, 5);
+  assert.equal(document.jobs.length, 5);
+  assert.deepEqual(document.uploads.map((upload) => upload.caption), platforms.map((platform) => `${platform} caption`));
+});
+
+test("central publishing holds exact-time and template jobs until their scheduled occurrence", () => {
+  const timestamp = Date.now();
+  const exactTime = new Date(timestamp + 60_000).toISOString();
+  const templateTime = new Date(timestamp + 120_000).toISOString();
+  const document = {
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", platform: "facebook",
+      enabled: true, credentialConfigured: true,
+    }],
+    uploads: [], jobs: [], activityLogs: [], companions: [],
+    schedules: [{
+      id: 1, workspaceId: "workspace_1", name: "Daily", frequency: "daily",
+      time: "09:30", status: "active", nextRunAt: templateTime,
+    }],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+
+  const exact = centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: "account_1", postFormat: "text", caption: "Exact-time post", scheduledAt: exactTime,
+  });
+  const templated = centralPublishingTestHelpers.createUploadInDocument(document, principal, {
+    accountId: "account_1", postFormat: "text", caption: "Template post", scheduleId: 1,
+  });
+
+  assert.equal(document.jobs.find((job) => job.uploadId === exact.id)?.notBefore, exactTime);
+  assert.equal(document.jobs.find((job) => job.uploadId === templated.id)?.notBefore, templateTime);
+  assert.equal(centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp, 5).length, 0);
+  assert.deepEqual(
+    centralPublishingTestHelpers.selectClaimableCentralJobs(document, "workspace_1", timestamp + 180_000, 5)
+      .map((item) => item.upload.id),
+    [exact.id, templated.id],
+  );
+});
+
+test("staged publishing finalization is idempotent per account", () => {
+  const document = {
+    accounts: [{ id: "account_1", workspaceId: "workspace_1", platform: "instagram", enabled: true, credentialConfigured: true }],
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+  const input = {
+    accountId: "account_1", postFormat: "image", originalName: "release.jpg", mimeType: "image/jpeg",
+    caption: "Retry-safe release", rightsConfirmed: true, sourceSubmissionId: "stage_1",
+    previewArtifact: { bucket: "job-artifacts", path: "workspace_1/release.preview.webp", byteSize: 24_000 },
+  };
+  const first = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
+  const retried = centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
+  assert.equal(retried.id, first.id);
+  assert.equal(document.uploads.length, 1);
+  assert.equal(document.jobs.length, 1);
+  assert.equal(document.uploads[0].previewArtifact.path, "workspace_1/release.preview.webp");
+  assert.equal(Object.hasOwn(first, "previewArtifact"), false);
+});
+
+test("large media parts advance in one contiguous batch", () => {
+  const chunkSize = 5 * 1024 * 1024;
+  const document = {
+    stagedUploads: [{
+      id: "stage_1", workspaceId: "workspace_1", size: chunkSize * 4,
+      offset: 0, chunkSize, artifactParts: [], updatedAt: new Date(0).toISOString(),
+    }],
+  };
+  const parts = Array.from({ length: 4 }, (_, index) => ({
+    index,
+    offset: index * chunkSize,
+    byteSize: chunkSize,
+    path: `workspace/media.parts/${index}`,
+  }));
+
+  const result = centralPublishingTestHelpers.advanceStagedUploadPartsInDocument(
+    document, "workspace_1", "stage_1", parts,
+  );
+
+  assert.equal(result.offset, chunkSize * 4);
+  assert.equal(document.stagedUploads[0].artifactParts.length, 4);
+  assert.deepEqual(document.stagedUploads[0].artifactParts.map((part) => part.index), [0, 1, 2, 3]);
+  assert.throws(() => centralPublishingTestHelpers.advanceStagedUploadPartsInDocument(
+    document, "workspace_1", "stage_1", [{ index: 5, offset: chunkSize * 5, byteSize: chunkSize }],
+  ), /does not match/);
+});
+
+test("a completed remote job cannot block a new staged post as an already queued duplicate", () => {
+  const document = {
+    accounts: [{ id: "account_1", workspaceId: "workspace_1", platform: "x", enabled: true, credentialConfigured: true }],
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+  const input = {
+    accountId: "account_1", postFormat: "video", originalName: "release.mp4", mimeType: "video/mp4", size: 126_716_294,
+    caption: "Verified replacement post", rightsConfirmed: true, sourceSubmissionId: "stage_1",
+  };
+  const first = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [input], [])[0];
+  const replacementInput = { ...input, sourceSubmissionId: "stage_2" };
+  assert.throws(() => centralPublishingTestHelpers.createUploadsInDocument(document, principal, [replacementInput], []), /already queued/);
+  const remote = [{
+    id: document.jobs[0].id, status: "uncertain", message: "Confirmation timed out", attemptCount: 1,
+    assignedDeviceId: null, leaseExpiresAt: null, updatedAt: new Date().toISOString(), completedAt: null,
+  }];
+  const [replacement] = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [replacementInput], remote);
+  assert.notEqual(replacement.id, first.id);
+  assert.equal(document.uploads[0].status, "failed");
+  assert.equal(document.uploads[0].publishActionState, "uncertain");
+  assert.equal(document.jobs[0].state, "uncertain");
+  assert.equal(document.uploads[1].status, "queued");
+  assert.equal(document.jobs.length, 2);
+  const [sameStage] = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [input], remote);
+  assert.equal(sameStage.id, first.id);
+  assert.equal(document.jobs.length, 2);
+});
+
+test("admin publishing monitoring preserves final destination copy without exposing artifacts", () => {
+  const document = {
+    accounts: [{
+      id: "account_1", workspaceId: "workspace_1", platform: "linkedin",
+      displayName: "Acme Company", handle: "acme", enabled: true, credentialConfigured: true,
+    }],
+    companions: [],
+    jobs: [{ id: "job_1", uploadId: "upload_1", state: "published", updatedAt: "2026-09-12T10:00:00.000Z" }],
+  };
+  const monitored = centralPublishingTestHelpers.adminMonitorPost(document, {
+    id: "upload_1", workspaceId: "workspace_1", accountId: "account_1", platform: "linkedin",
+    postFormat: "image", originalName: "launch.jpg", fileName: "private-launch.jpg", mimeType: "image/jpeg",
+    size: 9_856_614, title: "Launch day", caption: "The exact LinkedIn copy", status: "posted",
+    artifact: { bucket: "private", path: "do-not-expose", downloadUrl: "https://example.invalid/private" },
+    previewArtifact: { bucket: "job-artifacts", path: "do-not-expose-preview", byteSize: 42_000 },
+    createdByUserId: "user_1", createdByName: "Asha", updatedAt: "2026-09-12T10:00:00.000Z",
+  });
+
+  assert.equal(monitored.caption, "The exact LinkedIn copy");
+  assert.equal(monitored.account.displayName, "Acme Company");
+  assert.equal(monitored.statusDetail, "published");
+  assert.equal(monitored.mediaPreviewAvailable, true);
+  assert.equal(monitored.optimizedPreviewAvailable, true);
+  assert.equal(monitored.previewUrl, "/api/admin-center/publishing/media/upload_1?variant=preview");
+  assert.equal(monitored.mediaUrl, "/api/admin-center/publishing/media/upload_1");
+  assert.equal(Object.hasOwn(monitored, "artifact"), false);
+  assert.equal(JSON.stringify(monitored).includes("do-not-expose"), false);
+  assert.equal(JSON.stringify(monitored).includes("do-not-expose-preview"), false);
+});

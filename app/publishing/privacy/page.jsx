@@ -12,7 +12,7 @@ export default function PublishingCompanionPrivacyPage() {
         <a className={styles.brand} href="/">AgenticThat</a>
         <p className={styles.eyebrow}>Chrome extension privacy</p>
         <h1>Publishing Companion privacy policy</h1>
-        <p className={styles.updated}>Effective July 21, 2026</p>
+        <p className={styles.updated}>Effective July 23, 2026</p>
 
         <section>
           <h2>What the extension does</h2>
@@ -26,9 +26,16 @@ export default function PublishingCompanionPrivacyPage() {
         <section>
           <h2>Data handling</h2>
           <p>
-            The extension does not collect, sell, or send publishing data to AgenticThat servers.
-            Publishing metadata, selected media, schedules, and saved browser sessions remain on the
-            user&apos;s computer in the local companion data directory.
+            To provide this local bridge, the extension handles user-provided post text, selected
+            images or videos, schedules and publishing actions; AgenticThat dashboard authentication
+            information forwarded to the local companion; and locally returned workspace and
+            connected-account identifiers used by the publishing dashboard.
+          </p>
+          <p>
+            This information is transferred only between the AgenticThat dashboard and the companion
+            running on the same computer. The extension does not retain it or send it to AgenticThat
+            servers. Publishing metadata, selected media, schedules, and saved browser sessions remain
+            in the local companion data directory.
           </p>
           <p>
             The extension does not receive or store social-network passwords or verification codes.
@@ -43,6 +50,16 @@ export default function PublishingCompanionPrivacyPage() {
             <code>127.0.0.1:8792</code>. The extension itself does not retain publishing requests.
             Users can remove all locally stored publishing data by choosing <strong>Open local
             data</strong> in the companion, quitting the companion, and deleting that folder.
+          </p>
+        </section>
+
+        <section>
+          <h2>Sharing and limited use</h2>
+          <p>
+            AgenticThat does not sell extension data, use it for advertising, or transfer it for
+            purposes unrelated to the extension&apos;s single purpose. Use of information handled by
+            this extension complies with the Chrome Web Store User Data Policy, including the Limited
+            Use requirements.
           </p>
         </section>
 

@@ -1,6 +1,6 @@
 # Telegram Workflow Dashboard
 
-This project is a local Node.js/TypeScript application for connecting one or more Telegram user accounts, sending messages from the selected account, saving workflow data in the browser workspace, and storing Telegram sessions/messages securely in an encrypted local JSON datastore.
+This Node.js/TypeScript service connects one or more Telegram user accounts, sends messages from the selected account, and stores workspace-owned Telegram sessions, messages, posts, contacts, and media in normalized Supabase PostgreSQL tables. Sensitive fields remain encrypted before persistence. Local development can still use the encrypted JSON datastore.
 
 The current flow:
 
@@ -12,11 +12,11 @@ Developer runs npm run server
 -> User enters a Telegram phone number
 -> Telegram sends an OTP/login code to that Telegram account
 -> User enters the OTP in this dashboard
--> The app stores the encrypted Telegram session in data/store.json
+-> Production stores the encrypted Telegram session in workspace-owned Supabase rows
 -> Future sends use the selected saved Telegram account/session
 ```
 
-Each user enters their own Telegram API ID and API Hash when connecting a number. Those credentials and the Telegram session are encrypted in `data/store.json`, so one phone number is never reused as another sender.
+The deployment uses one server-side Telegram API ID and API hash. Users never see or submit those credentials; they enter only their phone number, verification code, and optional Telegram two-factor password. Connected Telegram sessions remain isolated per workspace and encrypted in the datastore.
 
 No PostgreSQL, pgAdmin, or separate database server is required. Backend data is stored in the local encrypted JSON datastore at `data/store.json`. The application UI opens in the browser, while VS Code is only used for editing/running the project.
 
@@ -27,7 +27,7 @@ No PostgreSQL, pgAdmin, or separate database server is required. Backend data is
 - Select which connected profile/number should send messages.
 - Send quick messages to `@username` or `+countrycode` phone numbers.
 - Manage local profiles, contacts, inbox threads, groups, channels, posts, search, settings, and backup JSON.
-- Create, preview, save, send, and schedule posts from the browser workspace.
+- Create, preview, save, and immediately send posts from the browser workspace.
 - Record sent-post history in browser JSON and backend message history in the JSON datastore.
 - Run a separate listener worker to save incoming Telegram replies.
 - Run an optional Telegram Bot API auto-reply worker.
@@ -69,10 +69,10 @@ contact-telegram/
 - Node.js 20 or newer.
 - npm.
 
-- Each user needs their own Telegram API ID and API Hash from `https://my.telegram.org` when connecting a number.
+- The deployment owner can optionally provide one shared Telegram API ID and API hash from `https://my.telegram.org`. Without them, each operator enters credentials securely while connecting a number.
 - A real Telegram phone number for each account you want to connect.
 - For production use: HTTPS, a real auth system, secret manager, backups, monitoring, and network restrictions.
-- Go to `https://my.telegram.org`, enter your mobile number, paste the Telegram code, open API development, create an app, and copy the API ID and API hash. Enter those values on the dashboard Add Number screen.
+- To keep the connection form phone-only, add the deployment API ID and hash as `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Never expose them through a `NEXT_PUBLIC_*` variable.
 - For SESSION_ENCRYPTION_KEY and USER_PROVISIONING_KEY, run this `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"` 2 times a random key will be generated paste them in their respective places
 
 ## First-Time Local Setup
@@ -88,7 +88,7 @@ npm run build
 
 No external database setup is required. The backend creates `data/store.json` automatically on first startup.
 
-The JSON datastore contains encrypted Telegram sessions, encrypted message history, app users, browser sessions, and temporary Telegram login challenges. Keep `SESSION_ENCRYPTION_KEY` stable because changing it makes existing encrypted Telegram sessions/messages unreadable.
+Production uses `TELEGRAM_DATA_STORE=postgres` with `DATABASE_URL` or `SUPABASE_DB_URL`. The JSON datastore is for local development only. Keep `SESSION_ENCRYPTION_KEY` stable because changing it makes existing encrypted Telegram sessions/messages unreadable.
 
 ### 3. Create `.env`.
 
@@ -118,11 +118,13 @@ Fill `.env` like this:
 DATA_DIR=data
 SESSION_ENCRYPTION_KEY=generated_key_1
 USER_PROVISIONING_KEY=generated_key_2
+TELEGRAM_API_ID=your_server_api_id
+TELEGRAM_API_HASH=your_server_api_hash
 SERVICE_HOST=127.0.0.1
 SERVICE_PORT=8787
 ```
 
-Never commit or share `.env`, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys. Users should keep their own Telegram API hash private.
+The two Telegram values are optional; omit both to collect and encrypt them per connection in Config Manager. Never commit or share `.env`, a Telegram API hash, access tokens, Telegram login codes, 2FA passwords, bot tokens, session strings, or generated keys.
 
 ### 4. Start the API and Browser UI
 
@@ -154,10 +156,11 @@ Account connections are centrally managed from the AgenticThat **Config Manager*
 
 1. Sign in to the Telegram workspace once.
 2. Open `http://127.0.0.1:5173/config-manager?service=messaging&platform=telegram`.
-3. Enter the Telegram API ID, API hash, and phone number with country code.
-4. Submit the verification code sent by Telegram.
-5. If prompted, enter that Telegram account's 2FA password.
-6. Return to Telegram and select the connected profile from the top `Profile` selector.
+3. If no shared app identity is configured, enter an API ID and hash from `https://my.telegram.org`.
+4. Enter the Telegram phone number with country code.
+5. Submit the verification code sent by Telegram.
+6. If prompted, enter that Telegram account's 2FA password.
+7. Return to Telegram and select the connected profile from the top `Profile` selector.
 
 The selected profile controls the sender for quick messages, inbox replies, and post sending.
 
@@ -188,7 +191,7 @@ Default local URLs:
 
 ```text
 Website + WhatsApp: http://127.0.0.1:5173
-Telegram:           http://127.0.0.1:8787/console
+Telegram:           http://127.0.0.1:5173/console
 Instagram:          http://127.0.0.1:5173/scraper/instagram
 ```
 
@@ -316,7 +319,7 @@ To send:
 5. Add a manual target, select contacts, select groups, or combine them.
 6. Click `Save post`.
 7. Check the preview.
-8. Click `Post now` or schedule a date/time.
+8. Click `Post now`. Scheduling is intentionally unavailable in the Netlify deployment.
 
 The app combines all targets, removes duplicates, and sends from the currently selected profile.
 
@@ -693,7 +696,7 @@ Screenshots are in [docs/screenshots](docs/screenshots). Requirement coverage an
 - Contacts, groups, channels, posts, settings, and post history are browser-local workspace JSON, not shared server records.
 - Contacts and groups are not strictly scoped per selected profile yet.
 - Saved groups are local broadcast lists, not private Telegram group sync by `chatId`/`accessHash`.
-- Scheduled posts send only while the browser workspace is open and signed in. There is no server-side scheduler worker yet.
+- Telegram sends are request-bound and complete before the API responds. Scheduling is intentionally disabled for the Netlify deployment.
 - Channel records are local planning records and do not manage Telegram channel membership.
 - A dedicated QR Code tab is listed in requirements but is not implemented in the UI yet.
 - `npm run listen` loads accounts only at startup. Restart it after adding or deleting numbers.

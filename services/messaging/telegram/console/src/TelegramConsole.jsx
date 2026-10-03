@@ -2,12 +2,12 @@ import React from "react";
 
 const h = React.createElement;
 
-export function TelegramConsole() {
+export function TelegramConsole({ integrated = false }) {
   return h(React.Fragment, null,
       h("main", null,
         h("section", {"id":"sign-in-view","className":"auth-shell","aria-labelledby":"sign-in-title"},
           h("div", {"className":"auth-showcase","aria-hidden":"true"},
-            h("div", {"className":"auth-brand"},
+            h("a", {"className":"auth-brand","href":"/apps","title":"Back to Home"},
               h("span", {"className":"auth-brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -43,6 +43,9 @@ export function TelegramConsole() {
             )
           ),
           h("div", {"className":"auth-card"},
+            h("a", {"className":"auth-back","href":"/apps"},
+              "← Back to Home"
+            ),
             h("div", {"className":"auth-card-heading"},
               h("span", {"className":"mobile-auth-mark","aria-hidden":"true"},
                 h("svg", {"viewBox":"0 0 24 24"},
@@ -53,13 +56,21 @@ export function TelegramConsole() {
                 "Secure workspace"
               ),
               h("h1", {"id":"sign-in-title"},
-                "Welcome back"
+                integrated ? "Opening Telegram" : "Welcome back"
               ),
               h("p", {"className":"lede"},
-                "Sign in to continue to your Telegram workspace."
+                integrated
+                  ? "Using your signed-in AgenticThat workspace. No extra dashboard login is required."
+                  : "Use the same Telegram dashboard login configured in Connections."
               )
             ),
-            h("form", {"id":"password-sign-in-form","className":"stack","noValidate":true},
+            integrated && h("div", {"className":"stack compact"},
+              h("p", null, "Your connected Telegram accounts are loading securely."),
+              h("button", {"className":"button primary","type":"button","onClick":() => window.location.reload()},
+                "Retry"
+              )
+            ),
+            h("form", {"id":"password-sign-in-form","className":"stack","noValidate":true,"hidden":integrated},
               h("label", {"htmlFor":"username"},
                 "Username"
               ),
@@ -77,11 +88,11 @@ export function TelegramConsole() {
                   "Sign in"
                 ),
                 h("button", {"id":"create-account","className":"button ghost","type":"button"},
-                  "Create workspace"
+                  "Create dashboard login"
                 )
               )
             ),
-            h("details", {"className":"token-panel"},
+            h("details", {"className":"token-panel","hidden":integrated},
               h("summary", null,
                 "Access token sign-in"
               ),
@@ -95,7 +106,9 @@ export function TelegramConsole() {
                 )
               )
             ),
-            h("p", {"id":"sign-in-status","className":"status","role":"status","aria-live":"polite"})
+            h("p", {"id":"sign-in-status","className":"status","role":"status","aria-live":"polite"},
+              integrated ? "Connecting securely…" : ""
+            )
           )
         ),
         h("section", {"id":"workspace","className":"app-shell","hidden":true},
@@ -125,6 +138,22 @@ export function TelegramConsole() {
               h("symbol", {"id":"nav-connect","viewBox":"0 0 24 24"},
                 h("path", {"d":"M15 7h2a4 4 0 0 1 0 8h-2m-6 0H7a4 4 0 0 1 0-8h2m-2 5h10M12 3v5m-2-2h4"})
               ),
+              h("symbol", {"id":"guide-phone","viewBox":"0 0 24 24"},
+                h("rect", {"x":"5","y":"2","width":"14","height":"20","rx":"2"}),
+                h("path", {"d":"M12 18h.01"})
+              ),
+              h("symbol", {"id":"guide-code","viewBox":"0 0 24 24"},
+                h("circle", {"cx":"7.5","cy":"15.5","r":"5.5"}),
+                h("path", {"d":"m21 2-9.6 9.6M15.5 7.5l3 3L21 8l-3-3"})
+              ),
+              h("symbol", {"id":"guide-shield","viewBox":"0 0 24 24"},
+                h("path", {"d":"M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"}),
+                h("path", {"d":"m9 12 2 2 4-4"})
+              ),
+              h("symbol", {"id":"guide-book","viewBox":"0 0 24 24"},
+                h("path", {"d":"M4 19.5A2.5 2.5 0 0 1 6.5 17H20"}),
+                h("path", {"d":"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"})
+              ),
               h("symbol", {"id":"nav-accounts","viewBox":"0 0 24 24"},
                 h("rect", {"x":"3","y":"4","width":"18","height":"16","rx":"3"}),
                 h("path", {"d":"M8 9h8M8 13h5"})
@@ -145,7 +174,7 @@ export function TelegramConsole() {
                 h("path", {"d":"M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4m4-6 4-4 4 4m-4-4v11"})
               )
             ),
-            h("div", {"className":"brand"},
+            h("a", {"className":"brand","href":"/apps","title":"Back to Home"},
               h("span", {"className":"brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -160,6 +189,20 @@ export function TelegramConsole() {
                 )
               )
             ),
+            h("nav", {"className":"product-links","aria-label":"AgenticThat navigation"},
+              h("a", {"href":"/apps"},
+                "← Home"
+              ),
+              h("a", {"href":"/messaging"},
+                "Send to everyone"
+              ),
+              h("a", {"href":"/dashboard"},
+                "WhatsApp"
+              ),
+              h("a", {"href":"/config-manager?service=messaging&platform=telegram"},
+                "Connect account"
+              )
+            ),
             h("nav", {"className":"nav-menu"},
               h("div", {"className":"nav-section"},
                 h("p", {"className":"nav-label"},
@@ -170,7 +213,7 @@ export function TelegramConsole() {
                     h("use", {"href":"#nav-overview"})
                   ),
                   h("span", null,
-                    "Overview"
+                    "Summary"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"inbox"},
@@ -178,7 +221,7 @@ export function TelegramConsole() {
                     h("use", {"href":"#nav-inbox"})
                   ),
                   h("span", null,
-                    "Inbox"
+                    "Chats"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"contacts"},
@@ -236,7 +279,7 @@ export function TelegramConsole() {
                     h("use", {"href":"#nav-connect"})
                   ),
                   h("span", null,
-                    "Config Manager"
+                    "Connect account"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"manage-numbers"},
@@ -440,24 +483,15 @@ export function TelegramConsole() {
                   ),
                   h("div", {"className":"connect-heading-actions"},
                     h("button", {"className":"guide-button","type":"button","data-guide-open":"","aria-controls":"telegram-guide-panel","aria-expanded":"false"},
-                      "Help guide"
+                      h("svg", {"className":"guide-help-icon","aria-hidden":"true"}, h("use", {"href":"#guide-book"})),
+                      "Connection steps"
                     )
                   )
                 ),
                 h("p", {"id":"connect-copy","className":"muted"},
-                  "Use the full phone number with country code. Telegram will deliver a verification code."
+                  "Enter your phone number. Telegram will deliver a verification code."
                 ),
                 h("form", {"id":"phone-form","className":"stack"},
-                  h("div", {"className":"form-grid"},
-                    h("label", {"htmlFor":"telegram-api-id"},
-                      "Telegram API ID ",
-                      h("input", {"id":"telegram-api-id","name":"telegramApiId","type":"text","inputMode":"numeric","autoComplete":"off","required":true})
-                    ),
-                    h("label", {"htmlFor":"telegram-api-hash"},
-                      "Telegram API hash ",
-                      h("input", {"id":"telegram-api-hash","name":"telegramApiHash","type":"password","autoComplete":"off","required":true})
-                    )
-                  ),
                   h("label", {"htmlFor":"phone"},
                     "Phone number"
                   ),
@@ -1390,7 +1424,7 @@ export function TelegramConsole() {
                     ),
                     h("input", {"id":"contact-name","type":"text","required":true}),
                     h("label", {"htmlFor":"contact-handle"},
-                      "Username"
+                      "Telegram username (optional)"
                     ),
                     h("input", {"id":"contact-handle","type":"text","placeholder":"@username"}),
                     h("label", {"htmlFor":"contact-phone"},
@@ -2289,7 +2323,8 @@ export function TelegramConsole() {
                       h("button", {"id":"group-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"group-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"group-list","className":"record-list"})
                 )
@@ -2340,7 +2375,8 @@ export function TelegramConsole() {
                       h("button", {"id":"channel-clear","className":"button ghost","type":"button"},
                         "Clear"
                       )
-                    )
+                    ),
+                    h("p", {"id":"channel-status-message","className":"status","role":"status","aria-live":"polite"})
                   ),
                   h("div", {"id":"channel-list","className":"record-list"})
                 )
@@ -2361,6 +2397,7 @@ export function TelegramConsole() {
                   ),
                   h("form", {"id":"post-form","className":"stack","noValidate":true},
                     h("input", {"id":"post-id","type":"hidden"}),
+                    h("input", {"id":"post-account-id","type":"hidden"}),
                     h("label", {"htmlFor":"post-title"},
                       "Post title"
                     ),
@@ -2378,6 +2415,9 @@ export function TelegramConsole() {
                           h("option", {"value":"video"},
                             "Video + text"
                           ),
+                          h("option", {"value":"animation"},
+                            "GIF / animation"
+                          ),
                           h("option", {"value":"document"},
                             "Document"
                           ),
@@ -2386,6 +2426,9 @@ export function TelegramConsole() {
                           ),
                           h("option", {"value":"voice"},
                             "Voice message"
+                          ),
+                          h("option", {"value":"video_note"},
+                            "Video note"
                           ),
                           h("option", {"value":"poll"},
                             "Poll"
@@ -2408,30 +2451,61 @@ export function TelegramConsole() {
                       ),
                       h("label", null,
                         "Status",
-                        h("select", {"id":"post-status"},
+                        h("select", {"id":"post-status","disabled":true,"aria-describedby":"post-status-help"},
                           h("option", null,
                             "Draft"
-                          ),
-                          h("option", null,
-                            "Ready"
                           ),
                           h("option", null,
                             "Scheduled"
                           ),
                           h("option", null,
+                            "Sending"
+                          ),
+                          h("option", null,
                             "Posted"
+                          ),
+                          h("option", null,
+                            "Partially failed"
+                          ),
+                          h("option", null,
+                            "Failed"
+                          ),
+                          h("option", null,
+                            "Cancelled"
                           )
+                        ),
+                        h("small", {"id":"post-status-help"},
+                          "Stored securely in your workspace"
                         )
                       )
                     ),
-                    h("label", {"htmlFor":"post-scheduled-at"},
+                    h("label", {"htmlFor":"post-scheduled-at","hidden":true},
                       "Scheduled date"
                     ),
-                    h("input", {"id":"post-scheduled-at","type":"datetime-local"}),
-                    h("label", {"htmlFor":"post-media-url"},
-                      "Media URL"
+                    h("input", {"id":"post-scheduled-at","type":"datetime-local","hidden":true,"disabled":true}),
+                    h("section", {"id":"post-media-dropzone","className":"telegram-upload-box","tabIndex":"0","role":"button","aria-label":"Upload Telegram media from this device","aria-describedby":"post-media-status"},
+                      h("input", {"id":"post-media-file","className":"telegram-upload-input","type":"file","accept":"*/*"}),
+                      h("span", {"className":"telegram-upload-icon","aria-hidden":"true"},
+                        "↑"
+                      ),
+                      h("strong", null,
+                        "Drop a file here or choose from device"
+                      ),
+                      h("span", {"className":"telegram-upload-copy"},
+                        "Images, videos, GIFs, audio, voice messages, video notes, and documents"
+                      ),
+                      h("span", {"className":"telegram-upload-button"},
+                        "Choose file"
+                      )
                     ),
-                    h("input", {"id":"post-media-url","type":"url","placeholder":"https://example.com/media.jpg"}),
+                    h("input", {"id":"post-media-url","type":"hidden"}),
+                    h("input", {"id":"post-media-upload-id","type":"hidden"}),
+                    h("input", {"id":"post-media-name","type":"hidden"}),
+                    h("input", {"id":"post-media-mime","type":"hidden"}),
+                    h("input", {"id":"post-media-size","type":"hidden"}),
+                    h("small", {"id":"post-media-status","className":"muted","role":"status","aria-live":"polite"},
+                      "Choose any supported file. It will be stored privately for sending."
+                    ),
                     h("label", {"htmlFor":"post-body"},
                       "Text or caption"
                     ),
@@ -2455,7 +2529,7 @@ export function TelegramConsole() {
                       h("button", {"id":"post-send-now","className":"button ghost","type":"button"},
                         "Post now"
                       ),
-                      h("button", {"id":"post-schedule","className":"button ghost","type":"button"},
+                      h("button", {"id":"post-schedule","className":"button ghost","type":"button","hidden":true,"disabled":true},
                         "Schedule"
                       ),
                       h("button", {"id":"post-clear","className":"button text","type":"button"},
@@ -2682,10 +2756,10 @@ export function TelegramConsole() {
           h("div", {"className":"guide-dialog-header"},
             h("div", null,
               h("p", {"className":"eyebrow"},
-                "Help guide"
+                "Account connection"
               ),
               h("h2", {"id":"telegram-user-guide-title"},
-                "Telegram API setup"
+                "Connect your Telegram account"
               )
             ),
             h("button", {"className":"icon-button guide-close-button","type":"button","data-guide-close":"","aria-label":"Close help guide"},
@@ -2693,100 +2767,40 @@ export function TelegramConsole() {
             )
           ),
           h("p", {"className":"guide-intro"},
-            "Use these quick steps to create Telegram API credentials and connect your number."
+            "Use the phone number attached to the Telegram account you want to add."
           ),
           h("ol", {"className":"guide-steps"},
             h("li", null,
               h("span", null,
-                "1"
-              ),
-              h("p", null,
-                "Open ",
-                h("a", {"href":"https://my.telegram.org/auth?to=apps","target":"_blank","rel":"noopener noreferrer"},
-                  "my.telegram.org"
-                ),
-                "."
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "2"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-phone"}))
               ),
               h("div", null,
-                h("p", null,
-                  "Enter your Telegram phone number. For India, use ",
-                  h("strong", null,
-                    "+91"
-                  ),
-                  " before the number."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-phone-entry.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-phone-entry.png","width":"1592","height":"563","alt":"Telegram website phone number entry screen","loading":"lazy","decoding":"async"})
-                )
+                h("strong", null, "Enter the phone number"),
+                h("p", null, "Include its country code, then request a verification code.")
               )
             ),
             h("li", null,
               h("span", null,
-                "3"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-code"}))
               ),
               h("div", null,
-                h("p", null,
-                  "Enter the confirmation code received in Telegram and click ",
-                  h("strong", null,
-                    "Sign in"
-                  ),
-                  "."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-confirmation-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-confirmation-redacted.png","width":"1523","height":"667","alt":"Telegram website confirmation-code screen with a safe example phone number","loading":"lazy","decoding":"async"})
-                )
+                h("strong", null, "Verify the account"),
+                h("p", null, "Enter the newest code sent to your Telegram app or by SMS.")
               )
             ),
             h("li", null,
               h("span", null,
-                "4"
-              ),
-              h("p", null,
-                "Click ",
-                h("a", {"href":"https://my.telegram.org/apps","target":"_blank","rel":"noopener noreferrer"},
-                  "API development tools"
-                ),
-                "."
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "5"
+                h("svg", {"className":"guide-step-icon","aria-hidden":"true"}, h("use", {"href":"#guide-shield"}))
               ),
               h("div", null,
-                h("p", null,
-                  "Copy ",
-                  h("strong", null,
-                    "API ID"
-                  ),
-                  " and ",
-                  h("strong", null,
-                    "API hash"
-                  ),
-                  ", then paste them into this form."
-                ),
-                h("a", {"className":"guide-screenshot","href":"/console/assets/guide/telegram-api-credentials-redacted.png","target":"_blank","rel":"noopener noreferrer","title":"Open the full-size screenshot"},
-                  h("img", {"src":"/console/assets/guide/telegram-api-credentials-redacted.png","width":"1601","height":"320","alt":"Telegram API configuration screen with the API ID and API hash blurred","loading":"lazy","decoding":"async"})
-                )
-              )
-            ),
-            h("li", null,
-              h("span", null,
-                "6"
-              ),
-              h("p", null,
-                "Enter your phone number here, click ",
-                h("strong", null,
-                  "Send verification code"
-                ),
-                ", then enter the Telegram code."
+                h("strong", null, "Finish securely"),
+                h("p", null, "If Telegram asks, enter the account's two-step verification password.")
               )
             )
+          ),
+          h("div", {"className":"guide-next"},
+            h("strong", null, "After connection"),
+            h("p", null, "Choose the sending profile, enter a recipient, and write your message. Companion is not required for Telegram.")
           )
         )
       )

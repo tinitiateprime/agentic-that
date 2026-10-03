@@ -1,0 +1,21 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - nvm install 22
+        - nvm use 22
+        - npm ci --include=dev
+    build:
+      commands:
+        - node scripts/amplify-environment.mjs
+        - node scripts/check-production-config.mjs --amplify
+        - HOSTING_PROVIDER=aws-amplify SERVERLESS=true DATA_STORE=postgres TELEGRAM_DATA_STORE=postgres RUN_DATABASE_MIGRATIONS=false PG_POOL_MAX=1 PG_IDLE_TIMEOUT_SECONDS=5 npm run build
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+      - .next/cache/**/*

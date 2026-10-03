@@ -5,6 +5,7 @@
       "@/*": ["./*"],
       "@instagram/*": ["services/scraping/instagram/*"],
       "@platform/*": ["src/platform/*"],
+      "@telegram/*": ["services/messaging/telegram/*"],
       "@whatsapp/*": ["services/messaging/whatsapp/src/*"]
     }
   }

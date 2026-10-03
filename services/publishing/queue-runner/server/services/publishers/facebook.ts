@@ -1,11 +1,23 @@
 import type { Locator, Page } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { waitForLoginWithManualFallback, type AccountLogin } from "./manual-login.js";
+import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
+import { setLocalInputFile } from "./local-file-input.js";
 
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login/";
+export const FACEBOOK_POST_ACCEPTED_TEXT = /Your post (?:is being processed|was shared|is now published)|Post published|Your (?:video|reel) is being processed/i;
+
+export const FACEBOOK_COMPOSER_EDITOR_SELECTORS = [
+  '[role="dialog"] [contenteditable="true"][role="textbox"]',
+  '[role="dialog"] [contenteditable="true"][data-lexical-editor="true"]',
+  '[role="dialog"] [role="textbox"]',
+  '[role="dialog"] [contenteditable="true"]',
+  '[role="dialog"] textarea',
+  '[contenteditable="true"][role="textbox"][aria-label*="mind" i]',
+  '[contenteditable="true"][data-lexical-editor="true"]',
+] as const;
 
 function getLoginHoldMs() {
   return Number(process.env.FACEBOOK_LOGIN_HOLD_MS ?? 15000);
@@ -82,6 +94,27 @@ async function dismissCookiePrompt(page: Page) {
   }
 }
 
+async function dismissPostLoginPrompts(page: Page) {
+  const dismissButtons = [
+    page.getByRole("button", { name: /^Not now$/i }),
+    page.getByRole("button", { name: /^Maybe later$/i }),
+    page.getByText(/^Not now$/i),
+    page.getByText(/^Maybe later$/i),
+  ];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let dismissed = false;
+    for (const button of dismissButtons) {
+      if (await clickIfVisible(button, 1200)) {
+        dismissed = true;
+        await page.waitForTimeout(400);
+        break;
+      }
+    }
+    if (!dismissed) break;
+  }
+}
+
 async function blockNotificationPrompt(page: Page) {
   try {
     const client = await page.context().newCDPSession(page);
@@ -110,9 +143,17 @@ async function blockNotificationPrompt(page: Page) {
   await page.keyboard.press("Escape").catch(() => undefined);
 }
 
+export function hasFacebookAuthenticationCookies(cookies: Array<{ name: string; value?: string }>) {
+  const values = new Map(cookies.map(cookie => [cookie.name, cookie.value ?? ""]));
+  return Boolean(values.get("c_user")?.trim() && values.get("xs")?.trim());
+}
+
 async function isLoggedIn(page: Page) {
   const url = page.url();
   if (/facebook\.com\/login|checkpoint|two_step|recover|captcha/i.test(url)) return false;
+
+  const cookies = await page.context().cookies(FACEBOOK_HOME_URL).catch(() => []);
+  if (hasFacebookAuthenticationCookies(cookies)) return true;
 
   const loggedInSignals = [
     page.getByRole("link", { name: /^Home$/i }),
@@ -120,6 +161,8 @@ async function isLoggedIn(page: Page) {
     page.locator('[aria-label="Facebook"]'),
     page.locator('[aria-label="Home"]'),
     page.locator('[aria-label="Create"]'),
+    page.locator('[aria-label*="Your profile" i]'),
+    page.locator('a[href="/me/"]'),
     page.locator('[role="feed"]'),
   ];
 
@@ -128,6 +171,22 @@ async function isLoggedIn(page: Page) {
 
 function createPostDialog(page: Page) {
   return page.locator('[role="dialog"]').filter({ hasText: /Create post|What's on your mind/i }).last();
+}
+
+function facebookComposerEditorLocators(page: Page) {
+  return FACEBOOK_COMPOSER_EDITOR_SELECTORS.map(selector => page.locator(selector));
+}
+
+async function waitForFacebookComposerEditor(page: Page, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const editor = await firstVisible(facebookComposerEditorLocators(page));
+    if (editor) return editor;
+    await page.waitForTimeout(200);
+  }
+
+  return null;
 }
 
 function reviewAudienceDialog(page: Page) {
@@ -162,27 +221,46 @@ async function waitForFacebookHome(page: Page) {
 
 async function clickWhatsOnYourMind(page: Page) {
   console.log("Clicking Facebook What's on your mind bar...");
+  await dismissPostLoginPrompts(page);
   await blockNotificationPrompt(page);
   await waitForFacebookHome(page);
 
-  const composerButton = await firstVisible([
+  const controls = () => [
     page.getByRole("button", { name: /What's on your mind/i }),
     page.locator('[role="button"]').filter({ hasText: /What's on your mind/i }),
+    page.locator('[aria-label*="What\'s on your mind" i]'),
     page.getByText(/What's on your mind/i),
-  ]);
+  ];
+  let composerReady: Locator | null = null;
+  const openingDeadline = Date.now() + 45000;
 
-  if (!composerButton) throw new Error("Could not find Facebook What's on your mind bar.");
+  for (let attempt = 1; attempt <= 3 && !composerReady && Date.now() < openingDeadline; attempt += 1) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" })).catch(() => undefined);
+    await page.waitForTimeout(attempt === 1 ? 750 : 1500);
+    for (const locator of controls()) {
+      if (Date.now() >= openingDeadline) break;
+      const count = await locator.count().catch(() => 0);
+      for (let index = 0; index < Math.min(count, 12); index += 1) {
+        if (Date.now() >= openingDeadline) break;
+        const candidate = locator.nth(index);
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        await candidate.evaluate((element: HTMLElement) => {
+          element.scrollIntoView({ block: "center", inline: "center" });
+          element.focus();
+          element.click();
+        }).catch(() => undefined);
+        composerReady = await waitForAnyVisible([
+          createPostDialog(page),
+          reviewAudienceDialog(page),
+          updateSettingsDialog(page),
+        ], 3000);
+        if (composerReady) break;
+      }
+      if (composerReady) break;
+    }
+  }
 
-  await composerButton.scrollIntoViewIfNeeded();
-  await composerButton.click({ force: true, timeout: 10000 });
-
-  const composerReady = await waitForAnyVisible([
-    createPostDialog(page),
-    reviewAudienceDialog(page),
-    updateSettingsDialog(page),
-  ], 30000);
-
-  if (!composerReady) throw new Error("Facebook post composer did not open.");
+  if (!composerReady) throw new Error("Facebook What's on your mind control did not open the post composer.");
 
   console.log("Waiting briefly for Facebook audience screens...");
   await page.waitForTimeout(getComposerSettleMs());
@@ -218,15 +296,17 @@ async function clickVisibleButton(page: Page, label: RegExp, actionName: string,
 
   if (!button) throw new Error(`Could not find Facebook ${actionName} button.`);
 
-  await button.scrollIntoViewIfNeeded().catch(() => undefined);
-
   try {
-    await button.click({ force: true, timeout: 10000 });
+    await button.evaluate((element: HTMLElement) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      element.focus();
+      element.click();
+    });
     return;
   } catch {
-    const box = await button.boundingBox().catch(() => null);
-    if (!box) throw new Error(`Could not click Facebook ${actionName} button.`);
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await button.click({ force: true, timeout: 10000 }).catch(() => {
+      throw new Error(`Could not click Facebook ${actionName} button.`);
+    });
   }
 }
 
@@ -263,7 +343,11 @@ async function selectPublicAudience(page: Page) {
 
   if (!publicOption) throw new Error("Could not find Facebook Public audience option.");
 
-  await publicOption.click({ force: true, timeout: 10000 });
+  await publicOption.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.focus();
+    element.click();
+  }).catch(() => publicOption.click({ force: true, timeout: 10000 }));
   await page.waitForTimeout(500);
 
   if (await publicAudienceIsSelected(page)) return;
@@ -340,7 +424,7 @@ async function attachFacebookMedia(page: Page, filePath: string) {
     throw new Error("Could not find Facebook's hidden media input; the native file picker was not opened.");
   }
 
-  await fileInput.setInputFiles(filePath);
+  await setLocalInputFile(page, fileInput, filePath);
 
   await page.waitForTimeout(300);
 }
@@ -349,39 +433,60 @@ async function clickFacebookTextArea(page: Page) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
 
-  const placeholder = dialog.getByText(/What's on your mind/i).first();
-  const editor = await firstVisible([
-    dialog.locator('[contenteditable="true"][role="textbox"]'),
-    dialog.locator('[role="textbox"]'),
-    dialog.locator('[contenteditable="true"]'),
-  ]);
-  const placeholderBox = await placeholder.boundingBox().catch(() => null);
+  // Facebook can render the Lexical editor shortly after the surrounding
+  // dialog and may portal it outside the duplicate dialog selected above.
+  const editor = await waitForFacebookComposerEditor(page);
+  if (!editor) throw new Error("Could not find Facebook's empty caption area.");
 
-  if (placeholderBox) {
-    await page.mouse.click(placeholderBox.x + 24, placeholderBox.y + Math.max(18, placeholderBox.height / 2));
-    return;
-  }
-
-  if (editor) {
-    await editor.scrollIntoViewIfNeeded();
-    await editor.click({ force: true, timeout: 10000 });
-    return;
-  }
-
-  const dialogBox = await dialog.boundingBox().catch(() => null);
-  if (!dialogBox) throw new Error("Could not find Facebook caption area.");
-
-  await page.mouse.click(dialogBox.x + 40, dialogBox.y + 160);
+  console.log("Clicking Facebook empty caption area...");
+  await editor.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.click();
+    element.focus();
+  });
+  const focused = await editor.evaluate(element => (
+    document.activeElement === element || Boolean(element.contains(document.activeElement))
+  )).catch(() => false);
+  if (!focused) await editor.focus();
+  return editor;
 }
 
 async function typeFacebookCaption(page: Page, caption: string) {
   const text = caption.trim();
   if (!text) return;
+  const expectedText = text.replace(/\s+/g, " ").trim();
 
   console.log("Entering Facebook caption...");
-  await clickFacebookTextArea(page);
-  await page.keyboard.insertText(text);
-  console.log("Facebook caption entered.");
+  const editor = await clickFacebookTextArea(page);
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    // Playwright fill dispatches the input events expected by Facebook's
+    // current Lexical editor. Raw keyboard insertion can be ignored even when
+    // the contenteditable element reports focus.
+    await editor.fill(text, { timeout: 10000 }).catch(async () => {
+      await editor.focus();
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.insertText(text);
+    });
+    await page.waitForTimeout(500);
+
+    const enteredText = await editor.evaluate((element: HTMLElement | HTMLTextAreaElement) => (
+      "value" in element ? element.value : element.innerText || element.textContent || ""
+    )).catch(() => "");
+    const normalizedEnteredText = enteredText.replace(/\s+/g, " ").trim();
+    if (normalizedEnteredText === expectedText) {
+      console.log("Facebook caption entered.");
+      return;
+    }
+
+    await editor.evaluate((element: HTMLElement) => {
+      element.click();
+      element.focus();
+    }).catch(() => undefined);
+  }
+
+  throw new Error("Facebook caption was not entered into the empty post area.");
 }
 
 async function waitForFacebookSubmissionStart(page: Page, timeout = 3500) {
@@ -400,10 +505,11 @@ async function waitForFacebookSubmissionStart(page: Page, timeout = 3500) {
   return false;
 }
 
-async function clickFacebookPostWhenReady(page: Page) {
+async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
   const deadline = Date.now() + 120000;
+  let readyPostButton: Locator | null = null;
 
   while (Date.now() < deadline) {
     const postButton = await firstVisible([
@@ -417,28 +523,46 @@ async function clickFacebookPostWhenReady(page: Page) {
       await page.waitForTimeout(500);
       continue;
     }
-
-    console.log("Clicking the Facebook Post button...");
-    await postButton.click({ force: true, timeout: 10000 });
-
-    if (await waitForFacebookSubmissionStart(page, 2000)) {
-      console.log("Facebook accepted the Post click.");
-      return;
-    }
-
-    console.log("Facebook did not accept the click yet; clicking Post again...");
-    await page.waitForTimeout(500);
+    readyPostButton = postButton;
+    break;
   }
 
-  throw new Error("Facebook Post button did not become ready or accept the click within 120 seconds.");
+  if (!readyPostButton) throw new Error("Facebook Post button did not become ready within 120 seconds.");
+  console.log("Clicking the Facebook Post button once...");
+  await readyPostButton.evaluate((element: HTMLElement) => {
+    element.scrollIntoView({ block: "center", inline: "center" });
+    element.focus();
+    element.click();
+  }).catch(() => readyPostButton.click({ force: true, timeout: 10000 }));
+  await onSubmitted?.();
+  if (await waitForFacebookSubmissionStart(page, 10000)) {
+    console.log("Facebook accepted the Post click.");
+    return;
+  }
+  throw new Error(
+    "Facebook final publish action was submitted, but confirmation is uncertain. Do not retry automatically; verify the Page before resuming.",
+  );
 }
 
 async function waitForFacebookPostComplete(page: Page) {
-  console.log("Post clicked. Waiting 15 seconds before closing Facebook window...");
-  const deadline = Date.now() + 15000;
+  console.log("Post clicked. Waiting for Facebook to accept and close the composer...");
+  const configuredTimeout = Number(process.env.FACEBOOK_POST_CONFIRMATION_TIMEOUT_MS);
+  const timeout = Number.isFinite(configuredTimeout)
+    ? Math.max(30_000, Math.min(300_000, configuredTimeout))
+    : 180_000;
+  const deadline = Date.now() + timeout;
   let sawPostingProgress = false;
 
   while (Date.now() < deadline) {
+    const accepted = await firstVisible([
+      page.getByText(FACEBOOK_POST_ACCEPTED_TEXT),
+      page.locator('[role="status"], [role="alert"]').filter({ hasText: FACEBOOK_POST_ACCEPTED_TEXT }),
+    ]);
+    if (accepted) {
+      console.log("Facebook confirmed that the post was accepted.");
+      return;
+    }
+
     if (!sawPostingProgress) {
       const postingProgress = await firstVisible([
         page.getByText(/^Posting$/i),
@@ -451,15 +575,16 @@ async function waitForFacebookPostComplete(page: Page) {
       }
     }
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) await page.waitForTimeout(Math.min(250, remainingMs));
+    if (!await createPostComposerIsVisible(page)) {
+      console.log("Facebook closed the Create post dialog after accepting the post.");
+      return;
+    }
+    await page.waitForTimeout(300);
   }
 
-  if (await createPostComposerIsVisible(page)) {
-    throw new Error("Facebook Create post dialog is still open 15 seconds after clicking Post.");
-  }
-
-  console.log("Facebook post wait complete.");
+  throw new Error(
+    `Facebook Create post dialog remained open for ${Math.round(timeout / 1000)} seconds after clicking Post; the final publish result is uncertain.`,
+  );
 }
 
 async function getLoginError(page: Page) {
@@ -517,7 +642,7 @@ async function loginFormIsVisible(page: Page) {
   return Boolean(emailField && passwordField);
 }
 
-async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false) {
+async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
   await waitForLoginWithManualFallback({
     page,
     platform: "Facebook",
@@ -527,8 +652,13 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart = false,
     isManualVerificationVisible: (url) => isManualVerificationVisible(page, url),
     isLoginFormVisible: () => loginFormIsVisible(page),
     getLoginError: () => getLoginError(page),
+    beforeCheck: async () => {
+      await dismissCookiePrompt(page);
+      await dismissPostLoginPrompts(page);
+    },
     allowManualLoginFromStart,
     ignoreLoginErrors,
+    embeddedLogin,
   });
 }
 
@@ -545,21 +675,30 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
   if (await isLoggedIn(page)) {
     console.log("Facebook session already active.");
   } else if (savedSessionOnly) {
-    throw new Error("Facebook saved browser session is not active. Open this account's Login action and complete login before the scheduled publish time.");
+    await waitForSavedSessionVerification({
+      page,
+      platform: "Facebook",
+      isLoggedIn: () => isLoggedIn(page),
+      beforeCheck: async () => {
+        await dismissCookiePrompt(page);
+        await dismissPostLoginPrompts(page);
+      },
+    });
   } else {
-    console.log("Complete the full Facebook login manually in Chrome; bot will save the session after the account opens.");
+    console.log("Complete the full Facebook login manually in the visible browser; Companion will save the session after the account opens.");
     await page.goto(FACEBOOK_LOGIN_URL, { timeout: 60000 });
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(1000);
     await dismissCookiePrompt(page);
-    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, true, Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
   if (!/facebook\.com\/?$|facebook\.com\/home/i.test(page.url())) {
     await page.goto(FACEBOOK_HOME_URL, { timeout: 60000 });
-    await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors));
+    await waitForLoginResult(page, manualLoginOnly, manualLoginOnly && Boolean(accountLogin?.ignoreLoginErrors), Boolean(accountLogin?.embeddedLogin));
   }
 
+  await dismissPostLoginPrompts(page);
   await blockNotificationPrompt(page);
 
   if (holdAfterLogin) {
@@ -574,19 +713,21 @@ export async function loginToFacebook(page: Page, _upload?: PlatformUpload, hold
 }
 
 export async function postToFacebook(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {
-  const filePath = publishingUploadFilePath(upload.fileName);
-  if (!fs.existsSync(filePath)) throw new Error(`Facebook upload file not found: ${filePath}`);
+  const isTextOnly = upload.postFormat === "text" || upload.mimeType === "text/plain" || !upload.fileName;
+  const filePath = isTextOnly ? "" : publishingUploadFilePath(upload.fileName);
+  if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`Facebook upload file not found: ${filePath}`);
 
-  if (!upload.caption?.trim()) {
+  const caption = upload.caption?.trim() ?? "";
+  if (isTextOnly && !caption) {
     throw new Error("Facebook caption is required.");
   }
 
   await loginToFacebook(page, upload, false, accountLogin);
   await clickWhatsOnYourMind(page);
   await waitForCreatePostComposerReady(page);
-  await typeFacebookCaption(page, upload.caption.trim());
-  await attachFacebookMedia(page, filePath);
-  await clickFacebookPostWhenReady(page);
+  await typeFacebookCaption(page, caption);
+  if (!isTextOnly) await attachFacebookMedia(page, filePath);
+  await clickFacebookPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   await waitForFacebookPostComplete(page);
 
   return { success: true };

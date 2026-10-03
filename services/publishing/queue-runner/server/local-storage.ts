@@ -1,17 +1,26 @@
 import { promises as fs } from "node:fs";
-import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
 import nodeCron from "node-cron";
+import { ContentPreflightError, isExactQueuedDuplicate } from "./services/content-preflight.js";
+import { publishingEngineForPlatform } from "./services/login-surface.js";
+import { publishingSafetyPacingEnabled } from "./services/safety-governor.js";
+import { mergeLinkedInManagedPageInventory } from "./linkedin-managed-page-inventory.js";
+import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import {
   type ActivityLog,
   type AutomationInput,
+  type ContentSubmission,
   type CreateUserProfileInput,
   type DashboardSummary,
+  type LinkedInManagedPage,
   type Platform,
   type PlatformAccount,
   type PlatformUpload,
+  type PostFormat,
+  type PublishActionState,
   type PublishingSchedule,
   type SocialMediaSchedule,
   type UpdateUploadDetailsInput,
@@ -27,23 +36,52 @@ import {
   platforms
 } from "../shared/schema.js";
 
-type StoredUser = UserProfile & { passwordHash: string };
+type StoredUser = UserProfile & {
+  passwordHash: string;
+  workspaceKeyHash?: string;
+  platformPasswordConfigured?: boolean;
+};
 
 type BlobStore = {
   get: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<unknown>;
-  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean }) => Promise<unknown>;
+  getWithMetadata: (key: string, options?: { type?: "json"; consistency?: string }) => Promise<{
+    data: unknown;
+    etag: string;
+  } | null>;
+  setJSON: (key: string, value: unknown, options?: { onlyIfNew?: boolean; onlyIfMatch?: string }) => Promise<{
+    modified: boolean;
+    etag?: string;
+  }>;
 };
 
 type StoredFileInput = {
+  platformOptions?: PlatformUpload["platformOptions"];
+  linkedinTarget?: LinkedInManagedPage;
   originalName: string;
   fileName: string;
   mimeType: string;
+  postFormat: PostFormat;
   size: number;
   url: string;
   title?: string;
   caption: string;
   scheduledAt?: string;
   scheduleId?: number;
+};
+
+type StoredSubmissionInput = {
+  platformOptions?: PlatformUpload["platformOptions"];
+  originalName: string;
+  fileName: string;
+  mimeType: string;
+  postFormat: PostFormat;
+  size: number;
+  url: string;
+  title?: string;
+  description: string;
+  rightsConfirmed: boolean;
+  selectedAccountIds: string[];
+  selectedDestinations?: Array<{ accountId: string; linkedinPageId?: string; description?: string }>;
 };
 
 type BootstrapUser = {
@@ -57,6 +95,7 @@ type BootstrapUser = {
 
 type AutomationRunRecord = {
   id: string;
+  workspaceId: string;
   trigger: AutomationRunTrigger;
   status: AutomationRunStatus;
   startedByUserId?: string;
@@ -67,6 +106,7 @@ type AutomationRunRecord = {
 
 type AutomationRunPostRecord = {
   id: string;
+  workspaceId: string;
   automationRunId: string;
   uploadId: string;
   accountId: string;
@@ -84,6 +124,7 @@ type Store = {
   schedules: PublishingSchedule[];
   socialMediaSchedules: SocialMediaSchedule[];
   uploads: PlatformUpload[];
+  submissions: ContentSubmission[];
   activityLogs: ActivityLog[];
   automationRuns: AutomationRunRecord[];
   automationRunPosts: AutomationRunPostRecord[];
@@ -91,14 +132,16 @@ type Store = {
 
 export type AutomationInputMode = "ready" | "scheduledOnly";
 export type PublishingAccount = PlatformAccount;
-export type AutomationRunTrigger = "manual" | "scheduler";
+export type AutomationRunTrigger = "manual" | "scheduler" | "companion";
 export type AutomationRunStatus = "running" | "completed" | "failed";
-export type AutomationPostStatus = "processing" | "posted" | "failed";
+export type AutomationPostStatus = "processing" | "posted" | "failed" | "deferred";
 
 const passwordIterations = 120_000;
 const passwordAlgorithm = "pbkdf2_sha256";
+const legacyWorkspaceId = "workspace_legacy";
 const serviceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const localStoreFile = resolveFromRoot(process.env.PUBLISH_QUEUE_DATA_PATH ?? "./data/store.json");
+const localStoreBackupFile = `${localStoreFile}.backup`;
 const useNetlifyBlobs = (
   process.env.DATA_STORE === "netlify-blobs" ||
   process.env.NETLIFY === "true" ||
@@ -107,6 +150,7 @@ const useNetlifyBlobs = (
 let blobStorePromise: Promise<BlobStore> | null = null;
 let storeMutationQueue: Promise<void> = Promise.resolve();
 let storeReadyPromise: Promise<void> | null = null;
+let lastStoreRecoveryAt: string | null = null;
 
 function resolveFromRoot(candidate: string) {
   return path.isAbsolute(candidate) ? candidate : path.resolve(serviceRoot, candidate);
@@ -231,6 +275,7 @@ function emptyStore(): Store {
     schedules: [],
     socialMediaSchedules: [],
     uploads: [],
+    submissions: [],
     activityLogs: [],
     automationRuns: [],
     automationRunPosts: []
@@ -239,21 +284,84 @@ function emptyStore(): Store {
 
 function normalizeStore(value: unknown): Store {
   const input = value && typeof value === "object" ? value as Partial<Store> : {};
+  const users = Array.isArray(input.users)
+    ? input.users.map(user => ({ ...user, workspaceId: user.workspaceId || legacyWorkspaceId }))
+    : [];
+  const accounts = Array.isArray(input.accounts)
+    ? input.accounts.map(account => ({
+      ...account,
+      workspaceId: account.workspaceId || legacyWorkspaceId,
+      executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
+      safetyStatus: account.safetyStatus || (account.enabled ? "healthy" : "paused"),
+      safetyMode: account.safetyMode ?? "standard",
+      twoFactorEnabled: account.twoFactorEnabled ?? false,
+      linkedinManagedPages: account.platform === "linkedin" && Array.isArray(account.linkedinManagedPages)
+        ? account.linkedinManagedPages
+        : undefined,
+    }))
+    : [];
+  const accountWorkspaces = new Map(accounts.map(account => [account.id, account.workspaceId]));
+  const schedules = Array.isArray(input.schedules)
+    ? input.schedules.map(schedule => ({ ...schedule, workspaceId: schedule.workspaceId || legacyWorkspaceId }))
+    : [];
+  const userWorkspaces = new Map(users.map(user => [user.id, user.workspaceId]));
+  const uploads = Array.isArray(input.uploads)
+    ? input.uploads.map(upload => ({
+      ...upload,
+      caption: typeof upload.caption === "string" ? upload.caption : "",
+      workspaceId: upload.workspaceId || accountWorkspaces.get(upload.accountId) || legacyWorkspaceId
+    }))
+    : [];
   return {
     version: 1,
-    users: Array.isArray(input.users) ? input.users : [],
-    accounts: Array.isArray(input.accounts) ? input.accounts : [],
-    schedules: Array.isArray(input.schedules) ? input.schedules : [],
-    socialMediaSchedules: Array.isArray(input.socialMediaSchedules) ? input.socialMediaSchedules : [],
-    uploads: Array.isArray(input.uploads) ? input.uploads : [],
-    activityLogs: Array.isArray(input.activityLogs) ? input.activityLogs : [],
-    automationRuns: Array.isArray(input.automationRuns) ? input.automationRuns : [],
-    automationRunPosts: Array.isArray(input.automationRunPosts) ? input.automationRunPosts : []
+    users,
+    accounts,
+    schedules,
+    socialMediaSchedules: Array.isArray(input.socialMediaSchedules)
+      ? input.socialMediaSchedules.map(item => ({
+        ...item,
+        workspaceId: item.workspaceId || accountWorkspaces.get(item.accountId) || legacyWorkspaceId
+      }))
+      : [],
+    uploads,
+    submissions: Array.isArray(input.submissions)
+      ? input.submissions.map(submission => ({
+        ...submission,
+        workspaceId: submission.workspaceId || legacyWorkspaceId,
+        rightsConfirmed: submission.rightsConfirmed ?? true,
+        selectedAccountIds: Array.isArray(submission.selectedAccountIds) ? submission.selectedAccountIds : [],
+        selectedDestinations: Array.isArray(submission.selectedDestinations) ? submission.selectedDestinations : undefined,
+        destinationUploadIds: Array.isArray(submission.destinationUploadIds) ? submission.destinationUploadIds : [],
+      }))
+      : [],
+    activityLogs: Array.isArray(input.activityLogs)
+      ? input.activityLogs.map(log => ({
+        ...log,
+        workspaceId: log.workspaceId || (log.actorUserId ? userWorkspaces.get(log.actorUserId) : undefined) || legacyWorkspaceId
+      }))
+      : [],
+    automationRuns: Array.isArray(input.automationRuns)
+      ? input.automationRuns.map(run => ({
+        ...run,
+        workspaceId: run.workspaceId || (run.startedByUserId ? userWorkspaces.get(run.startedByUserId) : undefined) || legacyWorkspaceId
+      }))
+      : [],
+    automationRunPosts: Array.isArray(input.automationRunPosts)
+      ? input.automationRunPosts.map(run => ({
+        ...run,
+        workspaceId: run.workspaceId || accountWorkspaces.get(run.accountId) || legacyWorkspaceId
+      }))
+      : []
   };
 }
 
 function publicUser(user: StoredUser): UserProfile {
-  const { passwordHash: _passwordHash, ...profile } = user;
+  const {
+    passwordHash: _passwordHash,
+    workspaceKeyHash: _workspaceKeyHash,
+    platformPasswordConfigured: _platformPasswordConfigured,
+    ...profile
+  } = user;
   return profile;
 }
 
@@ -283,6 +391,7 @@ function addBootstrapUsers(store: Store) {
     const timestamp = nowIso();
     store.users.push({
       id: "user_" + nanoid(12),
+      workspaceId: legacyWorkspaceId,
       username: bootstrap.username,
       fullName: bootstrap.fullName,
       email: bootstrap.email,
@@ -298,6 +407,24 @@ function addBootstrapUsers(store: Store) {
   return changed;
 }
 
+async function atomicReplaceFile(filePath: string, contents: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryFile = filePath + "." + process.pid + "." + randomUUID() + ".tmp";
+  const handle = await fs.open(temporaryFile, "w", 0o600);
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fs.rename(temporaryFile, filePath);
+  } catch (error) {
+    await fs.unlink(temporaryFile).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function writeStoreFile(store: Store) {
   if (useNetlifyBlobs) {
     const blobStore = await getBlobStore();
@@ -305,15 +432,18 @@ async function writeStoreFile(store: Store) {
     return;
   }
 
-  await fs.mkdir(path.dirname(localStoreFile), { recursive: true });
-  const temporaryFile = localStoreFile + "." + process.pid + "." + randomUUID() + ".tmp";
-  await fs.writeFile(temporaryFile, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   try {
-    await fs.rename(temporaryFile, localStoreFile);
+    const current = await fs.readFile(localStoreFile, "utf8");
+    normalizeStore(JSON.parse(current));
+    await atomicReplaceFile(localStoreBackupFile, current);
   } catch (error) {
-    await fs.unlink(temporaryFile).catch(() => undefined);
-    throw error;
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && error instanceof SyntaxError) {
+      // Keep an existing known-good backup when the primary file is corrupt.
+    } else if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
   }
+  await atomicReplaceFile(localStoreFile, JSON.stringify(store, null, 2) + "\n");
 }
 
 async function readStoreFile() {
@@ -322,7 +452,20 @@ async function readStoreFile() {
     return normalizeStore(await blobStore.get("store", { type: "json", consistency: "strong" }));
   }
 
-  return normalizeStore(JSON.parse(await fs.readFile(localStoreFile, "utf8")));
+  try {
+    return normalizeStore(JSON.parse(await fs.readFile(localStoreFile, "utf8")));
+  } catch (primaryError) {
+    if ((primaryError as NodeJS.ErrnoException)?.code === "ENOENT") throw primaryError;
+    try {
+      const backup = await fs.readFile(localStoreBackupFile, "utf8");
+      const recovered = normalizeStore(JSON.parse(backup));
+      await atomicReplaceFile(localStoreFile, backup);
+      lastStoreRecoveryAt = nowIso();
+      return recovered;
+    } catch {
+      throw primaryError;
+    }
+  }
 }
 
 function getBlobStore(): Promise<BlobStore> {
@@ -363,6 +506,19 @@ async function readStore(): Promise<Store> {
 async function mutateStore<T>(mutator: (store: Store) => T | Promise<T>) {
   await ensureStoreReady();
   const operation = storeMutationQueue.then(async () => {
+    if (useNetlifyBlobs) {
+      const blobStore = await getBlobStore();
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const current = await blobStore.getWithMetadata("store", { type: "json", consistency: "strong" });
+        const store = normalizeStore(current?.data ?? emptyStore());
+        const result = await mutator(store);
+        const written = await blobStore.setJSON("store", store, current
+          ? { onlyIfMatch: current.etag }
+          : { onlyIfNew: true });
+        if (written.modified) return result;
+      }
+      throw new Error("Publishing data changed concurrently. Please retry the request.");
+    }
     const store = await readStoreFile();
     const result = await mutator(store);
     await writeStoreFile(store);
@@ -378,7 +534,10 @@ export async function localStorageHealth() {
   return {
     path: useNetlifyBlobs ? "netlify-blobs://agentic-that-publishing/store" : localStoreFile,
     version: store.version,
-    storage: useNetlifyBlobs ? "netlify-blobs" : "local-json"
+    storage: useNetlifyBlobs ? "netlify-blobs" : "local-json",
+    durableWrites: !useNetlifyBlobs,
+    backupPath: useNetlifyBlobs ? null : localStoreBackupFile,
+    lastRecoveryAt: lastStoreRecoveryAt,
   };
 }
 
@@ -392,8 +551,12 @@ export async function logActivity(
 ) {
   return mutateStore(store => {
     const actor = actorUserId ? store.users.find(user => user.id === actorUserId) : undefined;
+    const workspaceId = actor?.workspaceId
+      || (typeof metadata.workspaceId === "string" ? metadata.workspaceId : undefined)
+      || legacyWorkspaceId;
     const log: ActivityLog = {
       id: "activity_" + nanoid(12),
+      workspaceId,
       actorUserId: actorUserId || undefined,
       actorName: actor?.fullName,
       actorUsername: actor?.username,
@@ -421,14 +584,22 @@ function assertUniqueUser(store: Store, username: string, email: string, exceptI
 
 function assertCanChangeManager(store: Store, existing: StoredUser, nextRole: UserRole, nextActive: boolean) {
   if (existing.role !== "operations_manager" || (nextRole === "operations_manager" && nextActive)) return;
-  if (!store.users.some(user => user.id !== existing.id && user.role === "operations_manager" && user.isActive)) {
+  if (!store.users.some(user =>
+    user.id !== existing.id
+    && user.workspaceId === existing.workspaceId
+    && user.role === "operations_manager"
+    && user.isActive
+  )) {
     throw new Error("At least one active operations manager must remain.");
   }
 }
 
-export async function listUserProfiles() {
+export async function listUserProfiles(workspaceId?: string) {
   const store = await readStore();
-  return store.users.map(publicUser).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return store.users
+    .filter(user => !workspaceId || user.workspaceId === workspaceId)
+    .map(publicUser)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function getUserProfile(userId: string) {
@@ -452,7 +623,205 @@ export async function loginUser(username: string, password: string) {
   return user;
 }
 
-export async function createUserProfile(input: CreateUserProfileInput, actorUserId?: string) {
+type PlatformWorkspaceIdentity = {
+  platformUserId: string;
+  workspaceId: string;
+  fullName: string;
+  email: string;
+};
+
+function workspaceKeyHash(workspaceKey: string) {
+  return createHash("sha256").update(workspaceKey).digest("base64url");
+}
+
+function findPlatformManager(store: Store, identity: PlatformWorkspaceIdentity) {
+  return store.users.findIndex(user =>
+    user.platformUserId === identity.platformUserId && user.workspaceId === identity.workspaceId
+  );
+}
+
+function platformManagerUsername(store: Store, identity: PlatformWorkspaceIdentity, exceptId?: string) {
+  const email = normalizeUsername(identity.email);
+  if (!store.users.some(user => user.id !== exceptId && normalizeUsername(user.username) === email)) {
+    return email;
+  }
+
+  const base = identity.email.split("@")[0].toLowerCase().replace(/[^a-z0-9._-]+/g, ".") || "manager";
+  let username = base;
+  let suffix = 1;
+  while (store.users.some(user => user.id !== exceptId && normalizeUsername(user.username) === username)) {
+    username = `${base}.${suffix++}`;
+  }
+  return username;
+}
+
+function assertWorkspaceKey(user: StoredUser, identity: PlatformWorkspaceIdentity) {
+  // The signed central service token now proves workspace ownership. Keep a
+  // deterministic local binding only to migrate older Companion stores.
+  const providedHash = workspaceKeyHash(`central-workspace:${identity.workspaceId}`);
+  return providedHash;
+}
+
+export async function upsertCentralWorkspaceActor(
+  identity: PlatformWorkspaceIdentity,
+  accessLevel: "view" | "operate" | "configure",
+  capabilities: string[] = [],
+) {
+  return mutateStore(store => {
+    const timestamp = nowIso();
+    const index = findPlatformManager(store, identity);
+    const role: UserRole = capabilities.includes("publishing.accounts.configure") || capabilities.includes("publishing.execute")
+      ? "operations_manager"
+      : capabilities.includes("publishing.schedule.manage")
+        ? "scheduler"
+        : capabilities.includes("publishing.content.create")
+          ? "post_uploader"
+          : "viewer";
+    if (index >= 0) {
+      const existing = store.users[index];
+      const updated: StoredUser = {
+        ...existing,
+        workspaceId: identity.workspaceId,
+        platformUserId: identity.platformUserId,
+        username: normalizeUsername(existing.username) || platformManagerUsername(store, identity, existing.id),
+        fullName: identity.fullName,
+        email: identity.email.toLowerCase(),
+        role,
+        centralAccessLevel: accessLevel,
+        capabilities,
+        isActive: true,
+        lastLoginAt: timestamp,
+        updatedAt: timestamp,
+      };
+      store.users[index] = updated;
+      return publicUser(updated);
+    }
+    const stored: StoredUser = {
+      id: "user_" + nanoid(12),
+      workspaceId: identity.workspaceId,
+      platformUserId: identity.platformUserId,
+      workspaceKeyHash: workspaceKeyHash(`central-workspace:${identity.workspaceId}`),
+      username: platformManagerUsername(store, identity),
+      fullName: identity.fullName,
+      email: identity.email.toLowerCase(),
+      role,
+      centralAccessLevel: accessLevel,
+      capabilities,
+      isActive: true,
+      passwordHash: hashPassword(randomBytes(48).toString("base64url")),
+      platformPasswordConfigured: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastLoginAt: timestamp,
+    };
+    store.users.push(stored);
+    return publicUser(stored);
+  });
+}
+
+export async function platformWorkspaceManagerStatus(identity: PlatformWorkspaceIdentity) {
+  return mutateStore(store => {
+    const existingIndex = findPlatformManager(store, identity);
+    if (existingIndex < 0) {
+      return {
+        configured: false,
+        username: identity.email.toLowerCase(),
+        workspaceId: identity.workspaceId,
+      };
+    }
+    const existing = store.users[existingIndex];
+    const providedHash = assertWorkspaceKey(existing, identity);
+    const username = normalizeUsername(existing.username)
+      || platformManagerUsername(store, identity, existing.id);
+    if (!existing.workspaceKeyHash || username !== existing.username) {
+      store.users[existingIndex] = {
+        ...existing,
+        username,
+        workspaceKeyHash: existing.workspaceKeyHash || providedHash,
+        updatedAt: nowIso(),
+      };
+    }
+    return {
+      configured: Boolean(existing.platformPasswordConfigured),
+      username,
+      workspaceId: existing.workspaceId,
+    };
+  });
+}
+
+export async function setupPlatformWorkspaceManager(identity: PlatformWorkspaceIdentity, password: string) {
+  return mutateStore(store => {
+    const existingIndex = findPlatformManager(store, identity);
+    const timestamp = nowIso();
+    const keyHash = workspaceKeyHash(`central-workspace:${identity.workspaceId}`);
+    if (existingIndex >= 0) {
+      const existing = store.users[existingIndex];
+      assertWorkspaceKey(existing, identity);
+      if (existing.platformPasswordConfigured) {
+        throw new Error("Operations Manager password is already configured. Sign in with it.");
+      }
+      const updated: StoredUser = {
+        ...existing,
+        username: normalizeUsername(existing.username)
+          || platformManagerUsername(store, identity, existing.id),
+        workspaceKeyHash: keyHash,
+        fullName: identity.fullName,
+        email: identity.email.toLowerCase(),
+        role: "operations_manager",
+        isActive: true,
+        passwordHash: hashPassword(password),
+        platformPasswordConfigured: true,
+        updatedAt: timestamp,
+      };
+      store.users[existingIndex] = updated;
+      return publicUser(updated);
+    }
+
+    const username = platformManagerUsername(store, identity);
+    const stored: StoredUser = {
+      id: "user_" + nanoid(12),
+      workspaceId: identity.workspaceId,
+      platformUserId: identity.platformUserId,
+      workspaceKeyHash: keyHash,
+      username,
+      fullName: identity.fullName,
+      email: identity.email.toLowerCase(),
+      role: "operations_manager",
+      isActive: true,
+      passwordHash: hashPassword(password),
+      platformPasswordConfigured: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.users.push(stored);
+    return publicUser(stored);
+  });
+}
+
+export async function loginPlatformWorkspaceManager(identity: PlatformWorkspaceIdentity, password: string) {
+  const user = await mutateStore(store => {
+    const index = findPlatformManager(store, identity);
+    if (index < 0) return null;
+    const existing = store.users[index];
+    assertWorkspaceKey(existing, identity);
+    if (!existing.platformPasswordConfigured || !existing.isActive || !verifyPassword(password, existing.passwordHash)) {
+      return null;
+    }
+    const updated = {
+      ...existing,
+      lastLoginAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    store.users[index] = updated;
+    return publicUser(updated);
+  });
+  if (user) {
+    await logActivity(user.id, "auth.login", "user_profile", user.id, user.fullName + " signed in.", { role: user.role });
+  }
+  return user;
+}
+
+export async function createUserProfile(input: CreateUserProfileInput, actorUserId?: string, workspaceId = legacyWorkspaceId) {
   const user = await mutateStore(store => {
     const username = normalizeUsername(input.username);
     const email = normalizeEmail(input.email, username);
@@ -460,6 +829,7 @@ export async function createUserProfile(input: CreateUserProfileInput, actorUser
     const timestamp = nowIso();
     const stored: StoredUser = {
       id: "user_" + nanoid(12),
+      workspaceId,
       username,
       fullName: input.fullName.trim(),
       email,
@@ -476,9 +846,9 @@ export async function createUserProfile(input: CreateUserProfileInput, actorUser
   return user;
 }
 
-export async function updateUserProfile(userId: string, input: UpdateUserProfileInput, actorUserId?: string) {
+export async function updateUserProfile(userId: string, input: UpdateUserProfileInput, actorUserId?: string, workspaceId?: string) {
   const user = await mutateStore(store => {
-    const index = store.users.findIndex(item => item.id === userId);
+    const index = store.users.findIndex(item => item.id === userId && (!workspaceId || item.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.users[index];
     const username = input.username === undefined ? existing.username : normalizeUsername(input.username);
@@ -506,14 +876,17 @@ export async function updateUserProfile(userId: string, input: UpdateUserProfile
   return user;
 }
 
-export async function deactivateUserProfile(userId: string, actorUserId?: string) {
-  return updateUserProfile(userId, { isActive: false }, actorUserId);
+export async function deactivateUserProfile(userId: string, actorUserId?: string, workspaceId?: string) {
+  return updateUserProfile(userId, { isActive: false }, actorUserId, workspaceId);
 }
 
-export async function listActivityLogs(limit = 100) {
+export async function listActivityLogs(limit = 100, workspaceId?: string) {
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 250);
   const store = await readStore();
-  return [...store.activityLogs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, safeLimit);
+  return store.activityLogs
+    .filter(log => !workspaceId || log.workspaceId === workspaceId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, safeLimit);
 }
 
 async function insertPostStatusHistory(
@@ -529,8 +902,12 @@ async function insertPostStatusHistory(
 
 export async function createAutomationRun(trigger: AutomationRunTrigger, startedByUserId?: string) {
   return mutateStore(store => {
+    const workspaceId = startedByUserId
+      ? store.users.find(user => user.id === startedByUserId)?.workspaceId || legacyWorkspaceId
+      : legacyWorkspaceId;
     const run: AutomationRunRecord = {
       id: "run_" + nanoid(12),
+      workspaceId,
       trigger,
       status: "running",
       startedByUserId,
@@ -558,6 +935,7 @@ export async function createAutomationRunPost(automationRunId: string, upload: P
   return mutateStore(store => {
     const post: AutomationRunPostRecord = {
       id: "run_post_" + nanoid(12),
+      workspaceId: upload.workspaceId,
       automationRunId,
       uploadId: upload.id,
       accountId: upload.accountId,
@@ -596,12 +974,18 @@ export async function recoverInterruptedPublishingWork() {
     store.uploads = store.uploads.map(upload => {
       if (upload.status !== "processing") return upload;
       recoveredUploads += 1;
+      const finalActionUncertain = upload.publishActionState === "submitted"
+        || upload.publishActionState === "uncertain";
+      const retryAllowed = recoveryMode === "retry" && !finalActionUncertain;
       return {
         ...upload,
-        status: recoveryMode === "retry" ? "queued" : "failed",
-        failureReason: recoveryMode === "retry"
+        status: retryAllowed ? "queued" : "failed",
+        publishActionState: finalActionUncertain ? "uncertain" : upload.publishActionState,
+        failureReason: retryAllowed
           ? undefined
-          : "The companion stopped during publishing. Verify the platform before retrying to prevent a duplicate post.",
+          : finalActionUncertain
+            ? "The companion stopped after the final publish action. Verify the platform; automatic retry is blocked to prevent a duplicate post."
+            : "The companion stopped during publishing. Verify the platform before retrying to prevent a duplicate post.",
         updatedAt: recoveredAt,
       };
     });
@@ -640,45 +1024,255 @@ function scheduledTime(upload: PlatformUpload) {
 
 export function isUploadReadyForAutomation(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued") return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt === null ? !upload.scheduledAt : scheduledAt <= now;
 }
 
 export function isDueScheduledUpload(upload: PlatformUpload, now = Date.now()) {
   if (upload.status !== "queued" || !upload.scheduledAt) return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
   const scheduledAt = scheduledTime(upload);
   return scheduledAt !== null && scheduledAt <= now;
 }
 
-export async function listPlatformAccounts(platform?: Platform) {
+export async function listContentSubmissions(workspaceId?: string) {
+  const store = await readStore();
+  return store.submissions
+    .filter(submission => !workspaceId || submission.workspaceId === workspaceId)
+    .map(submission => ({
+      ...submission,
+      createdByName: store.users.find(user => user.id === submission.createdByUserId)?.fullName,
+      scheduledByName: store.users.find(user => user.id === submission.scheduledByUserId)?.fullName,
+    }))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function getContentSubmission(submissionId: string, workspaceId?: string) {
+  const store = await readStore();
+  return store.submissions.find(submission =>
+    submission.id === submissionId && (!workspaceId || submission.workspaceId === workspaceId)
+  ) ?? null;
+}
+
+export async function claimContentSubmission(submissionId: string, actorUserId: string, workspaceId: string) {
+  return mutateStore(store => {
+    const index = store.submissions.findIndex(item => item.id === submissionId && item.workspaceId === workspaceId);
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    const leaseExpired = existing.status === "scheduling"
+      && (!existing.schedulingLeaseExpiresAt || Date.parse(existing.schedulingLeaseExpiresAt) <= Date.now());
+    if (existing.status !== "awaiting_schedule" && !leaseExpired) return null;
+    if (leaseExpired) {
+      store.uploads = store.uploads.filter(upload => upload.sourceSubmissionId !== existing.id);
+    }
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "scheduling",
+      scheduledByUserId: actorUserId,
+      schedulingLeaseExpiresAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
+}
+
+export async function releaseContentSubmissionClaim(submissionId: string, actorUserId: string, workspaceId: string) {
+  return mutateStore(store => {
+    const index = store.submissions.findIndex(item => item.id === submissionId && item.workspaceId === workspaceId);
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    if (existing.status !== "scheduling" || existing.scheduledByUserId !== actorUserId) return existing;
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "awaiting_schedule",
+      scheduledByUserId: undefined,
+      schedulingLeaseExpiresAt: undefined,
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
+}
+
+export async function createContentSubmission(
+  input: StoredSubmissionInput,
+  workspaceId: string,
+  actorUserId: string
+) {
+  const submission = await mutateStore(store => {
+    const timestamp = nowIso();
+    const created: ContentSubmission = {
+      id: "submission_" + nanoid(12),
+      workspaceId,
+      postFormat: input.postFormat,
+      originalName: input.originalName,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      size: input.size,
+      url: input.url,
+      title: input.title?.trim() || undefined,
+      platformOptions: input.platformOptions,
+      description: input.description.trim(),
+      rightsConfirmed: input.rightsConfirmed,
+      status: "awaiting_schedule",
+      createdByUserId: actorUserId,
+      selectedAccountIds: [...new Set(input.selectedAccountIds)],
+      selectedDestinations: input.selectedDestinations,
+      destinationUploadIds: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.submissions.unshift(created);
+    return created;
+  });
+  await logActivity(
+    actorUserId,
+    "submission.created",
+    "content_submission",
+    submission.id,
+    `${submission.title || submission.originalName} was handed to scheduling.`,
+    { postFormat: submission.postFormat }
+  );
+  return submission;
+}
+
+export async function completeContentSubmission(
+  submissionId: string,
+  destinationUploadIds: string[],
+  actorUserId: string,
+  workspaceId: string
+) {
+  const submission = await mutateStore(store => {
+    const index = store.submissions.findIndex(item =>
+      item.id === submissionId && item.workspaceId === workspaceId
+    );
+    if (index < 0) return null;
+    const existing = store.submissions[index];
+    if (existing.status !== "scheduling" || existing.scheduledByUserId !== actorUserId) {
+      throw new Error("This submission has already been scheduled.");
+    }
+    const updated: ContentSubmission = {
+      ...existing,
+      status: "scheduled",
+      scheduledByUserId: actorUserId,
+      schedulingLeaseExpiresAt: undefined,
+      destinationUploadIds,
+      updatedAt: nowIso(),
+    };
+    store.submissions[index] = updated;
+    return updated;
+  });
+  if (submission) {
+    await logActivity(
+      actorUserId,
+      "submission.scheduled",
+      "content_submission",
+      submission.id,
+      `${submission.title || submission.originalName} was scheduled for ${destinationUploadIds.length} destination${destinationUploadIds.length === 1 ? "" : "s"}.`,
+      { destinationUploadIds }
+    );
+  }
+  return submission;
+}
+
+export async function listPlatformAccounts(platform?: Platform, workspaceId?: string) {
   const store = await readStore();
   return store.accounts
-    .filter(account => !platform || account.platform === platform)
+    .filter(account => (!workspaceId || account.workspaceId === workspaceId) && (!platform || account.platform === platform))
     .sort((a, b) => a.platform.localeCompare(b.platform) || a.displayName.localeCompare(b.displayName));
 }
 
-export async function getPlatformAccount(accountId: string) {
-  const store = await readStore();
-  return store.accounts.find(account => account.id === accountId) ?? null;
-}
+export async function migrateLegacyPlatformAccounts(
+  workspaceId: string,
+  companionId: string,
+  legacyStorePath = process.env.PUBLISH_QUEUE_LEGACY_DATA_PATH?.trim(),
+) {
+  const selectedWorkspaceId = workspaceId.trim();
+  const selectedCompanionId = companionId.trim();
+  if (useNetlifyBlobs || !legacyStorePath || !selectedWorkspaceId || !selectedCompanionId) {
+    return { imported: 0, accountIds: [] as string[] };
+  }
 
-export async function getPublishingAccount(accountId: string): Promise<PublishingAccount | null> {
-  return getPlatformAccount(accountId);
-}
+  const resolvedLegacyStore = path.resolve(legacyStorePath);
+  if (resolvedLegacyStore === path.resolve(localStoreFile)) return { imported: 0, accountIds: [] as string[] };
 
-export async function createPlatformAccount(platform: Platform, input: UpsertPlatformAccountInput) {
+  let legacyStore: Store;
+  try {
+    legacyStore = normalizeStore(JSON.parse(await fs.readFile(resolvedLegacyStore, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { imported: 0, accountIds: [] as string[] };
+    throw error;
+  }
+
+  const candidates = legacyStore.accounts.filter(account => (
+    account.workspaceId === selectedWorkspaceId
+    && typeof account.id === "string"
+    && account.id.trim().length > 0
+    && platforms.includes(account.platform)
+  ));
+  if (candidates.length === 0) return { imported: 0, accountIds: [] as string[] };
+
   return mutateStore(store => {
-    const duplicate = store.accounts.some(account => account.platform === platform && account.handle.toLowerCase() === input.handle.toLowerCase());
+    let imported = 0;
+    const accountIds: string[] = [];
+    for (const account of candidates) {
+      const exists = store.accounts.some(existing => (
+        existing.id === account.id && existing.workspaceId === selectedWorkspaceId
+      ));
+      if (exists) continue;
+      store.accounts.push({
+        ...account,
+        workspaceId: selectedWorkspaceId,
+        companionId: selectedCompanionId,
+        credentialConfigured: Boolean(account.credentialConfigured),
+        enabled: account.enabled !== false,
+        executionEngine: publishingEngineForPlatform(account.platform, account.executionEngine),
+        safetyStatus: account.safetyStatus || (account.enabled === false ? "paused" : "healthy"),
+        safetyMode: account.safetyMode || "protected",
+        twoFactorEnabled: Boolean(account.twoFactorEnabled),
+        updatedAt: nowIso(),
+      });
+      imported += 1;
+      accountIds.push(account.id);
+    }
+    return { imported, accountIds };
+  });
+}
+
+export async function getPlatformAccount(accountId: string, workspaceId?: string) {
+  const store = await readStore();
+  return store.accounts.find(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId)) ?? null;
+}
+
+export async function getPublishingAccount(accountId: string, workspaceId?: string): Promise<PublishingAccount | null> {
+  return getPlatformAccount(accountId, workspaceId);
+}
+
+export async function createPlatformAccount(platform: Platform, input: UpsertPlatformAccountInput, workspaceId = legacyWorkspaceId) {
+  return mutateStore(store => {
+    const duplicate = store.accounts.some(account =>
+      account.workspaceId === workspaceId
+      && account.platform === platform
+      && account.handle.toLowerCase() === input.handle.toLowerCase()
+    );
     if (duplicate) throw new Error(platformLabels[platform] + " account " + input.handle + " already exists.");
     const timestamp = nowIso();
     const account: PlatformAccount = {
       id: "account_" + nanoid(12),
+      workspaceId,
+      companionId: input.companionId,
       platform,
       displayName: input.displayName,
       handle: input.handle,
       loginIdentifier: input.loginIdentifier ?? "",
       credentialConfigured: false,
       enabled: input.enabled ?? true,
+      executionEngine: publishingEngineForPlatform(platform, input.executionEngine),
+      safetyStatus: input.enabled === false ? "paused" : "healthy",
+      safetyMode: input.safetyMode ?? "protected",
+      twoFactorEnabled: input.twoFactorEnabled ?? false,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -687,23 +1281,46 @@ export async function createPlatformAccount(platform: Platform, input: UpsertPla
   });
 }
 
-export async function updatePlatformAccount(accountId: string, input: UpsertPlatformAccountInput) {
+export async function updatePlatformAccount(accountId: string, input: UpsertPlatformAccountInput, workspaceId?: string) {
   return mutateStore(store => {
-    const index = store.accounts.findIndex(account => account.id === accountId);
+    const index = store.accounts.findIndex(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.accounts[index];
-    const duplicate = store.accounts.some(account => account.id !== accountId && account.platform === existing.platform && account.handle.toLowerCase() === input.handle.toLowerCase());
+    const duplicate = store.accounts.some(account =>
+      account.id !== accountId
+      && account.workspaceId === existing.workspaceId
+      && account.platform === existing.platform
+      && account.handle.toLowerCase() === input.handle.toLowerCase()
+    );
     if (duplicate) throw new Error(platformLabels[existing.platform] + " account " + input.handle + " already exists.");
+    const executionEngine = publishingEngineForPlatform(existing.platform, input.executionEngine ?? existing.executionEngine);
+    const engineChanged = executionEngine !== existing.executionEngine;
     const updated: PlatformAccount = {
       ...existing,
       displayName: input.displayName,
       handle: input.handle,
       loginIdentifier: input.loginIdentifier ?? "",
-      credentialConfigured: existing.credentialConfigured,
+      credentialConfigured: engineChanged ? false : existing.credentialConfigured,
       enabled: input.enabled ?? existing.enabled,
+      executionEngine,
+      companionId: input.companionId ?? existing.companionId,
+      safetyMode: input.safetyMode ?? existing.safetyMode ?? "standard",
+      twoFactorEnabled: input.twoFactorEnabled ?? existing.twoFactorEnabled ?? false,
+      safetyStatus: input.enabled === true
+        ? "healthy"
+        : input.enabled === false ? "paused" : existing.safetyStatus,
+      safetyReason: input.enabled === true ? undefined : existing.safetyReason,
+      safetyPausedAt: input.enabled === true ? undefined : existing.safetyPausedAt,
       updatedAt: nowIso()
     };
     store.accounts[index] = updated;
+    if (!updated.enabled) {
+      const blockedAt = nowIso();
+      const reason = "Publishing account is disabled. Reconnect or enable it before retrying this destination.";
+      store.uploads = store.uploads.map(upload => upload.accountId === accountId && upload.status === "queued"
+        ? { ...upload, status: "failed" as const, failureReason: reason, updatedAt: blockedAt }
+        : upload);
+    }
     return updated;
   });
 }
@@ -722,9 +1339,179 @@ export async function updatePlatformAccountCredentialState(accountId: string, co
   });
 }
 
-export async function deletePlatformAccount(accountId: string) {
+export async function updateLinkedInManagedPages(accountId: string, pages: LinkedInManagedPage[]) {
   return mutateStore(store => {
-    const existing = store.accounts.find(account => account.id === accountId);
+    const index = store.accounts.findIndex(account => account.id === accountId);
+    if (index < 0) return null;
+    const existing = store.accounts[index];
+    if (existing.platform !== "linkedin") throw new Error("Managed LinkedIn Pages can only be saved for a LinkedIn account.");
+    const uniquePages = [...new Map(pages.map(page => [page.id, page])).values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, 100);
+    const updated: PlatformAccount = {
+      ...existing,
+      linkedinManagedPages: uniquePages,
+      linkedinManagedPagesUpdatedAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+}
+
+export async function bindPublishingAccountsToCompanion(companionId: string) {
+  const normalizedCompanionId = companionId.trim();
+  if (!normalizedCompanionId) throw new Error("A Companion instance ID is required.");
+  return mutateStore(store => {
+    const updatedAt = nowIso();
+    let rebound = 0;
+    store.accounts = store.accounts.map(account => {
+      const executionEngine = publishingEngineForPlatform(account.platform, account.executionEngine);
+      if (account.executionEngine === executionEngine && account.companionId === normalizedCompanionId) return account;
+      const engineChanged = account.executionEngine !== executionEngine;
+      rebound += 1;
+      return {
+        ...account,
+        executionEngine,
+        credentialConfigured: engineChanged ? false : account.credentialConfigured,
+        companionId: normalizedCompanionId,
+        updatedAt,
+      };
+    });
+    return { rebound, companionId: normalizedCompanionId };
+  });
+}
+
+function isReconnectFailure(upload: PlatformUpload) {
+  if (upload.status !== "failed") return false;
+  if (upload.publishActionState === "submitted" || upload.publishActionState === "uncertain") return false;
+  return /saved browser session|sign in|log in|login|session (?:expired|invalid|is not active)|credential|authenticat|reconnect/i
+    .test(upload.failureReason ?? "");
+}
+
+export async function requeueAccountSessionFailures(accountId: string) {
+  const changedAt = nowIso();
+  const uploadIds = await mutateStore(store => {
+    const recovered: string[] = [];
+    store.uploads = store.uploads.map(upload => {
+      if (upload.accountId !== accountId || !isReconnectFailure(upload)) return upload;
+      recovered.push(upload.id);
+      return {
+        ...upload,
+        status: "queued" as const,
+        failureReason: undefined,
+        safetyDeferredUntil: undefined,
+        safetyReason: undefined,
+        publishActionState: "not_started" as const,
+        updatedAt: changedAt,
+      };
+    });
+    return recovered;
+  });
+  await Promise.all(uploadIds.map(uploadId => insertPostStatusHistory(
+    uploadId,
+    "failed",
+    "queued",
+    "Verified Companion login restored the publishing session",
+    changedAt,
+  )));
+  return uploadIds;
+}
+
+// Central workspace metadata never includes secrets. This keeps a local account
+// record in sync with the server while preserving the encrypted local session.
+export async function upsertSyncedPlatformAccount(input: PlatformAccount) {
+  return mutateStore(store => {
+    const index = store.accounts.findIndex(account => account.id === input.id && account.workspaceId === input.workspaceId);
+    const timestamp = nowIso();
+    const executionEngine = publishingEngineForPlatform(input.platform, input.executionEngine);
+    if (index < 0) {
+      const created: PlatformAccount = {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        companionId: input.companionId || undefined,
+        platform: input.platform,
+        displayName: input.displayName,
+        handle: input.handle,
+        loginIdentifier: input.loginIdentifier || "",
+        credentialConfigured: Boolean(input.credentialConfigured),
+        enabled: input.enabled !== false,
+        executionEngine,
+        safetyStatus: input.enabled === false ? "paused" : "healthy",
+        safetyMode: input.safetyMode || "protected",
+        twoFactorEnabled: Boolean(input.twoFactorEnabled),
+        linkedinManagedPages: input.platform === "linkedin" ? input.linkedinManagedPages : undefined,
+        linkedinManagedPagesUpdatedAt: input.platform === "linkedin" ? input.linkedinManagedPagesUpdatedAt : undefined,
+        createdAt: input.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      store.accounts.push(created);
+      return created;
+    }
+    const existing = store.accounts[index];
+    const engineChanged = executionEngine !== existing.executionEngine;
+    const linkedinInventory = input.platform === "linkedin"
+      ? mergeLinkedInManagedPageInventory(existing, input)
+      : {};
+    const updated: PlatformAccount = {
+      ...existing,
+      displayName: input.displayName || existing.displayName,
+      handle: input.handle || existing.handle,
+      loginIdentifier: input.loginIdentifier || existing.loginIdentifier,
+      enabled: input.enabled !== false,
+      executionEngine,
+      companionId: input.companionId || existing.companionId,
+      // A central heartbeat can safely turn a disconnected session off, but it
+      // must never erase a session that this Companion has just saved locally.
+      credentialConfigured: engineChanged
+        ? false
+        : Boolean(input.credentialConfigured) || existing.credentialConfigured,
+      safetyStatus: input.enabled === false ? "paused" : existing.safetyStatus === "paused" ? "healthy" : existing.safetyStatus,
+      linkedinManagedPages: linkedinInventory.linkedinManagedPages ?? existing.linkedinManagedPages,
+      linkedinManagedPagesUpdatedAt: linkedinInventory.linkedinManagedPagesUpdatedAt ?? existing.linkedinManagedPagesUpdatedAt,
+      updatedAt: timestamp,
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+}
+
+export async function pausePlatformAccountForSafety(
+  accountId: string,
+  status: "warning" | "paused" | "restricted",
+  reason: string,
+) {
+  const account = await mutateStore(store => {
+    const index = store.accounts.findIndex(account => account.id === accountId);
+    if (index < 0) return null;
+    const timestamp = nowIso();
+    const updated: PlatformAccount = {
+      ...store.accounts[index],
+      enabled: false,
+      safetyStatus: status,
+      safetyReason: reason,
+      safetyPausedAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.accounts[index] = updated;
+    return updated;
+  });
+  if (account) {
+    await logActivity(
+      undefined,
+      "account.safety_paused",
+      "publishing_account",
+      account.id,
+      `${account.displayName} was paused automatically for account safety.`,
+      { workspaceId: account.workspaceId, platform: account.platform, status, reason },
+    );
+  }
+  return account;
+}
+
+export async function deletePlatformAccount(accountId: string, workspaceId?: string) {
+  return mutateStore(store => {
+    const existing = store.accounts.find(account => account.id === accountId && (!workspaceId || account.workspaceId === workspaceId));
     if (!existing) return null;
     if (store.uploads.some(upload => upload.accountId === accountId)) {
       throw new Error("This account has post history and cannot be deleted. Disable it instead.");
@@ -783,17 +1570,20 @@ function validateScheduleInput(input: UpsertPublishingScheduleInput) {
   }
 }
 
-export async function listPublishingSchedules() {
+export async function listPublishingSchedules(workspaceId?: string) {
   const store = await readStore();
-  return [...store.schedules].sort((a, b) => a.id - b.id);
+  return store.schedules
+    .filter(schedule => !workspaceId || schedule.workspaceId === workspaceId)
+    .sort((a, b) => a.id - b.id);
 }
 
-export async function listSocialMediaSchedules() {
+export async function listSocialMediaSchedules(workspaceId?: string) {
   const store = await readStore();
   return store.uploads
-    .filter(upload => upload.scheduleId)
+    .filter(upload => upload.scheduleId && (!workspaceId || upload.workspaceId === workspaceId))
     .map((upload, index) => ({
       id: index + 1,
+      workspaceId: upload.workspaceId,
       scheduleId: upload.scheduleId!,
       accountId: upload.accountId,
       platform: upload.platform,
@@ -803,12 +1593,13 @@ export async function listSocialMediaSchedules() {
     .sort((a, b) => a.id - b.id);
 }
 
-export async function createPublishingSchedule(input: UpsertPublishingScheduleInput) {
+export async function createPublishingSchedule(input: UpsertPublishingScheduleInput, workspaceId = legacyWorkspaceId) {
   validateScheduleInput(input);
   return mutateStore(store => {
     const timestamp = nowIso();
     const schedule: PublishingSchedule = {
       id: nextNumericId(store.schedules),
+      workspaceId,
       name: input.name.trim(),
       time: input.time,
       frequency: input.frequency,
@@ -824,10 +1615,10 @@ export async function createPublishingSchedule(input: UpsertPublishingScheduleIn
   });
 }
 
-export async function updatePublishingSchedule(scheduleId: number, input: UpsertPublishingScheduleInput) {
+export async function updatePublishingSchedule(scheduleId: number, input: UpsertPublishingScheduleInput, workspaceId?: string) {
   validateScheduleInput(input);
   return mutateStore(store => {
-    const index = store.schedules.findIndex(schedule => schedule.id === scheduleId);
+    const index = store.schedules.findIndex(schedule => schedule.id === scheduleId && (!workspaceId || schedule.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.schedules[index];
     const timestamp = nowIso();
@@ -847,11 +1638,11 @@ export async function updatePublishingSchedule(scheduleId: number, input: Upsert
   });
 }
 
-export async function deletePublishingSchedule(scheduleId: number) {
+export async function deletePublishingSchedule(scheduleId: number, workspaceId?: string) {
   return mutateStore(store => {
-    const existing = store.schedules.find(schedule => schedule.id === scheduleId);
+    const existing = store.schedules.find(schedule => schedule.id === scheduleId && (!workspaceId || schedule.workspaceId === workspaceId));
     if (!existing) return null;
-    if (store.uploads.some(upload => upload.scheduleId === scheduleId)) {
+    if (store.uploads.some(upload => upload.workspaceId === existing.workspaceId && upload.scheduleId === scheduleId)) {
       throw new Error("Remove this schedule from posts before deleting it.");
     }
     store.schedules = store.schedules.filter(schedule => schedule.id !== scheduleId);
@@ -939,6 +1730,57 @@ function previousScheduleOccurrence(schedule: PublishingSchedule, now: Date) {
   return scheduleDateInMonth(now.getFullYear() - 1, anchor.getMonth(), anchor.getDate(), schedule.time);
 }
 
+export function nextPublishingScheduleOccurrence(schedule: PublishingSchedule, now = new Date()) {
+  if (schedule.status !== "active") return null;
+  const createdAt = new Date(schedule.createdAt);
+  const anchor = Number.isFinite(createdAt.getTime()) ? createdAt : now;
+  let occurrence: Date | null = null;
+
+  if (schedule.frequency === "custom") {
+    if (!schedule.customCronExpression || !nodeCron.validate(schedule.customCronExpression)) return null;
+    const task = nodeCron.createTask(schedule.customCronExpression, () => undefined);
+    try {
+      occurrence = task.getNextRun();
+    } finally {
+      void task.destroy();
+    }
+  } else if (schedule.frequency === "onetime") {
+    const runDate = localDateFromValue(schedule.endDate);
+    if (runDate) occurrence = localDateAt(runDate, schedule.time);
+  } else if (schedule.frequency === "daily") {
+    occurrence = localDateAt(now, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 1);
+  } else if (schedule.frequency === "weekly") {
+    const dayDiff = (anchor.getDay() - now.getDay() + 7) % 7;
+    const candidateDay = new Date(now);
+    candidateDay.setDate(candidateDay.getDate() + dayDiff);
+    occurrence = localDateAt(candidateDay, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 7);
+  } else if (schedule.frequency === "biweekly") {
+    const elapsedDays = Math.max(0, daysBetween(anchor, now));
+    const nextCycle = elapsedDays - (elapsedDays % 14);
+    const candidateDay = new Date(anchor);
+    candidateDay.setDate(candidateDay.getDate() + nextCycle);
+    occurrence = localDateAt(candidateDay, schedule.time);
+    if (occurrence.getTime() <= now.getTime()) occurrence.setDate(occurrence.getDate() + 14);
+  } else if (schedule.frequency === "monthly") {
+    occurrence = scheduleDateInMonth(now.getFullYear(), now.getMonth(), anchor.getDate(), schedule.time);
+    if (occurrence.getTime() <= now.getTime()) {
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      occurrence = scheduleDateInMonth(nextMonth.getFullYear(), nextMonth.getMonth(), anchor.getDate(), schedule.time);
+    }
+  } else {
+    occurrence = scheduleDateInMonth(now.getFullYear(), anchor.getMonth(), anchor.getDate(), schedule.time);
+    if (occurrence.getTime() <= now.getTime()) {
+      occurrence = scheduleDateInMonth(now.getFullYear() + 1, anchor.getMonth(), anchor.getDate(), schedule.time);
+    }
+  }
+
+  if (!occurrence || occurrence.getTime() <= now.getTime()) return null;
+  const endAt = endOfLocalDate(schedule.endDate);
+  return endAt && occurrence.getTime() > endAt.getTime() ? null : occurrence;
+}
+
 function isScheduleDue(schedule: PublishingSchedule, now = new Date()) {
   if (schedule.status !== "active") return false;
   const occurrence = previousScheduleOccurrence(schedule, now);
@@ -968,19 +1810,26 @@ function isStoreUploadReadyForAutomation(
 ) {
   const account = store.accounts.find(item => item.id === upload.accountId);
   if (!account?.enabled) return false;
+  if (publishingSafetyPacingEnabled() && upload.safetyDeferredUntil) {
+    const deferredUntil = Date.parse(upload.safetyDeferredUntil);
+    if (Number.isFinite(deferredUntil)) {
+      return upload.status === "queued" && deferredUntil <= now;
+    }
+  }
   if (upload.scheduleId) return isDueByPostSchedule(upload, account, scheduledIds);
   if (mode === "scheduledOnly") return isDueScheduledUpload(upload, now);
   return isUploadReadyForAutomation(upload, now);
 }
 
-export async function listDueScheduleIdsWithQueuedUploads() {
+export async function listDueScheduleIdsWithQueuedUploads(companionId?: string) {
   const store = await readStore();
   const dueIds = dueScheduleIds(store);
   const accountById = new Map(store.accounts.map(account => [account.id, account]));
   const ids = new Set<number>();
   for (const upload of store.uploads) {
     const account = accountById.get(upload.accountId);
-    if (upload.scheduleId && isDueByPostSchedule(upload, account, dueIds)) ids.add(upload.scheduleId);
+    const assignedHere = !companionId || !account?.companionId || account.companionId === companionId;
+    if (assignedHere && upload.scheduleId && isDueByPostSchedule(upload, account, dueIds)) ids.add(upload.scheduleId);
   }
   return [...ids];
 }
@@ -1000,9 +1849,11 @@ export async function markSchedulesTriggered(scheduleIds: number[], triggeredAt 
   });
 }
 
-export async function dashboardSummary(): Promise<DashboardSummary> {
+export async function dashboardSummary(workspaceId?: string): Promise<DashboardSummary> {
   const store = await readStore();
-  const uploads = [...store.uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  const uploads = store.uploads
+    .filter(upload => !workspaceId || upload.workspaceId === workspaceId)
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const scheduledIds = dueScheduleIds(store);
   return {
     totalUploads: uploads.length,
@@ -1024,27 +1875,81 @@ export async function dashboardSummary(): Promise<DashboardSummary> {
   };
 }
 
-export async function listUploads(platform?: Platform, accountId?: string) {
+export async function listUploads(platform?: Platform, accountId?: string, workspaceId?: string) {
   const store = await readStore();
   return store.uploads
-    .filter(upload => (!platform || upload.platform === platform) && (!accountId || upload.accountId === accountId))
+    .filter(upload =>
+      (!workspaceId || upload.workspaceId === workspaceId)
+      && (!platform || upload.platform === platform)
+      && (!accountId || upload.accountId === accountId)
+    )
+    .map(upload => ({
+      ...upload,
+      createdByName: store.users.find(user => user.id === upload.createdByUserId)?.fullName,
+      scheduledByName: store.users.find(user => user.id === upload.scheduledByUserId)?.fullName,
+    }))
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 
-export async function createUpload(accountId: string, file: StoredFileInput, actorUserId?: string) {
+export async function createUpload(
+  accountId: string,
+  file: StoredFileInput,
+  actorUserId?: string,
+  workspaceId?: string,
+  attribution: { createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string } = {},
+) {
   const upload = await mutateStore(store => {
-    const account = store.accounts.find(item => item.id === accountId);
+    const account = store.accounts.find(item => item.id === accountId && (!workspaceId || item.workspaceId === workspaceId));
     if (!account) throw new Error("Publishing account not found.");
     if (!account.enabled) throw new Error("This publishing account is disabled.");
-    if (file.scheduleId && !store.schedules.some(schedule => schedule.id === file.scheduleId)) {
+    const linkedinTarget = file.linkedinTarget
+      ? account.platform === "linkedin"
+        ? account.linkedinManagedPages?.find(page => page.id === file.linkedinTarget?.id)
+        : undefined
+      : undefined;
+    if (file.linkedinTarget && !linkedinTarget) {
+      throw new Error("The selected managed LinkedIn Page is no longer available. Reconnect LinkedIn and choose it again.");
+    }
+    if (file.scheduleId && !store.schedules.some(schedule =>
+      schedule.id === file.scheduleId && schedule.workspaceId === account.workspaceId
+    )) {
       throw new Error("Selected schedule was not found.");
+    }
+    const duplicate = store.uploads.find(existing => isExactQueuedDuplicate({
+      postFormat: file.postFormat,
+      title: file.title,
+      description: file.caption,
+      originalName: file.originalName,
+      size: file.size,
+      rightsConfirmed: true,
+      destinations: [],
+    }, {
+      accountId,
+      platform: account.platform,
+      description: file.caption,
+      linkedinPageId: file.linkedinTarget?.id,
+      scheduledAt: file.scheduledAt,
+      scheduleId: file.scheduleId,
+    }, existing));
+    if (duplicate) {
+      throw new ContentPreflightError([{
+        code: "exact_queued_duplicate",
+        severity: "block",
+        accountId,
+        message: "This exact post is already queued for the same account and time.",
+      }]);
     }
     const timestamp = nowIso();
     const id = "upload_" + nanoid(12);
     const extension = path.extname(file.originalName).replace(".", "").toLowerCase() || "unknown";
+    const displayTitle = file.postFormat === "text"
+      ? `Text post: ${file.caption.replace(/\s+/g, " ").slice(0, 72)}${file.caption.length > 72 ? "…" : ""}`
+      : file.title || file.caption;
     const created: PlatformUpload = {
       id,
+      workspaceId: account.workspaceId,
       platform: account.platform,
+      postFormat: file.postFormat,
       accountId,
       originalName: file.originalName,
       fileName: file.fileName,
@@ -1052,16 +1957,20 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
       extension,
       size: file.size,
       url: file.url,
-      title: file.title || file.caption,
+      title: displayTitle,
+      platformOptions: requireYouTubeOptions(account.platform, file.postFormat, file.platformOptions) as PlatformUpload["platformOptions"],
+      linkedinTarget,
       caption: file.caption,
       status: "queued",
       attemptCount: 0,
+      publishActionState: "not_started",
       uploadedAt: timestamp,
       updatedAt: timestamp,
       scheduledAt: file.scheduledAt || undefined,
       scheduleId: file.scheduleId,
-      createdByUserId: actorUserId,
-      scheduledByUserId: file.scheduledAt || file.scheduleId ? actorUserId : undefined,
+      createdByUserId: attribution.createdByUserId ?? actorUserId,
+      scheduledByUserId: attribution.scheduledByUserId ?? (file.scheduledAt || file.scheduleId ? actorUserId : undefined),
+      sourceSubmissionId: attribution.sourceSubmissionId,
       lastUpdatedByUserId: actorUserId,
       automation: createAutomation(account.platform, accountId, id, file.url)
     };
@@ -1072,25 +1981,99 @@ export async function createUpload(accountId: string, file: StoredFileInput, act
   return upload;
 }
 
+export async function upsertSyncedUpload(input: PlatformUpload) {
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === input.id && upload.workspaceId === input.workspaceId);
+    const existing = index >= 0 ? store.uploads[index] : null;
+    const timestamp = nowIso();
+    const incomingPublishActionState = input.publishActionState === "submitted"
+      || input.publishActionState === "uncertain"
+      || input.publishActionState === "prepared"
+      || input.publishActionState === "confirmed"
+      ? input.publishActionState
+      : "not_started";
+    // A central retry arrives after its job has already been claimed, so its
+    // incoming status is "processing". Reset a prior local failure only when
+    // no final publish action was submitted. Posted and uncertain records must
+    // remain terminal locally to prevent duplicate social posts.
+    const centralRetryOfSafeFailure = existing?.status === "failed"
+      && (input.status === "queued" || input.status === "processing")
+      && existing.publishActionState !== "submitted"
+      && existing.publishActionState !== "uncertain"
+      && incomingPublishActionState !== "submitted"
+      && incomingPublishActionState !== "uncertain";
+    const status: UploadStatus = !existing
+      ? "queued"
+      : centralRetryOfSafeFailure
+        ? "queued"
+        : existing.status;
+    const publishActionState: PublishActionState = centralRetryOfSafeFailure
+      ? "not_started"
+      : existing?.status === "posted"
+        ? existing.publishActionState || "confirmed"
+        : existing?.publishActionState === "submitted" || existing?.publishActionState === "uncertain"
+          ? existing.publishActionState
+          : incomingPublishActionState;
+    const normalized: PlatformUpload = {
+      ...input,
+      caption: typeof input.caption === "string" ? input.caption : "",
+      postFormat: input.postFormat || "text",
+      extension: input.extension || path.extname(input.originalName || "").replace(".", ""),
+      status,
+      failureReason: status === "queued" || status === "posted"
+        ? undefined
+        : input.failureReason || existing?.failureReason,
+      publishActionState,
+      safetyDeferredUntil: centralRetryOfSafeFailure ? undefined : input.safetyDeferredUntil ?? existing?.safetyDeferredUntil,
+      safetyReason: centralRetryOfSafeFailure ? undefined : input.safetyReason ?? existing?.safetyReason,
+      uploadedAt: input.uploadedAt || timestamp,
+      updatedAt: timestamp,
+      automation: input.automation || createAutomation(input.platform, input.accountId, input.id, input.url),
+    };
+    if (index >= 0) store.uploads[index] = { ...store.uploads[index], ...normalized };
+    else store.uploads.unshift(normalized);
+    return index >= 0 ? store.uploads[index] : normalized;
+  });
+}
+
 export async function updateUploadStatus(
   uploadId: string,
   status: UploadStatus,
   changeReason = "Post status updated",
-  actorUserId?: string
+  actorUserId?: string,
+  workspaceId?: string
 ) {
   let oldStatus: UploadStatus | null = null;
   let statusChanged = false;
   const changedAt = nowIso();
   const updated = await mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    const index = store.uploads.findIndex(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (index < 0) return null;
     oldStatus = store.uploads[index].status;
     statusChanged = oldStatus !== status;
     const existing = store.uploads[index];
+    const transitions: Record<UploadStatus, UploadStatus[]> = {
+      queued: ["processing", "failed"],
+      processing: ["posted", "failed", "queued"],
+      failed: ["queued", "processing"],
+      posted: [],
+    };
+    if (statusChanged && !transitions[oldStatus].includes(status)) {
+      throw new Error(`A post cannot move from ${oldStatus} to ${status}.`);
+    }
+    if (
+      (status === "queued" || status === "processing")
+      && (existing.publishActionState === "submitted" || existing.publishActionState === "uncertain")
+    ) {
+      throw new Error("This post may already be published. Verify the platform and create a new post instead of retrying this job.");
+    }
     const next: PlatformUpload = {
       ...existing,
       status,
       failureReason: status === "failed" ? changeReason : undefined,
+      safetyDeferredUntil: status === "queued" ? existing.safetyDeferredUntil : undefined,
+      safetyReason: status === "queued" ? existing.safetyReason : undefined,
+      publishActionState: status === "posted" ? "confirmed" : existing.publishActionState,
       attemptCount: status === "processing" ? (existing.attemptCount ?? 0) + 1 : existing.attemptCount ?? 0,
       lastAttemptAt: status === "processing" ? changedAt : existing.lastAttemptAt,
       postedAt: status === "posted" ? changedAt : existing.postedAt,
@@ -1106,16 +2089,51 @@ export async function updateUploadStatus(
   return updated;
 }
 
-export async function deleteUpload(uploadId: string) {
+export async function updateUploadPublishActionState(uploadId: string, state: PublishActionState) {
   return mutateStore(store => {
-    const existing = store.uploads.find(upload => upload.id === uploadId);
+    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    if (index < 0) return null;
+    const updated: PlatformUpload = {
+      ...store.uploads[index],
+      publishActionState: state,
+      updatedAt: nowIso(),
+    };
+    store.uploads[index] = updated;
+    return updated;
+  });
+}
+
+export async function deferUploadForSafety(uploadId: string, retryAt: string, reason: string) {
+  const retryTimestamp = Date.parse(retryAt);
+  if (!Number.isFinite(retryTimestamp) || retryTimestamp <= Date.now()) {
+    throw new Error("A future safety retry time is required.");
+  }
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    if (index < 0) return null;
+    const existing = store.uploads[index];
+    if (existing.status !== "queued") return existing;
+    const updated: PlatformUpload = {
+      ...existing,
+      safetyDeferredUntil: retryAt,
+      safetyReason: reason,
+      updatedAt: nowIso(),
+    };
+    store.uploads[index] = updated;
+    return updated;
+  });
+}
+
+export async function deleteUpload(uploadId: string, workspaceId?: string) {
+  return mutateStore(store => {
+    const existing = store.uploads.find(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (!existing) return null;
     store.uploads = store.uploads.filter(upload => upload.id !== uploadId);
     return existing;
   });
 }
 
-export async function updateUploadDetails(uploadId: string, input: UpdateUploadDetailsInput, actorUserId?: string) {
+export async function updateUploadDetails(uploadId: string, input: UpdateUploadDetailsInput, actorUserId?: string, workspaceId?: string) {
   const selectedScheduleId = input.scheduleId === null ? undefined : normalizeScheduleId(input.scheduleId);
   let oldStatus: UploadStatus | null = null;
   let statusChanged = false;
@@ -1123,20 +2141,27 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
   const scheduleTouched = input.scheduledAt !== undefined || input.scheduleId !== undefined;
 
   const updatedUpload = await mutateStore(store => {
-    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    const index = store.uploads.findIndex(upload => upload.id === uploadId && (!workspaceId || upload.workspaceId === workspaceId));
     if (index < 0) return null;
     const existing = store.uploads[index];
     if (existing.status === "processing" || existing.status === "posted") {
       throw new Error("Cannot edit a " + existing.status + " post.");
     }
+    if (existing.publishActionState === "uncertain" || existing.publishActionState === "submitted") {
+      throw new Error("This post may already be published. Verify the platform and create a new post instead of retrying this job.");
+    }
     let accountId = existing.accountId;
     if (input.accountId && input.accountId !== accountId) {
-      const account = store.accounts.find(item => item.id === input.accountId);
+      const account = store.accounts.find(item =>
+        item.id === input.accountId && item.workspaceId === existing.workspaceId
+      );
       if (!account || account.platform !== existing.platform) throw new Error("Choose an account from the same platform.");
       if (!account.enabled) throw new Error("Choose an enabled publishing account.");
       accountId = account.id;
     }
-    if (selectedScheduleId && !store.schedules.some(schedule => schedule.id === selectedScheduleId)) {
+    if (selectedScheduleId && !store.schedules.some(schedule =>
+      schedule.id === selectedScheduleId && schedule.workspaceId === existing.workspaceId
+    )) {
       throw new Error("Selected schedule was not found.");
     }
     const nextScheduledAt = input.scheduledAt === null || selectedScheduleId ? undefined : input.scheduledAt ?? existing.scheduledAt;
@@ -1147,6 +2172,7 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
       ...existing,
       accountId,
       title: input.title?.trim() || input.caption.trim(),
+      platformOptions: requireYouTubeOptions(existing.platform, existing.postFormat, input.platformOptions ?? existing.platformOptions) as PlatformUpload["platformOptions"],
       caption: input.caption.trim(),
       scheduledAt: nextScheduledAt,
       scheduleId: nextScheduleId,
@@ -1154,6 +2180,9 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
       lastUpdatedByUserId: actorUserId,
       status: "queued",
       failureReason: undefined,
+      safetyDeferredUntil: undefined,
+      safetyReason: undefined,
+      publishActionState: "not_started",
       updatedAt: changedAt,
       automation: createAutomation(existing.platform, accountId, existing.id, existing.url)
     };
@@ -1167,19 +2196,24 @@ export async function updateUploadDetails(uploadId: string, input: UpdateUploadD
   return updatedUpload;
 }
 
-export async function listDueScheduledUploads() {
+export async function listDueScheduledUploads(companionId?: string) {
   const store = await readStore();
   const scheduledIds = dueScheduleIds(store);
+  const accountById = new Map(store.accounts.map(account => [account.id, account]));
   return store.uploads
-    .filter(upload => isStoreUploadReadyForAutomation(store, upload, "scheduledOnly", Date.now(), scheduledIds))
+    .filter(upload => {
+      const account = accountById.get(upload.accountId);
+      const assignedHere = !companionId || !account?.companionId || account.companionId === companionId;
+      return assignedHere && isStoreUploadReadyForAutomation(store, upload, "scheduledOnly", Date.now(), scheduledIds);
+    })
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
 }
 
-export async function automationInput(platform?: Platform, mode: AutomationInputMode = "ready"): Promise<AutomationInput> {
+export async function automationInput(platform?: Platform, mode: AutomationInputMode = "ready", workspaceId?: string): Promise<AutomationInput> {
   const store = await readStore();
   const scheduledIds = dueScheduleIds(store);
   const uploads = store.uploads
-    .filter(upload => !platform || upload.platform === platform)
+    .filter(upload => (!workspaceId || upload.workspaceId === workspaceId) && (!platform || upload.platform === platform))
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const queued = uploads.filter(upload => isStoreUploadReadyForAutomation(store, upload, mode, Date.now(), scheduledIds));
   const channels = Object.fromEntries(platforms.map(channel => [

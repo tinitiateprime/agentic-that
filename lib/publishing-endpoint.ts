@@ -64,19 +64,24 @@ export async function resolvePublishingOrigin() {
     activePublishingOrigin = configuredPublishingOrigin;
     return configuredPublishingOrigin;
   }
-  return detectLocalPublishingCompanion();
+  const local = await detectLocalPublishingCompanion();
+  if (local) return local;
+  activePublishingOrigin = "";
+  return "";
 }
 
 export async function publishingFetch(path: string, init: RequestInit = {}) {
   if (!configuredPublishingOrigin && typeof window !== "undefined" && !(init.body instanceof FormData)) {
     const extensionResponse = await publishingExtensionFetch(path, init);
-    if (extensionResponse) return extensionResponse;
+    if (extensionResponse && extensionResponse.headers.get("X-AgenticThat-Bridge-Error") !== "1") {
+      return extensionResponse;
+    }
   }
 
   const origin = await resolvePublishingOrigin();
   if (!origin && typeof window !== "undefined") {
     throw new Error(
-      "The publishing companion could not be reached. Install the AgenticThat Chrome extension, start Start Publishing Companion.cmd, and try again."
+      "Publishing is unavailable right now. Refresh the page, or ask your Workspace Manager to open the paired Companion."
     );
   }
   const normalizedPath = path.startsWith("/api/") ? path : `/api/${path.replace(/^\//, "")}`;

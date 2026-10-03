@@ -5,10 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 
-test("publishing API supports login, chunked media upload, queue scheduling, and failure details", async (context) => {
+test("publishing API supports login, role-scoped handoffs, scheduling, and failure details", async (context) => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agenticthat-publishing-api-"));
   const uploadDir = path.join(temporaryRoot, "uploads");
-  process.env.NODE_ENV = "test";
+  (process.env as Record<string, string | undefined>).NODE_ENV = "test";
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(temporaryRoot, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDir;
   process.env.PUBLISH_QUEUE_AUTH_TOKEN_SECRET = "test-auth-secret-that-is-longer-than-thirty-two-characters";
@@ -16,8 +16,34 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
   process.env.PUBLISH_QUEUE_OPERATIONS_MANAGER_PASSWORD = "Testing@2026";
   process.env.PUBLISH_QUEUE_SCHEDULER_ENABLED = "false";
   process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
+  process.env.PUBLISHING_SAFETY_PACING_ENABLED = "true";
 
-  const { createPublishingHttpServer } = await import("./index.js");
+  const { centralDeliveryFailure, createPublishingHttpServer } = await import("./index.js");
+  assert.deepEqual(centralDeliveryFailure(undefined), {
+    message: "Companion could not find the local copy of this publishing job. It is safe to retry.",
+    retry: true,
+    state: "failed",
+  });
+  assert.deepEqual(centralDeliveryFailure({
+    platform: "linkedin",
+    status: "processing",
+    publishActionState: "uncertain",
+  } as never), {
+    message: "Companion stopped after the final publish action. Verify the platform before retrying to prevent a duplicate post.",
+    retry: false,
+    state: "uncertain",
+  });
+  assert.deepEqual(centralDeliveryFailure({
+    platform: "youtube",
+    postFormat: "video",
+    status: "failed",
+    publishActionState: "uncertain",
+    failureReason: "Automation run failed: Processing abandoned",
+  } as never), {
+    message: "YouTube accepted Publish, but the video upload or processing could not be confirmed. Check YouTube Studio before retrying.",
+    retry: false,
+    state: "uncertain",
+  });
   const server = createPublishingHttpServer({ host: "127.0.0.1", port: 0, startBackgroundServices: false });
   await new Promise<void>((resolve, reject) => {
     if (server.listening) return resolve();
@@ -27,10 +53,27 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
   context.after(async () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await fs.rm(temporaryRoot, { recursive: true, force: true });
+    delete process.env.PUBLISHING_SAFETY_PACING_ENABLED;
   });
 
   const address = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${address.port}`;
+  const healthResponse = await fetch(`${origin}/api/health`);
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json() as {
+    companionInstanceId?: string;
+    capabilities?: { instagramScraping?: { available?: boolean; concurrency?: number } };
+  };
+  assert.equal(health.capabilities?.instagramScraping?.available, false);
+  assert.equal(health.capabilities?.instagramScraping?.concurrency, 1);
+
+  const unauthenticatedScrape = await fetch(`${origin}/api/scraping/instagram/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(unauthenticatedScrape.status, 401);
+
   const loginResponse = await fetch(`${origin}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,6 +90,27 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
     return fetch(`${origin}${route}`, { ...init, headers });
   }
 
+  const unavailableCompanionScrape = await api("/api/scraping/instagram/jobs", {
+    method: "POST",
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(unavailableCompanionScrape.status, 503);
+  assert.equal(
+    ((await unavailableCompanionScrape.json()) as { code?: string }).code,
+    "companion_unavailable",
+  );
+
+  const missingApiRoute = await api("/api/compatibility-route-that-does-not-exist", {
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(missingApiRoute.status, 404);
+  assert.match(missingApiRoute.headers.get("content-type") ?? "", /application\/json/);
+  assert.match(
+    ((await missingApiRoute.json()) as { message: string }).message,
+    /Publishing API route not found/,
+  );
+
   const accountResponse = await api("/api/platforms/facebook/accounts", {
     method: "POST",
     body: JSON.stringify({
@@ -56,7 +120,458 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
     }),
   });
   assert.equal(accountResponse.status, 201);
-  const account = await accountResponse.json() as { id: string };
+  const account = await accountResponse.json() as { id: string; workspaceId: string; executionEngine?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  assert.equal(account.executionEngine, "external_browser");
+  assert.equal(account.safetyMode, "protected");
+  assert.equal(account.twoFactorEnabled, false);
+
+  const youtubeAccountResponse = await api("/api/platforms/youtube/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: "YouTube test account",
+      handle: "@agenticthat-video-test",
+      enabled: true,
+      executionEngine: "companion",
+    }),
+  });
+  assert.equal(youtubeAccountResponse.status, 201);
+  const youtubeAccount = await youtubeAccountResponse.json() as { id: string; executionEngine?: string };
+  assert.equal(youtubeAccount.executionEngine, "external_browser");
+
+  const importedAccountResponse = await api("/api/companion/accounts/import", {
+    method: "POST",
+    body: JSON.stringify({ account: { ...account, platform: "facebook", companionId: "stale-central-companion", displayName: "Facebook test account", handle: "@agenticthat-test", loginIdentifier: "", credentialConfigured: false, enabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }),
+  });
+  assert.equal(importedAccountResponse.status, 201);
+  const importedAccount = await importedAccountResponse.json() as { companionId?: string };
+  assert.equal(importedAccount.companionId, health.companionInstanceId);
+
+  const {
+    bindPublishingAccountsToCompanion,
+    getPlatformAccount,
+    migrateLegacyPlatformAccounts,
+    pausePlatformAccountForSafety,
+    updateLinkedInManagedPages,
+    updatePlatformAccountCredentialState,
+  } = await import("./local-storage.js");
+  const legacyStorePath = path.join(temporaryRoot, "legacy-store.json");
+  const legacyAccountId = "account_legacy_workspace_session";
+  await fs.writeFile(legacyStorePath, JSON.stringify({
+    version: 1,
+    users: [],
+    accounts: [
+      { ...account, credentialConfigured: true },
+      {
+        ...account,
+        id: legacyAccountId,
+        platform: "youtube",
+        displayName: "Migrated YouTube account",
+        handle: "@migrated-video",
+        credentialConfigured: true,
+        executionEngine: "companion",
+      },
+    ],
+    schedules: [],
+    socialMediaSchedules: [],
+    uploads: [],
+    submissions: [],
+    activityLogs: [],
+    automationRuns: [],
+    automationRunPosts: [],
+  }));
+  const legacyMigration = await migrateLegacyPlatformAccounts(account.workspaceId, health.companionInstanceId!, legacyStorePath);
+  assert.deepEqual(legacyMigration, { imported: 1, accountIds: [legacyAccountId] });
+  assert.equal((await getPlatformAccount(account.id))?.credentialConfigured, false, "current account state must win over stale legacy data");
+  const migratedLegacyAccount = await getPlatformAccount(legacyAccountId, account.workspaceId);
+  assert.equal(migratedLegacyAccount?.credentialConfigured, true);
+  assert.equal(migratedLegacyAccount?.executionEngine, "external_browser");
+  assert.equal(migratedLegacyAccount?.companionId, health.companionInstanceId);
+  assert.deepEqual(
+    await migrateLegacyPlatformAccounts(account.workspaceId, health.companionInstanceId!, legacyStorePath),
+    { imported: 0, accountIds: [] },
+    "legacy account migration must be idempotent",
+  );
+  await updatePlatformAccountCredentialState(account.id, true);
+  const binding = await bindPublishingAccountsToCompanion("companion_test_rebound");
+  assert.ok(binding.rebound > 0);
+  const reboundAccount = await getPlatformAccount(account.id);
+  assert.equal(reboundAccount?.executionEngine, "external_browser");
+  assert.equal(reboundAccount?.companionId, "companion_test_rebound");
+  assert.equal(reboundAccount?.credentialConfigured, true);
+  await bindPublishingAccountsToCompanion(health.companionInstanceId!);
+  await pausePlatformAccountForSafety(account.id, "warning", "Uncertain publish result requires review.");
+  const pausedAccounts = await (await api("/api/accounts?platform=facebook")).json() as Array<{
+    id: string;
+    enabled: boolean;
+    safetyStatus?: string;
+  }>;
+  const pausedAccount = pausedAccounts.find(item => item.id === account.id);
+  assert.equal(pausedAccount?.enabled, false);
+  assert.equal(pausedAccount?.safetyStatus, "warning");
+
+  const resumeResponse = await api(`/api/accounts/${account.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      displayName: "Facebook test account",
+      handle: "@agenticthat-test",
+      enabled: true,
+      executionEngine: "external_browser",
+      safetyMode: "standard",
+      twoFactorEnabled: true,
+    }),
+  });
+  assert.equal(resumeResponse.status, 200);
+  const resumedAccount = await resumeResponse.json() as { enabled: boolean; credentialConfigured: boolean; executionEngine?: string; safetyStatus?: string; safetyReason?: string; safetyMode?: string; twoFactorEnabled?: boolean };
+  assert.equal(resumedAccount.enabled, true);
+  assert.equal(resumedAccount.executionEngine, "external_browser");
+  assert.equal(resumedAccount.credentialConfigured, true);
+  assert.equal(resumedAccount.safetyStatus, "healthy");
+  assert.equal(resumedAccount.safetyReason, undefined);
+  assert.equal(resumedAccount.safetyMode, "standard");
+  assert.equal(resumedAccount.twoFactorEnabled, true);
+  await updatePlatformAccountCredentialState(account.id, true);
+
+  const unsafeLinkResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Internal setup: http://admin:secret@192.168.1.5/setup",
+      destinations: [{ accountId: account.id }],
+    }),
+  });
+  assert.equal(unsafeLinkResponse.status, 422);
+  const unsafeLinkError = await unsafeLinkResponse.json() as { code?: string; issues?: Array<{ code: string }> };
+  assert.equal(unsafeLinkError.code, "CONTENT_PREFLIGHT_BLOCKED");
+  assert.equal(unsafeLinkError.issues?.some(issue => issue.code === "private_link"), true);
+
+  const { signPublishingWorkspaceIdentity } = await import("../../../../lib/publishing-workspace-auth.js");
+  const { signServiceAccessToken } = await import("../../../../lib/service-access-token.js");
+  const scrapingIdentityToken = signServiceAccessToken({
+    audience: "scraping",
+    subject: "instagram-scraping-user",
+    workspaceId: "instagram-scraping-workspace",
+    name: "Instagram Scraping User",
+    email: "scraping@example.test",
+    grants: { "scraping.instagram": "operate", "scraping.facebook": "none" },
+    capabilities: ["scraping.view", "scraping.run"],
+  });
+  const scrapingSessionResponse = await fetch(`${origin}/api/auth/platform/instagram-scraping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: scrapingIdentityToken }),
+  });
+  assert.equal(scrapingSessionResponse.status, 200);
+  const scrapingSession = await scrapingSessionResponse.json() as { token: string; expiresInSeconds: number };
+  assert.ok(scrapingSession.token);
+  assert.ok(scrapingSession.expiresInSeconds >= 300);
+  const scopedScrapeResponse = await fetch(`${origin}/api/scraping/instagram/jobs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${scrapingSession.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ mode: "profile", keyword: "instagram" }),
+  });
+  assert.equal(scopedScrapeResponse.status, 503);
+  const scopedPublishingResponse = await fetch(`${origin}/api/accounts`, {
+    headers: { Authorization: `Bearer ${scrapingSession.token}` },
+  });
+  assert.equal(scopedPublishingResponse.status, 401);
+
+  async function platformSession(platformUserId: string, workspaceId: string, email: string) {
+    const identityToken = signPublishingWorkspaceIdentity({
+      sub: platformUserId,
+      workspaceId,
+      workspaceKey: `workspace-key-${workspaceId}-that-is-long-enough`,
+      name: platformUserId,
+      email,
+      businessName: workspaceId,
+      capabilities: [
+        "publishing.view",
+        "publishing.content.create",
+        "publishing.content.edit",
+        "publishing.destinations.select",
+        "publishing.submissions.create",
+        "publishing.schedule.manage",
+        "publishing.accounts.configure",
+        "publishing.execute",
+      ],
+    });
+    const statusResponse = await fetch(`${origin}/api/auth/platform/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken }),
+    });
+    assert.equal(statusResponse.status, 200);
+    const initialStatus = await statusResponse.json() as { configured: boolean; username: string };
+    assert.equal(initialStatus.configured, false);
+    assert.equal(initialStatus.username, email);
+    const setupResponse = await fetch(`${origin}/api/auth/platform/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "OwnerPassword@2026" }),
+    });
+    assert.equal(setupResponse.status, 200);
+    const setupResult = await setupResponse.json() as { user: { username: string } };
+    assert.equal(setupResult.user.username, email);
+    const repeatedSetup = await fetch(`${origin}/api/auth/platform/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "Replacement@2026" }),
+    });
+    assert.equal(repeatedSetup.status, 400);
+    const wrongLogin = await fetch(`${origin}/api/auth/platform/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "WrongPassword" }),
+    });
+    assert.equal(wrongLogin.status, 401);
+    const loginResponse = await fetch(`${origin}/api/auth/platform/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: identityToken, password: "OwnerPassword@2026" }),
+    });
+    assert.equal(loginResponse.status, 200);
+    return loginResponse.json() as Promise<{ token: string }>;
+  }
+  const [workspaceA, workspaceB] = await Promise.all([
+    platformSession("Owner A", "workspace_a", "owner-a@example.com"),
+    platformSession("Owner B", "workspace_b", "owner-b@example.com"),
+  ]);
+  const workspaceApi = (token: string, route: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    if (typeof init.body === "string") headers.set("Content-Type", "application/json");
+    return fetch(`${origin}${route}`, { ...init, headers });
+  };
+  const workspaceAccountResponse = await workspaceApi(workspaceA.token, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Workspace A Facebook", handle: "@private-a", enabled: true }),
+  });
+  assert.equal(workspaceAccountResponse.status, 201);
+  const workspaceAccount = await workspaceAccountResponse.json() as { id: string };
+  const disabledWorkspaceAccountResponse = await workspaceApi(workspaceA.token, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Disabled Workspace A Facebook", handle: "@disabled-a", enabled: false }),
+  });
+  assert.equal(disabledWorkspaceAccountResponse.status, 201);
+  const workspaceBAccounts = await (await workspaceApi(workspaceB.token, "/api/accounts")).json() as unknown[];
+  assert.equal(workspaceBAccounts.length, 0);
+  const crossWorkspaceUpdate = await workspaceApi(workspaceB.token, `/api/accounts/${workspaceAccount.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ displayName: "Should fail", handle: "@private-a", enabled: true }),
+  });
+  assert.equal(crossWorkspaceUpdate.status, 404);
+  const workspaceAUsers = await (await workspaceApi(workspaceA.token, "/api/users")).json() as unknown[];
+  const workspaceBUsers = await (await workspaceApi(workspaceB.token, "/api/users")).json() as unknown[];
+  assert.equal(workspaceAUsers.length, 1);
+  assert.equal(workspaceBUsers.length, 1);
+  const workspaceASubmissionResponse = await workspaceApi(workspaceA.token, "/api/submissions/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Private Workspace A handoff", selectedAccountIds: [workspaceAccount.id] }),
+  });
+  assert.equal(workspaceASubmissionResponse.status, 201);
+  const workspaceASubmissions = await (await workspaceApi(workspaceA.token, "/api/submissions")).json() as unknown[];
+  const workspaceBSubmissions = await (await workspaceApi(workspaceB.token, "/api/submissions")).json() as unknown[];
+  assert.equal(workspaceASubmissions.length, 1);
+  assert.equal(workspaceBSubmissions.length, 0);
+
+  const centralUploaderToken = signPublishingWorkspaceIdentity({
+    sub: "central-uploader-a",
+    workspaceId: "workspace_a",
+    name: "Central Uploader A",
+    email: "uploader-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: [
+      "publishing.view",
+      "publishing.content.create",
+      "publishing.content.edit",
+      "publishing.destinations.select",
+      "publishing.submissions.create",
+    ],
+  });
+  const uploaderAccountsResponse = await workspaceApi(centralUploaderToken, "/api/accounts");
+  assert.equal(uploaderAccountsResponse.status, 200);
+  const uploaderAccounts = await uploaderAccountsResponse.json() as Array<{ id: string; enabled: boolean }>;
+  assert.deepEqual(uploaderAccounts.map(account => account.id), [workspaceAccount.id]);
+  assert.equal(uploaderAccounts.every(account => account.enabled), true);
+  const noRoleToken = signPublishingWorkspaceIdentity({
+    sub: "central-no-role-a",
+    workspaceId: "workspace_a",
+    name: "No Publishing Role",
+    email: "no-role-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: [],
+  });
+  assert.equal((await workspaceApi(noRoleToken, "/api/accounts")).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Uploader bypass", handle: "@uploader-bypass", enabled: true }),
+  })).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Uploader direct publish bypass", destinations: [{ accountId: workspaceAccount.id }] }),
+  })).status, 403);
+  assert.equal((await workspaceApi(centralUploaderToken, "/api/users")).status, 403);
+  const centralHandoffResponse = await workspaceApi(centralUploaderToken, "/api/submissions/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Central role handoff", selectedAccountIds: [workspaceAccount.id] }),
+  });
+  assert.equal(centralHandoffResponse.status, 201);
+  const centralHandoff = await centralHandoffResponse.json() as { id: string };
+  assert.equal((await workspaceApi(centralUploaderToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
+  })).status, 403);
+
+  const centralSchedulerToken = signPublishingWorkspaceIdentity({
+    sub: "central-scheduler-a",
+    workspaceId: "workspace_a",
+    name: "Central Scheduler A",
+    email: "scheduler-a@example.com",
+    grants: { "publishing.facebook": "configure" },
+    capabilities: ["publishing.view", "publishing.schedule.manage"],
+  });
+  const centralScheduleResponse = await workspaceApi(centralSchedulerToken, `/api/submissions/${centralHandoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: workspaceAccount.id, description: "Scheduler edit attempt", scheduledAt: new Date(Date.now() + 20 * 60_000).toISOString() }] }),
+  });
+  assert.equal(centralScheduleResponse.status, 201);
+  const centralScheduledHandoff = await centralScheduleResponse.json() as { uploads: Array<{ caption: string }> };
+  assert.equal(centralScheduledHandoff.uploads[0].caption, "Central role handoff");
+
+  const textPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Text-only publishing integration test",
+      destinations: [{ accountId: account.id }],
+    }),
+  });
+  assert.equal(textPostResponse.status, 201);
+  const textPosts = await textPostResponse.json() as Array<{
+    id: string;
+    postFormat?: string;
+    fileName: string;
+    mimeType: string;
+    url: string;
+    status: string;
+  }>;
+  assert.equal(textPosts.length, 1);
+  assert.equal(textPosts[0].postFormat, "text");
+  assert.equal(textPosts[0].fileName, "");
+  assert.equal(textPosts[0].mimeType, "text/plain");
+  assert.equal(textPosts[0].url, "");
+  assert.equal(textPosts[0].status, "queued");
+  const {
+    listUploads: listStoredUploads,
+    requeueAccountSessionFailures,
+    updateUploadStatus: setStoredUploadStatus,
+    upsertSyncedUpload,
+  } = await import("./local-storage.js");
+  await setStoredUploadStatus(textPosts[0].id, "processing", "Testing a failed saved session");
+  await setStoredUploadStatus(textPosts[0].id, "failed", "Facebook saved browser session is not active. Login is required.");
+  assert.deepEqual(await requeueAccountSessionFailures(account.id), [textPosts[0].id]);
+  const recoveredTextPost = (await (await api("/api/uploads")).json() as Array<{ id: string; status: string; failureReason?: string }>)
+    .find(item => item.id === textPosts[0].id);
+  assert.equal(recoveredTextPost?.status, "queued");
+  assert.equal(recoveredTextPost?.failureReason, undefined);
+
+  await setStoredUploadStatus(textPosts[0].id, "failed", "Old LinkedIn viewport failure");
+  const locallyFailedPost = (await listStoredUploads()).find(item => item.id === textPosts[0].id);
+  assert.ok(locallyFailedPost);
+  await upsertSyncedUpload({
+    ...locallyFailedPost,
+    status: "processing",
+    failureReason: "The local publisher did not confirm delivery.",
+  });
+  const centrallyRetriedPost = (await listStoredUploads()).find(item => item.id === textPosts[0].id);
+  assert.equal(centrallyRetriedPost?.status, "queued");
+  assert.equal(centrallyRetriedPost?.failureReason, undefined);
+  assert.equal(centrallyRetriedPost?.publishActionState, "not_started");
+
+  const instagramAccountResponse = await api("/api/platforms/instagram/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: "Instagram test account",
+      handle: "@agenticthat-instagram-test",
+      enabled: true,
+    }),
+  });
+  assert.equal(instagramAccountResponse.status, 201);
+  const instagramAccount = await instagramAccountResponse.json() as { id: string };
+  const unsupportedTextResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Instagram must reject this text-only post",
+      destinations: [{ accountId: instagramAccount.id }],
+    }),
+  });
+  assert.equal(unsupportedTextResponse.status, 400);
+  const unsupportedText = await unsupportedTextResponse.json() as { message: string };
+  assert.match(unsupportedText.message, /Instagram does not support text posts/i);
+
+  const consentWithoutCompanion = await api("/api/automation/consent", { method: "POST" });
+  assert.equal(consentWithoutCompanion.status, 409);
+  assert.match((await consentWithoutCompanion.json() as { message: string }).message, /Open Companion/i);
+
+  const xAccountResponse = await api("/api/platforms/x/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "X safety account", handle: "@agenticthat-safety", enabled: true }),
+  });
+  assert.equal(xAccountResponse.status, 201);
+  const xAccount = await xAccountResponse.json() as { id: string };
+  const firstXPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "First X safety post", destinations: [{ accountId: xAccount.id }] }),
+  });
+  assert.equal(firstXPostResponse.status, 201);
+  const [firstXPost] = await firstXPostResponse.json() as Array<{ id: string }>;
+  assert.equal((await api(`/api/uploads/${firstXPost.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "processing" }),
+  })).status, 200);
+  assert.equal((await api(`/api/uploads/${firstXPost.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "posted" }),
+  })).status, 200);
+
+  const safetyAssessmentResponse = await api("/api/publishing-safety/assess", {
+    method: "POST",
+    body: JSON.stringify({ postFormat: "text", destinations: [{ accountId: xAccount.id }] }),
+  });
+  assert.equal(safetyAssessmentResponse.status, 200);
+  const safetyAssessment = await safetyAssessmentResponse.json() as {
+    allowed: boolean;
+    issues: Array<{ accountId: string; earliestAt: string }>;
+  };
+  assert.equal(safetyAssessment.allowed, true);
+  assert.equal(safetyAssessment.issues[0]?.accountId, xAccount.id);
+  assert.ok(Date.parse(safetyAssessment.issues[0]?.earliestAt) > Date.now());
+
+  const mixedSafetyPostResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "Mixed destination safety post",
+      destinations: [{ accountId: xAccount.id }, { accountId: account.id }],
+    }),
+  });
+  assert.equal(mixedSafetyPostResponse.status, 201);
+  const mixedSafetyPosts = await mixedSafetyPostResponse.json() as Array<{
+    id: string;
+    accountId: string;
+    safetyDeferredUntil?: string;
+    safetyReason?: string;
+  }>;
+  assert.equal(mixedSafetyPosts.length, 2);
+  const deferredXPost = mixedSafetyPosts.find(post => post.accountId === xAccount.id);
+  const readyFacebookPost = mixedSafetyPosts.find(post => post.accountId === account.id);
+  assert.ok(Date.parse(deferredXPost?.safetyDeferredUntil ?? "") > Date.now());
+  assert.match(deferredXPost?.safetyReason ?? "", /Other selected accounts can continue/i);
+  assert.equal(readyFacebookPost?.safetyDeferredUntil, undefined);
+  const { automationInput: loadAutomationInput } = await import("./local-storage.js");
+  const mixedAutomationInput = await loadAutomationInput();
+  const readyAutomationIds = new Set(Object.values(mixedAutomationInput.channels).flat().map(post => post.id));
+  assert.equal(readyAutomationIds.has(readyFacebookPost!.id), true);
+  assert.equal(readyAutomationIds.has(deferredXPost!.id), false);
 
   const media = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const stagedResponse = await api("/api/staged-uploads", {
@@ -93,6 +608,7 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
       stagedUploadId: staged.id,
       title: "",
       description: "Publishing integration test",
+      rightsConfirmed: true,
       destinations: [{ accountId: account.id }],
     }),
   });
@@ -141,22 +657,162 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
   assert.equal(reusableScheduledPost.scheduledAt, undefined);
   assert.equal(reusableScheduledPost.scheduleId, schedule.id);
 
+  const roleUsers = [
+    { username: "handoff.uploader", fullName: "Handoff Uploader", role: "post_uploader", password: "Uploader@2026" },
+    { username: "handoff.scheduler", fullName: "Handoff Scheduler", role: "scheduler", password: "Scheduler@2026" },
+    { username: "handoff.viewer", fullName: "Handoff Viewer", role: "viewer", password: "ViewerPass@2026" },
+  ] as const;
+  for (const roleUser of roleUsers) {
+    const createUserResponse = await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify(roleUser),
+    });
+    assert.equal(createUserResponse.status, 201);
+  }
+
+  async function roleLogin(username: string, password: string) {
+    const response = await fetch(`${origin}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return response.json() as Promise<{ token: string }>;
+  }
+  const [uploaderLogin, schedulerLogin, viewerLogin] = await Promise.all([
+    roleLogin("handoff.uploader", "Uploader@2026"),
+    roleLogin("handoff.scheduler", "Scheduler@2026"),
+    roleLogin("handoff.viewer", "ViewerPass@2026"),
+  ]);
+  const roleApi = (token: string, route: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    if (typeof init.body === "string" && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    return fetch(`${origin}${route}`, { ...init, headers });
+  };
+
+  const uploadsBeforeHandoff = await (await api("/api/uploads")).json() as unknown[];
+  const handoffResponse = await roleApi(uploaderLogin.token, "/api/submissions/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Persistent uploader to scheduler handoff", selectedAccountIds: [account.id, youtubeAccount.id] }),
+  });
+  assert.equal(handoffResponse.status, 201);
+  const handoff = await handoffResponse.json() as { id: string; status: string; description: string; createdByUserId: string };
+  assert.equal(handoff.status, "awaiting_schedule");
+  assert.equal((await (await api("/api/uploads")).json() as unknown[]).length, uploadsBeforeHandoff.length);
+
+  const uploaderDirectPublish = await roleApi(uploaderLogin.token, "/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Must not bypass scheduler", destinations: [{ accountId: account.id }] }),
+  });
+  assert.equal(uploaderDirectPublish.status, 403);
+  assert.equal((await roleApi(uploaderLogin.token, "/api/platforms/facebook/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "Forbidden", handle: "@forbidden", enabled: true }),
+  })).status, 403);
+
+  const schedulerSubmissionsResponse = await roleApi(schedulerLogin.token, "/api/submissions");
+  assert.equal(schedulerSubmissionsResponse.status, 200);
+  const schedulerSubmissions = await schedulerSubmissionsResponse.json() as Array<{ id: string; status: string }>;
+  assert.equal(schedulerSubmissions.some(submission => submission.id === handoff.id && submission.status === "awaiting_schedule"), true);
+  assert.equal((await roleApi(schedulerLogin.token, "/api/submissions/text", {
+    method: "POST",
+    body: JSON.stringify({ description: "Schedulers cannot create content" }),
+  })).status, 403);
+  assert.equal((await roleApi(schedulerLogin.token, "/api/automation/consent", {
+    method: "POST",
+  })).status, 403);
+
+  const handoffScheduledAt = new Date(Date.now() + 10 * 60_000).toISOString();
+  const youtubeHandoffScheduledAt = new Date(Date.now() + 25 * 60_000).toISOString();
+  const scheduleHandoffResponse = await roleApi(schedulerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [
+      { accountId: account.id, scheduledAt: handoffScheduledAt },
+      { accountId: youtubeAccount.id, scheduledAt: youtubeHandoffScheduledAt },
+    ] }),
+  });
+  assert.equal(scheduleHandoffResponse.status, 201);
+  const scheduledHandoff = await scheduleHandoffResponse.json() as {
+    submission: { status: string; destinationUploadIds: string[] };
+    uploads: Array<{ id: string; accountId: string; caption: string; scheduledAt?: string; createdByUserId?: string; scheduledByUserId?: string; sourceSubmissionId?: string }>;
+  };
+  const scheduledFacebookHandoff = scheduledHandoff.uploads.find(upload => upload.accountId === account.id)!;
+  const scheduledYoutubeHandoff = scheduledHandoff.uploads.find(upload => upload.accountId === youtubeAccount.id)!;
+  assert.equal(scheduledHandoff.submission.status, "scheduled");
+  assert.equal(scheduledHandoff.submission.destinationUploadIds.length, 2);
+  assert.equal(scheduledFacebookHandoff.caption, handoff.description);
+  assert.equal(scheduledYoutubeHandoff.caption, handoff.description);
+  assert.equal(scheduledFacebookHandoff.scheduledAt, handoffScheduledAt);
+  assert.equal(scheduledYoutubeHandoff.scheduledAt, youtubeHandoffScheduledAt);
+  assert.equal(scheduledFacebookHandoff.createdByUserId, handoff.createdByUserId);
+  assert.ok(scheduledFacebookHandoff.scheduledByUserId);
+  assert.notEqual(scheduledFacebookHandoff.scheduledByUserId, handoff.createdByUserId);
+  assert.equal(scheduledFacebookHandoff.sourceSubmissionId, handoff.id);
+  assert.equal((await roleApi(schedulerLogin.token, `/api/uploads/${scheduledFacebookHandoff.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ caption: "Scheduler content edit attempt" }),
+  })).status, 400);
+  assert.equal((await roleApi(uploaderLogin.token, `/api/uploads/${scheduledFacebookHandoff.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ caption: "Uploader post-handoff edit attempt" }),
+  })).status, 403);
+  assert.equal((await roleApi(schedulerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
+  })).status, 400);
+
+  assert.equal((await roleApi(viewerLogin.token, "/api/submissions")).status, 200);
+  assert.equal((await roleApi(viewerLogin.token, "/api/uploads")).status, 200);
+  assert.equal((await roleApi(viewerLogin.token, `/api/submissions/${handoff.id}/schedule`, {
+    method: "POST",
+    body: JSON.stringify({ destinations: [{ accountId: account.id, scheduledAt: handoffScheduledAt }] }),
+  })).status, 403);
+  assert.equal((await roleApi(viewerLogin.token, "/api/users")).status, 403);
+  assert.equal((await roleApi(viewerLogin.token, "/api/automation/stop", { method: "POST" })).status, 403);
+
+  const idleStopResponse = await api("/api/automation/stop", { method: "POST" });
+  assert.equal(idleStopResponse.status, 200);
+  assert.deepEqual(await idleStopResponse.json(), {
+    stopped: false,
+    message: "No publishing automation is running.",
+  });
+  const stopAudit = await (await api("/api/activity-logs?limit=20")).json() as Array<{ action: string }>;
+  assert.equal(stopAudit.some(entry => entry.action === "automation.stop_checked"), true);
+
   const processingResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "processing" }),
   });
   assert.equal(processingResponse.status, 200);
-  const { recoverInterruptedPublishingWork } = await import("./local-storage.js");
+  const { recoverInterruptedPublishingWork, updateUploadPublishActionState } = await import("./local-storage.js");
+  await updateUploadPublishActionState(posts[0].id, "submitted");
+  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "retry";
   const recovery = await recoverInterruptedPublishingWork();
   assert.equal(recovery.recoveredUploads, 1);
-  assert.equal(recovery.recoveryMode, "review");
+  assert.equal(recovery.recoveryMode, "retry");
+  process.env.PUBLISH_QUEUE_INTERRUPTED_POST_RECOVERY = "review";
   const recoveredUploadsResponse = await api("/api/uploads");
-  const recoveredUploads = await recoveredUploadsResponse.json() as Array<{ id: string; status: string; failureReason?: string; attemptCount?: number }>;
+  const recoveredUploads = await recoveredUploadsResponse.json() as Array<{
+    id: string;
+    status: string;
+    failureReason?: string;
+    attemptCount?: number;
+    publishActionState?: string;
+  }>;
   const recoveredPost = recoveredUploads.find(upload => upload.id === posts[0].id);
   assert.equal(recoveredPost?.status, "failed");
   assert.equal(recoveredPost?.attemptCount, 1);
-  assert.match(recoveredPost?.failureReason || "", /stopped during publishing/i);
-  assert.match(recoveredPost?.failureReason || "", /prevent a duplicate/i);
+  assert.equal(recoveredPost?.publishActionState, "uncertain");
+  assert.match(recoveredPost?.failureReason || "", /after the final publish action/i);
+  assert.match(recoveredPost?.failureReason || "", /automatic retry is blocked/i);
+
+  const blockedRetryResponse = await api(`/api/uploads/${posts[0].id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "queued" }),
+  });
+  assert.equal(blockedRetryResponse.status, 400);
+  assert.match((await blockedRetryResponse.json() as { message: string }).message, /may already be published/i);
 
   const failedResponse = await api(`/api/uploads/${posts[0].id}/status`, {
     method: "PATCH",
@@ -166,4 +822,78 @@ test("publishing API supports login, chunked media upload, queue scheduling, and
   const failedPost = await failedResponse.json() as { status: string; failureReason?: string };
   assert.equal(failedPost.status, "failed");
   assert.match(failedPost.failureReason || "", /Test failure details/);
+
+  const videoBytes = Buffer.from("000000186674797069736f6d0000020069736f6d69736f32", "hex");
+  const videoStageResponse = await api("/api/staged-uploads", {
+    method: "POST", body: JSON.stringify({ originalName: "options-test.mp4", mimeType: "video/mp4", size: videoBytes.length }),
+  });
+  assert.equal(videoStageResponse.status, 201);
+  const videoStage = await videoStageResponse.json() as { id: string };
+  assert.equal((await api(`/api/staged-uploads/${videoStage.id}/chunks`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Upload-Offset": "0" }, body: videoBytes,
+  })).status, 200);
+  const youtubeOptions = { youtube: { audience: "not_made_for_kids", visibility: "private" } };
+  const videoResponse = await api("/api/posts/unified/staged", {
+    method: "POST", body: JSON.stringify({ stagedUploadId: videoStage.id, title: "Private video", description: "Audience and visibility transport check", rightsConfirmed: true,
+      platformOptions: youtubeOptions, destinations: [{ accountId: youtubeAccount.id }] }),
+  });
+  assert.equal(videoResponse.status, 201, await videoResponse.clone().text());
+  const [queuedVideo] = await videoResponse.json() as Array<{ id: string; platformOptions: unknown }>;
+  assert.deepEqual(queuedVideo.platformOptions, youtubeOptions);
+  const editedOptions = { youtube: { audience: "made_for_kids", visibility: "unlisted" } };
+  const editedVideo = await api(`/api/uploads/${queuedVideo.id}`, { method: "PATCH", body: JSON.stringify({ title: "Updated video", caption: "Updated metadata", platformOptions: editedOptions }) });
+  assert.equal(editedVideo.status, 200, await editedVideo.clone().text());
+  assert.deepEqual((await editedVideo.json() as { platformOptions: unknown }).platformOptions, editedOptions);
+
+  const linkedInAccountResponse = await api("/api/platforms/linkedin/accounts", {
+    method: "POST",
+    body: JSON.stringify({ displayName: "LinkedIn test profile", handle: "linkedin-test", enabled: true }),
+  });
+  assert.equal(linkedInAccountResponse.status, 201);
+  const linkedInAccount = await linkedInAccountResponse.json() as { id: string };
+  await updateLinkedInManagedPages(linkedInAccount.id, [
+    {
+      id: "page-one",
+      name: "Page One",
+      pageUrl: "https://www.linkedin.com/company/page-one/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/page-one/admin/page-posts/published/",
+    },
+    {
+      id: "page-two",
+      name: "Page Two",
+      pageUrl: "https://www.linkedin.com/company/page-two/admin/",
+      pagePostsUrl: "https://www.linkedin.com/company/page-two/admin/page-posts/published/",
+    },
+  ]);
+  const linkedInDestinationsResponse = await api("/api/posts/unified/text", {
+    method: "POST",
+    body: JSON.stringify({
+      description: "LinkedIn default copy",
+      confirmWarnings: true,
+      destinations: [
+        { accountId: linkedInAccount.id, description: "Personal profile copy" },
+        { accountId: linkedInAccount.id, linkedinPageId: "page-one", description: "Page One copy" },
+        { accountId: linkedInAccount.id, linkedinPageId: "page-two", description: "Page Two copy" },
+      ],
+    }),
+  });
+  assert.equal(linkedInDestinationsResponse.status, 201, await linkedInDestinationsResponse.clone().text());
+  const linkedInUploads = await linkedInDestinationsResponse.json() as Array<{
+    caption: string;
+    linkedinTarget?: { id: string; name: string };
+  }>;
+  assert.deepEqual(linkedInUploads.map(upload => [upload.linkedinTarget?.id || "personal", upload.caption]), [
+    ["personal", "Personal profile copy"],
+    ["page-one", "Page One copy"],
+    ["page-two", "Page Two copy"],
+  ]);
+
+  await fs.writeFile(process.env.PUBLISH_QUEUE_DATA_PATH!, "{corrupt", "utf8");
+  const durableRecoveryResponse = await api("/api/uploads");
+  assert.equal(durableRecoveryResponse.status, 200);
+  const recoveredHealth = await (await fetch(`${origin}/api/health`)).json() as {
+    localStorage?: { lastRecoveryAt?: string };
+    storageHealth?: { lastRecoveryAt?: string };
+  };
+  assert.ok(recoveredHealth.localStorage?.lastRecoveryAt || recoveredHealth.storageHealth?.lastRecoveryAt);
 });

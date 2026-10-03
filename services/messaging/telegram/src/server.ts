@@ -12,15 +12,47 @@ import {
   listenForAccount,
   fetchRecentTelegramMessages,
   normalizePhone,
+  telegramMediaMaxBytes,
   type TelegramApiCredentials
 } from "./account-client.ts";
 import { readConfig, type AppConfig } from "./config.ts";
 import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, type ConfiguredLoginUser } from "./login-config.ts";
 import { RequestRateLimiter } from "./rate-limit.ts";
-import { AccountAlreadyLinkedError, type AppUser, type MessageRecord, MultiUserStore, type TelegramAccountWithSession } from "./store.ts";
+import {
+  AccountAlreadyLinkedError,
+  WorkspaceRecordConflictError,
+  type AppUser,
+  type MessageRecord,
+  MultiUserStore,
+  type ClaimedTelegramPost,
+  type TelegramAccountWithSession,
+  type TelegramChannelInput,
+  type TelegramContactInput,
+  type TelegramGroupInput,
+  type TelegramPostDelivery,
+  type TelegramPostInput,
+  type TelegramPostTarget,
+  type TelegramProfileInput,
+  type TelegramWorkspaceChannel,
+  type TelegramWorkspaceContact,
+  type TelegramWorkspaceData,
+  type TelegramWorkspaceGroup,
+  type TelegramWorkspaceProfile,
+} from "./store.ts";
+import { TelegramPostScheduler } from "./post-scheduler.ts";
+import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
+import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
+import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
+import { TELEGRAM_MEDIA_CHUNK_BYTES, TelegramMediaStore } from "./media-store.ts";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonBody = Record<string, unknown>;
+type AuthenticatedAppUser = AppUser & {
+  workspaceId?: string;
+  billingStatus?: string;
+  trialStartsAt?: string | null;
+  trialEndsAt?: string | null;
+};
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -35,7 +67,13 @@ type ServerStartupOptions = {
 let config: AppConfig;
 let configuredLoginUsers: ConfiguredLoginUser[];
 let store: MultiUserStore;
+let mediaStore: TelegramMediaStore;
 let limiter: RequestRateLimiter;
+let postScheduler: TelegramPostScheduler | null = null;
+const trialHourlyMessageLimiter = new RollingTrialUsageLimiter();
+const trialDailyMessageLimiter = new RollingTrialUsageLimiter();
+const TRIAL_TELEGRAM_MESSAGES_PER_HOUR = 20;
+const TRIAL_TELEGRAM_MESSAGES_PER_DAY = 100;
 let initialized = false;
 let initializing: Promise<void> | null = null;
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -47,8 +85,6 @@ const frontendDistDirs = [
   path.resolve(telegramRoot, "..", "..", "dist")
 ];
 const publicFiles = new Map([
-  ["/console", { file: "index.html", type: "text/html; charset=utf-8" }],
-  ["/console/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/console/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
   ["/console/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   ["/console/assets/guide/telegram-phone-entry.png", { file: "assets/guide/telegram-phone-entry.png", type: "image/png" }],
@@ -66,7 +102,9 @@ const recentHistorySyncTargetLimit = 50;
 const secretEnvironmentNames = [
   "SESSION_ENCRYPTION_KEY",
   "USER_PROVISIONING_KEY",
-  "TELEGRAM_BOT_TOKEN"
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_API_ID",
+  "TELEGRAM_API_HASH"
 ];
 
 function shouldRunBackgroundListeners() {
@@ -98,8 +136,8 @@ function responseHeaders(request: IncomingMessage, contentType: string) {
   const origin = request.headers.origin;
   if (config.corsOrigin && origin === config.corsOrigin) {
     headers["access-control-allow-origin"] = config.corsOrigin;
-    headers["access-control-allow-methods"] = "GET,POST,DELETE,OPTIONS";
-    headers["access-control-allow-headers"] = "content-type,authorization,x-provisioning-key";
+    headers["access-control-allow-methods"] = "GET,POST,PUT,DELETE,OPTIONS";
+    headers["access-control-allow-headers"] = "content-type,authorization,x-provisioning-key,x-upload-offset";
     headers["access-control-allow-credentials"] = "true";
     headers.vary = "Origin";
   }
@@ -206,13 +244,13 @@ async function serveFrontendAsset(request: IncomingMessage, response: ServerResp
   }
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<JsonBody> {
+async function readJsonBody(request: IncomingMessage, maximumBytes = 1024 * 1024): Promise<JsonBody> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > 1024 * 1024) throw new HttpError(413, "Request body is too large.");
+    if (length > maximumBytes) throw new HttpError(413, "Request body is too large.");
     chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
@@ -227,6 +265,206 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonBody> {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "Request body is not valid JSON.");
   }
+}
+
+async function readMediaChunk(request: IncomingMessage) {
+  const declaredLength = Number(request.headers["content-length"] || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > TELEGRAM_MEDIA_CHUNK_BYTES) {
+    throw new HttpError(413, "Telegram media upload chunks must be 4 MB or smaller.");
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += buffer.length;
+    if (length > TELEGRAM_MEDIA_CHUNK_BYTES) throw new HttpError(413, "Telegram media upload chunks must be 4 MB or smaller.");
+    chunks.push(buffer);
+  }
+  if (!length) throw new HttpError(400, "Telegram media upload chunk is empty.");
+  return Buffer.concat(chunks, length);
+}
+
+function mediaUploadIdFromPath(pathname: string, suffix = "") {
+  const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^/v1/media/uploads/(telegram_media_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function telegramPostIdFromPath(pathname: string, suffix = "") {
+  const escapedSuffix = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^/v1/posts/(telegram_post_[a-f0-9]{32})${escapedSuffix}$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function workspaceRecordIdFromPath(pathname: string, collection: "contacts" | "groups" | "channels" | "profiles") {
+  const match = new RegExp(`^/v1/${collection}/([A-Za-z0-9_-]{1,110})$`).exec(pathname);
+  return match?.[1] || "";
+}
+
+function contactInput(body: JsonBody): TelegramContactInput {
+  return {
+    name: requiredString(body, "name", 200),
+    handle: optionalString(body, "handle", 256),
+    countryCode: optionalString(body, "countryCode", 8) || "+91",
+    phone: optionalString(body, "phone", 32),
+    group: optionalString(body, "group", 200),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function groupInput(body: JsonBody): TelegramGroupInput {
+  return {
+    name: requiredString(body, "name", 200),
+    type: optionalString(body, "type", 80) || "Private",
+    status: optionalString(body, "status", 80) || "Created",
+    members: optionalString(body, "members", 50_000),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function channelInput(body: JsonBody): TelegramChannelInput {
+  return {
+    name: requiredString(body, "name", 200),
+    privacy: optionalString(body, "privacy", 80) || "Private",
+    invites: optionalString(body, "invites", 50_000),
+    notes: optionalString(body, "notes", 10_000),
+  };
+}
+
+function profileInput(body: JsonBody): TelegramProfileInput {
+  return {
+    profileName: requiredString(body, "profileName", 200),
+    displayName: optionalString(body, "displayName", 200),
+    username: optionalString(body, "username", 256),
+    phone: optionalString(body, "phone", 32),
+    status: optionalString(body, "status", 80) || "Active",
+    avatar: optionalString(body, "avatar", 2_000),
+    configNumbers: optionalString(body, "configNumbers", 2_000),
+    description: optionalString(body, "description", 10_000),
+  };
+}
+
+function workspaceImportRecords<T>(
+  body: JsonBody,
+  name: string,
+  prefix: string,
+  parser: (value: JsonBody) => T,
+): Array<T & { id: string; createdAt: string; updatedAt: string }> {
+  const value = body[name];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 5_000) throw new HttpError(400, `${name} is invalid.`);
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, `${name} is invalid.`);
+    const record = item as JsonBody;
+    const id = requiredString(record, "id", 110);
+    if (!new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,100}$`).test(id)) throw new HttpError(400, `${name} contains an invalid record ID.`);
+    return {
+      ...parser(record),
+      id,
+      createdAt: optionalString(record, "createdAt", 80),
+      updatedAt: optionalString(record, "updatedAt", 80),
+    };
+  });
+}
+
+function workspaceImportInput(body: JsonBody): TelegramWorkspaceData {
+  const profilesValue = body.profiles;
+  if (profilesValue !== undefined && (!Array.isArray(profilesValue) || profilesValue.length > 500)) {
+    throw new HttpError(400, "profiles is invalid.");
+  }
+  const profiles: TelegramWorkspaceProfile[] = (profilesValue as unknown[] || []).map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, "profiles is invalid.");
+    const record = item as JsonBody;
+    return {
+      ...profileInput(record),
+      accountId: requiredString(record, "accountId", 110),
+      updatedAt: optionalString(record, "updatedAt", 80),
+    };
+  });
+  return {
+    contacts: workspaceImportRecords(body, "contacts", "contact", contactInput) as TelegramWorkspaceContact[],
+    groups: workspaceImportRecords(body, "groups", "group", groupInput) as TelegramWorkspaceGroup[],
+    channels: workspaceImportRecords(body, "channels", "channel", channelInput) as TelegramWorkspaceChannel[],
+    profiles,
+  };
+}
+
+function optionalStringArray(body: JsonBody, name: string, maximum: number, itemLength: number) {
+  const value = body[name];
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > maximum) throw new HttpError(400, `${name} is invalid.`);
+  return value.map((item) => {
+    if (typeof item !== "string" || item.trim().length > itemLength) throw new HttpError(400, `${name} is invalid.`);
+    return item.trim();
+  }).filter(Boolean);
+}
+
+function postTargets(body: JsonBody): TelegramPostTarget[] {
+  const value = body.targets;
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 500) throw new HttpError(400, "targets is invalid.");
+  const seen = new Set<string>();
+  const targets: TelegramPostTarget[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HttpError(400, "targets is invalid.");
+    const target = item as Record<string, unknown>;
+    const recipient = typeof target.recipient === "string" ? target.recipient.trim() : "";
+    if (!recipient || recipient.length > 256) throw new HttpError(400, "Each Telegram target needs a valid recipient.");
+    const key = recipient.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rawKind = target.kind;
+    const kind = rawKind === "contact" || rawKind === "group" ? rawKind : "manual";
+    targets.push({
+      recipient,
+      source: typeof target.source === "string" ? target.source.trim().slice(0, 160) : "",
+      firstName: typeof target.firstName === "string" ? target.firstName.trim().slice(0, 120) : "",
+      kind,
+    });
+  }
+  return targets;
+}
+
+function telegramPostInput(body: JsonBody): TelegramPostInput {
+  const mediaSize = Number(body.mediaSize || 0);
+  if (!Number.isSafeInteger(mediaSize) || mediaSize < 0) throw new HttpError(400, "mediaSize is invalid.");
+  return {
+    accountId: requiredString(body, "accountId", 64),
+    title: requiredString(body, "title", 200),
+    type: optionalString(body, "type", 32) || "text",
+    category: optionalString(body, "category", 120),
+    tags: optionalStringArray(body, "tags", 50, 80),
+    scheduledAt: optionalString(body, "scheduledAt", 80),
+    body: optionalString(body, "body", 50_000),
+    mediaUrl: optionalString(body, "mediaUrl", 900_000),
+    mediaUploadId: optionalString(body, "mediaUploadId", 64),
+    mediaName: optionalString(body, "mediaName", 200),
+    mediaMimeType: optionalString(body, "mediaMimeType", 120),
+    mediaSize,
+    recipient: optionalString(body, "recipient", 256),
+    contacts: optionalStringArray(body, "contacts", 500, 100),
+    groups: optionalStringArray(body, "groups", 500, 100),
+    targets: postTargets(body),
+  };
+}
+
+async function verifyPostMedia(userId: string, input: TelegramPostInput) {
+  if (!input.mediaUploadId) return;
+  const account = await store.getAccountWithSession(userId, input.accountId);
+  if (!account) throw new HttpError(404, "Telegram account was not found.");
+  try {
+    await mediaStore.resolve(userId, account.id, input.mediaUploadId);
+  } catch (error) {
+    throw telegramMediaHttpError(error);
+  }
+}
+
+function telegramMediaHttpError(error: unknown) {
+  if (error instanceof HttpError) return error;
+  const message = error instanceof Error ? error.message : "Telegram media upload failed.";
+  if (/not found/i.test(message)) return new HttpError(404, message);
+  if (/between 1 byte|too large|exceeds/i.test(message)) return new HttpError(413, message);
+  return new HttpError(400, message);
 }
 
 function requiredString(body: JsonBody, name: string, maxLength = 1000) {
@@ -302,20 +540,77 @@ function ensureTrustedOrigin(request: IncomingMessage) {
   throw new HttpError(403, "This browser origin is not allowed.");
 }
 
-async function requireUser(request: IncomingMessage): Promise<AppUser> {
+async function requireUser(request: IncomingMessage): Promise<AuthenticatedAppUser> {
   const authorization = request.headers.authorization ?? "";
   const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
   if (bearer) {
+    const identity = verifyServiceAccessToken(bearer, "telegram");
+    if (identity) {
+      const grantedLevel = String(identity.grants?.["messaging.telegram"] || "none");
+      const capabilities = Array.isArray(identity.capabilities) ? identity.capabilities.map(String) : [];
+      const capabilityLevel = capabilities.includes("messaging.configure")
+        ? "configure"
+        : capabilities.includes("messaging.operate")
+          ? "operate"
+          : capabilities.includes("messaging.view")
+            ? "view"
+            : null;
+      if (!identity.workspaceId || !identity.sub || !capabilityLevel || !["view", "operate", "configure"].includes(grantedLevel)) {
+        throw new HttpError(403, "Telegram access is not granted to this user.");
+      }
+      const levels = ["view", "operate", "configure"] as const;
+      const accessLevel = levels[Math.min(levels.indexOf(grantedLevel as typeof levels[number]), levels.indexOf(capabilityLevel))];
+      const platformUser = await store.findOrCreatePlatformWorkspaceUser(
+        String(identity.workspaceId),
+        String(identity.sub),
+        String(identity.name || identity.email || "AgenticThat workspace"),
+        accessLevel
+      );
+      return {
+        ...platformUser,
+        workspaceId: String(identity.workspaceId),
+        billingStatus: String(identity.billingStatus || ""),
+        trialStartsAt: identity.trialStartsAt ? String(identity.trialStartsAt) : null,
+        trialEndsAt: identity.trialEndsAt ? String(identity.trialEndsAt) : null,
+      };
+    }
     const user = await store.findUserByAccessToken(bearer);
-    if (user) return user;
+    if (user && process.env.RBAC_ENFORCEMENT_MODE === "shadow") return user;
   }
 
   const browserSession = readCookie(request, "app_session");
   if (browserSession) {
     const user = await store.findUserByBrowserSession(browserSession);
-    if (user) return user;
+    if (user && process.env.RBAC_ENFORCEMENT_MODE === "shadow") return user;
   }
   throw new HttpError(401, "Sign in is required.");
+}
+
+const accessRank = { view: 1, operate: 2, configure: 3 } as const;
+
+function requireUserLevel(user: AppUser, required: keyof typeof accessRank) {
+  const current = user.accessLevel;
+  if (!current || accessRank[current] < accessRank[required]) {
+    throw new HttpError(403, `This action requires ${required} access to Telegram.`);
+  }
+}
+
+function enforceTrialTelegramMessageLimit(user: AuthenticatedAppUser) {
+  if (teamTestingFullAccessEnabled()) return;
+  if (user.billingStatus !== "trialing") return;
+  const workspaceKey = user.workspaceId || user.id;
+  const hourlyKey = `${workspaceKey}:telegram:hour`;
+  const dailyKey = `${workspaceKey}:telegram:day`;
+  const hourly = trialHourlyMessageLimiter.check(hourlyKey, TRIAL_TELEGRAM_MESSAGES_PER_HOUR, 60 * 60_000);
+  if (!hourly.allowed) {
+    throw new HttpError(429, `Trial Telegram limit reached. Try again in ${hourly.retryAfterSeconds} seconds.`);
+  }
+  const daily = trialDailyMessageLimiter.check(dailyKey, TRIAL_TELEGRAM_MESSAGES_PER_DAY, 24 * 60 * 60_000);
+  if (!daily.allowed) {
+    throw new HttpError(429, `Daily Trial Telegram limit reached. Try again in ${daily.retryAfterSeconds} seconds.`);
+  }
+  trialHourlyMessageLimiter.consume(hourlyKey, TRIAL_TELEGRAM_MESSAGES_PER_HOUR, 60 * 60_000);
+  trialDailyMessageLimiter.consume(dailyKey, TRIAL_TELEGRAM_MESSAGES_PER_DAY, 24 * 60 * 60_000);
 }
 
 function hasProvisioningKey(request: IncomingMessage) {
@@ -396,16 +691,14 @@ async function syncRecentTelegramHistory(account: TelegramAccountWithSession, re
   const sync = (async () => {
     try {
       const messages = await fetchRecentTelegramMessages(telegramApiCredentialsFromAccount(account), account.sessionString, 100, recipients);
-      for (const message of messages) {
-        await store.recordMessage({
+      await store.recordMessages(messages.map(message => ({
           accountId: account.id,
           direction: message.direction,
           recipient: message.recipient,
           text: message.text,
           telegramMessageId: message.messageId,
           createdAt: message.createdAt
-        });
-      }
+      })));
     } catch (error) {
       console.error(`Recent Telegram history sync failed for account ${account.id}: ${redactedErrorMessage(error)}`);
     } finally {
@@ -470,7 +763,17 @@ function normalizePhoneFromBody(body: JsonBody) {
   }
 }
 
-function telegramApiCredentialsFromBody(body: JsonBody): TelegramApiCredentials {
+function sharedTelegramApiCredentials(): TelegramApiCredentials | null {
+  if (!config.telegramApiId || !config.telegramApiHash) return null;
+  return { apiId: config.telegramApiId, apiHash: config.telegramApiHash };
+}
+
+export function resolveTelegramApiCredentials(
+  body: JsonBody,
+  sharedCredentials: TelegramApiCredentials | null,
+): TelegramApiCredentials {
+  if (sharedCredentials) return sharedCredentials;
+
   const rawApiId = requiredString(body, "telegramApiId", 20);
   const apiId = Number(rawApiId);
   if (!Number.isInteger(apiId) || apiId <= 0) {
@@ -481,7 +784,6 @@ function telegramApiCredentialsFromBody(body: JsonBody): TelegramApiCredentials 
   if (!/^[a-f0-9]{32}$/i.test(apiHash)) {
     throw new HttpError(400, "Telegram API hash must be the 32-character hash from my.telegram.org.");
   }
-
   return { apiId, apiHash };
 }
 
@@ -545,12 +847,22 @@ function telegramLoginError(error: unknown) {
   }
   return new HttpError(502, message || "Telegram login failed. Please try again.");
 }
-function telegramSendError(error: unknown) {
+export function telegramSendError(error: unknown, recipient = "") {
   if (error instanceof HttpError) return error;
   const operational = operationalTelegramError(error);
   if (operational) return operational;
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toUpperCase();
+  const paidMessage = message.match(/ALLOW_PAYMENT_REQUIRED(?:_(\d+))?/i);
+  if (paidMessage) {
+    const target = recipient.trim() || "This recipient";
+    const requiredStars = Number(paidMessage[1] || 0);
+    const price = requiredStars > 0 ? ` requires ${requiredStars} Telegram Star${requiredStars === 1 ? "" : "s"} per message` : " only accepts paid Telegram messages";
+    return new HttpError(
+      402,
+      `${target}${price}. AgenticThat will not spend Stars automatically. Choose a recipient that accepts free messages, or ask this recipient to message/add the sending account first and then retry.`
+    );
+  }
   const floodWait = message.match(/wait (?:of )?(\d+) seconds|FLOOD_WAIT_(\d+)/i);
   if (normalized.includes("FLOOD") || floodWait) {
     const seconds = Number(floodWait?.[1] || floodWait?.[2] || 0);
@@ -579,8 +891,54 @@ function telegramSendError(error: unknown) {
   return new HttpError(502, message || "Telegram could not send this message right now.");
 }
 
+function telegramPostHttpError(error: unknown) {
+  if (error instanceof HttpError) return error;
+  const message = error instanceof Error ? error.message : "Telegram post operation failed.";
+  if (/not found/i.test(message)) return new HttpError(404, message);
+  if (/already sending|scheduled post before|only a waiting/i.test(message)) return new HttpError(409, message);
+  return new HttpError(400, message);
+}
+
+async function executeScheduledTelegramDelivery(
+  post: ClaimedTelegramPost,
+  delivery: TelegramPostDelivery,
+) {
+  const account = await store.getAccountWithSession(post.ownerId, post.accountId);
+  if (!account) throw new Error("The scheduled Telegram sender account is no longer connected.");
+  let uploadedMedia;
+  if (post.mediaUploadId) {
+    try {
+      uploadedMedia = await mediaStore.resolve(post.ownerId, account.id, post.mediaUploadId);
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+  }
+  try {
+    const sent = await sendTelegramMessage(telegramApiCredentialsFromAccount(account), account.sessionString, {
+      recipient: delivery.recipient,
+      message: post.body,
+      mediaUrl: post.mediaUrl,
+      mediaFile: uploadedMedia ? { name: uploadedMedia.fileName, path: uploadedMedia.path, size: uploadedMedia.size } : undefined,
+      mediaType: post.type,
+      firstName: delivery.firstName,
+      lastName: "",
+    });
+    if (shouldRunBackgroundListeners()) void startTelegramListener(account);
+    return sent;
+  } catch (error) {
+    throw telegramSendError(error, delivery.recipient);
+  }
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+
+  if (request.method === "GET" && (url.pathname === "/console" || url.pathname === "/console/")) {
+    const platformUrl = (config.corsOrigin || "/").replace(/\/$/, "") + "/console";
+    response.writeHead(302, { ...responseHeaders(request, "text/plain; charset=utf-8"), location: platformUrl });
+    response.end("Continue in AgenticThat.");
+    return;
+  }
 
   if (await servePublicAsset(request, response, url.pathname)) return;
 
@@ -593,7 +951,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     sendJson(request, response, 200, {
       ok: true,
       service: "telegram-multi-user",
-      storage: process.env.DATA_STORE || "json",
+      storage: store.storageBackend(),
+      scheduler: shouldRunBackgroundListeners() ? "server" : "disabled",
+      telegramLoginCredentials: sharedTelegramApiCredentials() ? "shared" : "per_connection",
+      sharedCredentialsStatus: config.telegramApiCredentialsStatus,
       configManagerUrl: config.corsOrigin
         ? config.corsOrigin.replace(/\/$/, "") + "/config-manager?service=messaging&platform=telegram"
         : "/config-manager?service=messaging&platform=telegram"
@@ -602,6 +963,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/users") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Telegram users are managed by AgenticThat.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`provision:${clientAddress(request)}`, Math.max(3, Math.floor(config.rateLimitMaxRequests / 10)));
     if (!hasProvisioningKey(request)) throw new HttpError(401, "A valid provisioning key is required.");
@@ -612,6 +976,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/password") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Use your AgenticThat login.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`password-login:${clientAddress(request)}`, Math.max(5, Math.floor(config.rateLimitMaxRequests / 6)));
     const body = await readJsonBody(request);
@@ -641,6 +1008,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/register") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Telegram users are managed by AgenticThat.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`password-register:${clientAddress(request)}`, Math.max(3, Math.floor(config.rateLimitMaxRequests / 10)));
     const body = await readJsonBody(request);
@@ -663,6 +1033,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === "POST" && url.pathname === "/v1/auth/session") {
+    if (process.env.RBAC_ENFORCEMENT_MODE !== "shadow") {
+      throw new HttpError(410, "Use your AgenticThat login.");
+    }
     ensureTrustedOrigin(request);
     enforceRateLimit(`browser-login:${clientAddress(request)}`, Math.max(5, Math.floor(config.rateLimitMaxRequests / 6)));
     const body = await readJsonBody(request);
@@ -685,18 +1058,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   if (await serveFrontendAsset(request, response, url.pathname)) return;
 
   const user = await requireUser(request);
-  enforceRateLimit(`api:${user.id}:${clientAddress(request)}`, config.rateLimitMaxRequests);
+  const isMediaChunk = request.method === "PUT" && Boolean(mediaUploadIdFromPath(url.pathname));
+  enforceRateLimit(
+    `${isMediaChunk ? "media-upload" : "api"}:${user.id}:${clientAddress(request)}`,
+    isMediaChunk ? Math.max(config.rateLimitMaxRequests, 2_000) : config.rateLimitMaxRequests,
+  );
   if (request.method !== "GET" && request.method !== "HEAD") ensureTrustedOrigin(request);
 
   if (request.method === "GET" && url.pathname === "/v1/me") {
-    sendJson(request, response, 200, { ok: true, user });
+    const includeAccounts = url.searchParams.get("include")?.split(",").includes("accounts");
+    sendJson(request, response, 200, {
+      ok: true,
+      user,
+      requiresTelegramApiCredentials: !sharedTelegramApiCredentials(),
+      ...(includeAccounts ? { accounts: await store.listAccounts(user.id) } : {})
+    });
     return;
   }
 
   if (request.method === "POST" && url.pathname === "/v1/telegram/login/start") {
+    requireUserLevel(user, "configure");
     enforceRateLimit(`telegram-login:${user.id}`, config.loginStartRateLimitMax);
     const body = await readJsonBody(request);
-    const credentials = telegramApiCredentialsFromBody(body);
+    const credentials = resolveTelegramApiCredentials(body, sharedTelegramApiCredentials());
     const phone = normalizePhoneFromBody(body);
     let start;
     try {
@@ -724,6 +1108,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const codeChallengeId = challengeIdFromPath(url.pathname, "code");
   if (request.method === "POST" && codeChallengeId) {
+    requireUserLevel(user, "configure");
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, codeChallengeId);
     if (!challenge || challenge.status !== "code_sent") throw new HttpError(404, "Active login challenge was not found.");
@@ -744,13 +1129,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       sendJson(request, response, 202, { ok: true, status: "password_required", challengeId: challenge.id });
       return;
     }
-    const account = await store.saveTelegramAccount(user.id, {
+    const saved = await store.saveTelegramAccount(user.id, {
       telegramApiId: credentials.apiId,
       telegramApiHash: credentials.apiHash,
       ...result.profile,
       sessionString: result.sessionString
-    });
+    }, { allowVerifiedTransfer: true });
+    const { account, transferred } = saved;
     if (shouldRunBackgroundListeners()) {
+      if (transferred) await stopTelegramListener(account.id);
       void startTelegramListener({
         ...account,
         telegramApiId: credentials.apiId,
@@ -759,12 +1146,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     await store.deleteLoginChallenge(user.id, challenge.id);
-    sendJson(request, response, 201, { ok: true, status: "connected", account });
+    sendJson(request, response, 201, { ok: true, status: "connected", account, transferred });
     return;
   }
 
   const passwordChallengeId = challengeIdFromPath(url.pathname, "password");
   if (request.method === "POST" && passwordChallengeId) {
+    requireUserLevel(user, "configure");
     const body = await readJsonBody(request);
     const challenge = await store.getLoginChallenge(user.id, passwordChallengeId);
     if (!challenge || challenge.status !== "password_required") throw new HttpError(404, "Password login challenge was not found.");
@@ -779,13 +1167,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     } catch (error) {
       throw telegramLoginError(error);
     }
-    const account = await store.saveTelegramAccount(user.id, {
+    const saved = await store.saveTelegramAccount(user.id, {
       telegramApiId: credentials.apiId,
       telegramApiHash: credentials.apiHash,
       ...result.profile,
       sessionString: result.sessionString
-    });
+    }, { allowVerifiedTransfer: true });
+    const { account, transferred } = saved;
     if (shouldRunBackgroundListeners()) {
+      if (transferred) await stopTelegramListener(account.id);
       void startTelegramListener({
         ...account,
         telegramApiId: credentials.apiId,
@@ -794,7 +1184,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       });
     }
     await store.deleteLoginChallenge(user.id, challenge.id);
-    sendJson(request, response, 201, { ok: true, status: "connected", account });
+    sendJson(request, response, 201, { ok: true, status: "connected", account, transferred });
     return;
   }
 
@@ -803,11 +1193,193 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/v1/workspace-data") {
+    sendJson(request, response, 200, { ok: true, ...await store.listWorkspaceData(user.id) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/workspace-data/import") {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request, 10 * 1024 * 1024);
+    const imported = await store.importWorkspaceData(user.id, workspaceImportInput(body), body.overwrite === true);
+    sendJson(request, response, 200, { ok: true, ...imported });
+    return;
+  }
+
+  const contactId = workspaceRecordIdFromPath(url.pathname, "contacts");
+  if (request.method === "POST" && url.pathname === "/v1/contacts") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, contact: await store.createContact(user.id, contactInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && contactId) {
+    requireUserLevel(user, "operate");
+    const contact = await store.updateContact(user.id, contactId, contactInput(await readJsonBody(request)));
+    if (!contact) throw new HttpError(404, "Telegram contact was not found.");
+    sendJson(request, response, 200, { ok: true, contact });
+    return;
+  }
+  if (request.method === "DELETE" && contactId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteContact(user.id, contactId)) throw new HttpError(404, "Telegram contact was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const groupId = workspaceRecordIdFromPath(url.pathname, "groups");
+  if (request.method === "POST" && url.pathname === "/v1/groups") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, group: await store.createGroup(user.id, groupInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && groupId) {
+    requireUserLevel(user, "operate");
+    const group = await store.updateGroup(user.id, groupId, groupInput(await readJsonBody(request)));
+    if (!group) throw new HttpError(404, "Telegram group was not found.");
+    sendJson(request, response, 200, { ok: true, group });
+    return;
+  }
+  if (request.method === "DELETE" && groupId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteGroup(user.id, groupId)) throw new HttpError(404, "Telegram group was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const channelId = workspaceRecordIdFromPath(url.pathname, "channels");
+  if (request.method === "POST" && url.pathname === "/v1/channels") {
+    requireUserLevel(user, "operate");
+    sendJson(request, response, 201, { ok: true, channel: await store.createChannel(user.id, channelInput(await readJsonBody(request))) });
+    return;
+  }
+  if (request.method === "PUT" && channelId) {
+    requireUserLevel(user, "operate");
+    const channel = await store.updateChannel(user.id, channelId, channelInput(await readJsonBody(request)));
+    if (!channel) throw new HttpError(404, "Telegram channel was not found.");
+    sendJson(request, response, 200, { ok: true, channel });
+    return;
+  }
+  if (request.method === "DELETE" && channelId) {
+    requireUserLevel(user, "operate");
+    if (!await store.deleteChannel(user.id, channelId)) throw new HttpError(404, "Telegram channel was not found.");
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const profileAccountId = workspaceRecordIdFromPath(url.pathname, "profiles");
+  if (request.method === "PUT" && profileAccountId) {
+    requireUserLevel(user, "operate");
+    try {
+      const profile = await store.saveProfile(user.id, profileAccountId, profileInput(await readJsonBody(request)));
+      sendJson(request, response, 200, { ok: true, profile });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/posts") {
+    const postAccountId = url.searchParams.get("accountId") || "";
+    if (postAccountId && !await store.getAccountWithSession(user.id, postAccountId)) {
+      throw new HttpError(404, "Telegram account was not found.");
+    }
+    sendJson(request, response, 200, { ok: true, posts: await store.listPosts(user.id, postAccountId) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/posts") {
+    requireUserLevel(user, "operate");
+    const input = telegramPostInput(await readJsonBody(request));
+    await verifyPostMedia(user.id, input);
+    try {
+      sendJson(request, response, 201, { ok: true, post: await store.createPost(user.id, input) });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const updatingPostId = telegramPostIdFromPath(url.pathname);
+  if (request.method === "PUT" && updatingPostId) {
+    requireUserLevel(user, "operate");
+    const input = telegramPostInput(await readJsonBody(request));
+    await verifyPostMedia(user.id, input);
+    try {
+      const post = await store.updatePost(user.id, updatingPostId, input);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const schedulingPostId = telegramPostIdFromPath(url.pathname, "/schedule");
+  if (request.method === "POST" && schedulingPostId) {
+    requireUserLevel(user, "operate");
+    if (!shouldRunBackgroundListeners()) {
+      throw new HttpError(409, "Telegram scheduling is not enabled. Use Send now.");
+    }
+    const body = await readJsonBody(request);
+    const scheduledAt = requiredString(body, "scheduledAt", 80);
+    try {
+      const post = await store.queuePost(user.id, schedulingPostId, scheduledAt);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      postScheduler?.wake();
+      sendJson(request, response, 202, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const sendingPostId = telegramPostIdFromPath(url.pathname, "/send-now");
+  if (request.method === "POST" && sendingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      const post = await store.queuePost(user.id, sendingPostId, new Date().toISOString());
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      const sender = postScheduler || new TelegramPostScheduler(store, executeScheduledTelegramDelivery, 2_000, 1);
+      const delivered = await sender.runPostNow(user.id, post.id);
+      if (!delivered) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post: delivered });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  const cancellingPostId = telegramPostIdFromPath(url.pathname, "/cancel");
+  if (request.method === "POST" && cancellingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      const post = await store.cancelPost(user.id, cancellingPostId);
+      if (!post) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true, post });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && updatingPostId) {
+    requireUserLevel(user, "operate");
+    try {
+      if (!await store.deletePost(user.id, updatingPostId)) throw new HttpError(404, "Telegram post was not found.");
+      sendJson(request, response, 200, { ok: true });
+    } catch (error) {
+      throw telegramPostHttpError(error);
+    }
+    return;
+  }
+
   const accountId = accountIdFromPath(url.pathname);
   if (request.method === "DELETE" && accountId) {
+    requireUserLevel(user, "configure");
     const account = await store.deleteAccount(user.id, accountId);
     if (!account) throw new HttpError(404, "Telegram account was not found.");
     await stopTelegramListener(account.id);
+    await mediaStore.removeAccountUploads(user.id, account.id);
     try {
       await revokeTelegramSession(telegramApiCredentialsFromAccount(account), account.sessionString);
     } catch {
@@ -817,27 +1389,108 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/v1/media/uploads") {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request);
+    const uploadAccountId = requiredString(body, "accountId", 64);
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    try {
+      const upload = await mediaStore.create(user.id, account.id, {
+        fileName: requiredString(body, "fileName", 200),
+        mimeType: optionalString(body, "mimeType", 120),
+        size: Number(body.size),
+      });
+      sendJson(request, response, 201, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  const mediaUploadId = mediaUploadIdFromPath(url.pathname);
+  if (request.method === "PUT" && mediaUploadId) {
+    requireUserLevel(user, "operate");
+    const uploadAccountId = url.searchParams.get("accountId") || "";
+    if (!uploadAccountId) throw new HttpError(400, "accountId is required.");
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    const offset = Number(request.headers["x-upload-offset"]);
+    try {
+      const upload = await mediaStore.append(user.id, account.id, mediaUploadId, offset, await readMediaChunk(request));
+      sendJson(request, response, 200, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  const completingMediaUploadId = mediaUploadIdFromPath(url.pathname, "/complete");
+  if (request.method === "POST" && completingMediaUploadId) {
+    requireUserLevel(user, "operate");
+    const body = await readJsonBody(request);
+    const uploadAccountId = requiredString(body, "accountId", 64);
+    const account = await store.getAccountWithSession(user.id, uploadAccountId);
+    if (!account) throw new HttpError(404, "Telegram account was not found.");
+    try {
+      const upload = await mediaStore.complete(user.id, account.id, completingMediaUploadId);
+      sendJson(request, response, 200, { ok: true, upload });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && mediaUploadId) {
+    requireUserLevel(user, "operate");
+    const uploadAccountId = url.searchParams.get("accountId") || "";
+    if (!uploadAccountId) throw new HttpError(400, "accountId is required.");
+    try {
+      await mediaStore.remove(user.id, uploadAccountId, mediaUploadId);
+      sendJson(request, response, 200, { ok: true });
+    } catch (error) {
+      throw telegramMediaHttpError(error);
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/messages") {
+    requireUserLevel(user, "operate");
     const body = await readJsonBody(request);
     const account = await store.getAccountWithSession(user.id, requiredString(body, "accountId", 64));
     if (!account) throw new HttpError(404, "Telegram account was not found.");
+    enforceTrialTelegramMessageLimit(user);
     enforceRateLimit(`message:${user.id}:${account.id}`, config.messageRateLimitMax);
     const recipient = requiredString(body, "recipient", 256);
-    const text = requiredString(body, "message", 50000);
+    const text = optionalString(body, "message", 50000);
     const mediaUrl = optionalString(body, "mediaUrl", 900000);
+    const uploadedMediaId = optionalString(body, "mediaUploadId", 64);
     const mediaType = optionalString(body, "mediaType", 32);
+    let uploadedMedia;
+    if (uploadedMediaId) {
+      try {
+        uploadedMedia = await mediaStore.resolve(user.id, account.id, uploadedMediaId);
+      } catch (error) {
+        throw telegramMediaHttpError(error);
+      }
+    }
     let sent;
     try {
       sent = await sendTelegramMessage(telegramApiCredentialsFromAccount(account), account.sessionString, {
         recipient,
         message: text,
         mediaUrl,
+        mediaFile: uploadedMedia ? { name: uploadedMedia.fileName, path: uploadedMedia.path, size: uploadedMedia.size } : undefined,
         mediaType,
         firstName: optionalString(body, "firstName", 120),
         lastName: optionalString(body, "lastName", 120)
       });
     } catch (error) {
-      throw telegramSendError(error);
+      const mapped = telegramSendError(error, recipient);
+      // Keep request data and recipients out of system logs while retaining a
+      // useful operational signal for remote-user failures.
+      console.warn(`Telegram send was rejected for account ${account.id} with HTTP ${mapped.status}.`);
+      throw mapped;
     }
     if (shouldRunBackgroundListeners()) void startTelegramListener(account);
     const message = await store.recordMessage({
@@ -847,6 +1500,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       text,
       telegramMessageId: sent.messageId
     });
+    console.log(`Telegram confirmed ${sent.messageId.split(",").length} message ID(s) for account ${account.id}.`);
     sendJson(request, response, 200, { ok: true, sent, message });
     return;
   }
@@ -880,12 +1534,21 @@ export async function initializeTelegramApp() {
     config = readConfig();
     configuredLoginUsers = readConfiguredLoginUsers();
     store = new MultiUserStore(config.dataDir, config.sessionEncryptionKey);
+    mediaStore = new TelegramMediaStore(config.dataDir, telegramMediaMaxBytes());
     limiter = new RequestRateLimiter(config.rateLimitWindowSeconds * 1_000);
 
     await store.initialize();
+    await mediaStore.initialize();
     initialized = true;
   })();
-  await initializing;
+  try {
+    await initializing;
+  } catch (error) {
+    // A transient store/configuration failure must not poison every later
+    // request handled by the same warm serverless process.
+    initializing = null;
+    throw error;
+  }
 }
 
 export async function handleRequestWithErrors(request: IncomingMessage, response: ServerResponse) {
@@ -893,8 +1556,10 @@ export async function handleRequestWithErrors(request: IncomingMessage, response
   await handleRequest(request, response).catch((error: unknown) => {
     const operational = operationalTelegramError(error);
     const known = error instanceof HttpError;
-    const linkedElsewhere = error instanceof AccountAlreadyLinkedError;
-    if (!known && !linkedElsewhere && !operational) console.error("Request failed without logging request data.");
+    const linkedElsewhere = error instanceof AccountAlreadyLinkedError || error instanceof WorkspaceRecordConflictError;
+    if (!known && !linkedElsewhere && !operational) {
+      console.error(`Request failed without logging request data: ${redactedErrorMessage(error)}`);
+    }
     sendJson(request, response, known ? error.status : linkedElsewhere ? 409 : operational ? operational.status : 500, {
       ok: false,
       error: known || linkedElsewhere ? error.message : operational ? operational.message : "Internal server error."
@@ -914,7 +1579,11 @@ async function main() {
   const server = await createTelegramHttpServer();
   server.listen(config.servicePort, config.serviceHost, () => {
     console.log(`Telegram multi-user API listening on http://${config.serviceHost}:${config.servicePort}`);
-    if (shouldRunBackgroundListeners()) void startStoredTelegramListeners();
+    if (shouldRunBackgroundListeners()) {
+      void startStoredTelegramListeners();
+      postScheduler = new TelegramPostScheduler(store, executeScheduledTelegramDelivery);
+      postScheduler.start();
+    }
   });
 
   let stopping = false;
@@ -922,6 +1591,7 @@ async function main() {
     if (stopping) return;
     stopping = true;
     server.close();
+    await postScheduler?.stop();
     await stopAllTelegramListeners();
     await store.close();
     process.exit(0);

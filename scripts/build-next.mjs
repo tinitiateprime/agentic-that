@@ -63,6 +63,12 @@ function buildCache() {
     .digest("hex")
     .slice(0, 12);
   const cacheRoot = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "AgenticThat", "next-build", projectKey);
+  // path.relative cannot produce a usable Next.js distDir across Windows
+  // volumes (GitHub hosts the checkout on D: but LOCALAPPDATA on C:). CI does
+  // not need the local OneDrive workaround, so keep its output in the project.
+  if (path.parse(cacheRoot).root.toLowerCase() !== path.parse(projectRoot).root.toLowerCase()) {
+    return { distDir: ".next", tsconfigPath: "tsconfig.json", external: false };
+  }
   const distPath = path.join(cacheRoot, "dist");
   const distDir = portablePath(path.relative(projectRoot, distPath));
   const tsconfigPath = path.join(projectRoot, ".next-build.tsconfig.json");

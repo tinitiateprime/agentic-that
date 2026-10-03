@@ -6,6 +6,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const extensionRoot = path.join(projectRoot, "extensions", "publishing-companion");
 const manifestPath = path.join(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const productionOrigin = "https://agenticthat.com";
+const productionMatch = `${productionOrigin}/*`;
 
 if (manifest.manifest_version !== 3) throw new Error("Publishing extension must use Manifest V3.");
 if (!manifest.background?.service_worker) throw new Error("Publishing extension service worker is missing.");
@@ -15,9 +17,23 @@ if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length 
 if ((manifest.host_permissions ?? []).some(permission => permission === "<all_urls>")) {
   throw new Error("Publishing extension must not request <all_urls>.");
 }
+const extensionPermissions = [
+  ...(manifest.host_permissions ?? []),
+  ...(manifest.content_scripts ?? []).flatMap(script => script.matches ?? []),
+];
+if (extensionPermissions.some(permission => /instagram\.com/i.test(permission))) {
+  throw new Error("Publishing extension must not request or inject on Instagram hosts.");
+}
+if (!manifest.content_scripts.some(script => (script.matches ?? []).includes(productionMatch))) {
+  throw new Error(`Publishing extension must inject the dashboard bridge on ${productionMatch}.`);
+}
+if (!(manifest.web_accessible_resources ?? []).some(resource => (resource.matches ?? []).some(match => match === productionMatch || match === "https://*/*"))) {
+  throw new Error(`Publishing extension media resources must be available on ${productionMatch}.`);
+}
 
 const files = new Set([
   manifest.background.service_worker,
+  "trusted-origins.js",
   manifest.action?.default_popup,
   ...Object.values(manifest.icons ?? {}),
   ...Object.values(manifest.action?.default_icon ?? {}),
@@ -27,11 +43,23 @@ const files = new Set([
 
 for (const file of files) await access(path.join(extensionRoot, file));
 
+const serviceWorkerSource = await readFile(path.join(extensionRoot, manifest.background.service_worker), "utf8");
+if (!serviceWorkerSource.includes('importScripts("trusted-origins.js")')) {
+  throw new Error("Publishing extension service worker must load the trusted-origin policy.");
+}
+const mediaProxySource = await readFile(path.join(extensionRoot, "media-proxy.js"), "utf8");
+if (!mediaProxySource.includes("assertTrustedParent")) {
+  throw new Error("Publishing extension media proxy must verify its embedding dashboard origin.");
+}
+
 const scriptFiles = [...files].filter(file => file.endsWith(".js"));
 for (const file of scriptFiles) {
   const source = await readFile(path.join(extensionRoot, file), "utf8");
   if (/\beval\s*\(|new\s+Function\s*\(/.test(source)) {
     throw new Error(`${file} contains forbidden dynamic code execution.`);
+  }
+  if (file === manifest.background.service_worker && !source.includes(JSON.stringify(productionOrigin))) {
+    throw new Error(`Publishing extension service worker must trust ${productionOrigin}.`);
   }
 }
 

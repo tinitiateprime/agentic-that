@@ -1,14 +1,16 @@
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { watiGetContacts, watiConfigured, normalizeWaNumber } from "@whatsapp/lib/wa/provider";
 import { importContacts } from "@whatsapp/lib/data";
+import { credsForProvider } from "@whatsapp/lib/tenant";
 
 // Import WATI contacts into the CRM. Body: { phones?: string[] }
 //   - no phones  -> import all new contacts
 //   - phones[]   -> import just those numbers
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-  if (!watiConfigured()) {
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
+  const creds = await credsForProvider(user.business_id, "wati");
+  if (!watiConfigured(creds)) {
     return Response.json({ error: "WATI isn't configured." }, { status: 400 });
   }
 
@@ -16,7 +18,7 @@ export async function POST(req) {
 
   let contacts;
   try {
-    contacts = await watiGetContacts({ pageSize: 100 });
+    contacts = await watiGetContacts({ pageSize: 100 }, creds);
   } catch (err) {
     return Response.json({ error: err.message }, { status: 502 });
   }

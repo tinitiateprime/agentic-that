@@ -1,9 +1,9 @@
 import { getSql } from "@whatsapp/lib/db";
-import { getCurrentUser } from "@whatsapp/lib/auth";
+import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 
 export async function GET() {
   const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!user) return whatsappAccessErrorResponse("view");
   const sql = await getSql();
   const groups = await sql`
     SELECT g.*, CAST(COUNT(gm.contact_id) AS INTEGER) AS member_count
@@ -15,8 +15,8 @@ export async function GET() {
 }
 
 export async function POST(req) {
-  const user = await getCurrentUser();
-  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await getCurrentUser("operate");
+  if (!user) return whatsappAccessErrorResponse("operate");
   const { name } = await req.json();
   if (!name?.trim()) return Response.json({ error: "Name is required" }, { status: 400 });
   const sql = await getSql();
