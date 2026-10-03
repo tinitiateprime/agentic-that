@@ -289,6 +289,35 @@ test("large media parts advance in one contiguous batch", () => {
   ), /does not match/);
 });
 
+test("a completed remote job cannot block a new staged post as an already queued duplicate", () => {
+  const document = {
+    accounts: [{ id: "account_1", workspaceId: "workspace_1", platform: "x", enabled: true, credentialConfigured: true }],
+    uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
+  };
+  const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
+  const input = {
+    accountId: "account_1", postFormat: "video", originalName: "release.mp4", mimeType: "video/mp4", size: 126_716_294,
+    caption: "Verified replacement post", rightsConfirmed: true, sourceSubmissionId: "stage_1",
+  };
+  const first = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [input], [])[0];
+  const replacementInput = { ...input, sourceSubmissionId: "stage_2" };
+  assert.throws(() => centralPublishingTestHelpers.createUploadsInDocument(document, principal, [replacementInput], []), /already queued/);
+  const remote = [{
+    id: document.jobs[0].id, status: "uncertain", message: "Confirmation timed out", attemptCount: 1,
+    assignedDeviceId: null, leaseExpiresAt: null, updatedAt: new Date().toISOString(), completedAt: null,
+  }];
+  const [replacement] = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [replacementInput], remote);
+  assert.notEqual(replacement.id, first.id);
+  assert.equal(document.uploads[0].status, "failed");
+  assert.equal(document.uploads[0].publishActionState, "uncertain");
+  assert.equal(document.jobs[0].state, "uncertain");
+  assert.equal(document.uploads[1].status, "queued");
+  assert.equal(document.jobs.length, 2);
+  const [sameStage] = centralPublishingTestHelpers.createUploadsInDocument(document, principal, [input], remote);
+  assert.equal(sameStage.id, first.id);
+  assert.equal(document.jobs.length, 2);
+});
+
 test("admin publishing monitoring preserves final destination copy without exposing artifacts", () => {
   const document = {
     accounts: [{

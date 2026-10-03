@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright-core";
+import type { Locator, Page, Response } from "playwright-core";
 import type { PlatformUpload } from "../../../shared/schema.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 import fs from "fs";
@@ -67,6 +67,35 @@ async function dismissCookiePrompt(page: Page) {
       await page.waitForTimeout(500);
       return;
     }
+  }
+}
+
+export async function dismissXInterruptions(page: Page) {
+  // X can stack its terms notice on top of a Premium offer. Dismiss the
+  // acknowledgement first, then the offer, without closing the post editor.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const acknowledgement = await firstVisible([
+      page.getByRole("button", { name: /^Got it$/i }),
+    ]);
+    if (acknowledgement && await clickIfVisible(acknowledgement)) {
+      console.log("Dismissed X informational notice.");
+      await page.waitForTimeout(250);
+      continue;
+    }
+
+    const offers = page.locator('[role="dialog"]')
+      .filter({ hasText: /premium|subscription|updates to our terms of service|first 2 months/i })
+      .filter({ hasNot: page.locator('[data-testid="tweetTextarea_0"], input[type="password"]') });
+    const close = await firstVisible([
+      offers.getByRole("button", { name: /^(Close|Dismiss|Not now|Maybe later)$/i }),
+      offers.locator('[data-testid="app-bar-close"]'),
+      ...(/\/i\/(?:premium_sign_up|verified-choose|verified-get-verified)/i.test(page.url())
+        ? [page.getByRole("button", { name: /^(Close|Dismiss)$/i }), page.locator('[data-testid="app-bar-close"]')]
+        : []),
+    ]);
+    if (!close || !await clickIfVisible(close)) return;
+    console.log("Dismissed X Premium offer.");
+    await page.waitForTimeout(250);
   }
 }
 
@@ -156,6 +185,7 @@ async function getLoginError(page: Page) {
 
 async function openPostComposer(page: Page) {
   console.log("Opening X post composer...");
+  await dismissXInterruptions(page);
   const composeButton = await waitForVisible([
     page.locator('[data-testid="SideNav_NewTweet_Button"]'),
     page.locator('a[href="/compose/post"]'),
@@ -166,7 +196,7 @@ async function openPostComposer(page: Page) {
   if (!composeButton) throw new Error("Could not find the X Post button.");
 
   await composeButton.scrollIntoViewIfNeeded().catch(() => undefined);
-  await composeButton.click({ force: true, timeout: 10000 });
+  await composeButton.click({ timeout: 10000 });
 
   const editor = await waitForVisible([
     page.locator('[role="dialog"] [data-testid="tweetTextarea_0"]'),
@@ -235,13 +265,30 @@ async function attachXMedia(page: Page, filePath: string) {
   }
 
   await setLocalInputFile(page, fileInput, filePath);
-  const fileSelectionCompleted = true;
   console.log("X media selected; waiting for it to become ready...");
 
+  await waitForXMediaReady(page, composer);
+}
+
+async function xMediaIsReady(page: Page, composer: Locator) {
+  const preview = await firstVisible(xMediaPreviewLocators(page, composer));
+  if (!preview) return false;
+  const attachments = await firstVisible([
+    page.locator('[role="dialog"] [data-testid="attachments"]'),
+    composer.locator('[data-testid="attachments"]'),
+    page.locator('[data-testid="attachments"]'),
+  ]);
+  const text = (await attachments?.textContent()) || "";
+  const uploading = /\buploading\b|\bprocessing\b/i.test(text)
+    || await attachments?.getAttribute("aria-busy") === "true";
+  return hasReadyXMedia(true, true, uploading);
+}
+
+export async function waitForXMediaReady(page: Page, composer: Locator) {
   const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
   let stablePreviewChecks = 0;
   while (Date.now() < deadline) {
-    const preview = await firstVisible(xMediaPreviewLocators(page, composer));
+    await dismissXInterruptions(page);
     const uploadError = await firstVisible([
       page.locator('[data-testid="toast"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
       page.locator('[role="alert"]').filter({ hasText: /failed|error|unsupported|could not upload/i }),
@@ -249,9 +296,10 @@ async function attachXMedia(page: Page, filePath: string) {
     const uploadErrorText = (await uploadError?.textContent())?.replace(/\s+/g, " ").trim();
     if (uploadErrorText) throw new Error(`X media upload error: ${uploadErrorText}`);
 
-    // X clears input.files after accepting the upload. A completed assignment
-    // proves selection; the rendered preview proves that processing completed.
-    if (hasReadyXMedia(fileSelectionCompleted, Boolean(preview))) {
+    // A video preview appears while the bytes are still uploading. Wait for
+    // the attachment's Uploading/Processing status to clear before posting.
+    // Global progress bars also exist after completion, so do not use them.
+    if (await xMediaIsReady(page, composer)) {
       stablePreviewChecks += 1;
       if (stablePreviewChecks >= 2) {
         console.log("X media preview is attached and ready.");
@@ -263,15 +311,16 @@ async function attachXMedia(page: Page, filePath: string) {
     await page.waitForTimeout(750);
   }
 
-  throw new Error("X did not show an attached media preview, so Companion did not submit a text-only post.");
+  throw new Error("X media did not finish uploading and processing; Companion did not submit the post.");
 }
 
-export function hasReadyXMedia(fileSelectionCompleted: boolean, previewVisible: boolean) {
-  return fileSelectionCompleted && previewVisible;
+export function hasReadyXMedia(fileSelectionCompleted: boolean, previewVisible: boolean, uploading = false) {
+  return fileSelectionCompleted && previewVisible && !uploading;
 }
 
 async function fillXCaption(page: Page, caption: string) {
   console.log("Entering X caption...");
+  await dismissXInterruptions(page);
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer for caption entry.");
 
@@ -284,7 +333,7 @@ async function fillXCaption(page: Page, caption: string) {
   if (!editor) throw new Error("Could not find the X What's happening field.");
 
   await editor.scrollIntoViewIfNeeded().catch(() => undefined);
-  await editor.click({ force: true, timeout: 10000 });
+  await editor.click({ timeout: 10000 });
   await editor.fill(caption);
 
   const enteredText = (await editor.innerText().catch(() => "")).trim();
@@ -292,13 +341,14 @@ async function fillXCaption(page: Page, caption: string) {
   console.log("X caption entered.");
 }
 
-async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void) {
+export async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void) {
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer before publishing.");
 
   const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
 
   while (Date.now() < deadline) {
+    await dismissXInterruptions(page);
     const postButton = await firstVisible([
       page.locator('[role="dialog"] [data-testid="tweetButton"]'),
       page.locator('[role="dialog"] [data-testid="tweetButtonInline"]'),
@@ -308,13 +358,11 @@ async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitte
       page.locator('[data-testid="tweetButton"]'),
       page.locator('[data-testid="tweetButtonInline"]'),
     ]);
-    const mediaPreview = requireMedia
-      ? await firstVisible(xMediaPreviewLocators(page, composer))
-      : composer;
+    const mediaReady = !requireMedia || await xMediaIsReady(page, composer);
 
-    if (postButton && mediaPreview && await postButton.isEnabled().catch(() => false)) {
+    if (postButton && mediaReady && await postButton.isEnabled().catch(() => false)) {
       console.log("Clicking X Post button...");
-      await postButton.click({ force: true, timeout: 10000 });
+      await postButton.click({ timeout: 10000 });
       await onSubmitted?.();
       return composer;
     }
@@ -332,18 +380,40 @@ async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitte
   throw new Error("X Post button did not become enabled while the media was uploading.");
 }
 
-async function waitForXPostComplete(page: Page, composer: Locator) {
+export function xAcceptedPostId(body: unknown) {
+  const value = body as { errors?: unknown[]; data?: { create_tweet?: { tweet_results?: { result?: { rest_id?: string; tweet?: { rest_id?: string } } } } } } | null;
+  if (!value || value.errors?.length) return null;
+  const result = value.data?.create_tweet?.tweet_results?.result;
+  const postId = result?.rest_id || result?.tweet?.rest_id;
+  return typeof postId === "string" && /^\d+$/.test(postId) ? postId : null;
+}
+
+export function observeXPostAcceptance(page: Page) {
+  const evidence = { postId: null as string | null };
+  let active = true;
+  const responseReceived = async (response: Response) => {
+    if (response.request().method() !== "POST" || !/\/CreateTweet(?:\?|$)/.test(response.url()) || !response.ok()) return;
+    const postId = xAcceptedPostId(await response.json().catch(() => null));
+    if (active && postId) evidence.postId = postId;
+  };
+  page.on("response", responseReceived);
+  return { evidence, dispose: () => { active = false; page.off("response", responseReceived); } };
+}
+
+async function waitForXPostComplete(page: Page, evidence: { postId: string | null }) {
   console.log("Waiting for X to confirm the post...");
   const deadline = Date.now() + 90000;
 
   while (Date.now() < deadline) {
+    await dismissXInterruptions(page);
     const success = await firstVisible([
-      page.locator('[data-testid="toast"]').filter({ hasText: /post was sent|posted|view/i }),
+      page.locator('[data-testid="toast"]').filter({ hasText: /post was sent|post sent|successfully posted/i }),
       page.getByText(/Your post was sent/i),
-      page.getByText(/^View$/i),
     ]);
 
-    if (success || !await composer.isVisible().catch(() => false)) {
+    // Closing the composer can also open a provider notice. Only a returned
+    // post ID or X's explicit sent message confirms delivery.
+    if (evidence.postId || success) {
       console.log("X post published.");
       return;
     }
@@ -371,7 +441,7 @@ async function waitForLoginResult(page: Page, allowManualLoginFromStart: boolean
     isManualVerificationVisible: (url) => isManualVerificationVisible(page, url),
     isLoginFormVisible: () => loginFormIsVisible(page),
     getLoginError: () => getLoginError(page),
-    beforeCheck: () => dismissCookiePrompt(page),
+    beforeCheck: async () => { await dismissXInterruptions(page); await dismissCookiePrompt(page); },
     allowManualLoginFromStart,
     ignoreLoginErrors,
     embeddedLogin,
@@ -385,6 +455,7 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
   console.log("Navigating to X...");
   await page.goto(X_HOME_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1500);
+  await dismissXInterruptions(page);
   await dismissCookiePrompt(page);
 
   if (await isLoggedIn(page)) {
@@ -394,7 +465,7 @@ export async function loginToX(page: Page, _upload?: PlatformUpload, holdAfterLo
       page,
       platform: "X",
       isLoggedIn: () => isLoggedIn(page),
-      beforeCheck: () => dismissCookiePrompt(page),
+      beforeCheck: async () => { await dismissXInterruptions(page); await dismissCookiePrompt(page); },
     });
   } else {
     await page.goto(X_LOGIN_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
@@ -433,8 +504,11 @@ export async function postToX(page: Page, upload: PlatformUpload, accountLogin?:
   await openPostComposer(page);
   if (!isTextOnly) await attachXMedia(page, filePath);
   await fillXCaption(page, caption);
-  const composer = await clickXPostWhenReady(page, !isTextOnly, accountLogin?.onFinalActionSubmitted);
-  await waitForXPostComplete(page, composer);
+  const acceptance = observeXPostAcceptance(page);
+  try {
+    await clickXPostWhenReady(page, !isTextOnly, accountLogin?.onFinalActionSubmitted);
+    await waitForXPostComplete(page, acceptance.evidence);
+  } finally { acceptance.dispose(); }
 
   const holdTime = getPostHoldMs();
   console.log(`X post complete. Holding for ${holdTime / 1000} seconds...`);

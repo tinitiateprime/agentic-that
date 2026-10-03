@@ -825,11 +825,19 @@ function createUploadInDocument(document, principal, input = {}) {
   return uploadPublic(document, upload);
 }
 
+function createUploadsInDocument(document, principal, inputs, remoteJobs) {
+  // Status reads overlay current Companion outcomes without rewriting history.
+  // Reconcile those outcomes before checking for an already queued duplicate.
+  applyRemotePublishingJobs(document, principal.workspaceId, remoteJobs);
+  return inputs.map((input) => createUploadInDocument(document, principal, input));
+}
+
 export async function createCentralUploads(principal, inputs = []) {
   if (!Array.isArray(inputs) || !inputs.length) throw new Error("Choose at least one workspace account.");
+  const remoteJobs = await listSupabaseJobs(principal.workspaceId, { type: "publish", limit: 500, includePayload: false });
   return mutateWorkspaceDocument(principal.workspaceId, async (value, transaction) => {
     const document = documentValue(value);
-    const result = inputs.map((input) => createUploadInDocument(document, principal, input));
+    const result = createUploadsInDocument(document, principal, inputs, remoteJobs);
     const uploadIds = new Set(result.map((upload) => upload.id));
     const workspaceAccounts = document.accounts.filter((item) => item.workspaceId === principal.workspaceId);
     const workspaceUploads = document.uploads.filter((item) => item.workspaceId === principal.workspaceId && uploadIds.has(item.id));
@@ -1678,6 +1686,7 @@ export const centralPublishingTestHelpers = {
   companionPublishingEngine,
   companionStatus,
   createUploadInDocument,
+  createUploadsInDocument,
   hasActiveJobLease,
   recoverExpiredCentralJobLeases,
   resumeReconnectJobs,
