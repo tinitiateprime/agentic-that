@@ -15,6 +15,42 @@ const accountInput = (sessionString: string) => ({
   sessionString
 });
 
+test("login challenges replace only their owner's code, enforce expiry, and retain the encrypted two-factor session", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-login-"));
+  const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));
+  try {
+    await store.initialize();
+    const first = (await store.createUser("First login workspace")).user;
+    const second = (await store.createUser("Second login workspace")).user;
+    const challenge = await store.createLoginChallenge(first.id, 123456, "private-api-hash", "+10000000000", "private-code-hash", "private-session", 10);
+    const other = await store.createLoginChallenge(second.id, 234567, "other-api-hash", "+10000000001", "other-code-hash", "other-session", 10);
+    assert.equal(await store.getLoginChallenge(second.id, challenge.id), null);
+    await store.markPasswordRequired(second.id, challenge.id, "unauthorized-session");
+    assert.equal((await store.getLoginChallenge(first.id, challenge.id))?.status, "code_sent");
+    await store.markPasswordRequired(first.id, challenge.id, "private-two-factor-session");
+    const passwordChallenge = await store.getLoginChallenge(first.id, challenge.id);
+    assert.equal(passwordChallenge?.status, "password_required");
+    assert.equal(passwordChallenge?.sessionString, "private-two-factor-session");
+    const raw = await readFile(path.join(dataDir, "store.json"), "utf8");
+    for (const secret of ["private-api-hash", "private-code-hash", "private-two-factor-session", "+10000000000"]) assert(!raw.includes(secret));
+    const replacement = await store.createLoginChallenge(first.id, 123456, "private-api-hash", "+10000000000", "new-code-hash", "new-session", 10);
+    assert.equal(await store.getLoginChallenge(first.id, challenge.id), null);
+    assert((await store.getLoginChallenge(second.id, other.id)));
+    await store.deleteLoginChallenge(second.id, replacement.id);
+    assert((await store.getLoginChallenge(first.id, replacement.id)));
+    await store.deleteLoginChallenge(first.id, replacement.id);
+    assert.equal(await store.getLoginChallenge(first.id, replacement.id), null);
+    const expired = await store.createLoginChallenge(first.id, 123456, "private-api-hash", "+10000000000", "expired-code", "expired-session", -1);
+    assert.equal(await store.getLoginChallenge(first.id, expired.id), null);
+  } finally {
+    await store.close();
+    const absolute = path.resolve(dataDir);
+    assert.equal(path.dirname(absolute), path.resolve(os.tmpdir()));
+    assert(path.basename(absolute).startsWith("agentic-that-telegram-login-"));
+    await rm(absolute, {recursive: true, force: true});
+  }
+});
+
 test("a freshly verified Telegram login can securely move an existing account", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-store-"));
   const encryptionKey = randomBytes(32).toString("base64url");

@@ -682,28 +682,50 @@ export class MultiUserStore {
   ) {
     const id = randomUUID();
     const expiresAt = new Date(Date.now() + ttlMinutes * 60_000);
+    const row: LoginChallengeRow = {
+      id,
+      userId,
+      telegramApiIdCiphertext: this.cipher.encrypt(String(telegramApiId)),
+      telegramApiHashCiphertext: this.cipher.encrypt(telegramApiHash),
+      phoneCiphertext: this.cipher.encrypt(phone),
+      phoneCodeHashCiphertext: this.cipher.encrypt(phoneCodeHash),
+      sessionCiphertext: this.cipher.encrypt(sessionString),
+      status: "code_sent",
+      expiresAt: asIso(expiresAt),
+      createdAt: nowIso()
+    };
+    if (this.usePostgres && this.databaseSql) {
+      await this.databaseSql.begin(async (transaction) => {
+        // Coordinate with legacy store mutations, but touch only this user's
+        // challenges. A connection must not rewrite every workspace's state.
+        await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+        await transaction`DELETE FROM agentic_that.telegram_login_challenges WHERE owner_id = ${userId}`;
+        await transaction`
+          INSERT INTO agentic_that.telegram_login_challenges(id, owner_id, expires_at, created_at, record)
+          VALUES (${row.id}, ${row.userId}, ${row.expiresAt}, ${row.createdAt}, ${transaction.json(row)})`;
+      });
+      return { id, expiresAt: row.expiresAt };
+    }
     await this.updateDatabase((database) => {
       database.telegramLoginChallenges = database.telegramLoginChallenges.filter((challenge) => (
         parseIso(challenge.expiresAt) > Date.now() && challenge.userId !== userId
       ));
-      database.telegramLoginChallenges.push({
-        id,
-        userId,
-        telegramApiIdCiphertext: this.cipher.encrypt(String(telegramApiId)),
-        telegramApiHashCiphertext: this.cipher.encrypt(telegramApiHash),
-        phoneCiphertext: this.cipher.encrypt(phone),
-        phoneCodeHashCiphertext: this.cipher.encrypt(phoneCodeHash),
-        sessionCiphertext: this.cipher.encrypt(sessionString),
-        status: "code_sent",
-        expiresAt: asIso(expiresAt),
-        createdAt: nowIso()
-      });
+      database.telegramLoginChallenges.push(row);
       return null;
     });
     return { id, expiresAt: asIso(expiresAt) };
   }
 
   async getLoginChallenge(userId: string, challengeId: string): Promise<LoginChallenge | null> {
+    if (this.usePostgres && this.databaseSql) {
+      const rows = await this.databaseSql`
+        SELECT record FROM agentic_that.telegram_login_challenges
+         WHERE id = ${challengeId} AND owner_id = ${userId} AND expires_at > now()`;
+      const row = this.postgresRecord<LoginChallengeRow>(rows[0]?.record);
+      // Expired challenges need no read-time mutation. A subsequent login
+      // replaces this user's challenges without locking unrelated workspaces.
+      return row && parseIso(row.expiresAt) > Date.now() ? this.toLoginChallenge(row) : null;
+    }
     return this.updateDatabase((database) => {
       const row = database.telegramLoginChallenges.find((challenge) => (
         challenge.id === challengeId && challenge.userId === userId
@@ -713,20 +735,21 @@ export class MultiUserStore {
         database.telegramLoginChallenges = database.telegramLoginChallenges.filter((challenge) => challenge.id !== challengeId);
         return null;
       }
-      return {
-        id: row.id,
-        telegramApiId: this.decryptTelegramApiId(row),
-        telegramApiHash: this.decryptTelegramApiHash(row),
-        phone: this.cipher.decrypt(row.phoneCiphertext),
-        phoneCodeHash: this.cipher.decrypt(row.phoneCodeHashCiphertext),
-        sessionString: this.cipher.decrypt(row.sessionCiphertext),
-        status: row.status,
-        expiresAt: row.expiresAt
-      };
+      return this.toLoginChallenge(row);
     });
   }
 
   async markPasswordRequired(userId: string, challengeId: string, sessionString: string) {
+    if (this.usePostgres && this.databaseSql) {
+      const changes = { status: "password_required", sessionCiphertext: this.cipher.encrypt(sessionString) };
+      await this.databaseSql.begin(async (transaction) => {
+        await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+        await transaction`
+          UPDATE agentic_that.telegram_login_challenges SET record = record || ${transaction.json(changes)}
+           WHERE id = ${challengeId} AND owner_id = ${userId}`;
+      });
+      return;
+    }
     await this.updateDatabase((database) => {
       const challenge = database.telegramLoginChallenges.find((row) => row.id === challengeId && row.userId === userId);
       if (challenge) {
@@ -738,6 +761,13 @@ export class MultiUserStore {
   }
 
   async deleteLoginChallenge(userId: string, challengeId: string) {
+    if (this.usePostgres && this.databaseSql) {
+      await this.databaseSql.begin(async (transaction) => {
+        await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+        await transaction`DELETE FROM agentic_that.telegram_login_challenges WHERE id = ${challengeId} AND owner_id = ${userId}`;
+      });
+      return;
+    }
     await this.updateDatabase((database) => {
       database.telegramLoginChallenges = database.telegramLoginChallenges.filter((challenge) => (
         challenge.id !== challengeId || challenge.userId !== userId
@@ -751,6 +781,44 @@ export class MultiUserStore {
     input: { telegramApiId: number; telegramApiHash: string; telegramUserId: string; displayName: string; username: string; sessionString: string },
     options: { allowVerifiedTransfer?: boolean } = {}
   ): Promise<SavedTelegramAccount> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+        const rows = await transaction`
+          SELECT record FROM agentic_that.telegram_accounts WHERE telegram_user_id = ${input.telegramUserId} FOR UPDATE`;
+        const existing = this.postgresRecord<TelegramAccountRow>(rows[0]?.record);
+        const transferred = Boolean(existing && existing.userId !== userId);
+        if (transferred && !options.allowVerifiedTransfer) {
+          throw new AccountAlreadyLinkedError("This Telegram account is already linked to another app user.");
+        }
+        const timestamp = nowIso();
+        const row: TelegramAccountRow = {
+          id: existing?.id || randomUUID(),
+          userId,
+          telegramUserId: input.telegramUserId,
+          displayName: input.displayName,
+          username: input.username || "",
+          telegramApiIdCiphertext: this.cipher.encrypt(String(input.telegramApiId)),
+          telegramApiHashCiphertext: this.cipher.encrypt(input.telegramApiHash),
+          sessionCiphertext: this.cipher.encrypt(input.sessionString),
+          createdAt: existing?.createdAt || timestamp,
+          updatedAt: timestamp
+        };
+        await transaction`
+          INSERT INTO agentic_that.telegram_accounts
+            (id, owner_id, telegram_user_id, display_name, username, created_at, updated_at, record)
+          VALUES (${row.id}, ${row.userId}, ${row.telegramUserId}, ${row.displayName}, ${row.username},
+            ${row.createdAt}, ${row.updatedAt}, ${transaction.json(row)})
+          ON CONFLICT (id) DO UPDATE SET owner_id=excluded.owner_id, display_name=excluded.display_name,
+            username=excluded.username, updated_at=excluded.updated_at, record=excluded.record`;
+        if (transferred) {
+          await transaction`
+            UPDATE agentic_that.telegram_messages SET owner_id = ${userId}
+             WHERE account_id = ${row.id} AND owner_id = ${existing!.userId}`;
+        }
+        return { account: this.toAccount(row), transferred };
+      }) as unknown as Promise<SavedTelegramAccount>;
+    }
     return this.updateDatabase((database) => {
       const existing = database.telegramAccounts.find((account) => account.telegramUserId === input.telegramUserId);
       const transferred = Boolean(existing && existing.userId !== userId);
@@ -829,6 +897,15 @@ export class MultiUserStore {
   }
 
   async deleteAccount(userId: string, accountId: string): Promise<TelegramAccountWithSession | null> {
+    if (this.usePostgres && this.databaseSql) {
+      return this.databaseSql.begin(async (transaction) => {
+        await transaction`SELECT pg_advisory_xact_lock(hashtext('agentic-that-telegram-state'))`;
+        const rows = await transaction`
+          DELETE FROM agentic_that.telegram_accounts WHERE id = ${accountId} AND owner_id = ${userId} RETURNING record`;
+        const row = this.postgresRecord<TelegramAccountRow>(rows[0]?.record);
+        return row ? this.toAccountWithSession(row) : null;
+      }) as unknown as Promise<TelegramAccountWithSession | null>;
+    }
     let deleted: TelegramAccountWithSession | null = null;
     await this.updateDatabase((database) => {
       const account = database.telegramAccounts.find((row) => row.id === accountId && row.userId === userId);
@@ -2038,6 +2115,19 @@ export class MultiUserStore {
       username: row.username,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
+    };
+  }
+
+  private toLoginChallenge(row: LoginChallengeRow): LoginChallenge {
+    return {
+      id: row.id,
+      telegramApiId: this.decryptTelegramApiId(row),
+      telegramApiHash: this.decryptTelegramApiHash(row),
+      phone: this.cipher.decrypt(row.phoneCiphertext),
+      phoneCodeHash: this.cipher.decrypt(row.phoneCodeHashCiphertext),
+      sessionString: this.cipher.decrypt(row.sessionCiphertext),
+      status: row.status,
+      expiresAt: row.expiresAt
     };
   }
 
