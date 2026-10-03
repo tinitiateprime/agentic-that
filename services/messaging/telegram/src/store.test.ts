@@ -15,6 +15,40 @@ const accountInput = (sessionString: string) => ({
   sessionString
 });
 
+test("Telegram inbox batches keep provider IDs distinct by peer and merge aliases without duplicate messages", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-history-"));
+  const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));
+  try {
+    await store.initialize();
+    const owner = (await store.createUser("Inbox batch owner")).user;
+    const account = (await store.saveTelegramAccount(owner.id, accountInput("inbox-session"))).account;
+    const first = {accountId: account.id, direction: "outbound" as const, recipient: "@first_user", text: "Private first message", telegramMessageId: "101"};
+    const other = {...first, recipient: "@other_user", text: "Private other message"};
+    const rows = await store.recordMessages([first, other, first]);
+    assert.equal(rows[0].id, rows[2].id);
+    assert.notEqual(rows[0].id, rows[1].id);
+    const alias = await store.recordMessage({...first, recipient: "@first_user +10000000000 12345"});
+    assert.equal(alias.id, rows[0].id);
+    assert(alias.recipient.includes("+10000000000"));
+    const replay = await Promise.all([store.recordMessage(first), store.recordMessage({...first, recipient: "first_user"})]);
+    assert(replay.every(row => row.id === rows[0].id));
+    assert.equal((await store.listMessages(owner.id, account.id)).length, 2);
+    const batch = Array.from({length: 100}, (_, index) => ({...first, telegramMessageId: String(index + 200)}));
+    await store.recordMessages(batch);
+    await store.recordMessages(batch);
+    assert.equal((await store.listMessages(owner.id, account.id, 500)).length, 102);
+    const raw = await readFile(path.join(dataDir, "store.json"), "utf8");
+    assert(!raw.includes(first.text));
+    assert(!raw.includes(other.text));
+  } finally {
+    await store.close();
+    const absolute = path.resolve(dataDir);
+    assert.equal(path.dirname(absolute), path.resolve(os.tmpdir()));
+    assert(path.basename(absolute).startsWith("agentic-that-telegram-history-"));
+    await rm(absolute, {recursive: true, force: true});
+  }
+});
+
 test("login challenges replace only their owner's code, enforce expiry, and retain the encrypted two-factor session", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "agentic-that-telegram-login-"));
   const store = new MultiUserStore(dataDir, randomBytes(32).toString("base64url"));

@@ -1,4 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // postgres 3.4.9 only reserves a sql.begin() connection after its pipeline
 // checks. With max_pipeline: 0 those checks skip the reservation callback.
@@ -14,8 +16,13 @@ const after = `      return write(toBuffer(q))
         && !q.cursorFn
         && sent.length < max_pipeline`;
 
+// The standalone Telegram install also has its own postgres dependency.
+const dependencyRoot = process.argv[2]
+  ? pathToFileURL(path.resolve(process.argv[2]) + path.sep)
+  : new URL("../node_modules/postgres/", import.meta.url);
+
 for (const file of ["src/connection.js", "cjs/src/connection.js"]) {
-  const location = new URL(`../node_modules/postgres/${file}`, import.meta.url);
+  const location = new URL(file, dependencyRoot);
   const source = readFileSync(location, "utf8");
   if (source.includes(after)) continue;
   if (!source.includes(before)) throw new Error(`The postgres transaction reservation patch needs review: ${file}.`);

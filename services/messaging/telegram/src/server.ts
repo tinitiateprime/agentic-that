@@ -20,6 +20,7 @@ import { configuredLoginId, findConfiguredLoginUser, readConfiguredLoginUsers, t
 import { RequestRateLimiter } from "./rate-limit.ts";
 import {
   AccountAlreadyLinkedError,
+  WorkspaceRecordConflictError,
   type AppUser,
   type MessageRecord,
   MultiUserStore,
@@ -690,16 +691,14 @@ async function syncRecentTelegramHistory(account: TelegramAccountWithSession, re
   const sync = (async () => {
     try {
       const messages = await fetchRecentTelegramMessages(telegramApiCredentialsFromAccount(account), account.sessionString, 100, recipients);
-      for (const message of messages) {
-        await store.recordMessage({
+      await store.recordMessages(messages.map(message => ({
           accountId: account.id,
           direction: message.direction,
           recipient: message.recipient,
           text: message.text,
           telegramMessageId: message.messageId,
           createdAt: message.createdAt
-        });
-      }
+      })));
     } catch (error) {
       console.error(`Recent Telegram history sync failed for account ${account.id}: ${redactedErrorMessage(error)}`);
     } finally {
@@ -1557,7 +1556,7 @@ export async function handleRequestWithErrors(request: IncomingMessage, response
   await handleRequest(request, response).catch((error: unknown) => {
     const operational = operationalTelegramError(error);
     const known = error instanceof HttpError;
-    const linkedElsewhere = error instanceof AccountAlreadyLinkedError;
+    const linkedElsewhere = error instanceof AccountAlreadyLinkedError || error instanceof WorkspaceRecordConflictError;
     if (!known && !linkedElsewhere && !operational) {
       console.error(`Request failed without logging request data: ${redactedErrorMessage(error)}`);
     }
