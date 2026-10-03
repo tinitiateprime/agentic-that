@@ -36,7 +36,9 @@ import {
 } from "@platform/server/publishing-central-store";
 import { deletePublishingMedia } from "../../../../services/publishing/queue-runner/server/media-storage.ts";
 import { publishingMediaResponse } from "@platform/server/publishing-media-response";
+import { after } from "next/server";
 import { storePublishingPreviewInput } from "@platform/server/publishing-media-preview";
+import { runDueRedditApiJobs } from "@platform/server/reddit-publishing";
 import {
   authorizeSupabaseJobArtifactPartUploads,
   deleteSupabaseJobArtifactParts,
@@ -198,6 +200,20 @@ async function finishStagedMedia(principalValue, stagedUploadId, previewInput = 
   throw new Error("The media upload has no stored parts. Please upload the file again.");
 }
 
+// Reddit accounts connected through OAuth publish from the server, not the
+// Companion. Start due posts once the response is sent; the scheduled
+// reddit-publisher function covers future times and any missed run.
+function publishDueRedditPosts(workspaceId, rows) {
+  if (!(Array.isArray(rows) ? rows : [rows]).some((row) => row?.platform === "reddit")) return;
+  after(async () => {
+    try {
+      await runDueRedditApiJobs({ workspaceId });
+    } catch (error) {
+      console.error("Reddit API publishing run failed", { workspaceId, message: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+}
+
 async function createPosts(principalValue, input) {
   const destinations = Array.isArray(input.destinations) ? input.destinations : [];
   if (!destinations.length) throw new Error("Choose at least one workspace account.");
@@ -205,7 +221,7 @@ async function createPosts(principalValue, input) {
   if (new Set(keys).size !== keys.length) throw new Error("Each publishing destination can be selected only once.");
   const accounts = await centralAccountsForPrincipal(principalValue, destinations.map((destination) => destination.accountId), "operate");
   const accountsById = new Map(accounts.map(account => [account.id, account]));
-  return createCentralUploads(principalValue, destinations.map((destination) => {
+  const uploads = await createCentralUploads(principalValue, destinations.map((destination) => {
     const account = accountsById.get(destination.accountId);
     if (!account) throw new Error("The selected publishing account is no longer available.");
     const linkedinTarget = destination.linkedinPageId
@@ -225,6 +241,8 @@ async function createPosts(principalValue, input) {
       scheduleId: destination.scheduleId || null,
     };
   }));
+  publishDueRedditPosts(principalValue.workspaceId, uploads);
+  return uploads;
 }
 
 async function validatedPublishingDestinations(principalValue, destinations, level = "operate") {
@@ -498,7 +516,9 @@ export async function POST(request, context) {
     if (parts[0] === "submissions" && parts[2] === "schedule") {
       const user = await principal("publishing.schedule.manage");
       const destinations = await validatedPublishingDestinations(user, body.destinations || []);
-      return Response.json(await scheduleCentralSubmission(user, parts[1], destinations), { status: 201 });
+      const scheduled = await scheduleCentralSubmission(user, parts[1], destinations);
+      publishDueRedditPosts(user.workspaceId, scheduled.uploads);
+      return Response.json(scheduled, { status: 201 });
     }
     if (parts[0] === "platforms" && parts[2] === "accounts") {
       const user = await principal("publishing.accounts.configure");
@@ -529,6 +549,7 @@ export async function POST(request, context) {
       }
       await centralUploadsForPrincipal(user, body.uploadIds || [], "operate");
       const jobs = await queueCentralUploads(user, body.uploadIds);
+      publishDueRedditPosts(user.workspaceId, jobs);
       return Response.json({ message: "Posts are queued for the workspace Companion.", uploadIds: jobs.map((job) => job.uploadId) });
     }
     if (parts[0] === "automation" && parts[1] === "stop") return Response.json({ stopped: false, message: "Queued work remains safe until the workspace Companion is online." });
@@ -566,7 +587,9 @@ export async function PATCH(request, context) {
       // into a queued post. Only a Publishing Manager can change queued copy.
       const user = await principal(scheduleOnly ? "publishing.schedule.manage" : "publishing.execute");
       await centralUploadForPrincipal(user, parts[1], "operate");
-      return Response.json(await updateCentralUpload(user, parts[1], body));
+      const updated = await updateCentralUpload(user, parts[1], body);
+      publishDueRedditPosts(user.workspaceId, updated);
+      return Response.json(updated);
     }
     if (parts[0] === "schedules" && parts[1]) {
       const user = await principal("publishing.schedule.manage");

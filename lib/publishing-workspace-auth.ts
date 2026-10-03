@@ -11,7 +11,7 @@ export type PublishingWorkspaceIdentity = {
   exp: number;
 };
 
-const publishingResources = ["instagram", "youtube", "facebook", "x", "linkedin"]
+const publishingResources = ["instagram", "youtube", "facebook", "x", "linkedin", "reddit"]
   .map(platform => `publishing.${platform}`);
 
 export function signPublishingWorkspaceIdentity(

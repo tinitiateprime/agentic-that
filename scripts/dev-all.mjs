@@ -74,6 +74,10 @@ const telegramUrl = `${siteUrl}/console`;
 const instagramUrl = `${siteUrl}/scraper/instagram`;
 const facebookUrl = `${siteUrl}/scraper/facebook`;
 const publishQueueUrl = `${siteUrl}/publishing`;
+// --central-publishing runs the site's own /api/publishing routes against the
+// workspace database, as Netlify does, instead of the local queue service.
+// Platforms published from the server, such as Reddit through Zernio, need it.
+const centralPublishing = process.argv.includes("--central-publishing");
 const publishQueueApiUrl = `http://${host}:${publishQueuePort}`;
 
 console.log("\nAgenticThat development workspace");
@@ -81,7 +85,7 @@ console.log(`  Website + WhatsApp  ${siteUrl}`);
 console.log(`  Telegram           ${telegramUrl}`);
 console.log(`  Instagram          ${instagramUrl}`);
 console.log(`  Facebook           ${facebookUrl}`);
-console.log(`  Publish Queue      ${publishQueueUrl}`);
+console.log(`  Publish Queue      ${publishQueueUrl}${centralPublishing ? " (central API, workspace database)" : ""}`);
 console.log("  Press Ctrl+C once to stop every service.\n");
 
 const commonEnv = { ...process.env, HOST: host };
@@ -101,9 +105,11 @@ const services = [
       NEXT_PUBLIC_INSTAGRAM_API_URL: `http://${host}:${instagramPort}/api/scraping/instagram`,
       FACEBOOK_SERVICE_PORT: String(facebookPort),
       NEXT_PUBLIC_FACEBOOK_API_URL: `http://${host}:${facebookPort}/api/scraping/facebook`,
-      PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
-      PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
-      NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
+      ...(centralPublishing ? { PUBLISH_QUEUE_MODE: "central" } : {
+        PUBLISH_QUEUE_SERVICE_PORT: String(publishQueuePort),
+        PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
+        NEXT_PUBLIC_PUBLISH_QUEUE_API_URL: publishQueueApiUrl,
+      }),
       NEXT_PUBLIC_TELEGRAM_DASHBOARD_URL: "/console",
     },
   },
@@ -131,7 +137,7 @@ const services = [
       INSTAGRAM_SERVICE_PORT: String(instagramPort),
     },
   },
-  {
+  !centralPublishing && {
     name: "publishing",
     color: "\u001b[33m",
     command: process.execPath,
@@ -154,7 +160,7 @@ const services = [
       FACEBOOK_SERVICE_PORT: String(facebookPort),
     },
   },
-];
+].filter(Boolean);
 
 const reset = "\u001b[0m";
 const useColor = Boolean(process.stdout.isTTY && !process.env.NO_COLOR);

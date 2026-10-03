@@ -23,13 +23,13 @@ const keys = {
 };
 
 const titles = {
-  dashboard: ["Workspace", "Overview"],
+  dashboard: ["Workspace", "Summary"],
   "add-number": ["Accounts", "Connect account"],
   "manage-numbers": ["Accounts", "Connected accounts"],
   profiles: ["Accounts", "Profile details"],
   applications: ["Applications", "Workflow Applications"],
   contacts: ["Workspace", "Contacts"],
-  inbox: ["Workspace", "Inbox"],
+  inbox: ["Workspace", "Chats"],
   groups: ["Engage", "Groups"],
   channels: ["Engage", "Channels"],
   posts: ["Engage", "Create post"],

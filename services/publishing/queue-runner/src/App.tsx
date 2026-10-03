@@ -10,7 +10,7 @@ import {
   Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
+import { FaFacebook, FaInstagram, FaLinkedin, FaReddit, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { ActivityLog, ContentSubmission, LinkedInManagedPage, Platform, PlatformAccount, PlatformUpload, PostFormat, PublishingSchedule, ScheduleFrequency, ScheduleStatus, UnifiedPostDestinationInput, UserProfile, UserRole } from "../shared/schema.ts";
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
@@ -25,6 +25,7 @@ const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number
     case 'instagram': return <FaInstagram {...iconProps} color="#E4405F" />;
     case 'linkedin': return <FaLinkedin {...iconProps} color="#0A66C2" />;
     case 'facebook': return <FaFacebook {...iconProps} color="#1877F2" />;
+    case 'reddit': return <FaReddit {...iconProps} color="#FF4500" />;
     default: return null;
   }
 };
@@ -45,13 +46,14 @@ function accountHealthStatus(account: PlatformAccount): 'healthy' | 'warning' | 
 function accountConnectionLabel(account: PlatformAccount) {
   if (!account.enabled) return 'Paused';
   if (account.readiness === 'reconnect_required' || account.sessionStatus === 'reconnect_required' || !account.credentialConfigured) return 'Reconnect Required';
-  if (account.readiness === 'waiting_for_companion' || account.companionStatus === 'offline') return 'Waiting for Companion';
+  if (account.executionEngine !== 'api' && (account.readiness === 'waiting_for_companion' || account.companionStatus === 'offline')) return 'Waiting for Companion';
   return 'Ready';
 }
 
-function accountPublishingEngine(_account: PlatformAccount) {
-  return 'companion' as const;
+function accountPublishingEngine(account: PlatformAccount) {
+  return account.executionEngine === 'api' ? 'api' as const : 'companion' as const;
 }
+
 
 const accountHealthLabels = {
   healthy: 'Green',
@@ -65,7 +67,8 @@ const platformColor: Record<Platform, string> = {
   x: '#000000',
   instagram: '#E1306C',
   linkedin: '#0A66C2',
-  facebook: '#1877F2'
+  facebook: '#1877F2',
+  reddit: '#FF4500'
 };
 
 const DONUT_CIRCUMFERENCE = 263.89;
@@ -265,7 +268,7 @@ export default function App({ publishingIdentityToken }: { publishingIdentityTok
           <a className='auth-brand' href='/apps'>AgenticThat<span> / Publish Queue</span></a>
           <h1>{platformStatus.state === 'error' ? 'Publishing access could not be opened.' : 'Opening your publishing workspace…'}</h1>
           <p>{platformStatus.state === 'error' ? platformStatus.message : 'Verifying your AgenticThat role and workspace.'}</p>
-          {platformStatus.state === 'error' && <a className='button primary' href='/apps'>Return to the Store</a>}
+          {platformStatus.state === 'error' && <a className='button primary' href='/apps'>Go back to Home</a>}
         </section></main>
     : <LandingPage onSignIn={signIn} />;
 }
@@ -1067,6 +1070,12 @@ function ComposerPlatformPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={17} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={17} /><MessageCircle size={17} /><Send size={17} /><Bookmark size={17} /></footer></aside>
   </article>;
 
+  if (platform === 'reddit') return <article className='composer-preview-card linkedin reddit'>
+    <header><span className='avatar' /><div><strong>r/community</strong><small>Posted by u/{name.toLowerCase()} · now</small></div><MoreHorizontal size={17} /></header>
+    <p><strong>{title || 'Post title'}</strong></p>{postFormat === 'text' ? <p>{description}</p> : media}
+    <footer><span><ThumbsUp size={16} />Vote</span><span><MessageCircle size={16} />Comment</span><span><Share2 size={16} />Share</span></footer>
+  </article>;
+
   if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={17} /></header>
     <p>{description}</p>{media}
@@ -1122,6 +1131,12 @@ function PolishedComposerPreview({
     <div className='instagram-media'>{media}</div><aside><header><span className='avatar' /><strong>{name}</strong><MoreHorizontal size={18} /></header><p><strong>{name}</strong> {description}</p><footer><Heart size={20} /><MessageCircle size={20} /><Send size={20} /><Bookmark size={20} /></footer><small>Add a comment...</small></aside>
   </article>;
 
+  if (platform === 'reddit') return <article className='composer-preview-card linkedin reddit polished'>
+    <header><span className='avatar' /><div><strong>r/community</strong><small>Posted by u/{name.toLowerCase()} · now</small></div><MoreHorizontal size={18} /></header>
+    <p><strong>{title || 'Post title'}</strong></p>{postFormat === 'text' ? <p>{description}</p> : media}
+    <footer><span><ThumbsUp size={18} />Vote</span><span><MessageCircle size={18} />Comment</span><span><Share2 size={18} />Share</span></footer>
+  </article>;
+
   if (platform === 'youtube' && !isVideo) return <article className={`composer-preview-card youtube-community polished ${postFormat === 'text' ? 'text-only' : ''}`}>
     <header><span className='avatar youtube-channel-avatar'>t</span><div><strong>{name}</strong><small>acc1 · Community</small></div><MoreHorizontal size={18} /></header>
     <p>{description}</p>{media}
@@ -1161,6 +1176,10 @@ function UnifiedComposer({
   const [title, setTitle] = useState('');
   const [youtubeAudience, setYoutubeAudience] = useState<'' | 'made_for_kids' | 'not_made_for_kids'>('');
   const [youtubeVisibility, setYoutubeVisibility] = useState<'' | 'private' | 'unlisted' | 'public'>('');
+  const [redditSubreddit, setRedditSubreddit] = useState('');
+  const [redditTitle, setRedditTitle] = useState('');
+  const [redditNsfw, setRedditNsfw] = useState(false);
+  const [redditSpoiler, setRedditSpoiler] = useState(false);
   const [description, setDescription] = useState('');
   const [platformDescriptions, setPlatformDescriptions] = useState<Partial<Record<Platform, string>>>({});
   const [destinationDescriptions, setDestinationDescriptions] = useState<Record<string, string>>({});
@@ -1189,7 +1208,7 @@ function UnifiedComposer({
   useEffect(() => {
     setPendingPreflightWarnings([]);
     setMessage(current => current?.type === 'warning' ? null : current);
-  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, description, platformDescriptions, destinationDescriptions, selectedDestinationKeys, sharedSchedule, scheduleOverrides, rightsConfirmed]);
+  }, [postFormat, file, title, youtubeAudience, youtubeVisibility, redditSubreddit, redditTitle, description, platformDescriptions, destinationDescriptions, selectedDestinationKeys, sharedSchedule, scheduleOverrides, rightsConfirmed]);
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
@@ -1220,7 +1239,13 @@ function UnifiedComposer({
   const selectedNeedsTitle = Boolean(postFormat === 'video' && selectedPlatforms.includes('youtube'));
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const youtubeDetailsReady = !selectedNeedsTitle || Boolean(title.trim() && youtubeAudience && youtubeVisibility);
-  const destinationsReady = Boolean(selectedDestinations.length && youtubeDetailsReady);
+  const selectedNeedsReddit = selectedPlatforms.includes('reddit');
+  const redditSubredditName = redditSubreddit.trim().replace(/^\/?r\//i, '').replace(/\/+$/, '');
+  const redditDetailsError = !selectedNeedsReddit ? ''
+    : !/^[A-Za-z0-9_]{2,21}$/.test(redditSubredditName) ? 'Enter the subreddit for the Reddit post, such as r/marketing.'
+      : !redditTitle.trim() ? 'Enter a Reddit post title.'
+        : redditTitle.trim().length > 300 ? 'Reddit titles must be 300 characters or fewer.' : '';
+  const destinationsReady = Boolean(selectedDestinations.length && youtubeDetailsReady && !redditDetailsError);
   const activeSchedules = schedules.filter(scheduleCanReceivePosts);
 
   useEffect(() => {
@@ -1309,6 +1334,9 @@ function UnifiedComposer({
     setTitle('');
     setYoutubeAudience('');
     setYoutubeVisibility('');
+    setRedditTitle('');
+    setRedditNsfw(false);
+    setRedditSpoiler(false);
     setDescription('');
     setPlatformDescriptions({});
     setDestinationDescriptions({});
@@ -1327,8 +1355,12 @@ function UnifiedComposer({
     if (postFormat !== 'text' && !rightsConfirmed) return setMessage({ type: 'error', text: 'Confirm that you own this media or have permission to publish it.' });
     if (selectedNeedsTitle && !title.trim()) return setMessage({ type: 'error', text: handoffOnly ? 'Enter a video title.' : 'Enter a YouTube title.' });
     if (selectedNeedsTitle && (!youtubeAudience || !youtubeVisibility)) return setMessage({ type: 'error', text: 'Choose the YouTube audience and visibility before publishing.' });
-    const platformOptions = selectedNeedsTitle && youtubeAudience && youtubeVisibility
-      ? { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } } : undefined;
+    if (redditDetailsError) return setMessage({ type: 'error', text: redditDetailsError });
+    const platformOptions = (selectedNeedsTitle && youtubeAudience && youtubeVisibility) || selectedNeedsReddit
+      ? {
+        ...(selectedNeedsTitle && youtubeAudience && youtubeVisibility ? { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } } : {}),
+        ...(selectedNeedsReddit ? { reddit: { subreddit: redditSubredditName, title: redditTitle.trim(), nsfw: redditNsfw, spoiler: redditSpoiler } } : {}),
+      } : undefined;
     if (!description.trim()) return setMessage({ type: 'error', text: postFormat === 'text' ? 'Write your post text.' : 'Enter a post description.' });
     if (handoffOnly) {
       if (!selectedDestinations.length) return setMessage({ type: 'error', text: 'Choose at least one compatible publishing destination.' });
@@ -1534,10 +1566,18 @@ function UnifiedComposer({
                   <label className='composer-field'><span>YouTube audience</span><select aria-label='YouTube audience' value={youtubeAudience} onChange={event => setYoutubeAudience(event.target.value as typeof youtubeAudience)} required><option value=''>Choose audience…</option><option value='not_made_for_kids'>No, it is not made for kids</option><option value='made_for_kids'>Yes, it is made for kids</option></select></label>
                   <label className='composer-field'><span>YouTube visibility</span><select aria-label='YouTube visibility' value={youtubeVisibility} onChange={event => setYoutubeVisibility(event.target.value as typeof youtubeVisibility)} required><option value=''>Choose visibility…</option><option value='private'>Private</option><option value='unlisted'>Unlisted</option><option value='public'>Public</option></select></label>
                 </fieldset>}
+                {platform === 'reddit' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
+                  <legend><span><CustomIcon platform='reddit' size={16} /></span><span><strong>Reddit post details</strong><small>Used for every selected Reddit account. {postFormat === 'text' ? 'The post text becomes the Reddit body.' : 'The description is added as body text where the subreddit allows it.'}</small></span></legend>
+                  <label className='composer-field'><span>Subreddit</span><input value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' maxLength={24} required /></label>
+                  <label className='composer-field'><span>Reddit title <small>{redditTitle.length}/300</small></span><input value={redditTitle} onChange={event => setRedditTitle(event.target.value)} placeholder='Enter the post title' maxLength={300} required /></label>
+                  <label className='composer-rights-confirmation'><input type='checkbox' checked={redditNsfw} onChange={event => setRedditNsfw(event.target.checked)} /><span><strong>NSFW</strong><small>Mark the post as not safe for work.</small></span></label>
+                  <label className='composer-rights-confirmation'><input type='checkbox' checked={redditSpoiler} onChange={event => setRedditSpoiler(event.target.checked)} /><span><strong>Spoiler</strong><small>Blur the post until readers open it.</small></span></label>
+                  {redditDetailsError && <em>{redditDetailsError}</em>}
+                </fieldset>}
                 {state.allowed && platformAccounts.length === 0 && <div className='composer-no-account'><span>No enabled account</span>{canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}>Open Config Manager</button>}</div>}
                 <div className='composer-platform-tools'>{!handoffOnly && <button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'edit' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'edit')}><Pencil size={14} />Edit text</button>}<button type='button' disabled={!selectedCount} className={activePanel && copyMode === 'preview' ? 'active' : ''} onClick={() => selectedCount && openPlatformCopy(platform, 'preview')}><Eye size={14} />Preview</button></div>
                 {activePanel && <div className={`composer-platform-panel ${copyMode}`}>
-                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} {postFormat === 'text' ? 'post text' : 'description'}</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default {postFormat === 'text' ? 'post text' : 'description'}</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={title} description={platformText} postFormat={postFormat ?? 'image'} /></div>}
+                  {copyMode === 'edit' ? <label className={`composer-platform-copy ${textError ? 'error' : ''}`}><span><strong>{platformLabels[platform]} {postFormat === 'text' ? 'post text' : 'description'}</strong><small>{platformText.length}/{platformPostRules[platform].descriptionLimit.toLocaleString()}</small></span><textarea value={platformDescriptions[platform] ?? description} onChange={event => setPlatformDescriptions(current => ({ ...current, [platform]: event.target.value }))} rows={5} />{platformDescriptions[platform] !== undefined && <button type='button' onClick={() => setPlatformDescriptions(current => { const next = { ...current }; delete next[platform]; return next; })}>Use default {postFormat === 'text' ? 'post text' : 'description'}</button>}{textError && <em>{textError}</em>}</label> : <div className='composer-card-preview'><PolishedComposerPreview platform={platform} file={file} previewUrl={previewUrl} title={platform === 'reddit' ? redditTitle : title} description={platformText} postFormat={postFormat ?? 'image'} /></div>}
                 </div>}
               </article>;
             })}
@@ -1755,7 +1795,7 @@ function Workboard({
     <main className='workboard-app'>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/apps' title='Back to AgenticThat Store'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
+        <a className='workboard-brand' href='/apps' title='Back to Home'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
         <nav className='workboard-nav' aria-label='Publishing workspace'>
           <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
           <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
@@ -2783,8 +2823,8 @@ function NetworkPostPreview({
   const postFormat = uploadPostFormat(upload);
   const isYouTubeCommunity = upload.platform === 'youtube' && postFormat !== 'video';
   const postText = caption.trim() || (upload.platform === 'youtube' ? 'Write a description to see it here.' : 'Write a caption to see it here.');
-  const previewNames: Record<Platform, string> = { instagram: 'AgenticThat', x: 'AgenticThat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: 'AgenticThat' };
-  const previewHandles: Record<Platform, string> = { instagram: '@agenticthat', x: '@agenticthat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: '@agenticthat' };
+  const previewNames: Record<Platform, string> = { instagram: 'AgenticThat', x: 'AgenticThat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: 'AgenticThat', reddit: 'AgenticThat' };
+  const previewHandles: Record<Platform, string> = { instagram: '@agenticthat', x: '@agenticthat', linkedin: 'AgenticThat', facebook: 'AgenticThat', youtube: '@agenticthat', reddit: 'u/agenticthat' };
   const accountName = account?.displayName ?? previewNames[upload.platform];
   const accountHandle = account?.handle ?? previewHandles[upload.platform];
   const avatarLetter = (accountName.trim()[0] || 't').toLowerCase();
@@ -2831,6 +2871,13 @@ function NetworkPostPreview({
         <div className='youtube-copy'><strong>{displayTitle}</strong><span>{accountName} · {accountHandle}</span><p>{postText}</p></div>
       </article>}
 
+      {upload.platform === 'reddit' && <article className='network-post linkedin-post'>
+        {profile(upload.platformOptions?.reddit?.subreddit ? `r/${upload.platformOptions.reddit.subreddit}` : 'r/community', `Posted by ${accountHandle} · now`)}
+        <p className='linkedin-copy'><strong>{title.trim() || 'Post title'}</strong></p>
+        {postFormat === 'text' ? <p className='linkedin-copy'>{postText}</p> : media}
+        <div className='linkedin-actions'><span><ThumbsUp size={16} /> Vote</span><span><MessageCircle size={16} /> Comment</span><span><Share2 size={16} /> Share</span></div>
+      </article>}
+
       {upload.platform === 'youtube' && isYouTubeCommunity && <article className='network-post youtube-community-post'>
         {profile(accountName, `${accountHandle} · Community`)}
         <p className='youtube-community-copy'>{postText}</p>
@@ -2861,6 +2908,8 @@ function EditPostModal({
   const [title, setTitle] = useState(upload.title ?? upload.caption ?? "");
   const [youtubeAudience, setYoutubeAudience] = useState(upload.platformOptions?.youtube?.audience || '');
   const [youtubeVisibility, setYoutubeVisibility] = useState(upload.platformOptions?.youtube?.visibility || '');
+  const [redditSubreddit, setRedditSubreddit] = useState(upload.platformOptions?.reddit?.subreddit || '');
+  const [redditTitle, setRedditTitle] = useState(upload.platformOptions?.reddit?.title || '');
   const [caption, setCaption] = useState(upload.caption ?? "");
   const [accountId, setAccountId] = useState(upload.accountId);
   const [scheduleMode, setScheduleMode] = useState<'none' | 'exact' | 'template'>(upload.scheduleId ? 'template' : upload.scheduledAt ? 'exact' : 'none');
@@ -2873,6 +2922,7 @@ function EditPostModal({
   const isYouTube = upload.platform === "youtube";
   const postFormat = uploadPostFormat(upload);
   const isYouTubeVideo = isYouTube && postFormat === "video";
+  const isReddit = upload.platform === "reddit";
   const canEditContent = permissions.canEditContent;
   const canEditSchedule = permissions.canSchedulePosts;
 
@@ -2880,6 +2930,7 @@ function EditPostModal({
     if (canEditContent && !caption.trim()) return alert(postFormat === "text" ? "Post text is required" : "Caption is required");
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
     if (canEditContent && isYouTubeVideo && (!youtubeAudience || !youtubeVisibility)) return alert("Choose the YouTube audience and visibility.");
+    if (canEditContent && isReddit && (!redditSubreddit.trim() || !redditTitle.trim())) return alert("Enter the subreddit and Reddit title.");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
     if (canEditSchedule && scheduleMode === 'exact' && !scheduledDate) return alert("Choose a scheduled date and time.");
@@ -2896,6 +2947,7 @@ function EditPostModal({
         payload.caption = caption.trim();
         payload.accountId = accountId;
         if (isYouTubeVideo) payload.platformOptions = { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } };
+        if (isReddit) payload.platformOptions = { reddit: { ...upload.platformOptions?.reddit, subreddit: redditSubreddit.trim().replace(/^\/?r\//i, ''), title: redditTitle.trim() } };
       }
       if (canEditSchedule) {
         payload.scheduledAt = scheduleMode === 'exact' ? scheduledDate?.toISOString() ?? null : null;
@@ -2937,6 +2989,10 @@ if (permissions.canRunAutomation) {
                 <div><strong>{upload.originalName}</strong><span>{platformLabels[upload.platform]}</span></div>
               </div>
               <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={!canEditContent}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
+              {isReddit && <>
+                <div className='field'><label>Subreddit</label><input type='text' value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' disabled={!canEditContent} /></div>
+                <div className='field'><label>Reddit title</label><input type='text' value={redditTitle} onChange={event => setRedditTitle(event.target.value)} maxLength={300} disabled={!canEditContent} /></div>
+              </>}
               {isYouTubeVideo && (
                 <div className="field"><label>Video title</label><input type="text" value={title} onChange={event => setTitle(event.target.value)} disabled={!canEditContent} /></div>
               )}
@@ -2969,7 +3025,7 @@ if (permissions.canRunAutomation) {
                 <small className='field-help'>This applies only to this post.</small>
               </div>}
             </div>
-            <NetworkPostPreview upload={upload} account={accounts.find(account => account.id === accountId)} title={title} caption={caption} />
+            <NetworkPostPreview upload={upload} account={accounts.find(account => account.id === accountId)} title={isReddit ? redditTitle : title} caption={caption} />
           </div>
         </div>
         <div className="modal-foot">

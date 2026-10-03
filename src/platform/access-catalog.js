@@ -49,6 +49,7 @@ export const LIVE_ACCESS_CATALOG = Object.freeze({
     "publishing.facebook",
     "publishing.x",
     "publishing.linkedin",
+    "publishing.reddit",
   ]),
   scraping: Object.freeze([
     "scraping.instagram",

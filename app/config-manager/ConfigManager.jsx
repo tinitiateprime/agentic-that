@@ -44,24 +44,33 @@ const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || "/companion/download";
 const publishingHealthUrl = "http://127.0.0.1:8792/api/health";
-const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
+const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"];
 const platformLabels = {
   instagram: "Instagram",
   facebook: "Facebook",
   x: "X",
   youtube: "YouTube",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  reddit: "Reddit"
 };
 const platformLogos = {
   instagram: "/instagram-logo.svg",
   facebook: "/facebook-logo.svg",
   x: "/x-logo.svg",
   youtube: "/youtube-logo.svg",
-  linkedin: "/linkedin-logo.png"
+  linkedin: "/linkedin-logo.png",
+  reddit: "/reddit-logo.svg"
 };
 const publishingEngineLabels = {
   companion: "Companion",
-  external_browser: "External browser"
+  external_browser: "External browser",
+  api: "Zernio"
+};
+const redditConnectionMessages = {
+  connected: { tone: "success", message: "Reddit is connected. Posts for this account now publish through Zernio." },
+  denied: { tone: "error", message: "Reddit access was not granted. Choose Connect with Reddit to try again." },
+  expired: { tone: "error", message: "The Reddit connection expired. Choose Connect with Reddit again." },
+  failed: { tone: "error", message: "Reddit could not be connected. Try Connect with Reddit again." }
 };
 const externalBrowserRequiredPlatforms = new Set(["facebook", "x", "youtube"]);
 const messagingPlatforms = ["telegram", "whatsapp"];
@@ -1475,7 +1484,26 @@ function PublishingManager({
   const [busy, setBusy] = useState(false);
   const [loginAccountId, setLoginAccountId] = useState("");
   const [companionBusy, setCompanionBusy] = useState(false);
+  const [redditApiConfigured, setRedditApiConfigured] = useState(false);
   const { status: localCompanionStatus, refresh: refreshLocalCompanion } = useCompanionStatus();
+
+  const redditAllowed = allowedPlatforms.includes("reddit");
+  useEffect(() => {
+    if (!redditAllowed) return;
+    let active = true;
+    fetch("/api/publishing/reddit/connections", { credentials: "include", cache: "no-store" })
+      .then(response => response.ok ? response.json() : { configured: false })
+      .then(data => { if (active) setRedditApiConfigured(Boolean(data.configured)); })
+      .catch(() => undefined);
+    const params = new URLSearchParams(window.location.search);
+    const outcome = redditConnectionMessages[params.get("reddit")];
+    if (outcome) {
+      setNotice(outcome);
+      params.delete("reddit");
+      window.history.replaceState(null, "", window.location.pathname + (params.toString() ? "?" + params.toString() : ""));
+    }
+    return () => { active = false; };
+  }, [redditAllowed, setNotice]);
 
   const platformAccounts = useMemo(
     () => accounts.filter(account => account.platform === selectedPlatform),
@@ -1574,6 +1602,25 @@ function PublishingManager({
       setNotice({ tone: "error", message: error.message });
     } finally {
       setLoginAccountId("");
+    }
+  };
+
+  const connectReddit = (account) => {
+    window.location.assign("/api/publishing/reddit/connect?accountId=" + encodeURIComponent(account.id));
+  };
+
+  const disconnectReddit = async (account) => {
+    if (!window.confirm("Disconnect " + account.displayName + " from Reddit? Queued posts will wait until you connect Reddit again.")) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/publishing/reddit/connections?accountId=" + encodeURIComponent(account.id), { method: "DELETE", credentials: "include" });
+      await responsePayload(response);
+      setNotice({ tone: "success", message: account.displayName + " is disconnected. Choose Connect with Reddit to publish again." });
+      await onReload();
+    } catch (error) {
+      setNotice({ tone: "error", message: error.message });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1816,7 +1863,9 @@ function PublishingManager({
         <EmptyState
           icon={Plug}
           title={"No " + platformLabels[selectedPlatform] + " accounts"}
-          copy={workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair the manager computer above, then add your first publishing account."}
+          copy={selectedPlatform === "reddit"
+            ? redditApiConfigured ? "Add the account, then choose Connect with Reddit." : "Reddit publishing is not configured yet. Add ZERNIO_API_KEY to enable it."
+            : workspaceCompanion ? "Add an account, then use Login once to make it ready for publishing." : "Pair the manager computer above, then add your first publishing account."}
           action={<button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add first account</button>}
         />
       ) : !editing && (
@@ -1825,12 +1874,14 @@ function PublishingManager({
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
               <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
-              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : "Reconnect required"}</span>
-              <span className="config-account-meta config-account-engine">{(account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
+              <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.executionEngine === "api" || account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : account.platform === "reddit" ? "Not connected" : "Reconnect required"}</span>
+              <span className="config-account-meta config-account-engine">{account.executionEngine === "api" ? <Plug size={14} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
                 <button className="open" type="button" onClick={() => openPublishingAccount(account)} disabled={!account.enabled || !account.credentialConfigured} title={!account.enabled ? "Enable this account before opening it" : !account.credentialConfigured ? "Complete Login before opening this workspace" : "Open publishing workspace"}><ArrowRight size={15} />Open</button>
                 <button type="button" onClick={() => setEditing(account)} disabled={busy} title="Edit account details"><Pencil size={15} />Edit</button>
-                <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the selected engine session" : "Sign in with the selected engine"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={15} /> : <KeyRound size={15} />}Login</button>
+                {account.platform === "reddit" && account.credentialConfigured && <button type="button" onClick={() => void disconnectReddit(account)} disabled={busy} title="Remove this Reddit connection from Zernio"><LogOut size={15} />Disconnect Reddit</button>}
+                {account.platform === "reddit" && !account.credentialConfigured && <button type="button" onClick={() => connectReddit(account)} disabled={!account.enabled || busy || !redditApiConfigured} title={redditApiConfigured ? "Sign in to Reddit through Zernio" : "Add ZERNIO_API_KEY to enable Reddit publishing"}><Plug size={15} />Connect with Reddit</button>}
+                {account.executionEngine !== "api" && <button type="button" onClick={() => void startLogin(account)} disabled={!account.enabled || Boolean(loginAccountId)} title={account.credentialConfigured ? "Sign in again and refresh the selected engine session" : "Sign in with the selected engine"}>{loginAccountId === account.id ? <Loader2 className="spin" size={15} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={15} /> : <KeyRound size={15} />}Login</button>}
                 {(account.executionEngine || "companion") === "companion" && <button className="icon-only" type="button" onClick={() => void startLogin(account, "external")} disabled={!account.enabled || Boolean(loginAccountId)} title="Open system-browser login fallback" aria-label={"Open " + account.displayName + " login in the system browser"}><ExternalLink size={15} /></button>}
                 <button className="danger" type="button" onClick={() => void removeAccount(account)} disabled={busy} title="Delete account"><Trash2 size={15} />Delete</button>
               </div>
@@ -1852,6 +1903,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
     externalBrowserRequired ? "external_browser" : account?.executionEngine || "companion"
   );
   const engineChanged = Boolean(account && executionEngine !== (account.executionEngine || "companion"));
+  const zernioOnly = platform === "reddit";
 
   const submit = (event) => {
     event.preventDefault();
@@ -1878,7 +1930,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
           <label><span>Account name</span><input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder={"Brand " + platformLabels[platform]} required /></label>
           <label><span>Public handle</span><input value={handle} onChange={event => setHandle(event.target.value)} placeholder="@brand" required /></label>
           <label><span>Login hint (optional)</span><input value={loginIdentifier} onChange={event => setLoginIdentifier(event.target.value)} placeholder="Only a label; credentials stay on the provider sign-in page" /></label>
-          <fieldset className="config-engine-field wide">
+          {zernioOnly ? <p className="config-engine-warning wide"><Plug size={14} />Reddit publishes through Zernio. After saving, choose Connect with Reddit in the account list.</p> : <fieldset className="config-engine-field wide">
             <legend>Publishing engine</legend>
             <div className="config-engine-picker" role="group" aria-label="Choose publishing engine">
               <button type="button" disabled={externalBrowserRequired} className={executionEngine === "companion" ? "active" : ""} aria-pressed={executionEngine === "companion"} onClick={() => setExecutionEngine("companion")}><MonitorCheck size={18} /><span><strong>Companion</strong><small>{externalBrowserRequired ? "Embedded login is blocked by this provider" : "Runs in the background and opens only when attention is needed"}</small></span></button>
@@ -1886,7 +1938,7 @@ function PublishingAccountForm({ platform, account, busy, onCancel, onSave }) {
             </div>
             {externalBrowserRequired && <p className="config-engine-warning"><ShieldCheck size={14} />Facebook, X, and YouTube use a persistent external-browser session. Companion stores and reuses its dedicated local profile.</p>}
             {engineChanged && <p className="config-engine-warning"><CircleAlert size={14} />Saving this change clears the old browser session. Use Login once afterward.</p>}
-          </fieldset>
+          </fieldset>}
           <label className="config-toggle wide"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /><span><strong>Enabled for publishing</strong><small>Disabled accounts remain visible but cannot receive new posts.</small></span></label>
         </div>
         <div className="config-form-actions"><button className="config-secondary" type="button" onClick={onCancel}>Cancel</button><button className="config-primary" type="submit" disabled={busy}>{busy ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}{account ? "Save changes" : "Add account"}</button></div>

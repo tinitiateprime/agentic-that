@@ -36,6 +36,9 @@ const platformRules = {
   facebook: { hourlyLimit: 2, dailyLimit: 10, minimumGapMs: 30 * 60 * 1000 },
   linkedin: { hourlyLimit: 1, dailyLimit: 3, minimumGapMs: 60 * 60 * 1000 },
   x: { hourlyLimit: 4, dailyLimit: 30, minimumGapMs: 15 * 60 * 1000 },
+  // Completes the table only: Reddit publishes through Zernio, never the
+  // Companion, so this pacing is never applied.
+  reddit: { hourlyLimit: 1, dailyLimit: 5, minimumGapMs: 60 * 60 * 1000 },
 } satisfies Partial<Record<PlatformUpload["platform"], PublishingSafetyRule>>;
 
 export function publishingSafetyRuleFor(

@@ -34,7 +34,7 @@ export default async function WebsiteStudioPage() {
   };
 
   return (
-    <ProductShell user={user} active="apps" companionBridge={false}>
+    <ProductShell user={user} active="website" companionBridge={false}>
       <main className="website-studio-shell">
         <WebsiteStudioWorkspace canGenerate={canGenerate} />
       </main>

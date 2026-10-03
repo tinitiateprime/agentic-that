@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+import GlobalLoader from "@platform/GlobalLoader";
 import "@fontsource/roboto/latin-400.css";
 import "@fontsource/roboto/latin-500.css";
 import "../src/styles/globals.css";
@@ -20,7 +22,12 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="min-h-screen text-slate-800 antialiased">{children}</body>
+      <body className="min-h-screen text-slate-800 antialiased">
+        {children}
+        <Suspense fallback={null}>
+          <GlobalLoader />
+        </Suspense>
+      </body>
     </html>
   );
 }

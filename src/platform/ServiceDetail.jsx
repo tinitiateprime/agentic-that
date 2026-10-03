@@ -57,7 +57,7 @@ function StandardServiceDetail({ user, service, category, related }) {
 
         <section className={styles.detailHero}>
           <div className={styles.detailHeroMain}>
-            <Link className={styles.detailBack} href="/apps"><ArrowLeft size={17} />Back to store</Link>
+            <Link className={styles.detailBack} href="/apps"><ArrowLeft size={17} />Back to Home</Link>
             <div className={styles.detailIdentity}>
               <span className={styles.detailLogo}><img src={service.logo} alt="" /></span>
               <div><span>{category.label}</span><small>{service.provider}</small></div>
@@ -168,7 +168,7 @@ function StandardServiceDetail({ user, service, category, related }) {
 
 export default function ServiceDetail(props) {
   if (props.category?.id === "messaging" && props.service?.slug === "whatsapp") {
-    return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} />;
+    return <WhatsAppServiceDetail user={props.user} service={props.service} category={props.category} accessLevel={props.accessLevel} />;
   }
   if (props.category?.id === "website" || props.service?.slug === "ai-phone-front-desk") {
     return <StandardServiceDetail {...props} />;

@@ -61,6 +61,9 @@ are rolling per account and successful posts are separated by a minimum gap.
 | YouTube video | 1 | 3 | 60 minutes |
 | YouTube Community | 2 | 6 | 30 minutes |
 
+Reddit never uses the Companion or an external browser: Reddit accounts publish
+from the server through Zernio, and Reddit's own rate limits apply. See `../reddit/README.md`.
+
 Newly connected accounts default to **Protected** pacing: half the hourly and
 daily allowance (minimum one) and at least a 60-minute gap. This mode never
 rejects an account and can be changed to **Standard** for an established

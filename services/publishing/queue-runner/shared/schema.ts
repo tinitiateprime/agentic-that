@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube"] as const;
+export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube", "reddit"] as const;
 export const postFormats = ["image", "video", "text"] as const;
 export const uploadStatuses = ["queued", "processing", "posted", "failed"] as const;
 export const submissionStatuses = ["awaiting_schedule", "scheduling", "scheduled"] as const;
@@ -9,16 +9,23 @@ export const scheduleStatuses = ["active", "inactive"] as const;
 export const userRoles = ["operations_manager", "post_uploader", "scheduler", "viewer"] as const;
 export const accountSafetyStatuses = ["healthy", "warning", "paused", "restricted"] as const;
 export const accountSafetyModes = ["standard", "protected"] as const;
-export const publishingEngines = ["companion", "external_browser"] as const;
+export const publishingEngines = ["companion", "external_browser", "api"] as const;
 export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
 
 export const youtubeOptionsSchema = z.object({
   audience: z.enum(["made_for_kids", "not_made_for_kids"]),
   visibility: z.enum(["private", "unlisted", "public"]),
 });
-export const platformOptionsSchema = z.object({ youtube: youtubeOptionsSchema.optional() });
+export const redditOptionsSchema = z.object({
+  subreddit: z.string().trim().regex(/^[A-Za-z0-9_]{2,21}$/, "Use a subreddit name such as r/marketing"),
+  title: z.string().trim().min(1, "Reddit posts need a title").max(300),
+  nsfw: z.boolean().optional(),
+  spoiler: z.boolean().optional(),
+});
+export const platformOptionsSchema = z.object({ youtube: youtubeOptionsSchema.optional(), reddit: redditOptionsSchema.optional() });
 export type PlatformOptions = z.infer<typeof platformOptionsSchema>;
 export type YouTubeOptions = z.infer<typeof youtubeOptionsSchema>;
+export type RedditOptions = z.infer<typeof redditOptionsSchema>;
 
 export const platformSchema = z.enum(platforms);
 export const postFormatSchema = z.enum(postFormats);
@@ -56,7 +63,8 @@ export type PublishActionState = (typeof publishActionStates)[number];
 
 export const publishingEngineLabels: Record<PublishingEngine, string> = {
   companion: "Companion",
-  external_browser: "External browser"
+  external_browser: "External browser",
+  api: "Zernio"
 };
 
 export const scheduleFrequencyLabels: Record<ScheduleFrequency, string> = {
@@ -198,7 +206,8 @@ export const platformLabels: Record<Platform, string> = {
   x: "X",
   linkedin: "LinkedIn",
   facebook: "Facebook",
-  youtube: "YouTube"
+  youtube: "YouTube",
+  reddit: "Reddit"
 };
 
 export const platformPostRules: Record<Platform, {
@@ -212,7 +221,10 @@ export const platformPostRules: Record<Platform, {
   x: { formats: ["image", "video", "text"], descriptionLimit: 280 },
   linkedin: { formats: ["image", "video", "text"], descriptionLimit: 3_000 },
   facebook: { formats: ["image", "video", "text"], descriptionLimit: 63_206 },
-  youtube: { formats: ["image", "video", "text"], descriptionLimit: 5_000, titleLimit: 100, titleRequiredFor: ["video"] }
+  youtube: { formats: ["image", "video", "text"], descriptionLimit: 5_000, titleLimit: 100, titleRequiredFor: ["video"] },
+  // The Reddit title lives in platformOptions.reddit so it never collides
+  // with the shared YouTube video title.
+  reddit: { formats: ["image", "video", "text"], descriptionLimit: 40_000 }
 };
 
 export const unifiedPostDestinationSchema = z.object({
@@ -242,7 +254,8 @@ export const platformHandles: Record<Platform, string> = {
   x: "@x",
   linkedin: "LinkedIn Page",
   facebook: "Facebook Page",
-  youtube: "YouTube Channel"
+  youtube: "YouTube Channel",
+  reddit: "u/reddit"
 };
 
 export const platformSurfaces: Record<Platform, string> = {
@@ -250,7 +263,8 @@ export const platformSurfaces: Record<Platform, string> = {
   x: "https://x.com/compose/post",
   linkedin: "https://www.linkedin.com/feed/",
   facebook: "https://www.facebook.com/",
-  youtube: "https://www.youtube.com/"
+  youtube: "https://www.youtube.com/",
+  reddit: "https://www.reddit.com/submit"
 };
 
 export const uploadAutomationSchema = z.object({

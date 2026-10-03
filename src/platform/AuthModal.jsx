@@ -164,7 +164,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
           throw new Error(data.error || "Unable to continue. Please try again.");
         }
         if (data.mfaRequired) {
-          window.location.assign(`/admin-mfa?next=${encodeURIComponent("/admin-center")}`);
+          const requested = new URLSearchParams(window.location.search).get("next") || "";
+          const next = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/admin-center";
+          window.location.assign(`/admin-mfa?next=${encodeURIComponent(next)}`);
           return;
         }
         setForm(EMPTY_FORM);

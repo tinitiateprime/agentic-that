@@ -19,7 +19,7 @@ export default async function ContentManagerPage({ searchParams }) {
   const requestedMessagingPlatform = params?.service === "whatsapp" || params?.platform === "whatsapp"
     ? "whatsapp"
     : "telegram";
-  const requestedPublishingPlatform = ["instagram", "facebook", "x", "youtube", "linkedin"].includes(params?.platform)
+  const requestedPublishingPlatform = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"].includes(params?.platform)
     ? params.platform
     : "instagram";
   const requestedResource = requestedService === "publishing"
@@ -27,7 +27,7 @@ export default async function ContentManagerPage({ searchParams }) {
     : `messaging.${requestedMessagingPlatform}`;
   let user = await requireAccess(requestedResource, "view", "/content-manager");
   user = await requirePrincipalCapability(user, requestedService === "publishing" ? "publishing.view" : "messaging.view", "/content-manager");
-  const canUsePublishing = ["instagram", "facebook", "x", "youtube", "linkedin"]
+  const canUsePublishing = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"]
     .some((platform) => principalHasAccess(user, `publishing.${platform}`, "view"))
     && principalHasCapability(user, "publishing.view");
   const canUseTelegram = principalHasAccess(user, "messaging.telegram", "view") && principalHasCapability(user, "messaging.view");

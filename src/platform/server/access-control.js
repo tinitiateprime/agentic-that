@@ -277,13 +277,14 @@ export async function requireAccess(resourceKey, requiredLevel = "view", returnT
   }
 }
 
-export async function requireGlobalAdmin() {
+export async function requireGlobalAdmin(returnTo = "/admin-center") {
   const user = await getCurrentPlatformUser();
   const principal = user ? { ...user, userId: String(user.id) } : null;
-  if (!principal) redirect("/?auth=login&next=/admin-center");
+  const next = encodeURIComponent(returnTo);
+  if (!principal) redirect(`/?auth=login&next=${next}`);
   if (principal.status === "pending") redirect("/pending-approval");
-  if (principal.status !== "active" || !principal.isGlobalAdmin) redirect("/access-denied?resource=admin-center");
-  if (principal.mfaRequired) redirect("/admin-mfa?next=/admin-center");
+  if (principal.status !== "active" || !principal.isGlobalAdmin) redirect(`/access-denied?resource=${encodeURIComponent(returnTo.replace(/^\//, ""))}`);
+  if (principal.mfaRequired) redirect(`/admin-mfa?next=${next}`);
   return principal;
 }
 

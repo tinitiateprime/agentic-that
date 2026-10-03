@@ -38,7 +38,7 @@ Only live modules are registered:
 | Category | Application resources |
 | --- | --- |
 | `messaging` | `messaging.whatsapp`, `messaging.telegram` |
-| `publishing` | `publishing.instagram`, `publishing.youtube`, `publishing.facebook`, `publishing.x`, `publishing.linkedin` |
+| `publishing` | `publishing.instagram`, `publishing.youtube`, `publishing.facebook`, `publishing.x`, `publishing.linkedin`, `publishing.reddit` |
 | `scraping` | `scraping.instagram`, `scraping.facebook` |
 
 The canonical catalog is [src/platform/access-catalog.js](../src/platform/access-catalog.js). SEO and Engagement/Liking are intentionally not registered until those applications are live.

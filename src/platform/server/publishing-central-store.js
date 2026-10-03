@@ -2,7 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import nodeCron from "node-cron";
 import { inFlightSnapshotReader } from "../../../lib/in-flight-snapshot.js";
-import { requireYouTubeOptions } from "../../../services/publishing/queue-runner/shared/youtube-options.js";
+import { requirePlatformOptions } from "../../../services/publishing/queue-runner/shared/platform-options.js";
 import {
   getDatabaseSql,
 } from "../../../lib/database-document-store.js";
@@ -20,6 +20,8 @@ import {
   listSupabaseJobs,
   listSupabasePublishingJobsForAdmin,
   revokeSupabaseCompanions,
+  setSupabaseAccountApiConnection,
+  supabaseJobDashboard,
   supabasePublishingWorkspaceSnapshot,
   synchronizePublishingJobs,
   upsertSupabaseAccount,
@@ -31,14 +33,18 @@ const PAIRING_CHALLENGE_MS = 5 * 60_000;
 const JOB_LEASE_MS = 5 * 60_000;
 const MAX_JOB_ATTEMPTS = 3;
 const MINIMUM_COMPANION_VERSION = process.env.MINIMUM_COMPANION_VERSION?.trim() || "2.1.29";
-const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
+const PLATFORM_VALUES = new Set(["instagram", "facebook", "x", "linkedin", "youtube", "reddit"]);
 const CENTRAL_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
-const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000 };
+const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000, reddit: 40000 };
+// Reddit publishes only through Zernio, never the Companion or an external
+// browser, whatever engine an edit or Companion inventory requests.
+const API_ENGINE_PLATFORMS = new Set(["reddit"]);
 
 function companionPublishingEngine(platformName, requestedEngine = "companion") {
+  if (API_ENGINE_PLATFORMS.has(platformName)) return "api";
   return platformName === "facebook" || platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
@@ -191,6 +197,7 @@ function latestWorkspaceCompanion(document, workspaceId) {
 function accountReadiness(account, companion) {
   if (!account.enabled) return "unavailable";
   if (!account.credentialConfigured) return "reconnect_required";
+  if (API_ENGINE_PLATFORMS.has(account.platform)) return "ready";
   return isAvailable(companion) ? "ready" : "waiting_for_companion";
 }
 
@@ -271,9 +278,10 @@ function uploadPublic(document, upload) {
   const accountState = account ? publicAccount(document, account) : null;
   const jobIsDue = !job?.notBefore || Date.parse(job.notBefore) <= Date.now();
   const scheduledWithoutJobIsDue = !job && upload.status === "queued" && upload.scheduledAt && Date.parse(upload.scheduledAt) <= Date.now();
+  const companionOffline = !API_ENGINE_PLATFORMS.has(upload.platform) && accountState?.companionStatus !== "online";
   const statusDetail = job?.state === "waiting_for_companion" && !jobIsDue
     ? "queued"
-    : (job?.state === "queued" && jobIsDue && accountState?.companionStatus !== "online") || (scheduledWithoutJobIsDue && accountState?.companionStatus !== "online")
+    : (job?.state === "queued" && jobIsDue && companionOffline) || (scheduledWithoutJobIsDue && companionOffline)
       ? "waiting_for_companion"
       : job?.state || (upload.status === "posted" ? "published" : upload.status);
   const { artifact, previewArtifact: _previewArtifact, ...safeUpload } = upload;
@@ -421,6 +429,16 @@ function scheduleDue(upload, document, timestamp = Date.now()) {
   return Boolean(schedule?.nextRunAt && Date.parse(schedule.nextRunAt) <= timestamp);
 }
 
+function apiAccount(document, accountId) {
+  return document.accounts.some((item) => item.id === accountId && API_ENGINE_PLATFORMS.has(item.platform));
+}
+
+// Platform-specific options are validated at intake and again whenever the
+// destination changes, so a queued job never inherits another platform's rules.
+function platformOptionsFor(account, format, platformOptions) {
+  return requirePlatformOptions(account.platform, format, platformOptions);
+}
+
 function queueJob(document, upload) {
   const active = document.jobs.find((job) => job.uploadId === upload.id && !TERMINAL_JOB_STATES.has(job.state));
   if (active) return active;
@@ -434,7 +452,7 @@ function queueJob(document, upload) {
     uploadId: upload.id,
     accountId: upload.accountId,
     platform: upload.platform,
-    state: isAvailable(latestWorkspaceCompanion(document, upload.workspaceId)) ? "queued" : "waiting_for_companion",
+    state: apiAccount(document, upload.accountId) || isAvailable(latestWorkspaceCompanion(document, upload.workspaceId)) ? "queued" : "waiting_for_companion",
     notBefore: upload.scheduledAt || scheduleNextRun || null,
     attemptCount: 0,
     leaseOwner: null,
@@ -666,6 +684,7 @@ export async function heartbeatCentralCompanion(token, input = {}) {
     const accounts = Array.isArray(input.accounts) ? input.accounts : [];
     for (const incoming of accounts) {
       if (!incoming || incoming.workspaceId !== companion.workspaceId || !PLATFORM_VALUES.has(incoming.platform)) continue;
+      if (API_ENGINE_PLATFORMS.has(incoming.platform)) continue;
       let account = document.accounts.find((item) => item.id === incoming.id && item.workspaceId === companion.workspaceId);
       if (!account) {
         account = {
@@ -682,6 +701,10 @@ export async function heartbeatCentralCompanion(token, input = {}) {
           createdAt: timestamp, updatedAt: timestamp,
         };
         document.accounts.push(account);
+      } else if (account.executionEngine === "api") {
+        // An OAuth-connected account publishes from the server. Companion
+        // inventory must not overwrite its credential state or engine.
+        continue;
       } else {
         account.credentialConfigured = Boolean(incoming.credentialConfigured);
         account.enabled = incoming.enabled !== false;
@@ -749,6 +772,39 @@ export async function updateCentralAccount(principal, accountId, input = {}) {
   return account;
 }
 
+// Records the outcome of an official-API OAuth connection. Connecting moves the
+// account's posts through Zernio; disconnecting leaves its queued posts waiting
+// until Connect with Reddit is used again.
+export async function setCentralAccountApiConnection(workspaceId, accountId, connection) {
+  await initialize();
+  const account = await mutateWorkspaceDocument(workspaceId, async (value) => {
+    const document = documentValue(value);
+    const account = findOwned(document, "accounts", workspaceId, accountId, "Account");
+    if (!API_ENGINE_PLATFORMS.has(account.platform)) throw new Error("This platform does not support an official API connection.");
+    const timestamp = now();
+    if (connection?.connected) {
+      account.credentialConfigured = true;
+      if (connection.username) account.handle = `u/${connection.username}`;
+      account.apiUsername = connection.username || account.apiUsername || null;
+      activity(document, workspaceId, { type: "account.api_connected", summary: `${account.displayName} was connected for Reddit publishing.` });
+    } else {
+      account.credentialConfigured = false;
+      account.apiUsername = null;
+      activity(document, workspaceId, { type: "account.api_disconnected", summary: `${account.displayName} was disconnected from Reddit publishing.` });
+    }
+    account.updatedAt = timestamp;
+    for (const job of document.jobs) {
+      if (job.accountId !== account.id || !["queued", "waiting_for_companion", "reconnect_required"].includes(job.state)) continue;
+      job.state = "queued";
+      job.updatedAt = timestamp;
+    }
+    return { document, result: publicAccount(document, account) };
+  });
+  await setSupabaseAccountApiConnection(account);
+  await synchronizePublishingControlPlane(workspaceId);
+  return account;
+}
+
 export async function deleteCentralAccount(principal, accountId) {
   await initialize();
   const result = await mutateWorkspaceDocument(principal.workspaceId, async (value) => {
@@ -777,6 +833,7 @@ function createUploadInDocument(document, principal, input = {}) {
   if (caption.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This ${account.platform} post is longer than the platform limit.`);
   if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
   if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
+  const platformOptions = platformOptionsFor(account, format, input.platformOptions);
   if (format !== "text" && !input.rightsConfirmed) throw new Error("Confirm that you have rights to publish this media.");
   if (input.scheduleId) {
     const schedule = document.schedules.find((item) => item.id === Number(input.scheduleId) && item.workspaceId === principal.workspaceId && item.status === "active");
@@ -812,7 +869,7 @@ function createUploadInDocument(document, principal, input = {}) {
     fileName: input.fileName || "", mimeType: input.mimeType || "text/plain", extension: input.extension || "",
     size: Number(input.size || 0), url: input.url || "", artifact: input.artifact || null,
     previewArtifact: input.previewArtifact || null, title: String(input.title || "").trim(),
-    platformOptions: requireYouTubeOptions(account.platform, format, input.platformOptions),
+    platformOptions,
     linkedinTarget: account.platform === "linkedin" ? input.linkedinTarget || undefined : undefined,
     caption, status: "queued", publishActionState: "not_started",
     uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId: input.scheduleId ? Number(input.scheduleId) : null,
@@ -876,7 +933,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
     if (String(upload.caption).trim().length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This ${account.platform} post is longer than the platform limit.`);
     if (upload.postFormat === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
     if (upload.postFormat === "video" && account.platform === "youtube" && !String(upload.title || "").trim()) throw new Error("YouTube video posts need a title.");
-    upload.platformOptions = requireYouTubeOptions(account.platform, upload.postFormat, upload.platformOptions);
+    upload.platformOptions = platformOptionsFor(account, upload.postFormat, upload.platformOptions);
     if (upload.scheduledAt) {
       const timestamp = Date.parse(upload.scheduledAt);
       if (!Number.isFinite(timestamp) || timestamp <= Date.now()) throw new Error("Scheduled publishing time must be in the future.");
@@ -900,7 +957,7 @@ export async function updateCentralUpload(principal, uploadId, input = {}) {
         ? document.schedules.find((item) => item.id === upload.scheduleId && item.workspaceId === principal.workspaceId)
         : null;
       queuedJob.notBefore = upload.scheduledAt || schedule?.nextRunAt || null;
-      queuedJob.state = isAvailable(latestWorkspaceCompanion(document, principal.workspaceId)) ? "queued" : "waiting_for_companion";
+      queuedJob.state = apiAccount(document, upload.accountId) || isAvailable(latestWorkspaceCompanion(document, principal.workspaceId)) ? "queued" : "waiting_for_companion";
       queuedJob.updatedAt = upload.updatedAt;
     } else {
       queueJob(document, upload);
@@ -1218,7 +1275,7 @@ export async function createCentralSubmission(principal, input = {}) {
       if (destinationDescription.length > PLATFORM_CAPTION_LIMITS[account.platform]) throw new Error(`This post is longer than the ${account.platform} limit.`);
       if (format === "text" && account.platform === "instagram") throw new Error("Instagram needs an image or video post.");
       if (format === "video" && account.platform === "youtube" && !String(input.title || "").trim()) throw new Error("YouTube video posts need a title.");
-      requireYouTubeOptions(account.platform, format, input.platformOptions);
+      platformOptionsFor(account, format, input.platformOptions);
     }
     const submission = {
       id: id("submission"), workspaceId: principal.workspaceId, postFormat: format,
@@ -1280,7 +1337,7 @@ export async function scheduleCentralSubmission(principal, submissionId, destina
         mimeType: submission.mimeType, extension: submission.extension, size: submission.size, url: submission.url,
         artifact: submission.artifact || null, previewArtifact: submission.previewArtifact || null,
         title: submission.title, caption: String(selectedDestination?.description || submission.description).trim(), status: "queued", publishActionState: "not_started",
-        platformOptions: requireYouTubeOptions(account.platform, submission.postFormat, submission.platformOptions),
+        platformOptions: platformOptionsFor(account, submission.postFormat, submission.platformOptions),
         linkedinTarget: account.platform === "linkedin" ? destination.linkedinTarget || undefined : undefined,
         uploadedAt: timestamp, updatedAt: timestamp, scheduledAt, scheduleId,
         sourceSubmissionId: submission.id, createdByUserId: submission.createdByUserId, createdByName: submission.createdByName,

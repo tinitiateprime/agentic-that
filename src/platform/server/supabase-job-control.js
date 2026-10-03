@@ -8,7 +8,8 @@ const ARTIFACT_URL_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const JOB_TYPES = new Set(["publish", "scrape.instagram", "scrape.facebook"]);
-const JOB_PLATFORMS = new Set(["instagram", "facebook", "x", "linkedin", "youtube"]);
+const JOB_PLATFORMS = new Set(["instagram", "facebook", "x", "linkedin", "youtube", "reddit"]);
+const API_ENGINE_PLATFORMS = new Set(["reddit"]);
 const ACTIVE_JOB_STATES = new Set([
   "queued", "waiting_for_companion", "claimed", "running", "opening_platform",
   "uploading", "publishing", "reconnect_required", "cancel_requested",
@@ -33,6 +34,7 @@ function safeText(value, maximum = 500) {
 }
 
 function publishingEngineForPlatform(platform, requestedEngine = "companion") {
+  if (API_ENGINE_PLATFORMS.has(platform)) return "api";
   return platform === "facebook" || platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
@@ -91,11 +93,12 @@ function camelJob(row) {
 function camelAccount(row, companion) {
   if (!row) return null;
   const companionStatus = companion?.status || "offline";
+  const executionEngine = publishingEngineForPlatform(row.platform, row.metadata?.executionEngine);
   const readiness = !row.enabled
     ? "unavailable"
     : !row.credential_configured
       ? "reconnect_required"
-      : companionStatus === "online" ? "ready" : "waiting_for_companion";
+      : executionEngine === "api" || companionStatus === "online" ? "ready" : "waiting_for_companion";
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -110,7 +113,8 @@ function camelAccount(row, companion) {
     safetyStatus: readiness === "reconnect_required" ? "restricted" : row.safety_status,
     readiness,
     companionStatus,
-    executionEngine: publishingEngineForPlatform(row.platform, row.metadata?.executionEngine),
+    executionEngine,
+    apiUsername: executionEngine === "api" ? row.metadata?.apiUsername || undefined : undefined,
     linkedinManagedPages: row.platform === "linkedin"
       ? normalizedLinkedInManagedPages(row.metadata)
       : undefined,
@@ -539,6 +543,42 @@ export async function deleteSupabasePublishingMediaObject(workspaceId, fileName)
   await deleteSupabaseJobArtifactParts([{ path: decodeURIComponent(storageObjectPath(workspaceId, fileName)) }]);
 }
 
+// Streams a stored artifact part by part, so media of any size can be handed
+// to another service without holding the whole file in memory.
+export async function openSupabaseJobArtifactStream(artifact) {
+  if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  const byteSize = Number(artifact.byteSize || 0);
+  if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error("The private publishing artifact size is invalid.");
+  const paths = Array.isArray(artifact.parts) && artifact.parts.length
+    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index)).map((part) => part?.path)
+    : [artifact.path];
+  if (!paths.length || paths.some((value) => !value || String(value).startsWith("/") || String(value).includes(".."))) {
+    throw new Error("The private publishing artifact path is invalid.");
+  }
+  const urls = await signedArtifactUrls(supabaseServiceConfiguration(), paths);
+  let index = 0;
+  let sent = 0;
+  const stream = new ReadableStream({
+    async pull(controller) {
+      if (index >= urls.length) {
+        if (sent !== byteSize) controller.error(new Error("The private publishing media is incomplete."));
+        else controller.close();
+        return;
+      }
+      const response = await fetch(urls[index], { cache: "no-store" });
+      index += 1;
+      if (!response.ok) {
+        controller.error(new Error(`Private publishing media could not be read (${response.status}).`));
+        return;
+      }
+      const chunk = new Uint8Array(await response.arrayBuffer());
+      sent += chunk.length;
+      controller.enqueue(chunk);
+    },
+  });
+  return { stream, byteSize };
+}
+
 export async function readSupabaseJobArtifactRange(artifact, start, end, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
   if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
   const declaredSize = Number(artifact.byteSize || 0);
@@ -677,6 +717,33 @@ export async function upsertSupabaseAccount(account) {
     WHERE public.social_accounts.workspace_id = EXCLUDED.workspace_id
     RETURNING *`;
   return camelAccount(row, companion);
+}
+
+// Written directly rather than through upsertSupabaseAccount, whose engine-change
+// rule deliberately clears credentials that only a Companion login can restore.
+export async function setSupabaseAccountApiConnection(account) {
+  const sql = await getDatabaseSql();
+  const connected = Boolean(account.credentialConfigured);
+  await upsertSupabaseAccount(account);
+  const [row] = await sql`
+    UPDATE public.social_accounts SET
+      handle = ${account.handle || ""},
+      credential_configured = ${connected},
+      session_status = ${connected ? "connected" : "reconnect_required"},
+      metadata = (coalesce(metadata, '{}'::jsonb) - 'apiUsername') || ${sql.json({
+        executionEngine: account.executionEngine,
+        ...(connected && account.apiUsername ? { apiUsername: account.apiUsername } : {}),
+      })},
+      updated_at = now()
+    WHERE workspace_id = ${account.workspaceId} AND id = ${account.id}
+    RETURNING *`;
+  if (connected) {
+    await sql`
+      UPDATE public.jobs SET status = 'queued', message = 'Reddit is connected. Publishing will continue automatically.', updated_at = now()
+       WHERE workspace_id = ${account.workspaceId} AND account_id = ${account.id}
+         AND job_type = 'publish' AND status IN ('waiting_for_companion', 'reconnect_required')`;
+  }
+  return camelAccount(row, await latestSupabaseCompanion(account.workspaceId));
 }
 
 export async function deleteSupabaseAccount(workspaceId, accountId) {

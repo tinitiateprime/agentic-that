@@ -23,7 +23,7 @@ import {
   UsersRound,
   Video,
 } from "lucide-react";
-import { FaFacebook, FaInstagram, FaLinkedin, FaXTwitter, FaYoutube } from "react-icons/fa6";
+import { FaFacebook, FaInstagram, FaLinkedin, FaReddit, FaXTwitter, FaYoutube } from "react-icons/fa6";
 
 const PLATFORM_LABELS = {
   instagram: "Instagram",
@@ -31,9 +31,10 @@ const PLATFORM_LABELS = {
   x: "X",
   linkedin: "LinkedIn",
   youtube: "YouTube",
+  reddit: "Reddit",
 };
 
-const PLATFORM_ORDER = ["instagram", "facebook", "x", "linkedin", "youtube"];
+const PLATFORM_ORDER = ["instagram", "facebook", "x", "linkedin", "youtube", "reddit"];
 
 function PlatformIcon({ platform, size = 20 }) {
   const props = { size, style: { display: "block" }, "aria-hidden": true };
@@ -42,6 +43,7 @@ function PlatformIcon({ platform, size = 20 }) {
   if (platform === "x") return <FaXTwitter {...props} color="#0f1419" />;
   if (platform === "linkedin") return <FaLinkedin {...props} color="#0a66c2" />;
   if (platform === "youtube") return <FaYoutube {...props} color="#ff0000" />;
+  if (platform === "reddit") return <FaReddit {...props} color="#ff4500" />;
   return <MonitorUp size={size} aria-hidden="true" />;
 }
 
@@ -172,6 +174,21 @@ function XPreview({ post }) {
   </div>;
 }
 
+function RedditPreview({ post }) {
+  const subreddit = post.platformOptions?.reddit?.subreddit;
+  return <div className="monitor-native-card x-card">
+    <AccountAvatar post={post} />
+    <div className="monitor-x-body">
+      <div className="monitor-x-name"><strong>{subreddit ? `r/${subreddit}` : accountName(post)}</strong><span>Posted by {accountHandle(post)} · now</span><MoreHorizontal size={16} /></div>
+      {post.title && <strong className="monitor-native-copy">{post.title}</strong>}
+      {post.hasMedia
+        ? <div className="monitor-wide-media x-media"><MonitorMedia post={post} /></div>
+        : <div className="monitor-native-copy block-copy">{post.caption}</div>}
+      <div className="monitor-x-actions"><ThumbsUp /><MessageCircle /><Share2 /></div>
+    </div>
+  </div>;
+}
+
 function LinkedInPreview({ post }) {
   return <div className="monitor-native-card linkedin-card">
     <PreviewProfile post={post} detail={`${accountHandle(post)} · now`} />
@@ -208,6 +225,7 @@ function PlatformPreview({ post }) {
     {post.platform === "x" && <XPreview post={post} />}
     {post.platform === "linkedin" && <LinkedInPreview post={post} />}
     {post.platform === "youtube" && <YouTubePreview post={post} />}
+    {post.platform === "reddit" && <RedditPreview post={post} />}
     <div className="monitor-post-meta">
       <span><strong>{post.linkedinTarget?.name || accountName(post)}</strong><small>{post.linkedinTarget ? `Managed Page · ${accountName(post)}` : accountHandle(post)} · {post.originalName} · {formatBytes(post.size)}</small></span>
       <span className="monitor-post-meta-actions"><time>{formatMoment(post.postedAt || post.scheduledAt || post.updatedAt)}</time>{post.mediaUrl && <a href={post.mediaUrl} target="_blank" rel="noreferrer">Open original</a>}</span>

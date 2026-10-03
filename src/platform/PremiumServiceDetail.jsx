@@ -142,6 +142,21 @@ const publishingProfiles = {
       ["People teams", "Plan hiring and culture updates with a clear review history."],
     ],
   },
+  reddit: {
+    account: "u/AgenticThat",
+    heroTitle: "Reddit Publishing",
+    heroDescription: "Choose the community, write a clear title, preview the post, and publish it without opening a browser.",
+    headline: "What we learned shipping one workflow for every channel",
+    body: "A practical write-up on keeping titles, community rules, and delivery results in one place.",
+    mediaLabel: "Community post",
+    postType: "Subreddit post · Title required",
+    mediaClass: styles.linkedinMedia,
+    audience: [
+      ["Community managers", "Post to the right subreddit with a title written for that community."],
+      ["Founders and product teams", "Share launches and updates where your users already gather."],
+      ["Marketing teams", "Keep Reddit posts on the same calendar as every other channel."],
+    ],
+  },
 };
 
 const categoryContent = {
@@ -692,7 +707,7 @@ export default function PremiumServiceDetail({ user, service, category, related 
       <main className={`${styles.serviceMain} ${service.category === "messaging" ? styles.telegramPage : ""} ${isPublishing ? styles.publishingPage : ""}`} style={{ "--accent": service.accent, "--tint": service.tint }}>
         <div className={styles.topline}>
           <nav aria-label="Breadcrumb"><Link href="/apps">Store</Link><ChevronRight size={14} /><Link href={`/apps#category-${category.id}`}>{category.label}</Link><ChevronRight size={14} /><span aria-current="page">{service.platformName}</span></nav>
-          <Link href="/apps"><ArrowLeft size={16} />Back to store</Link>
+          <Link href="/apps"><ArrowLeft size={16} />Back to Home</Link>
         </div>
 
         <section className={`${styles.heroSection} ${service.category === "messaging" ? styles.telegramHero : ""} ${isPublishing ? styles.publishingHero : ""}`}>

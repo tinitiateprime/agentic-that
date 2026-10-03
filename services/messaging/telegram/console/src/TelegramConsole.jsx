@@ -7,7 +7,7 @@ export function TelegramConsole({ integrated = false }) {
       h("main", null,
         h("section", {"id":"sign-in-view","className":"auth-shell","aria-labelledby":"sign-in-title"},
           h("div", {"className":"auth-showcase","aria-hidden":"true"},
-            h("a", {"className":"auth-brand","href":"/apps","title":"Back to AgenticThat Store"},
+            h("a", {"className":"auth-brand","href":"/apps","title":"Back to Home"},
               h("span", {"className":"auth-brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -44,7 +44,7 @@ export function TelegramConsole({ integrated = false }) {
           ),
           h("div", {"className":"auth-card"},
             h("a", {"className":"auth-back","href":"/apps"},
-              "← Back to Store"
+              "← Back to Home"
             ),
             h("div", {"className":"auth-card-heading"},
               h("span", {"className":"mobile-auth-mark","aria-hidden":"true"},
@@ -174,7 +174,7 @@ export function TelegramConsole({ integrated = false }) {
                 h("path", {"d":"M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4m4-6 4-4 4 4m-4-4v11"})
               )
             ),
-            h("a", {"className":"brand","href":"/apps","title":"Back to AgenticThat Store"},
+            h("a", {"className":"brand","href":"/apps","title":"Back to Home"},
               h("span", {"className":"brand-mark"},
                 h("svg", {"viewBox":"0 0 24 24","aria-hidden":"true"},
                   h("path", {"d":"M21.6 3.2 18.7 20c-.2 1.2-.9 1.5-1.9.9l-4.4-3.3-2.1 2c-.2.2-.4.4-.9.4l.3-4.5L18 8c.4-.3-.1-.5-.6-.2L7.1 14.3l-4.4-1.4c-1-.3-1-1 .2-1.5L20.2 2.8c.8-.3 1.5.2 1.4.4Z"})
@@ -191,10 +191,16 @@ export function TelegramConsole({ integrated = false }) {
             ),
             h("nav", {"className":"product-links","aria-label":"AgenticThat navigation"},
               h("a", {"href":"/apps"},
-                "← Store"
+                "← Home"
+              ),
+              h("a", {"href":"/messaging"},
+                "Send to everyone"
+              ),
+              h("a", {"href":"/dashboard"},
+                "WhatsApp"
               ),
               h("a", {"href":"/config-manager?service=messaging&platform=telegram"},
-                "Connections"
+                "Connect account"
               )
             ),
             h("nav", {"className":"nav-menu"},
@@ -207,7 +213,7 @@ export function TelegramConsole({ integrated = false }) {
                     h("use", {"href":"#nav-overview"})
                   ),
                   h("span", null,
-                    "Overview"
+                    "Summary"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"inbox"},
@@ -215,7 +221,7 @@ export function TelegramConsole({ integrated = false }) {
                     h("use", {"href":"#nav-inbox"})
                   ),
                   h("span", null,
-                    "Inbox"
+                    "Chats"
                   )
                 ),
                 h("button", {"className":"nav-item","type":"button","data-view":"contacts"},

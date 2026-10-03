@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { requireUser } from "@whatsapp/lib/auth";
 import { listGroups, listTempGroups } from "@whatsapp/lib/data";
+import { listGroupRules } from "@whatsapp/lib/group-rules";
 import { timeUntil } from "@whatsapp/lib/format";
 import CreateGroup from "./CreateGroup";
+import GroupRules from "./GroupRules";
 
 export const metadata = { title: "Groups — Tinitiate WA" };
 
@@ -12,6 +14,8 @@ export default async function GroupsPage() {
   // Throwaway groups built from the inbox — kept in their own section so they
   // don't get mistaken for standing groups. They expire on their own.
   const tempGroups = await listTempGroups(user.business_id);
+  // Keyword rules that fill groups from incoming messages on their own.
+  const rules = await listGroupRules(user.business_id);
 
   return (
     <div className="space-y-5">
@@ -49,6 +53,8 @@ export default async function GroupsPage() {
           ))}
         </ul>
       )}
+
+      <GroupRules rules={rules} />
 
       {tempGroups.length > 0 && (
         <div className="space-y-2">

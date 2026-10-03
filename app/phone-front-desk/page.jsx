@@ -36,7 +36,7 @@ export default async function PhoneFrontDeskPage() {
   };
 
   return (
-    <ProductShell user={user} active="apps" companionBridge={false}>
+    <ProductShell user={user} active="phone" companionBridge={false}>
       <main className="phone-front-desk-shell">
         <PhoneFrontDeskWorkspace canOperate={canOperate} canConfigure={canConfigure} />
       </main>

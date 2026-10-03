@@ -88,7 +88,14 @@ export function useProductStatus() {
       .then((data) => {
         const service = data.whatsapp || {};
         setWhatsapp({
-          state: service.connected ? (service.onboarded ? "connected" : "continue") : "setup",
+          state: !service.workspaceAuthenticated
+            ? "login"
+            : service.connected
+              ? (service.onboarded ? "connected" : "continue")
+              : "setup",
+          connected: Boolean(service.connected),
+          onboarded: Boolean(service.onboarded),
+          workspaceAuthenticated: Boolean(service.workspaceAuthenticated),
           provider: service.provider,
           senderCount: service.senderCount || 0,
         });
@@ -114,6 +121,7 @@ export function useProductStatus() {
     }
     if (service.connectionKind === "none") return { state: "ready", label: "Ready to use" };
     if (service.connectionKind === "whatsapp") {
+      if (whatsapp.state === "login") return { ...whatsapp, label: "Sign in required" };
       if (whatsapp.state === "connected") {
         const detail = whatsapp.provider === "wati" ? "WATI connected" : `${whatsapp.senderCount || 1} sender${whatsapp.senderCount === 1 ? "" : "s"}`;
         return { ...whatsapp, label: "Connected", detail };

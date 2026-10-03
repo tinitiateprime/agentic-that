@@ -59,7 +59,8 @@ import {
 import { requestCentralWorkspaceSync } from "../central-sync.js";
 
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
-const platformLoginUrls: Record<PublishingAccount["platform"], string> = {
+// Reddit is absent: it publishes only through Zernio on the platform server.
+const platformLoginUrls: Partial<Record<PublishingAccount["platform"], string>> = {
   instagram: "https://www.instagram.com/accounts/login/",
   x: "https://x.com/i/flow/login",
   linkedin: "https://www.linkedin.com/login/",
@@ -332,7 +333,7 @@ async function launchAccountBrowser(
     return await launchExternalBrowserEngine({
       account,
       purpose,
-      targetUrl: purpose === "login" ? platformLoginUrls[account.platform] : "about:blank",
+      targetUrl: purpose === "login" ? platformLoginUrls[account.platform] ?? "about:blank" : "about:blank",
       desktopHost,
       restoreSessionState: context => restoreAccountSessionState(account, context, "external_browser"),
       releaseAccount,
@@ -685,6 +686,7 @@ async function publishOne(page: Page, upload: PlatformUpload, options: AccountLo
     case "instagram": return postToInstagram(page, upload, login);
     case "facebook": return postToFacebook(page, upload, login);
     case "x": return postToX(page, upload, login);
+    case "reddit": throw new Error("Reddit posts publish through Zernio, not the Companion.");
   }
 }
 
@@ -702,6 +704,7 @@ async function loginOnly(page: Page, account: PublishingAccount, options: Accoun
     case "instagram": return loginToInstagram(page, undefined, false, login);
     case "facebook": return loginToFacebook(page, undefined, false, login);
     case "x": return loginToX(page, undefined, false, login);
+    case "reddit": throw new Error("Reddit accounts connect through Zernio, not the Companion.");
   }
 }
 

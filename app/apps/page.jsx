@@ -3,8 +3,8 @@ import AppsExplorer from "@platform/AppsExplorer";
 import { getCurrentPrincipal } from "@platform/server/access-control";
 
 export const metadata = {
-  title: "Apps — AgenticThat",
-  description: "Choose and open AgenticThat AI website, messaging, publishing, scraping, SEO, and engagement services.",
+  title: "Home — AgenticThat",
+  description: "Omnichannel publishing and messaging apps for Instagram, YouTube, Facebook, X, LinkedIn, WhatsApp, and Telegram, plus AI websites, public-data, SEO, and engagement tools.",
 };
 
 export default async function AppsPage() {

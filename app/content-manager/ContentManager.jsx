@@ -30,20 +30,22 @@ import { rememberPublishingAccounts } from "@platform/use-product-status";
 const PUBLISH_SESSION_KEY = "agenticthat-publish-queue-session";
 const publishingCompanionDownloadUrl = process.env.NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL?.trim()
   || "/companion/download";
-const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin"];
+const publishPlatforms = ["instagram", "facebook", "x", "youtube", "linkedin", "reddit"];
 const platformLabels = {
   instagram: "Instagram",
   facebook: "Facebook",
   x: "X",
   youtube: "YouTube",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  reddit: "Reddit"
 };
 const platformLogos = {
   instagram: "/instagram-logo.svg",
   facebook: "/facebook-logo.svg",
   x: "/x-logo.svg",
   youtube: "/youtube-logo.svg",
-  linkedin: "/linkedin-logo.png"
+  linkedin: "/linkedin-logo.png",
+  reddit: "/reddit-logo.svg"
 };
 const messagingPlatforms = ["telegram", "whatsapp"];
 const messagingLabels = {
