@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTelegramHttpServer } from "../../../services/messaging/telegram/src/server.ts";
+import { telegramProxyHeaders } from "./telegram-proxy-origin.ts";
 
 type LocalServer = {
   origin: string;
@@ -106,10 +107,7 @@ export async function handleTelegramRequest(request: Request) {
     const local = await getLocalServer();
     const incomingUrl = new URL(request.url);
     const targetUrl = new URL(`${telegramPath(incomingUrl.pathname)}${incomingUrl.search}`, local.origin);
-    const headers = new Headers(request.headers);
-
-    headers.set("x-forwarded-host", incomingUrl.host);
-    headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
+    const headers = telegramProxyHeaders(request);
 
     const response = await fetch(targetUrl, {
       body: await requestBody(request),

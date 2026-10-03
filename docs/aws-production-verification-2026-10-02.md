@@ -49,3 +49,11 @@ After checking the X profile and finding no copy from the failed attempt, one re
 The first replacement submission exposed a stale queued record: dashboard reads showed the remote failure, but creation's duplicate check still used the old persisted status. New destination creation now reconciles current remote outcomes before checking duplicates, while preserving staged-upload idempotency and uncertain job history. Regression tests cover that recovery.
 
 Sanitized evidence: `artifacts/aws-x-current-publishing-recovery.json`, `artifacts/aws-x-current-post-before-retry.json` and `artifacts/aws-x-recovered-profile.png`.
+
+## Telegram browser-origin follow-up ? 3 October 2026
+
+An authenticated connection request from `https://www.agenticthat.com` reproduced HTTP 403 with ?This browser origin is not allowed.? Workspace reads succeeded, and the deployed Telegram application credentials were present. The internal Next.js proxy replaced the public host and scheme with the SSR request URL, so state-changing requests failed the service's origin check.
+
+The proxy now uses the configured `PLATFORM_PUBLIC_URL` for its forwarded origin. It accepts the known AgenticThat apex/www pair, preserves the external reverse-proxy headers when the deployment URL is absent, and never accepts an arbitrary browser Origin as trusted. Telegram still performs its normal origin and authenticated-workspace checks. HTTP regression tests exercise the actual Telegram service with trusted, forged, null and HTTP downgrade origins.
+
+All 411 automated tests passed with one skipped. Live evidence is retained in `artifacts/aws-telegram-origin-live-validation.json`. These checks reach connection input validation and code/password challenge validation without sending a login code or claiming a completed Telegram login.
