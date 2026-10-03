@@ -23,10 +23,20 @@ The installed Windows Companion was updated to 2.1.30 and used for the successfu
 
 ## Remaining external setup
 
-- Verify the sending domain in Resend before email delivery, invitations and verification emails can pass.
+- Resend's three sending DNS records were restored in Route 53 on 3 October and verified through Google and Cloudflare DNS. Run domain verification again in the Resend account owning the sending API key before email delivery, invitations and verification emails can pass.
 - Reconnect Gmail and Google Calendar within Phone Front Desk before follow-up delivery and confirmed calendar bookings can pass. The real workspace's saved Google refresh grants returned expired/revoked after the encryption migration was fixed. Reconnect buttons allow replacing the grant without first deleting the connection. The isolated microphone test correctly retained an unsent email status.
 - The expired Meta token remains deferred at the owner's request. Meta API messaging cannot be claimed verified; Companion browser publishing on Facebook and Instagram did pass.
 
 These results prove the workflows and accounts tested. They do not guarantee every account, large media size, social platform change, live telephone line or desktop operating system.
 
 Detailed sanitized reports are retained locally under `artifacts/aws-real-*-validation.json` and `artifacts/aws-publishing-concurrency-live.json`. Cookies, API keys, database URLs and signed media URLs are excluded from this report.
+
+## Email follow-up — 3 October 2026
+
+An actual production signup reproduced the delivery failure. A direct provider request returned HTTP 403 because `agenticthat.com` was unverified. Route 53 contained the website records but lacked the earlier Resend DKIM and return-path CNAME records. Those three email records were restored from the owner's DNS export, preserving the existing Amplify website routing. Resend still requires its domain verification check to pass; the available sending-only API key cannot perform domain-management actions.
+
+Failed verification and password reset retries now preserve earlier unexpired links. Completing a password reset consumes all remaining reset links and revokes existing sessions. Signup displays pending email verification, resend success updates the delivery status, and closing the modal keeps an unverified account unauthenticated. Email-provider rejections return a temporary-unavailability response without exposing provider configuration to the visitor.
+
+Validation: 401 existing tests passed with one skipped, one additional real-browser UI regression passed, and the production build passed. Thirteen HTTP/database checks passed against the production build and real Supabase database, using isolated accounts and the actual Resend rejection. Earlier tokens were seeded privately to check retry preservation and single-use behavior; these checks do not prove inbox delivery. Temporary accounts and workspaces were removed. All nine public AWS deployment health checks also passed.
+
+Sanitized evidence: `artifacts/aws-email-dns-restoration.json`, `artifacts/aws-auth-email-after-dns-validation.json` and `artifacts/aws-auth-email-flow-patched-validation.json`.

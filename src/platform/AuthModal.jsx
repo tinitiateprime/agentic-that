@@ -27,8 +27,10 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   const [form, setForm] = useState(EMPTY_FORM);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [errorCode, setErrorCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
   const [signupStep, setSignupStep] = useState(1);
   const [completedUser, setCompletedUser] = useState(null);
   const [verificationRequired, setVerificationRequired] = useState(false);
@@ -40,8 +42,8 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   }, [onClose, onAuthenticated]);
 
   useEffect(() => {
-    completedUserRef.current = completedUser;
-  }, [completedUser]);
+    completedUserRef.current = verificationRequired ? null : completedUser;
+  }, [completedUser, verificationRequired]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -52,8 +54,10 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     setEmailDeliveryFailed(false);
     completedUserRef.current = null;
     setError("");
+    setNotice("");
     setErrorCode("");
     setBusy(false);
+    setResendingVerification(false);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusTimer = window.setTimeout(() => firstInputRef.current?.focus(), 80);
@@ -83,7 +87,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   if (!open) return null;
 
   const isSignup = mode === "signup";
-  const activeStep = SIGNUP_STEPS[signupStep - 1];
+  const activeStep = signupStep === 3 && verificationRequired
+    ? { eyebrow: "Account created", title: "Verify your email", description: "Confirm your email address to open your workspace." }
+    : SIGNUP_STEPS[signupStep - 1];
   const update = (field) => (event) => {
     setForm((current) => ({ ...current, [field]: event.target.value }));
   };
@@ -93,11 +99,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
     setMode(nextMode);
     setSignupStep(1);
     setError("");
+    setNotice("");
     setErrorCode("");
   };
 
   const goToStep = (step) => {
     setError("");
+    setNotice("");
     setSignupStep(step);
   };
 
@@ -139,6 +147,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setNotice("");
     setErrorCode("");
 
     if (!isSignup) {
@@ -205,18 +214,21 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
   }
 
   async function resendVerification() {
-    setBusy(true); setError("");
+    setBusy(true); setResendingVerification(true); setError(""); setNotice("");
     try {
       const response = await fetch("/api/platform-auth/resend-verification", {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: form.email }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Unable to resend verification.");
-      setError(data.message);
-      setErrorCode("");
+      setEmailDeliveryFailed(false);
+      setNotice(data.message);
     } catch (resendError) {
       setError(resendError instanceof Error ? resendError.message : "Unable to resend verification.");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      setResendingVerification(false);
+    }
   }
 
   return (
@@ -259,7 +271,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                   aria-current={signupStep === step.id ? "step" : undefined}
                 >
                   <span>{signupStep > step.id ? "✓" : step.id}</span>
-                  <small>{step.shortLabel}</small>
+                  <small>{step.id === 3 && verificationRequired ? "Verify email" : step.shortLabel}</small>
                 </li>
               ))}
             </ol>
@@ -335,20 +347,21 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
                 <strong>Welcome, {completedUser?.name || form.name}.</strong>
                 <p>{verificationRequired
                   ? emailDeliveryFailed
-                    ? "Your account was created, but the verification email could not be delivered. Use resend below."
+                    ? "Your account was created, but we couldn't send the verification email. Please try again later or contact support."
                     : "Check your inbox and verify your work email before signing in."
                   : "Every service is ready with full access and no trial usage quotas."}</p>
-                <span>{verificationRequired ? "The secure link expires in 24 hours." : "No payment method is required."}</span>
-                {verificationRequired && emailDeliveryFailed && (
+                <span>{verificationRequired ? emailDeliveryFailed ? "Your email still needs verification." : "The secure link expires in 24 hours." : "No payment method is required."}</span>
+                {verificationRequired && (
                   <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>
-                    Resend verification email
+                    {resendingVerification ? "Sending..." : "Resend verification email"}
                   </button>
                 )}
               </div>
             )}
 
             <div className={`auth-error${error ? " visible" : ""}`} role="alert">{error || " "}</div>
-            {errorCode === "EMAIL_NOT_VERIFIED" && <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>Resend verification email</button>}
+            {notice && <p className="auth-notice" role="status">{notice}</p>}
+            {errorCode === "EMAIL_NOT_VERIFIED" && <button className="auth-back" type="button" onClick={resendVerification} disabled={busy}>{resendingVerification ? "Sending..." : "Resend verification email"}</button>}
 
             <div className={`auth-actions${isSignup && signupStep === 2 ? " has-back" : ""}`}>
               {isSignup && signupStep === 2 && (
@@ -360,7 +373,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
 
               <button className="auth-submit" type="submit" disabled={busy}>
                 <span>{busy
-                  ? "Creating your workspace..."
+                  ? resendingVerification ? "Sending email..." : isSignup ? "Creating your workspace..." : "Signing in..."
                   : !isSignup
                     ? "Continue to AgenticThat"
                     : signupStep === 1

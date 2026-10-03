@@ -449,6 +449,7 @@
 
 .auth-error { min-height: 18px; margin-top: -3px; color: transparent; font-size: 11px; line-height: 1.4; }
 .auth-error.visible { color: #ff8e8e; }
+.auth-notice { margin: 0; color: #a6dfba; font-size: 12px; line-height: 1.5; }
 
 .auth-actions {
   position: sticky;

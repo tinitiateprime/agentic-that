@@ -1183,9 +1183,8 @@ export async function resendPlatformVerification(emailInput) {
     const [user] = await tx`
       SELECT id, email_verified_at FROM platform_users WHERE lower(email) = ${email} LIMIT 1 FOR UPDATE`;
     if (!user || user.email_verified_at) return null;
-    await tx`
-      UPDATE platform_auth_tokens SET consumed_at = now()
-       WHERE user_id = ${user.id} AND purpose = 'email_verification' AND consumed_at IS NULL`;
+    // Keep earlier links valid when a retry cannot be delivered. Verification
+    // consumes every outstanding verification link after one succeeds.
     const token = crypto.randomBytes(32).toString("base64url");
     await tx`
       INSERT INTO platform_auth_tokens(id, user_id, token_hash, purpose, expires_at)
@@ -1204,9 +1203,7 @@ export async function requestPlatformPasswordReset(emailInput) {
   const result = await sql.begin(async (tx) => {
     const [user] = await tx`SELECT id FROM platform_users WHERE lower(email) = ${email} LIMIT 1 FOR UPDATE`;
     if (!user) return null;
-    await tx`
-      UPDATE platform_auth_tokens SET consumed_at = now()
-       WHERE user_id = ${user.id} AND purpose = 'password_reset' AND consumed_at IS NULL`;
+    // Issuing a replacement must not invalidate a previously delivered link.
     const token = crypto.randomBytes(32).toString("base64url");
     await tx`
       INSERT INTO platform_auth_tokens(id, user_id, token_hash, purpose, expires_at)
@@ -1235,7 +1232,9 @@ export async function resetPlatformPassword(rawToken, passwordInput) {
       UPDATE platform_users
          SET password_hash = ${hashPlatformPassword(password)}, password_changed_at = now()
        WHERE id = ${record.user_id}`;
-    await tx`UPDATE platform_auth_tokens SET consumed_at = now() WHERE id = ${record.id}`;
+    await tx`
+      UPDATE platform_auth_tokens SET consumed_at = now()
+       WHERE user_id = ${record.user_id} AND purpose = 'password_reset' AND consumed_at IS NULL`;
     await tx`DELETE FROM platform_sessions WHERE user_id = ${record.user_id}`;
     return { ok: true };
   });

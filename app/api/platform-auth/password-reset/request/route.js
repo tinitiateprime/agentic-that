@@ -1,5 +1,6 @@
 import { requestPlatformPasswordReset, PlatformAuthError } from "@platform/server/auth-store";
 import { enforceAuthRateLimit, requestClientAddress } from "@platform/server/auth-abuse";
+import { PlatformEmailDeliveryError } from "@platform/server/auth-email";
 
 export async function POST(request) {
   try {
@@ -12,6 +13,10 @@ export async function POST(request) {
   } catch (error) {
     if (error instanceof PlatformAuthError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.code === "RATE_LIMITED" ? 429 : 400 });
+    }
+    if (error instanceof PlatformEmailDeliveryError) {
+      console.error("Platform password reset email delivery failed:", error.message);
+      return Response.json({ error: "Email delivery is temporarily unavailable. Please try again later or contact support.", code: error.code }, { status: 503 });
     }
     console.error("Platform password reset request failed", error);
     return Response.json({ error: "The password reset email could not be sent." }, { status: 500 });

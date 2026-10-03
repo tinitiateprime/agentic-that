@@ -34,6 +34,8 @@ PLATFORM_PUBLIC_URL=https://www.agenticthat.com
 PLATFORM_SUPER_ADMIN_EMAILS=<production-admin-email>
 AUTH_EMAIL_FROM="AgenticThat <accounts@your-domain.example>"
 RESEND_API_KEY=<server-only-resend-api-key>
+# Verify the sender domain in the Resend account that owns this key.
+# Copy its email DNS records when changing DNS providers, then rerun domain verification.
 AUTH_RATE_LIMIT_PEPPER=<random-32-byte-base64url-secret>
 # Optional: retain the original value when available; never enter a masked value.
 PROJECT_WORKSPACE_TOKEN_ENCRYPTION_KEY=

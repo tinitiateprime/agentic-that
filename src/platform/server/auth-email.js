@@ -249,6 +249,14 @@ export function platformProductEmailTemplate({
 </html>`;
 }
 
+export class PlatformEmailDeliveryError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PlatformEmailDeliveryError";
+    this.code = "EMAIL_DELIVERY_UNAVAILABLE";
+  }
+}
+
 function emailProvider() {
   return process.env.RESEND_API_KEY?.trim()
     ? "Resend"
@@ -326,12 +334,12 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId,
       // Give useful setup guidance without exposing an upstream response that
       // could contain addresses, request data or credentials.
       if (failure.name === "validation_error" && /domain is not verified/i.test(String(failure.message || ""))) {
-        throw new Error("The sending domain is not verified in Resend. Verify it in Resend Domains before sending email.");
+        throw new PlatformEmailDeliveryError("The sending domain is not verified in Resend. Verify it in Resend Domains before sending email.");
       }
       if ([401, 403].includes(response.status) && failure.name === "invalid_api_key") {
-        throw new Error("The Resend API key is invalid. Update the email provider credentials.");
+        throw new PlatformEmailDeliveryError("The Resend API key is invalid. Update the email provider credentials.");
       }
-      throw new Error(`Email provider returned HTTP ${response.status}.`);
+      throw new PlatformEmailDeliveryError(`Email provider returned HTTP ${response.status}.`);
     }
     const result = await response.json().catch(() => ({}));
     return { provider: "resend", messageId: String(result.id || "") || null, skipped: false };
@@ -349,13 +357,13 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId,
       body: JSON.stringify({ from, to, subject, text, html }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`Email webhook returned HTTP ${response.status}.`);
+    if (!response.ok) throw new PlatformEmailDeliveryError(`Email webhook returned HTTP ${response.status}.`);
     const result = await response.json().catch(() => ({}));
     return { provider: "webhook", messageId: String(result.id || result.messageId || "") || null, skipped: false };
   }
 
   if (process.env.NODE_ENV === "production") {
-    throw new Error("AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL are required.");
+    throw new PlatformEmailDeliveryError("AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL are required.");
   }
   console.warn(`Authentication email for ${to} was not sent because no development email provider is configured.`);
   return { provider: "development", messageId: null, skipped: true };
