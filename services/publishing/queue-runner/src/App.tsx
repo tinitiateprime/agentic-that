@@ -3,7 +3,7 @@
 import {
   Loader2, RefreshCw, Upload, X,
   CalendarClock, FileText, Pencil, Trash2,
-  ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
+  ArrowLeft, ArrowRight, BriefcaseBusiness, KeyRound, LockKeyhole, LogOut, ShieldCheck, UsersRound,
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
   Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
@@ -1793,15 +1793,20 @@ function Workboard({
 
   return (
     <main className='workboard-app'>
+      <aside className='pq-menu' aria-label='Social posting menu'>
+        <a className='pq-menu-brand' href='/apps' title='Back to Home'><span>AT</span><div><strong>Social posting</strong><small>Your posting workspace</small></div></a>
+        <nav aria-label='Publishing workspace'>
+          <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={17} />Create</button>
+          <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={17} />Channels</button>
+          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={17} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
+          {PUBLISHING_SCHEDULING_ENABLED && <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={17} />Schedule</button>}
+          <button onClick={() => { window.location.href = '/config-manager?service=publishing'; }}><Settings2 size={17} />Connect accounts</button>
+        </nav>
+        <a className='pq-menu-home' href='/apps'><ArrowLeft size={17} />Back to Home</a>
+      </aside>
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <a className='workboard-brand' href='/apps' title='Back to Home'><span>AT</span><div><strong>AgenticThat</strong><small>Publishing workspace</small></div></a>
-        <nav className='workboard-nav' aria-label='Publishing workspace'>
-          <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={16} />Create</button>
-          <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={16} />Channels</button>
-          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={16} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
-          {PUBLISHING_SCHEDULING_ENABLED && <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={16} />Schedule</button>}
-        </nav>
+        <h1 className='workboard-page-title'>{({ overview: 'Create a post', channels: 'Channels', operations: 'Review', schedule: 'Schedule' } as Record<string, string>)[activeView] ?? 'Social posting'}</h1>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
           <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>

@@ -5,12 +5,11 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   Home,
+  LogOut,
   ContactRound,
   FileText,
-  LogOut,
   MessageCircle,
   PlugZap,
-  Send,
   Settings2,
   UsersRound,
 } from "lucide-react";
@@ -22,13 +21,6 @@ const LINKS = [
   { href: "/dashboard/templates", label: "Ready messages", short: "Ready", icon: FileText },
   { href: "/groups", label: "Contact groups", short: "Groups", icon: UsersRound },
   { href: "/settings", label: "Settings", icon: Settings2 },
-];
-
-const OTHER_LINKS = [
-  { href: "/apps", label: "Home", icon: Home },
-  { href: "/messaging", label: "Send to everyone", icon: Send },
-  { href: "/console", label: "Telegram", icon: MessageCircle },
-  { href: "/config-manager?service=messaging&platform=whatsapp", label: "WhatsApp connection", icon: PlugZap },
 ];
 
 const CONNECTIONS_HREF = "/config-manager?service=messaging&platform=whatsapp";
@@ -56,36 +48,23 @@ export default function Nav({ businessName }) {
     <>
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:hidden">
         <Link href="/apps" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-amber-200 via-yellow-400 to-amber-500 text-xs font-extrabold text-neutral-900">AT</span>
-          <span>WhatsApp</span>
+          <Home size={17} /><span>WhatsApp</span>
         </Link>
         <Link href={CONNECTIONS_HREF} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-900">
-          <PlugZap size={15} />Connections
+          <PlugZap size={15} />Connection
         </Link>
       </header>
 
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-slate-200 bg-white sm:flex">
-        <Link href="/apps" className="flex items-center gap-3 px-4 py-4" title="Back to Home">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px_4px_10px_4px] bg-gradient-to-br from-amber-200 via-yellow-400 to-amber-500 text-xs font-extrabold text-neutral-900">AT</span>
+        <div className="flex items-center gap-3 px-4 py-5">
+          <img src="/whatsapp-logo.svg" alt="" className="h-9 w-9" />
           <span className="min-w-0">
-            <strong className="block text-sm font-semibold text-slate-900">AgenticThat</strong>
-            <small className="mt-0.5 block truncate text-[10px] font-semibold uppercase tracking-wider text-slate-400">WhatsApp</small>
+            <strong className="block text-base font-semibold text-slate-900">WhatsApp</strong>
+            <small className="block truncate text-[11px] text-slate-500">{businessName || "Your workspace"}</small>
           </span>
-        </Link>
+        </div>
 
-        <nav className="border-y border-slate-100 px-2 py-3" aria-label="Product navigation">
-          {OTHER_LINKS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Link key={item.href} href={item.href} className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900">
-                <Icon size={17} /><span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3" aria-label="WhatsApp workspace navigation">
-          <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">{businessName || "WhatsApp"}</p>
+        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-3" aria-label="WhatsApp workspace navigation">
           {LINKS.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.href);
@@ -105,9 +84,17 @@ export default function Nav({ businessName }) {
           })}
         </nav>
 
-        <button onClick={logout} className="mx-2 mb-3 flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-900">
-          <LogOut size={17} />Sign out
-        </button>
+        <div className="border-t border-slate-100 px-2 py-3">
+          <Link href="/apps" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900">
+            <Home size={17} />Back to Home
+          </Link>
+          <Link href={CONNECTIONS_HREF} className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900">
+            <PlugZap size={17} />WhatsApp connection
+          </Link>
+          <button onClick={logout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-900">
+            <LogOut size={17} />Sign out
+          </button>
+        </div>
       </aside>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t border-slate-200 bg-white sm:hidden" aria-label="WhatsApp workspace navigation">
