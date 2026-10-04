@@ -5163,3 +5163,33 @@ button, input, textarea, select { font-family: inherit; }
     font-size: 8.5px;
   }
 }
+
+/* Social posting: its own left menu, light with the AgenticThat gold accent */
+.publish-queue-runner main.workboard-app { display: grid; grid-template-columns: 236px minmax(0, 1fr); align-items: start; }
+.publish-queue-runner main.workboard-app > .workboard-shell { min-width: 0; max-width: none; }
+.publish-queue-runner .workboard-app .workboard-topbar { grid-template-columns: minmax(180px, 1fr) auto; }
+.publish-queue-runner .workboard-page-title { margin: 0; color: var(--wb-ink); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+
+.publish-queue-runner .pq-menu { position: sticky; top: 0; z-index: 30; display: flex; height: 100vh; flex-direction: column; padding: 18px 12px; border-right: 1px solid #E3E8EB; background: #FFFFFF; }
+.publish-queue-runner .pq-menu-brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 18px; color: #111827; text-decoration: none; }
+.publish-queue-runner .pq-menu-brand > span { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 10px 4px 10px 4px; background: linear-gradient(135deg, #fde68a 0%, #facc15 52%, #d99a0b 100%); color: #171203; font-size: 12px; font-weight: 850; }
+.publish-queue-runner .pq-menu-brand strong { display: block; font-size: 15px; font-weight: 740; }
+.publish-queue-runner .pq-menu-brand small { display: block; margin-top: 2px; color: #7c8796; font-size: 11.5px; }
+.publish-queue-runner .pq-menu nav { display: grid; gap: 3px; }
+.publish-queue-runner .pq-menu nav button { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 12px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: #5b6574; cursor: pointer; font: inherit; font-size: 14px; font-weight: 620; text-align: left; }
+.publish-queue-runner .pq-menu nav button:hover { background: #F8FAFC; color: #111827; }
+.publish-queue-runner .pq-menu nav button.active { border-color: rgba(190, 139, 14, 0.28); background: linear-gradient(135deg, rgba(250, 204, 21, 0.16), rgba(245, 158, 11, 0.055)); color: #111827; font-weight: 760; }
+.publish-queue-runner .pq-menu nav button.active svg { color: #a56f05; }
+.publish-queue-runner .pq-menu nav button small { margin-left: auto; min-width: 20px; padding: 2px 7px; border-radius: 999px; background: rgba(15, 23, 42, 0.07); color: #475569; font-size: 11px; font-weight: 700; text-align: center; }
+.publish-queue-runner .pq-menu-home { display: flex; align-items: center; gap: 11px; margin-top: auto; padding: 11px 12px; border-top: 1px solid #EEF2F4; color: #5b6574; font-size: 14px; font-weight: 620; text-decoration: none; }
+.publish-queue-runner .pq-menu-home:hover { color: #111827; }
+
+@media (max-width: 960px) {
+  .publish-queue-runner main.workboard-app { grid-template-columns: 1fr; }
+  .publish-queue-runner .pq-menu { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; border-right: 0; border-bottom: 1px solid #E3E8EB; }
+  .publish-queue-runner .pq-menu-brand { padding: 0; }
+  .publish-queue-runner .pq-menu-brand small { display: none; }
+  .publish-queue-runner .pq-menu nav { display: flex; flex-wrap: wrap; }
+  .publish-queue-runner .pq-menu nav button { width: auto; min-height: 38px; }
+  .publish-queue-runner .pq-menu-home { margin: 0 0 0 auto; padding: 8px; border-top: 0; }
+}
