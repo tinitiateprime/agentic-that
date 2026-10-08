@@ -90,7 +90,7 @@
     "framer-motion": "^13.0.0",
     "lucide-react": "^0.468.0",
     "nanoid": "^5.1.16",
-    "next": "^15.5.25",
+    "next": "^15.5.27",
     "node-cron": "^4.6.0",
     "playwright-core": "^1.61.1",
     "postgres": "^3.4.9",
@@ -106,7 +106,11 @@
     "@opentelemetry/sdk-trace-base": "^2.8.0",
     "@opentelemetry/sdk-trace-node": "^2.8.0",
     "postcss": "^8.5.10",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5",
+    "argparse": "2.0.1",
+    "katex": "0.18.2",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2"
   },
   "devDependencies": {
     "@aws-sdk/client-amplify": "^3.1145.0",
@@ -120,7 +124,7 @@
     "@types/react": "19.2.17",
     "archiver": "^8.0.0",
     "concurrently": "^9.2.4",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.23.0",
     "typescript": "5.8.2"

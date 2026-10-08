@@ -19,3 +19,7 @@ Tests use intercepted LinkedIn pages; live account delivery is a separate check.
 
 The publisher runs inside Companion. Rebuild or install this Companion version
 to use the fix; updating the website alone does not update an installed app.
+
+Release dependencies include patched Sharp 0.35.5 and Next.js 15.5.27, with
+overrides for vulnerable transitive packages. The macOS universal build uses
+matching Sharp 0.35.5 and libvips 1.3.4 binaries for Intel and Apple Silicon.
