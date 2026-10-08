@@ -13,7 +13,7 @@ async function fixture({ upload = null, submission = null, accounts = [], allowe
   const modules = new Map(imports.map(({ names, path }) => [path, names]));
   const bundled = await build({ stdin: { contents: source, resolveDir: process.cwd(), loader: 'js' }, bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{ name: 'media-fixture', setup(b) {
     b.onResolve({ filter: /^@platform\/server\/publishing-media-response$/ }, () => ({ path: process.cwd() + '/src/platform/server/publishing-media-response.js' }));
-    b.onResolve({ filter: /^(?:@platform\/|\.\.\/|\.\/supabase-job-control\.js|\.\/publishing-media-preview\.js)/ }, a => ({ path: a.path, namespace: 'fixture' }));
+    b.onResolve({ filter: /^(?:@platform\/|\.\.\/|\.\/supabase-job-control\.js|\.\/publishing-media-preview\.js|next\/server$)/ }, a => ({ path: a.path, namespace: 'fixture' }));
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, a => ({ contents: `const f=globalThis[${JSON.stringify(key)}];\n` + (modules.get(a.path) || (a.path.endsWith('supabase-job-control.js') ? ['readSupabaseJobArtifactBytes','readSupabaseJobArtifactRange'] : a.path.endsWith('publishing-media-preview.js') ? ['optimizePublishingPreviewBytes'] : ['readPublishingMedia','readPublishingMediaRange'])).map(name => {
       const implementations = {
         authorizeApiCapability: "return {workspaceId:'workspace-a'};",

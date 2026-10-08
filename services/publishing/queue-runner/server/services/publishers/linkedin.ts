@@ -311,7 +311,25 @@ async function getLoginError(page: Page) {
   return text || null;
 }
 
-export async function clickStartPost(page: Page) {
+function linkedInStartPostControls(page: Page, managedPage = false) {
+  return [
+    page.getByRole("button", { name: /Start a post/i }),
+    page.locator('button[class*="share-box-feed-entry__trigger"]'),
+    page.locator('[data-view-name*="start-post" i]'),
+    page.locator('[data-control-name*="sharebox" i]'),
+    page.locator("button").filter({ hasText: /Start a post/i }),
+    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
+    page.locator('[aria-label*="Start a post" i]'),
+    ...(managedPage ? [
+      page.getByRole("button", { name: /^(?:Create (?:a )?post|Write a post)$/i }),
+      page.getByRole("link", { name: /^(?:Create (?:a )?post|Write a post)$/i }),
+      page.getByRole("menuitem", { name: /^(?:Create (?:a )?post|Post)$/i }),
+      page.getByText(/^Create (?:a )?post$/i),
+    ] : []),
+  ];
+}
+
+export async function clickStartPost(page: Page, managedPage = false) {
   console.log("Opening LinkedIn post composer...");
 
   // LinkedIn's current UI navigates to /sharing/compose and renders a TipTap
@@ -321,15 +339,7 @@ export async function clickStartPost(page: Page) {
     return;
   }
 
-  const controls = () => [
-    page.getByRole("button", { name: /Start a post/i }),
-    page.locator('button[class*="share-box-feed-entry__trigger"]'),
-    page.locator('[data-view-name*="start-post" i]'),
-    page.locator('[data-control-name*="sharebox" i]'),
-    page.locator("button").filter({ hasText: /Start a post/i }),
-    page.locator('[role="button"]').filter({ hasText: /Start a post/i }),
-    page.locator('[aria-label*="Start a post" i]'),
-  ];
+  const controls = () => linkedInStartPostControls(page, managedPage);
 
   const openingDeadline = Date.now() + 45000;
   for (let attempt = 1; attempt <= 3 && Date.now() < openingDeadline; attempt += 1) {
@@ -364,17 +374,74 @@ export async function clickStartPost(page: Page) {
         }
       }
     }
+
+    if (managedPage) {
+      const create = await firstVisible([
+        page.getByRole("button", { name: /^(?:\+\s*)?Create$/i }),
+        page.getByRole("link", { name: /^(?:\+\s*)?Create$/i }),
+        page.getByText(/^(?:\+\s*)?Create$/i),
+      ]);
+      if (create) {
+        await activateComposerControl(create);
+        const menuDeadline = Math.min(openingDeadline, Date.now() + 5000);
+        while (Date.now() < menuDeadline) {
+          if (await firstVisible(linkedInComposerEditorLocators(page))) return;
+          const createPost = await firstVisible(controls());
+          if (createPost) {
+            await activateComposerControl(createPost);
+            if (await waitForLinkedInComposer(page, 5000)) {
+              console.log("LinkedIn Page post composer opened from Create.");
+              return;
+            }
+            break;
+          }
+          await page.waitForTimeout(250);
+        }
+      }
+    }
   }
 
   throw new Error("LinkedIn Start a post control did not open the post editor after three verified attempts.");
 }
 
-async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedPage) {
-  let trustedCanonicalNavigation = false;
-  const onExpectedPage = () => isLinkedInManagedPagePostsUrl(
-    page.url(),
-    trustedCanonicalNavigation ? undefined : target.id,
-  );
+function linkedInAdminPageId(urlInput: string) {
+  try {
+    const url = new URL(urlInput);
+    if (url.protocol !== "https:" || !/(?:^|\.)linkedin\.com$/i.test(url.hostname)) return null;
+    const match = /^\/company\/([^/]+)\/admin(?:\/|$)/i.exec(url.pathname);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedPage) {
+  let expectedPageId = target.id;
+  const onExpectedPage = () => isLinkedInManagedPagePostsUrl(page.url(), expectedPageId);
+  const waitForSelectedPage = async () => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const currentId = linkedInAdminPageId(page.url());
+      if (currentId?.toLowerCase() === target.id.toLowerCase()) {
+        expectedPageId = currentId;
+        return true;
+      }
+      // A public slug may become a numeric organization ID. Verify the Page's
+      // visible identity before using that ID for any subsequent navigation.
+      if (currentId && /^\d+$/.test(currentId) && shouldOpenLinkedInManagedPageFromManage(target.id)) {
+        const identity = await firstVisible([
+          page.getByRole("heading", { name: target.name, exact: true }),
+          page.getByText(target.name, { exact: true }),
+        ]);
+        if (identity) {
+          expectedPageId = currentId;
+          return true;
+        }
+      }
+      await page.waitForTimeout(250);
+    }
+    return false;
+  };
 
   const waitForPagePostsControl = async (timeout = 15000) => {
     const deadline = Date.now() + timeout;
@@ -382,7 +449,10 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
       const control = await firstVisible([
         page.getByRole("link", { name: /^Page posts$/i }),
         page.getByRole("button", { name: /^Page posts$/i }),
+        page.getByRole("tab", { name: /^Page posts$/i }),
+        page.getByRole("menuitem", { name: /^Page posts$/i }),
         page.locator('a[href*="/admin/page-posts"]'),
+        page.getByText(/^Page posts$/i),
       ]);
       if (control) return control;
       await page.waitForTimeout(250);
@@ -392,7 +462,7 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
 
   const openFromManageCard = async () => {
     if (!/linkedin\.com\/feed\/?/i.test(page.url())) {
-      await page.goto(LINKEDIN_FEED_URL, { timeout: 60000 });
+      await page.goto(LINKEDIN_FEED_URL, { timeout: 60000, waitUntil: "domcontentloaded" });
       await page.waitForLoadState("domcontentloaded");
     }
     const manageHeading = page.getByText(/^Manage$/i).first();
@@ -433,7 +503,8 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
           || element.querySelector("img")?.getAttribute("alt") || "",
       })).catch(() => null);
       const managedPage = candidate ? linkedInManagedPageFromLink(candidate.name, candidate.href) : null;
-      if (!managedPage || (managedPage.id !== target.id && managedPage.name !== target.name)) continue;
+      if (!managedPage || (managedPage.id !== target.id
+        && !(shouldOpenLinkedInManagedPageFromManage(target.id) && managedPage.name === target.name))) continue;
       const previousUrl = page.url();
       const clicked = await link.scrollIntoViewIfNeeded({ timeout: 5000 })
         .then(() => link.click({ force: true, timeout: 10000 }))
@@ -448,71 +519,75 @@ async function openLinkedInManagedPagePosts(page: Page, target: LinkedInManagedP
         // exact, validated Manage item above, so opening it directly preserves
         // destination identity without trying another administered Page.
         console.log(`LinkedIn kept the selected Manage link on ${previousUrl}; opening its verified destination directly.`);
-        await page.goto(candidate!.href, { timeout: 60000 });
+        await page.goto(candidate!.href, { timeout: 60000, waitUntil: "domcontentloaded" });
       }
-      trustedCanonicalNavigation = true;
       await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-      await page.waitForTimeout(1500);
       console.log(`LinkedIn opened ${target.name} from Manage at ${page.url()}.`);
-      return true;
+      return waitForSelectedPage();
     }
     return false;
   };
 
   console.log(`Opening managed LinkedIn Page posts for ${target.name}...`);
-  const openPagePostsControl = async (pagePostsControl: Locator) => {
-    const href = await pagePostsControl.getAttribute("href").catch(() => null);
-    if (href) {
-      await page.goto(new URL(href, page.url()).href, { timeout: 60000 });
-    } else {
-      await pagePostsControl.click({ timeout: 10000 });
+  const openPagePostsControl = async (pagePostsControl: Locator | null) => {
+    if (pagePostsControl) {
+      console.log(`Clicking Page posts for ${target.name}...`);
+      // Current sidebars can render the label inside a div, a tab, or a
+      // clickable ancestor rather than expose a link/button role.
+      const href = await pagePostsControl.evaluate(element => (
+        element.closest<HTMLAnchorElement>("a[href]")?.href || null
+      )).catch(() => null);
+      if (href && linkedInAdminPageId(href)?.toLowerCase() !== expectedPageId.toLowerCase()) {
+        throw new Error(`LinkedIn Page posts points to a different Page than ${target.name}. Nothing was published.`);
+      }
+      await activateComposerControl(pagePostsControl).catch(() => undefined);
+      await page.waitForURL(url => isLinkedInManagedPagePostsUrl(url.href, expectedPageId), {
+        timeout: 5000, waitUntil: "domcontentloaded",
+      }).catch(() => undefined);
+      if (!onExpectedPage() && linkedInAdminPageId(page.url())?.toLowerCase() !== expectedPageId.toLowerCase()) {
+        throw new Error(`LinkedIn left the selected managed Page ${target.name}. Nothing was published.`);
+      }
+      if (onExpectedPage()) return;
     }
-    trustedCanonicalNavigation = true;
-    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-    await page.waitForTimeout(1500);
+    // Use the verified admin ID when the sidebar click is ignored or missing.
+    // Reusing a saved public slug here can select another administered Page.
+    await page.goto(`https://www.linkedin.com/company/${encodeURIComponent(expectedPageId)}/admin/page-posts/published/`, {
+      timeout: 60000, waitUntil: "domcontentloaded",
+    });
   };
 
   if (shouldOpenLinkedInManagedPageFromManage(target.id)) {
     if (!await openFromManageCard()) {
-      throw new Error(`LinkedIn could not find ${target.name} in the Manage card. Nothing was published.`);
+      throw new Error(`LinkedIn could not verify the selected Page ${target.name} from Manage. Nothing was published.`);
     }
-    const pagePostsControl = await waitForPagePostsControl();
-    if (!pagePostsControl) {
-      throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
-    }
-    await openPagePostsControl(pagePostsControl);
   } else {
-    await page.goto(target.pagePostsUrl, { timeout: 60000 });
-    await page.waitForLoadState("domcontentloaded");
-    await page.waitForTimeout(1500);
+    await page.goto(target.pagePostsUrl, { timeout: 60000, waitUntil: "domcontentloaded" });
     await dismissCookiePrompt(page);
-    // LinkedIn may preserve or canonicalize a numeric organization ID after
-    // opening the exact saved Page-posts destination.
-    if (isLinkedInManagedPagePostsUrl(page.url(), target.id)) trustedCanonicalNavigation = true;
+    if (!await waitForSelectedPage() && !await openFromManageCard()) {
+      throw new Error(`LinkedIn did not open the selected managed Page ${target.name}. Nothing was published.`);
+    }
   }
 
   if (!onExpectedPage()) {
-    await page.goto(target.pageUrl, { timeout: 60000 });
-    await page.waitForLoadState("domcontentloaded");
-    await page.waitForTimeout(1500);
-    let pagePostsControl = await waitForPagePostsControl(5000);
-    if (!pagePostsControl && await openFromManageCard()) {
-      pagePostsControl = await waitForPagePostsControl();
-    }
-    if (!pagePostsControl) {
-      throw new Error(`LinkedIn could not open Page posts for ${target.name} from its Manage card. Nothing was published.`);
-    }
-    await openPagePostsControl(pagePostsControl);
+    await openPagePostsControl(await waitForPagePostsControl());
   }
 
   if (!onExpectedPage()) {
     throw new Error(`LinkedIn did not open the selected managed Page ${target.name}. Nothing was published.`);
   }
-  const pagePostsReady = await firstVisible([
-    page.getByRole("heading", { name: /^Page posts$/i }),
-    page.getByText(/^Page posts$/i),
-    page.getByRole("button", { name: /Start a post/i }),
-  ]);
+  const readyDeadline = Date.now() + 15000;
+  let pagePostsReady = false;
+  while (Date.now() < readyDeadline && onExpectedPage()) {
+    // The sidebar label can be visible while the main content is still loading.
+    pagePostsReady = Boolean(await firstVisible([
+      ...linkedInStartPostControls(page, true),
+      page.getByRole("button", { name: /^(?:\+\s*)?Create$/i }),
+      page.getByRole("link", { name: /^(?:\+\s*)?Create$/i }),
+      page.getByText(/^(?:\+\s*)?Create$/i),
+    ]));
+    if (pagePostsReady) break;
+    await page.waitForTimeout(250);
+  }
   if (!pagePostsReady) {
     throw new Error(`LinkedIn Page posts did not finish loading for ${target.name}. Nothing was published.`);
   }
@@ -648,11 +723,8 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
         response.status(),
       ), { timeout: getPostConfirmationTimeoutMs() }).then(() => true).catch(() => false);
       console.log("Clicking LinkedIn Post button...");
-      await postButton.evaluate((element: HTMLElement) => {
-        element.scrollIntoView({ block: "center", inline: "center" });
-        element.focus();
-        element.click();
-      }).catch(() => postButton.click({ force: true, timeout: 10000 }));
+      await postButton.scrollIntoViewIfNeeded({ timeout: 5000 });
+      await postButton.click({ timeout: 10000 });
       await onSubmitted?.();
       return { acceptedResponse };
     }
@@ -712,7 +784,6 @@ async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvide
   console.log("Waiting for LinkedIn post to finish...");
   const deadline = Date.now() + getPostConfirmationTimeoutMs();
   let networkAccepted = false;
-  let composerHiddenSince: number | null = null;
   void evidence.acceptedResponse.then(accepted => { networkAccepted = accepted; });
 
   while (Date.now() < deadline) {
@@ -732,22 +803,6 @@ async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvide
       await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
       console.log("LinkedIn confirmed the post was accepted.");
       return;
-    }
-
-    const composerVisible = Boolean(await firstVisible(linkedInComposerEditorLocators(page)));
-    if (composerVisible) {
-      composerHiddenSince = null;
-    } else {
-      composerHiddenSince ??= Date.now();
-      if (Date.now() - composerHiddenSince >= 12_000) {
-        const minimumSettleMs = mediaUploadExpected ? linkedinMediaSettleMs() : 0;
-        if (minimumSettleMs > 0) {
-          console.log(`LinkedIn closed the composer. Keeping the browser open for a ${minimumSettleMs / 1000}-second media-upload safety window.`);
-        }
-        await waitForLinkedInSettle(page, mediaUploadExpected ? 15_000 : 5000, minimumSettleMs);
-        console.log("LinkedIn finished uploading and kept the composer closed after accepting the post.");
-        return;
-      }
     }
 
     await page.waitForTimeout(250);
@@ -852,7 +907,7 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
 
   await loginToLinkedIn(page, upload, accountLogin);
   if (upload.linkedinTarget) await openLinkedInManagedPagePosts(page, upload.linkedinTarget);
-  await clickStartPost(page);
+  await clickStartPost(page, Boolean(upload.linkedinTarget));
   if (!isTextOnly) await attachLinkedInMedia(page, filePath);
   await typeLinkedInPostText(page, upload.caption.trim());
   const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
