@@ -6,7 +6,7 @@ import test from "node:test";
 import { build } from "esbuild";
 import { chromium } from "playwright-core";
 
-test("signup keeps verification pending and updates delivery status after resend", async (context) => {
+async function authModalPage(context, initialMode = "signup") {
   const executablePath = [
     process.env.CHROME_PATH,
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -21,7 +21,7 @@ test("signup keeps verification pending and updates delivery status after resend
       contents: `import React from "react"; import { createRoot } from "react-dom/client";
         import AuthModal from "./AuthModal.jsx";
         window.authEvents = [];
-        createRoot(document.getElementById("root")).render(<AuthModal open initialMode="signup"
+        createRoot(document.getElementById("root")).render(<AuthModal open initialMode="${initialMode}"
           onClose={() => window.authEvents.push("closed")}
           onAuthenticated={() => window.authEvents.push("authenticated")} />);`,
       resolveDir: fileURLToPath(new URL(".", import.meta.url)),
@@ -38,6 +38,13 @@ test("signup keeps verification pending and updates delivery status after resend
   const browser = await chromium.launch({ executablePath, headless: true });
   context.after(() => browser.close());
   const page = await browser.newPage();
+  return { page, url: `http://127.0.0.1:${server.address().port}/` };
+}
+
+test("signup keeps verification pending and updates delivery status after resend", async (context) => {
+  const fixture = await authModalPage(context);
+  if (!fixture) return;
+  const { page, url } = fixture;
   let resendCount = 0;
   await page.route("**/api/platform-auth/signup", route => route.fulfill({ json: {
     ok: true, user: {name: "AWS email test"}, verificationRequired: true, emailDeliveryFailed: true,
@@ -48,7 +55,7 @@ test("signup keeps verification pending and updates delivery status after resend
       ? {status: 503, json: {error: "Email delivery is temporarily unavailable. Please try again later or contact support."}}
       : {json: {ok: true, message: "If the account needs verification, a new link has been sent."}});
   });
-  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.goto(url);
   await page.getByLabel("Full name").fill("AWS email test");
   await page.getByLabel("Company", {exact:true}).fill("AWS UI test");
   await page.getByLabel("Work email").fill("test@example.com");
@@ -69,4 +76,34 @@ test("signup keeps verification pending and updates delivery status after resend
   assert.equal(await page.getByRole("button", {name:"Resend verification email"}).count(), 1);
   await page.keyboard.press("Escape");
   assert.deepEqual(await page.evaluate(() => window.authEvents), ["closed"]);
+});
+
+test("login shows automatic verification delivery and lets a failed send recover", async context => {
+  const fixture = await authModalPage(context, "login");
+  if (!fixture) return;
+  const { page, url } = fixture;
+  let loginCount = 0;
+  await page.route("**/api/platform-auth/login", route => route.fulfill({ status: 403, json: {
+    code: "EMAIL_NOT_VERIFIED", error: "Verify your email before signing in.", verificationRequired: true,
+    emailDeliveryFailed: ++loginCount > 1,
+    verificationMessage: loginCount === 1
+      ? "A verification link has been sent. Check your inbox and spam folder."
+      : "We couldn't send the verification email. Please try resending later or contact support.",
+  } }));
+  await page.route("**/api/platform-auth/resend-verification", route => route.fulfill({ json: {
+    ok: true, message: "If the account needs verification, a new link has been sent.",
+  } }));
+  await page.goto(url);
+  await page.getByLabel("Work email").fill("person@example.com");
+  await page.getByPlaceholder("Enter your password").fill("test-password-123");
+  await page.getByRole("button", { name: "Continue to AgenticThat" }).click();
+  await page.locator(".auth-notice").filter({ hasText: "A verification link has been sent" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Resend verification email" }).count(), 1);
+  assert.deepEqual(await page.evaluate(() => window.authEvents), []);
+  await page.getByRole("button", { name: "Continue to AgenticThat" }).click();
+  await page.locator(".auth-notice").filter({ hasText: "couldn't send" }).waitFor();
+  await page.getByRole("button", { name: "Resend verification email" }).click();
+  await page.locator(".auth-notice").filter({ hasText: "a new link has been sent" }).waitFor();
+  assert.equal(await page.getByRole("alert").innerText(), "");
+  assert.deepEqual(await page.evaluate(() => window.authEvents), []);
 });

@@ -52,6 +52,7 @@
     "db:migrate:whatsapp": "node scripts/migrate-whatsapp-database.mjs",
     "db:migrate": "npm run db:migrate:platform",
     "production:check": "node scripts/check-production-config.mjs",
+    "email:check": "node scripts/check-auth-email.mjs",
     "whatsapp:sync": "node scripts/sync-whatsapp-upstream.mjs",
     "whatsapp:sync:apply": "node scripts/sync-whatsapp-upstream.mjs --apply",
     "seed": "node scripts/seed.js",

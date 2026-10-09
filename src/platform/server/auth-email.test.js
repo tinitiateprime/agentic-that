@@ -205,3 +205,98 @@ test("verification page signs in, removes the token from browser history, and re
   assert.match(source, /You're signed in\. We're opening your AgenticThat workspace now\./);
   assert.doesNotMatch(source, /â€¦/);
 });
+
+function emailFixture(context) {
+  const names = ["AUTH_EMAIL_FROM", "RESEND_API_KEY", "AUTH_EMAIL_WEBHOOK_URL", "NODE_ENV"];
+  const before = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  process.env.AUTH_EMAIL_FROM = "AgenticThat <accounts@example.com>";
+  process.env.RESEND_API_KEY = "re_test_key";
+  delete process.env.AUTH_EMAIL_WEBHOOK_URL;
+  context.after(() => {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+}
+
+test("temporary Resend throttling retries with the same payload and idempotency key", async context => {
+  emailFixture(context);
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (_url, options) => {
+    requests.push(options);
+    return requests.length === 1
+      ? Response.json({ name: "rate_limit_exceeded" }, { status: 429, headers: { "retry-after": "0" } })
+      : Response.json({ id: "email_after_retry" });
+  });
+  const result = await sendVerificationEmail("person@example.com", "verification-token");
+  assert.equal(result.messageId, "email_after_retry");
+  assert.equal(requests.length, 2);
+  assert.ok(requests[0].headers["Idempotency-Key"]);
+  assert.equal(requests[0].headers["Idempotency-Key"], requests[1].headers["Idempotency-Key"]);
+  assert.equal(requests[0].body, requests[1].body);
+});
+
+test("a lost network response retries safely and permanent rejection does not retry", async context => {
+  emailFixture(context);
+  let attempts = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    if (++attempts === 1) throw new TypeError("Private network details");
+    return Response.json({ id: "email_network_retry" });
+  });
+  assert.equal((await sendPlatformAuthEmail({ to: "person@example.com", subject: "Test", text: "Test" })).messageId, "email_network_retry");
+  assert.equal(attempts, 2);
+  attempts = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    attempts++;
+    return Response.json({ name: "invalid_api_key", message: "Private key details" }, { status: 401 });
+  });
+  await assert.rejects(sendVerificationEmail("person@example.com", "token"), error => {
+    assert.ok(error instanceof PlatformEmailDeliveryError);
+    assert.match(error.message, /API key is invalid/);
+    assert.doesNotMatch(error.message, /Private/);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
+
+test("email deadlines return a delivery error instead of waiting for the hosting gateway", async context => {
+  emailFixture(context);
+  context.mock.method(globalThis, "fetch", async (_url, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    // AbortSignal's timer is unref'ed; keep this mocked request alive.
+    const timer = setTimeout(() => resolve(Response.json({ id: "too_late" })), 1_000);
+    signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  }));
+  await assert.rejects(sendPlatformAuthEmail({ to: "person@example.com", subject: "Test", text: "Test", timeoutMs: 25 }), error => {
+    assert.ok(error instanceof PlatformEmailDeliveryError);
+    assert.match(error.message, /timed out/);
+    return true;
+  });
+});
+
+test("missing local email settings and unconfirmed responses never report a successful send", async context => {
+  emailFixture(context);
+  process.env.NODE_ENV = "development";
+  delete process.env.RESEND_API_KEY;
+  await assert.rejects(sendVerificationEmail("person@example.com", "token"), PlatformEmailDeliveryError);
+  process.env.RESEND_API_KEY = "re_test_key";
+  context.mock.method(globalThis, "fetch", async () => Response.json({}));
+  await assert.rejects(sendVerificationEmail("person@example.com", "token"), /did not confirm acceptance/);
+});
+
+test("persistent provider outages exhaust bounded retries without exposing the provider response", async context => {
+  emailFixture(context);
+  let attempts = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    attempts++;
+    return Response.json({ message: "Private upstream request data" }, { status: 503 });
+  });
+  await assert.rejects(sendVerificationEmail("person@example.com", "token"), error => {
+    assert.ok(error instanceof PlatformEmailDeliveryError);
+    assert.match(error.message, /HTTP 503/);
+    assert.doesNotMatch(error.message, /Private/);
+    return true;
+  });
+  assert.equal(attempts, 3);
+});

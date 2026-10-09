@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+
 function publicOrigin() {
   const configured = String(process.env.PLATFORM_PUBLIC_URL || process.env.URL || "").trim();
   if (configured) {
@@ -311,26 +314,52 @@ export function resolvePlatformEmailStudioSender(senderId) {
   return sender;
 }
 
-export async function sendPlatformAuthEmail({ to, subject, text, html, senderId, idempotencyKey, timeoutMs = 30_000 }) {
+async function requestEmailProvider(url, options, timeoutMs) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  // Keep all retries within one deadline so Amplify can return a useful error.
+  // Reuse the same idempotency key if the provider accepted a lost response.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(url, { ...options, signal });
+      const payload = await response.json().catch(() => null);
+      const result = payload && typeof payload === "object" ? payload : {};
+      if (signal.aborted) throw signal.reason;
+      const transient = [408, 429].includes(response.status) || response.status >= 500;
+      if (!transient || attempt === 2) return { response, result };
+      const retryAfter = Number(response.headers.get("retry-after"));
+      await delay(Math.min(2_000, Math.max(500 * (attempt + 1), Number.isFinite(retryAfter) ? retryAfter * 1000 : 0)), undefined, { signal });
+    } catch (error) {
+      if (signal.aborted) throw new PlatformEmailDeliveryError("Email delivery timed out. Try again later.");
+      if (attempt === 2) throw new PlatformEmailDeliveryError("Unable to reach the email provider. Try again later.");
+      try {
+        await delay(500 * (attempt + 1), undefined, { signal });
+      } catch {
+        throw new PlatformEmailDeliveryError("Email delivery timed out. Try again later.");
+      }
+    }
+  }
+}
+
+export async function sendPlatformAuthEmail({ to, subject, text, html, senderId, idempotencyKey, timeoutMs = 8_000 }) {
   const from = senderId
     ? resolvePlatformEmailStudioSender(senderId).from
     : String(process.env.AUTH_EMAIL_FROM || "").trim();
   const resendKey = String(process.env.RESEND_API_KEY || "").trim();
   const webhookUrl = String(process.env.AUTH_EMAIL_WEBHOOK_URL || "").trim();
+  const deliveryKey = String(idempotencyKey || randomUUID()).slice(0, 256);
 
   if (resendKey && from) {
-    const response = await fetch("https://api.resend.com/emails", {
+    const { response, result } = await requestEmailProvider("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         authorization: `Bearer ${resendKey}`,
         "content-type": "application/json",
-        ...(idempotencyKey ? { "Idempotency-Key": String(idempotencyKey).slice(0, 256) } : {}),
+        "Idempotency-Key": deliveryKey,
       },
       body: JSON.stringify({ from, to: [to], subject, text, html }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, timeoutMs);
     if (!response.ok) {
-      const failure = await response.json().catch(() => ({}));
+      const failure = result;
       // Give useful setup guidance without exposing an upstream response that
       // could contain addresses, request data or credentials.
       if (failure.name === "validation_error" && /domain is not verified/i.test(String(failure.message || ""))) {
@@ -341,32 +370,28 @@ export async function sendPlatformAuthEmail({ to, subject, text, html, senderId,
       }
       throw new PlatformEmailDeliveryError(`Email provider returned HTTP ${response.status}.`);
     }
-    const result = await response.json().catch(() => ({}));
-    return { provider: "resend", messageId: String(result.id || "") || null, skipped: false };
+    if (typeof result.id !== "string" || !result.id.trim()) {
+      throw new PlatformEmailDeliveryError("The email provider did not confirm acceptance. Try again later.");
+    }
+    return { provider: "resend", messageId: result.id, skipped: false };
   }
 
   if (webhookUrl && from) {
     const secret = String(process.env.AUTH_EMAIL_WEBHOOK_SECRET || "").trim();
-    const response = await fetch(webhookUrl, {
+    const { response, result } = await requestEmailProvider(webhookUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(secret ? { authorization: `Bearer ${secret}` } : {}),
-        ...(idempotencyKey ? { "Idempotency-Key": String(idempotencyKey).slice(0, 256) } : {}),
+        "Idempotency-Key": deliveryKey,
       },
       body: JSON.stringify({ from, to, subject, text, html }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    }, timeoutMs);
     if (!response.ok) throw new PlatformEmailDeliveryError(`Email webhook returned HTTP ${response.status}.`);
-    const result = await response.json().catch(() => ({}));
     return { provider: "webhook", messageId: String(result.id || result.messageId || "") || null, skipped: false };
   }
 
-  if (process.env.NODE_ENV === "production") {
-    throw new PlatformEmailDeliveryError("AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL are required.");
-  }
-  console.warn(`Authentication email for ${to} was not sent because no development email provider is configured.`);
-  return { provider: "development", messageId: null, skipped: true };
+  throw new PlatformEmailDeliveryError("AUTH_EMAIL_FROM and RESEND_API_KEY or AUTH_EMAIL_WEBHOOK_URL are required.");
 }
 
 export function platformEmailConfiguration() {

@@ -109,6 +109,51 @@ The worker receives only its required configuration through AWS Secrets Manager.
 Amplify uses a branch-specific IAM role to invoke that worker without static AWS keys.
 See [deployment.md](deployment.md) for setup, migration and live validation.
 
+## Login email delivery
+
+An unverified account now receives a fresh verification **link** when signing in
+with the correct password. Verified accounts sign in with their password;
+the application does not send a numeric login code. Automatic sends and the
+Resend verification email button share the same abuse limits (three requests
+per email and five per IP per hour). Previously issued links remain valid until
+one succeeds or their 24-hour expiry is reached.
+
+In Amplify Hosting, open **Hosting > Environment variables** and check the
+values for the `main` branch:
+
+```text
+AUTH_EMAIL_FROM = AgenticThat <accounts@agenticthat.com>
+RESEND_API_KEY = your actual Resend sending key
+PLATFORM_PUBLIC_URL = https://www.agenticthat.com
+```
+
+Enter the values directly in the console, without the surrounding quotes used
+in dotenv files. Save and redeploy `main` after changing them: `amplify.yml`
+copies the server variables into the Next.js runtime during the build.
+The key must have permission to send from `agenticthat.com`. In Resend Domains,
+verify that this exact domain has its required sending DNS records verified.
+Use Resend Emails to check whether a requested message was delivered, bounced,
+or suppressed, and check the recipient's spam folder. Sending-only API keys
+cannot list domains; that restriction does not mean email sending is broken.
+
+Check the sender and key without emailing a real person:
+
+```powershell
+npm run email:check -- --env-file .env.aws-import
+```
+
+The check sends to Resend's `delivered@resend.dev` simulation and prints no
+credentials. API acceptance does not prove delivery to a real inbox.
+For local development, set `AUTH_EMAIL_FROM` and `RESEND_API_KEY` in
+`.env.local`, set `PLATFORM_PUBLIC_URL=http://localhost:5173` (or your actual
+local port), and restart the dev server. `.env.aws-import` is a deployment
+input and Next.js does not load it automatically. Missing local email settings
+now produce a delivery error instead of silently skipping the email.
+
+References: [Amplify SSR environment variables](https://docs.aws.amazon.com/amplify/latest/userguide/ssr-environment-variables.html),
+[Resend domain verification](https://resend.com/docs/dashboard/domains/introduction),
+and [Resend sending status](https://resend.com/docs/dashboard/emails/introduction).
+
 ## Values not to add
 
 These are unused, redundant, local-only, or provider-specific for the current production configuration:

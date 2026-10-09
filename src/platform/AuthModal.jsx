@@ -161,6 +161,8 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           setErrorCode(data.code || "");
+          setEmailDeliveryFailed(data.emailDeliveryFailed === true);
+          setNotice(data.verificationMessage || "");
           throw new Error(data.error || "Unable to continue. Please try again.");
         }
         if (data.mfaRequired) {

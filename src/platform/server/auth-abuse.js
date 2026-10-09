@@ -13,6 +13,11 @@ export function requestClientAddress(request) {
   return forwarded || request.headers.get("x-nf-client-connection-ip") || "unknown";
 }
 
+export async function enforceVerificationEmailRateLimit(request, email) {
+  await enforceAuthRateLimit("verification-resend-ip", requestClientAddress(request), 5, 60 * 60, 60 * 60);
+  await enforceAuthRateLimit("verification-resend-email", email || "invalid", 3, 60 * 60, 60 * 60);
+}
+
 export async function enforceAuthRateLimit(scope, subject, maximum, windowSeconds, blockSeconds = windowSeconds) {
   const hash = subjectHash(subject);
   const enforceLocally = () => {
