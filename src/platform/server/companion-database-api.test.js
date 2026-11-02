@@ -104,39 +104,28 @@ test("an omitted job result or error is SQL NULL rather than a JSON null documen
   assert.equal(parameters[8], null);
 });
 
-test("signed media streams ranges without forwarding cookies, API keys, or redirects", async () => {
-  let called;
+test("signed media downloads redirect to fixed storage without exposing elevated keys", async () => {
   const result = await handleCompanionMedia(new Request("https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=signed", {
     headers: { range: "bytes=0-2", cookie: "private-cookie", authorization: "private-key", apikey: "private-key" },
-  }), { environment, fetchImplementation: async (url, options) => {
-    called = { url, options };
-    return new Response(Uint8Array.from([1, 2, 3]), { status: 206, headers: { "content-type": "image/jpeg", "content-range": "bytes 0-2/10", "set-cookie": "private=1" } });
-  } });
-  assert.equal(result.status, 206);
-  assert.equal(called.url.origin, environment.NEXT_PUBLIC_SUPABASE_URL);
-  assert.deepEqual(called.options.headers, { range: "bytes=0-2" });
-  assert.equal(called.options.redirect, "error");
+  }), { environment });
+  assert.equal(result.status, 307);
+  assert.equal(new URL(result.headers.get("location")).origin, environment.NEXT_PUBLIC_SUPABASE_URL);
+  assert.equal(new URL(result.headers.get("location")).pathname, "/storage/v1/object/sign/job-artifacts/workspace/file.jpg");
+  assert.equal(new URL(result.headers.get("location")).searchParams.get("token"), "signed");
   assert.equal(result.headers.get("set-cookie"), null);
-  assert.equal(result.headers.get("content-range"), "bytes 0-2/10");
+  assert.equal(result.headers.get("authorization"), null);
+  assert.equal(result.headers.get("apikey"), null);
   assert.equal(result.headers.get("cache-control"), "private, no-store");
-  assert.deepEqual(new Uint8Array(await result.arrayBuffer()), Uint8Array.from([1, 2, 3]));
+  assert.equal((await result.arrayBuffer()).byteLength, 0);
 });
 
 test("media proxy cannot become an open proxy or an unsigned storage endpoint", async () => {
-  let called = false;
-  const fetchImplementation = async () => { called = true; throw new Error(); };
   for (const [url, status, headers] of [
     ["https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg", 401],
     ["https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=t&url=https://evil.test", 401],
     ["https://www.example.test/storage/v1/object/sign/job-artifacts/workspace%2Fsecret/file.jpg?token=t", 400],
     ["https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=t", 416, { range: "bytes=0-1,3-4" }],
   ]) {
-    assert.equal((await handleCompanionMedia(new Request(url, { headers }), { environment, fetchImplementation })).status, status);
+    assert.equal((await handleCompanionMedia(new Request(url, { headers }), { environment })).status, status);
   }
-  assert.equal(called, false);
-  const expired = await handleCompanionMedia(new Request("https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=expired"), {
-    environment, fetchImplementation: async () => new Response("private upstream error", { status: 403 }),
-  });
-  assert.equal(expired.status, 403);
-  assert.ok(!(await expired.text()).includes("private upstream error"));
 });

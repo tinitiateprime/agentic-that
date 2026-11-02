@@ -204,7 +204,7 @@ export async function handleCompanionRpc(request, name, { environment = process.
   }
 }
 
-export async function handleCompanionMedia(request, { environment = process.env, fetchImplementation = fetch } = {}) {
+export async function handleCompanionMedia(request, { environment = process.env } = {}) {
   if (!companionDatabaseApiEnabled(environment)) return response({ message: "Companion database API is disabled." }, 404);
   try {
     const url = new URL(request.url);
@@ -220,18 +220,13 @@ export async function handleCompanionMedia(request, { environment = process.env,
     const range = request.headers.get("range");
     if (range && !/^bytes=\d+-\d*$/.test(range)) return response({ message: "Invalid media range." }, 416);
     const destination = new URL(`${url.pathname}${url.search}`, apiOrigins(environment).storage);
-    const upstream = await fetchImplementation(destination, {
-      headers: range ? { range } : {}, redirect: "error", signal: AbortSignal.timeout(20000),
+    // Released Companions validate the initial website origin and follow this
+    // fixed-origin redirect. Media stays on storage, including 5 MiB parts that
+    // would exceed Amplify's compute response limit after binary encoding.
+    return new Response(null, {
+      status: 307,
+      headers: { location: destination.toString(), "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
     });
-    if (![200, 206].includes(upstream.status)) {
-      await upstream.body?.cancel();
-      return response({ message: "Private media download is unavailable." }, [400, 401, 403, 404].includes(upstream.status) ? upstream.status : 502);
-    }
-    const headers = new Headers({ "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
-    for (const key of ["content-type", "content-length", "content-range", "accept-ranges", "etag"]) {
-      if (upstream.headers.has(key)) headers.set(key, upstream.headers.get(key));
-    }
-    return new Response(upstream.body, { status: upstream.status, headers });
   } catch {
     return response({ message: "Private media download is temporarily unavailable." }, 502);
   }

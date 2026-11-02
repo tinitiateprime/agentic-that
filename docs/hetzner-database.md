@@ -30,8 +30,9 @@ pairings continue to target the old database until replaced.
 
 Private media remains in its existing Supabase Storage bucket. Claimed jobs
 receive website-origin signed download URLs, including chunked downloads.
-The download proxy forwards only the signed URL and an optional byte range to
-the configured storage origin; it never forwards cookies or elevated keys.
+The download endpoint redirects to the signed URL on the fixed storage origin.
+Companions download directly from storage, preserving large chunk support and
+avoiding Amplify response-size limits. Elevated keys are never included.
 
 ## Cutover
 
