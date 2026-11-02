@@ -24,6 +24,11 @@ test("AWS retains supported legacy keys and limits worker secrets to its service
   assert.equal(worker.SUPABASE_SERVICE_ROLE_KEY, undefined);
 });
 
+test("Amplify preserves the PostgreSQL Companion transport in the server runtime", () => {
+  const values = amplifyEnvironment({ COMPANION_RPC_TRANSPORT: "postgres" });
+  assert.equal(values.COMPANION_RPC_TRANSPORT, "postgres");
+});
+
 test("Next.js reads PEM newlines and literal dollar signs from the AWS runtime file", () => {
   const values = { TEST_AWS_PEM: "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n", TEST_AWS_URL: "postgres://user:pass$NO_SUCH_VARIABLE@host/db" };
   const [, parsed] = nextEnvironment.processEnv([{ path: ".env.production", contents: serializeEnvironment(values), env: {} }], undefined, console, true);

@@ -2,14 +2,16 @@
 
 Amplify hosts the Next.js website and request-based APIs. A private Node 22
 Lambda worker can run long scraping, Growth Advisor and Website Studio jobs.
-Supabase remains the PostgreSQL database, private media storage and token-scoped
-Companion job-control backend. Publishing browser sessions stay in the desktop
+Hetzner hosts the application PostgreSQL database. With
+`COMPANION_RPC_TRANSPORT=postgres`, the website serves token-scoped Companion
+job operations against the same database. Supabase provides private media
+storage. Publishing browser sessions stay in the desktop
 Companion. Request-based Telegram hosting does not run a permanent listener or
 scheduler.
 
 ## Prepare and validate
 
-Use the existing Supabase project and retain the original session, credential
+Use the configured Hetzner PostgreSQL database and retain the original session, credential
 and service signing keys. Retain the project-token key if its original value is
 available. Masked values cannot decrypt existing records. Netlify secrets are
 write-only: its UI, CLI and API cannot reveal them. Without an explicit project
@@ -42,7 +44,7 @@ Google Cloud. Existing Meta webhook settings should use the same canonical host.
 
 `BACKGROUND_JOB_MODE=auto` uses the configured `BACKGROUND_JOB_FUNCTION_NAME`.
 If no function name is set, Website Studio advances one bounded AI/media/render
-step per authenticated request, with private state and claims in Supabase.
+step per authenticated request, with private state and claims in PostgreSQL.
 Growth Advisor makes one bounded provider attempt per request and persists a
 retry or result. Keep the page open for request-driven progress; reopening
 Website Studio resumes its saved steps. The Companion continues to run scraping

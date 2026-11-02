@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getDatabaseSql } from "../../../lib/database-document-store.js";
+import { companionPairingConfiguration } from "./companion-database-api.js";
 
 const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_TTL_MS = 5 * 60_000;
@@ -626,6 +627,7 @@ export async function readSupabaseJobArtifactRange(artifact, start, end, request
 }
 
 export async function createSupabasePairing(principal, input = {}) {
+  const configuration = companionPairingConfiguration(supabasePublicConfiguration());
   const sql = await getDatabaseSql();
   const pairingCode = `${randomUUID()}${randomUUID().replaceAll("-", "")}`;
   const challengeId = id("pairing");
@@ -640,7 +642,7 @@ export async function createSupabasePairing(principal, input = {}) {
       VALUES
         (${challengeId}, ${principal.workspaceId}, ${hashToken(pairingCode)}, ${label}, ${instanceId}, ${principal.userId}, ${expiresAt})`;
   });
-  return { pairingCode, expiresAt, ...supabasePublicConfiguration() };
+  return { pairingCode, expiresAt, ...configuration };
 }
 
 export async function latestSupabaseCompanion(workspaceId) {

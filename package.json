@@ -48,6 +48,8 @@
     "dev:instagram": "npm run dev",
     "dev:facebook": "npm run dev",
     "build": "npm run publishing:css && node scripts/copy-telegram-console.mjs && node scripts/build-next.mjs",
+    "db:check": "node scripts/check-database.mjs",
+    "test:companion-database": "node --test src/platform/server/companion-database-api.test.js src/platform/server/companion-database-api.integration.test.js",
     "db:migrate:platform": "node --import tsx scripts/migrate-platform-database.mjs",
     "db:migrate:whatsapp": "node scripts/migrate-whatsapp-database.mjs",
     "db:migrate": "npm run db:migrate:platform",

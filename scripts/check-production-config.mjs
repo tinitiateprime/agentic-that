@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { amplifyEnvironment } from "./amplify-environment.mjs";
 import { backgroundJobMode } from "../lib/background-jobs.js";
+import { companionPairingConfiguration } from "../src/platform/server/companion-database-api.js";
 
 const environment = process.argv.includes("--amplify") ? amplifyEnvironment(process.env) : process.env;
 const errors = [];
@@ -32,6 +33,13 @@ required("PLATFORM_PUBLIC_URL");
 required("AUTH_EMAIL_FROM");
 required("RESEND_API_KEY", ["AUTH_EMAIL_WEBHOOK_URL"]);
 required("AUTH_RATE_LIMIT_PEPPER");
+if (!["supabase", "postgres"].includes(environment.COMPANION_RPC_TRANSPORT || "supabase")) {
+  errors.push("COMPANION_RPC_TRANSPORT must be supabase or postgres.");
+}
+if (environment.COMPANION_RPC_TRANSPORT === "postgres") {
+  try { companionPairingConfiguration({}, environment); }
+  catch { errors.push("PostgreSQL Companion transport requires a plain HTTPS PLATFORM_PUBLIC_URL distinct from the media storage origin."); }
+}
 falseValue("NEXT_PUBLIC_TEAM_TESTING_FULL_ACCESS");
 
 if (String(environment.RBAC_ENFORCEMENT_MODE || "enforce").trim().toLowerCase() !== "enforce") {

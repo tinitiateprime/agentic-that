@@ -51,3 +51,10 @@ test("Amplify can deploy with private project-key persistence and request-driven
   assert.equal(result.status, 0, result.stderr);
   assert.equal(check({ BACKGROUND_JOB_MODE: "detached" }).status, 1);
 });
+
+test("PostgreSQL Companion transport requires a separate trusted website origin", () => {
+  assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres" }).status, 0);
+  assert.equal(check({ COMPANION_RPC_TRANSPORT: "unknown" }).status, 1);
+  assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres", PLATFORM_PUBLIC_URL: "https://user:password@example.test" }).status, 1);
+  assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres", PLATFORM_PUBLIC_URL: environment.NEXT_PUBLIC_SUPABASE_URL }).status, 1);
+});

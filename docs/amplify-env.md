@@ -17,8 +17,11 @@ NEXT_PUBLIC_WHATSAPP_DASHBOARD_URL=/dashboard
 NEXT_PUBLIC_PUBLISHING_EXTENSION_URL=<approved-chrome-web-store-listing-url>
 NEXT_PUBLIC_PUBLISHING_COMPANION_DOWNLOAD_URL=/companion/download
 
-# Supabase Data API. The publishable key is public and constrained by RLS plus
-# token-authenticated Companion RPCs. The secret key stays server-only.
+# Companion job operations use the website API and the Hetzner database.
+COMPANION_RPC_TRANSPORT=postgres
+# Supabase private media storage. The public key is also a compatibility marker
+# for Companion requests; each operation authenticates its own pairing token.
+# The secret key stays server-only.
 NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<supabase-publishable-key>
 SUPABASE_SECRET_KEY=<supabase-secret-key>
@@ -68,7 +71,7 @@ META_WEBHOOK_VERIFY_TOKEN=<new-random-webhook-verify-token>
 CREDENTIAL_ENCRYPTION_KEY=<original-credential-encryption-key>
 
 # WhatsApp application database and first admin
-DATABASE_URL=<serverless-pooled-postgresql-url>
+DATABASE_URL=postgresql://<login>:<url-encoded-password>@<hetzner-host>:5432/<database>?sslmode=require
 ADMIN_EMAIL=<production-admin-email>
 ADMIN_PASSWORD=<new-strong-unique-password>
 BUSINESS_NAME=AgenticThat
