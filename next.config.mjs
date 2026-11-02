@@ -3,6 +3,7 @@ const nextConfig = {
   outputFileTracingRoot: process.cwd(),
   serverExternalPackages: ["telegram", "postgres", "@project-workspace/embedded", "@sparticuz/chromium", "playwright-core", "sharp"],
   outputFileTracingIncludes: {
+    "/tools/pdf/assets/*": ["./node_modules/pdfjs-dist/build/pdf.worker.min.mjs", "./node_modules/pdfjs-dist/cmaps/**", "./node_modules/pdfjs-dist/standard_fonts/**", "./node_modules/pdfjs-dist/wasm/**", "./node_modules/pdfjs-dist/iccs/**"],
     "/api/website-studio": ["./node_modules/@sparticuz/chromium/bin/**"],
     "/api/website-studio/**": ["./node_modules/@sparticuz/chromium/bin/**"],
   },

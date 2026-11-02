@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { serviceEndpoints } from "./service-catalog";
 import AuthModal from "./AuthModal";
+import ToolsMenu from "./ToolsMenu";
 
 const FacebookLogo = "/facebook-logo.svg";
 const GoogleLogo = "/google-logo.svg";
@@ -2873,7 +2874,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 
   return (
     <main className="site-shell">
-      <nav className="nav-bar" aria-label="Main navigation">
+      <nav className="nav-bar nav-with-tools" aria-label="Main navigation">
         
         <a className="brand" href="/" aria-label="AgenticThat home">
           <span className="brand-mark">AT</span>
@@ -2884,6 +2885,7 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
           {navItems.map((item) => (
             <a href={item.href} key={item.label}>{item.label}</a>
           ))}
+          <ToolsMenu />
         </div>
 
         <div className="nav-actions">

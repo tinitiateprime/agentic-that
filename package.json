@@ -73,7 +73,10 @@
     "test:telegram": "npm --prefix services/messaging/telegram test",
     "aws:storage:check": "node scripts/check-aws-storage.mjs",
     "aws:live:check": "node scripts/check-aws-live.mjs",
-    "storage:migrate:netlify": "node scripts/migrate-netlify-storage.mjs"
+    "storage:migrate:netlify": "node scripts/migrate-netlify-storage.mjs",
+    "test:pdf": "node --test src/platform/pdf/pdf-operations.test.js src/platform/pdf/pdf-advanced.test.js",
+    "test:pdf:browser": "node scripts/test-pdf-browser.mjs",
+    "test:pdf:advanced:browser": "node scripts/test-pdf-advanced-browser.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-lambda": "^3.1145.0",
@@ -101,7 +104,14 @@
     "react-dom": "^19.1.0",
     "react-icons": "^5.7.0",
     "telegram": "^2.26.22",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.5.438",
+    "fflate": "0.8.3",
+    "mammoth": "1.13.0",
+    "docx": "9.15.1",
+    "pdfmake": "0.3.13",
+    "@pdf-lib/fontkit": "1.1.1"
   },
   "overrides": {
     "@opentelemetry/core": "^2.8.0",

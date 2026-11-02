@@ -13925,3 +13925,51 @@ html:has(body > .site-shell) body {
   .execution-model-exact.is-revealed .execution-exact-cloud,
   .execution-model-exact.is-revealed .execution-exact-browser { animation: none; }
 }
+
+/* Keep the complete primary navigation, including Tools, reachable on touch. */
+.nav-bar.nav-with-tools .nav-links {
+  display: flex;
+  align-self: stretch;
+  gap: clamp(18px, 2.5vw, 42px);
+}
+
+.nav-with-tools .nav-links > a { white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .nav-bar.nav-with-tools {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 66px 46px;
+    column-gap: 12px;
+    row-gap: 0;
+  }
+
+  .nav-with-tools .brand { grid-column: 1; grid-row: 1; }
+  .nav-with-tools .nav-actions { grid-column: 2; grid-row: 1; }
+  .nav-bar.nav-with-tools .nav-links {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    font-size: 13px;
+  }
+
+  .nav-with-tools .nav-links > a::after { bottom: -8px; width: 3px; height: 3px; }
+}
+
+@media (max-width: 560px) {
+  .nav-with-tools .site-account-copy { display: none; }
+  .nav-with-tools .site-account { gap: 4px; }
+  .nav-with-tools .site-signout { padding: 0 7px; font-size: 11px; }
+  .nav-with-tools .nav-actions { gap: 4px; }
+}
+
+@media (max-width: 380px) {
+  .nav-bar.nav-with-tools { padding-inline: 10px; }
+  .nav-with-tools .brand { gap: 7px; }
+  .nav-with-tools .brand-mark { width: 30px; height: 30px; font-size: 13px; }
+  .nav-with-tools .brand-word { font-size: 16px; }
+  .nav-with-tools .site-create-account { min-height: 36px; padding-inline: 9px; font-size: 10px; }
+  .nav-bar.nav-with-tools .nav-links { gap: 8px; font-size: 12px; }
+}
