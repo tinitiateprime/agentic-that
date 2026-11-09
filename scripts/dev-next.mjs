@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { parseEnv } from "node:util";
+import { nextDevelopmentEnvironment } from "./development-environment.mjs";
 
 const require = createRequire(import.meta.url);
 const nextBin = require.resolve("next/dist/bin/next");
@@ -16,15 +16,6 @@ const maxAttempts = Number(process.env.DEV_PORT_ATTEMPTS || 20);
 const projectRoot = process.cwd();
 const nextEnvPath = path.join(projectRoot, "next-env.d.ts");
 const useTurbopack = process.env.NEXT_USE_WEBPACK !== "true";
-
-function whatsappEnvironment() {
-  const envFiles = [
-    path.join(projectRoot, "services", "messaging", "whatsapp", ".env.local"),
-    path.join(projectRoot, "services", "messaging", "whatsapp", ".env"),
-  ];
-  const envPath = envFiles.find((candidate) => existsSync(candidate));
-  return envPath ? parseEnv(readFileSync(envPath, "utf8")) : {};
-}
 
 function canonicalNextEnv() {
   let eol = os.EOL;
@@ -193,8 +184,7 @@ const child = spawn(
   [nextBin, "dev", ...bundlerArgs, "-H", host, "-p", String(port)],
   {
     env: {
-      ...whatsappEnvironment(),
-      ...process.env,
+      ...nextDevelopmentEnvironment(projectRoot),
       PORT: String(port),
       NEXT_DIST_DIR: cache.distDir,
       NEXT_DEV_TSCONFIG: cache.tsconfigPath,
