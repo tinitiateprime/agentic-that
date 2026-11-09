@@ -5,6 +5,7 @@ import { ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircle
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
+import { BrandSymbol } from "./BrandMark";
 
 // Two levels. The slim rail on the left lists everything you can do; sections with
 // sub-pages (Messages, More) open a second panel beside it. Everything else is one click.
@@ -127,7 +128,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
   return (
     <div className={`${styles.productShell} ${embedded ? styles.embedded : ""}`}>
       <header className={styles.mobileHeader}>
-        <Link className={styles.mobileBrand} href="/apps"><span>AT</span><strong>AgenticThat</strong></Link>
+        <Link className={styles.mobileBrand} href="/apps"><span><BrandSymbol size={19} /></span><strong>AgenticThat</strong></Link>
         <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
           {menuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
@@ -137,7 +138,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
 
       <aside ref={sidebarRef} className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`}>
         <nav className={styles.rail} aria-label="Main navigation">
-          <Link className={styles.brandMark} href="/apps" onClick={close} title="AgenticThat home">AT</Link>
+          <Link className={styles.brandMark} href="/apps" onClick={close} title="AgenticThat home"><BrandSymbol size={20} /></Link>
 
           <div className={styles.railItems}>
             {railSections.filter((section) => section.id !== "more").map((section) => {

@@ -13973,3 +13973,9 @@ html:has(body > .site-shell) body {
   .nav-with-tools .site-create-account { min-height: 36px; padding-inline: 9px; font-size: 10px; }
   .nav-bar.nav-with-tools .nav-links { gap: 8px; font-size: 12px; }
 }
+
+/* AgenticThat logo (Keystone @) in the main navigation */
+.brand .brand-logo { height: 40px; color: #f7f5ef; }
+@media (max-width: 920px) { .brand .brand-logo { height: 34px; } }
+@media (max-width: 560px) { .brand .brand-logo { height: 30px; } }
+@media (max-width: 380px) { .nav-with-tools .brand .brand-logo { height: 26px; } }

@@ -65,6 +65,7 @@ import ProductShell from "./ProductShell";
 import { serviceDetailHref } from "./product-catalog";
 import { useProductStatus } from "./use-product-status";
 import styles from "./premium-service-detail.module.css";
+import { BrandSymbol } from "./BrandMark";
 
 const publishingProfiles = {
   instagram: {
@@ -466,7 +467,7 @@ function PlatformPostPreview({ service, profile }) {
       <article className={`${styles.platformPostPreview} ${styles.youtubePostPreview}`}>
         <PlatformArtwork service={service} profile={profile} compact />
         <div className={styles.youtubePreviewMeta}>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span>
             <strong>{profile.headline}</strong>
             <small>AgenticThat · 2.1K views · Premieres 24 Sep</small>
@@ -481,7 +482,7 @@ function PlatformPostPreview({ service, profile }) {
     return (
       <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_facebook}`}>
         <header>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span><strong>AgenticThat</strong><small>2 h · <Globe2 size={9} /></small></span>
           <MoreHorizontal size={17} />
         </header>
@@ -501,7 +502,7 @@ function PlatformPostPreview({ service, profile }) {
     return (
       <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_x}`}>
         <header>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span><strong>AgenticThat ✓</strong><small>@AgenticThat · 2h</small></span>
           <MoreHorizontal size={17} />
         </header>
@@ -521,7 +522,7 @@ function PlatformPostPreview({ service, profile }) {
   return (
     <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_linkedin}`}>
       <header>
-        <span className={styles.publisherBrandAvatar}>AT</span>
+        <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
         <span><strong>AgenticThat</strong><small>12,480 followers · 1h · <Globe2 size={9} /></small></span>
         <MoreHorizontal size={17} />
       </header>
@@ -644,7 +645,7 @@ function TelegramProof() {
   return (
     <section className={styles.proofSection}>
       <div className={styles.proofCopy}><span>SECURE BY DESIGN</span><h2>Verify once. Return to the same approved account.</h2><p>AgenticThat guides the Telegram login, uses each verification code once, and protects the reusable account session after setup.</p></div>
-      <div className={styles.connectionDiagram}><article><img src="/telegram-logo.svg" alt="" /><span><strong>Your Telegram account</strong><small>Phone number you control</small></span></article><i /><span><LockKeyhole size={18} />Encrypted session</span><i /><article><b>AT</b><span><strong>AgenticThat</strong><small>Ready for messaging</small></span></article></div>
+      <div className={styles.connectionDiagram}><article><img src="/telegram-logo.svg" alt="" /><span><strong>Your Telegram account</strong><small>Phone number you control</small></span></article><i /><span><LockKeyhole size={18} />Encrypted session</span><i /><article><b><BrandSymbol /></b><span><strong>AgenticThat</strong><small>Ready for messaging</small></span></article></div>
     </section>
   );
 }

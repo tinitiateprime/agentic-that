@@ -10,6 +10,9 @@ export async function generateMetadata({ params }) {
   return {
     title: `${item?.name || "PDF Studio"} | AgenticThat`,
     description: item?.description,
+    ...(item ? { alternates: { canonical: item.href } } : {}),
+    // Tools that are not built yet stay out of search until they work.
+    ...(item && item.status !== "ready" ? { robots: { index: false, follow: true } } : {}),
   };
 }
 

@@ -1,0 +1,35 @@
+# AgenticThat
+
+> AgenticThat runs AI agents for the online side of a business from one workspace: AI-built websites, WhatsApp and Telegram messaging, an AI phone receptionist, public-data research, and scheduled social publishing.
+
+Website: https://agenticthat.com/
+Contact: agenticthat@gmail.com
+Address: Vivekananda Nagar, Dilsukhnagar, Hyderabad, Telangana 500060, India
+
+## Products (live)
+
+- AI Website Studio: creates three responsive, business-specific website designs from one short brief, then delivers and publishes the chosen design.
+- WhatsApp and Telegram Messaging: manages contacts, campaigns, templates, inbox replies and outbound messages.
+- AI Phone Front Desk: an AI receptionist that answers calls with knowledge of the business, qualifies the caller, captures the lead and prepares a summary.
+- Social media posting: creates, schedules and tracks posts to Instagram, Facebook, X, LinkedIn, YouTube and Reddit.
+- Public data research: collects public Instagram and Facebook profiles, Pages, posts, reels, comments and engagement counts as JSON or CSV.
+- PDF Studio: free browser-based PDF tools (merge, split, organize, convert, compress, edit) at https://agenticthat.com/tools/pdf
+
+## Coming soon
+
+- SEO and AI visibility tools: keyword research, website audits, AI visibility checks, content and profile optimization.
+- Replies and comments: reviewable engagement on posts across social channels.
+
+## How it runs
+
+- Managed execution for supported work.
+- A Local Companion app for account-bound browser sessions, so social account passwords stay on the customer's own machine.
+- Human review and visible sessions keep important actions accountable.
+
+## Pages
+
+- Home: https://agenticthat.com/
+- About: https://agenticthat.com/about
+- FAQ: https://agenticthat.com/#faq
+- PDF tools: https://agenticthat.com/tools/pdf
+- Publishing Companion privacy policy: https://agenticthat.com/publishing/privacy

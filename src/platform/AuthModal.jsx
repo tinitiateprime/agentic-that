@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BrandLogo } from "./BrandMark";
 
 const EMPTY_FORM = {
   name: "",
@@ -247,7 +248,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onAuth
         </button>
 
         <aside className="auth-story">
-          <div className="auth-story-brand"><span>AT</span> AgenticThat</div>
+          <div className="auth-story-brand"><BrandLogo height={28} symbolColor="#FACC15" /></div>
           <div className="auth-story-copy">
             <p className="auth-eyebrow">One intelligent workspace</p>
             <h2>Move from idea to automated operation.</h2>
