@@ -66,8 +66,9 @@ import {
 import { useEffect, useState } from "react";
 import ProductShell from "./ProductShell";
 import { serviceDetailHref } from "./product-catalog";
-import { useProductStatus } from "./use-product-status";
+import { guestActionFor, useProductStatus } from "./use-product-status";
 import styles from "./premium-service-detail.module.css";
+import { BrandSymbol } from "./BrandMark";
 
 const publishingProfiles = {
   instagram: {
@@ -214,6 +215,7 @@ function useAutoIndex(length, delay) {
 }
 
 function actionFor(service, status) {
+  if (status.state === "guest") return guestActionFor(service);
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (service.connectionKind === "none") return { label: "Open Instagram scraper", href: service.dashboardHref };
   if (status.state === "connected") return { label: `Open ${service.platformName} workspace`, href: service.dashboardHref };
@@ -459,7 +461,7 @@ function PlatformPostPreview({ service, profile }) {
       <article className={`${styles.platformPostPreview} ${styles.youtubePostPreview}`}>
         <PlatformArtwork service={service} profile={profile} compact />
         <div className={styles.youtubePreviewMeta}>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span>
             <strong>{profile.headline}</strong>
             <small>AgenticThat · 2.1K views · Premieres 24 Sep</small>
@@ -474,7 +476,7 @@ function PlatformPostPreview({ service, profile }) {
     return (
       <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_facebook}`}>
         <header>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span><strong>AgenticThat</strong><small>2 h · <Globe2 size={9} /></small></span>
           <MoreHorizontal size={17} />
         </header>
@@ -494,7 +496,7 @@ function PlatformPostPreview({ service, profile }) {
     return (
       <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_x}`}>
         <header>
-          <span className={styles.publisherBrandAvatar}>AT</span>
+          <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
           <span><strong>AgenticThat ✓</strong><small>@AgenticThat · 2h</small></span>
           <MoreHorizontal size={17} />
         </header>
@@ -514,7 +516,7 @@ function PlatformPostPreview({ service, profile }) {
   return (
     <article className={`${styles.platformPostPreview} ${styles.platformPostPreview_linkedin}`}>
       <header>
-        <span className={styles.publisherBrandAvatar}>AT</span>
+        <span className={styles.publisherBrandAvatar}><BrandSymbol /></span>
         <span><strong>AgenticThat</strong><small>12,480 followers · 1h · <Globe2 size={9} /></small></span>
         <MoreHorizontal size={17} />
       </header>
@@ -640,7 +642,7 @@ function TelegramProof() {
   return (
     <section className={styles.proofSection}>
       <div className={styles.proofCopy}><span>SECURE BY DESIGN</span><h2>Verify once. Return to the same approved account.</h2><p>AgenticThat guides the Telegram login, uses each verification code once, and protects the reusable account session after setup.</p></div>
-      <div className={styles.connectionDiagram}><article><img src="/telegram-logo.svg" alt="" /><span><strong>Your Telegram account</strong><small>Phone number you control</small></span></article><i /><span><LockKeyhole size={18} />Encrypted session</span><i /><article><b>AT</b><span><strong>AgenticThat</strong><small>Ready for messaging</small></span></article></div>
+      <div className={styles.connectionDiagram}><article><img src="/telegram-logo.svg" alt="" /><span><strong>Your Telegram account</strong><small>Phone number you control</small></span></article><i /><span><LockKeyhole size={18} />Encrypted session</span><i /><article><b><BrandSymbol /></b><span><strong>AgenticThat</strong><small>Ready for messaging</small></span></article></div>
     </section>
   );
 }
@@ -688,13 +690,13 @@ function RelatedServices({ service, category, related }) {
 }
 
 export default function PremiumServiceDetail({ user, service, category, related = [] }) {
-  const { statusFor } = useProductStatus();
+  const { statusFor } = useProductStatus({ guest: !user });
   const status = statusFor(service);
   const action = actionFor(service, status);
   const baseContent = service.category === "messaging" ? categoryContent.telegram : categoryContent[service.category];
   const profile = service.category === "publishing" ? publishingProfiles[service.slug] : null;
   const isPublishing = service.category === "publishing";
-  const needsConnection = service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
+  const needsConnection = service.connectionKind !== "none" && !["connected", "checking", "guest"].includes(status.state);
   const heroTitle = profile ? profile.heroTitle : baseContent.heroTitle;
   const heroDescription = profile ? profile.heroDescription : baseContent.heroDescription;
 

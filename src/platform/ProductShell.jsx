@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Database, LogOut, Menu, Settings2, UsersRound, X } from "lucide-react";
+import { Boxes, Database, LogIn, LogOut, Menu, Settings2, UsersRound, X } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { BrandSymbol } from "./BrandMark";
 import styles from "./product-shell.module.css";
 
 const navigation = [
@@ -28,6 +30,9 @@ function billingLabel(user) {
 
 export default function ProductShell({ user, active = "apps", children }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const guest = !user;
+  const homeHref = guest ? "/" : "/apps";
+  const returnPath = usePathname() || "/apps";
   const initial = String(user?.name || user?.email || "A").charAt(0).toUpperCase();
   const capabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
   const navigationHref = (item) => {
@@ -54,7 +59,7 @@ export default function ProductShell({ user, active = "apps", children }) {
   return (
     <div className={styles.productShell}>
       <header className={styles.mobileHeader}>
-        <Link className={styles.mobileBrand} href="/apps"><span>AT</span><strong>AgenticThat</strong></Link>
+        <Link className={styles.mobileBrand} href={homeHref}><span><BrandSymbol size={19} /></span><strong>AgenticThat</strong></Link>
         <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
           {menuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
@@ -63,15 +68,16 @@ export default function ProductShell({ user, active = "apps", children }) {
       {menuOpen && <button className={styles.sidebarBackdrop} type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
 
       <aside className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`}>
-        <Link className={styles.brand} href="/apps" onClick={() => setMenuOpen(false)}>
-          <span className={styles.brandMark}>AT</span>
+        <Link className={styles.brand} href={homeHref} onClick={() => setMenuOpen(false)}>
+          <span className={styles.brandMark}><BrandSymbol size={20} /></span>
           <span><strong>AgenticThat</strong><small>Operations</small></span>
         </Link>
 
         <nav className={styles.sidebarNav} aria-label="Workspace navigation">
           <span>Workspace tools</span>
           {navigation.filter((item) => (
-            (!item.capability || capabilities.includes(item.capability))
+            (!guest || item.id === "apps")
+            && (!item.capability || capabilities.includes(item.capability))
             && (!item.anyCapability || item.anyCapability.some((capability) => capabilities.includes(capability)))
           )).map((item) => {
             const Icon = item.icon;
@@ -103,6 +109,14 @@ export default function ProductShell({ user, active = "apps", children }) {
           </ol>
         </section>
 
+        {guest ? (
+          <div className={styles.sidebarFooter}>
+            <a className={styles.guestPrimary} href={`/?auth=signup&next=${encodeURIComponent(returnPath)}`}>Create account</a>
+            <a className={styles.signOut} href={`/?auth=login&next=${encodeURIComponent(returnPath)}`}>
+              <LogIn size={17} /><span>Sign in</span>
+            </a>
+          </div>
+        ) : (
         <div className={styles.sidebarFooter}>
           <section className={styles.account} aria-label="Signed-in workspace">
             <span className={styles.accountAvatar}>{initial}</span>
@@ -116,6 +130,7 @@ export default function ProductShell({ user, active = "apps", children }) {
             <LogOut size={17} /><span>Sign out</span>
           </button>
         </div>
+        )}
       </aside>
 
       <div className={styles.productContent}>{children}</div>

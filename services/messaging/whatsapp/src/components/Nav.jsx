@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandSymbol } from "@platform/BrandMark";
 import {
   BarChart3,
   Boxes,
@@ -48,7 +49,7 @@ export default function Nav({ businessName }) {
     <>
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:hidden">
         <Link href="/apps" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--brand-dark)] text-xs font-bold text-white">AT</span>
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--brand-dark)] text-xs font-bold text-white"><BrandSymbol size={16} /></span>
           <span>WhatsApp workspace</span>
         </Link>
         <Link href={CONNECTIONS_HREF} className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--brand-dark)]">
@@ -58,7 +59,7 @@ export default function Nav({ businessName }) {
 
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col bg-[var(--brand-dark)] text-white sm:flex">
         <Link href="/apps" className="flex items-center gap-3 border-b border-white/10 px-4 py-4" title="Back to AgenticThat Store">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/15 text-xs font-bold">AT</span>
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/15 text-xs font-bold"><BrandSymbol size={18} /></span>
           <span className="min-w-0">
             <strong className="block text-sm font-semibold">AgenticThat</strong>
             <small className="mt-0.5 block truncate text-[10px] font-medium uppercase tracking-wider text-white/55">WhatsApp workspace</small>

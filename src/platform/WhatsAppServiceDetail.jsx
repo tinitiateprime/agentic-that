@@ -38,7 +38,7 @@ import {
 } from "react-icons/pi";
 import { useEffect, useState } from "react";
 import ProductShell from "./ProductShell";
-import { useProductStatus } from "./use-product-status";
+import { guestActionFor, useProductStatus } from "./use-product-status";
 import styles from "./whatsapp-service-detail.module.css";
 
 const demoViews = [
@@ -82,6 +82,7 @@ const connectionModes = [
 ];
 
 function actionFor(status, service) {
+  if (status.state === "guest") return guestActionFor(service);
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (status.state === "connected") return { label: "Open WhatsApp workspace", href: service.dashboardHref };
   return { label: "Open WhatsApp workspace", disabled: true };
@@ -384,11 +385,11 @@ function SecuritySection() {
 }
 
 export default function WhatsAppServiceDetail({ user, service }) {
-  const { statusFor } = useProductStatus();
+  const { statusFor } = useProductStatus({ guest: !user });
   const status = statusFor(service);
   const action = actionFor(status, service);
   const connected = status.state === "connected";
-  const needsConnection = !connected && status.state !== "checking";
+  const needsConnection = !connected && status.state !== "checking" && status.state !== "guest";
 
   return (
     <ProductShell user={user} active="apps">

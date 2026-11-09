@@ -42,6 +42,10 @@ import {
 } from "lucide-react";
 import { serviceEndpoints } from "./service-catalog";
 import AuthModal from "./AuthModal";
+import ToolsMenu from "./ToolsMenu";
+import SiteFaq from "./SiteFaq";
+import { BrandLogo, BrandSymbol } from "./BrandMark";
+import SiteFooter from "./SiteFooter";
 
 const FacebookLogo = "/facebook-logo.svg";
 const GoogleLogo = "/google-logo.svg";
@@ -133,6 +137,7 @@ const navItems = [
   { label: "Messaging", href: "#messaging" },
   { label: "Publishing", href: "#publishing" },
   { label: "Scraping", href: "#scraping" },
+  { label: "About", href: "/about" },
 ];
 
 const services = [
@@ -1360,7 +1365,7 @@ function LegacyExecutionModelSection() {
         </div>
 
         <div className="execution-workspace-core">
-          <span>AT</span>
+          <span><BrandSymbol /></span>
           <strong>AgenticThat</strong>
           <small>workspace</small>
           <i><b />Connected</i>
@@ -2470,7 +2475,7 @@ function TeamBenefitProof({ type }) {
   if (type === "execution") {
     return (
       <div className="team-benefit-proof is-execution" aria-label="Server and Local Companion execution">
-        <span className="team-runtime-mark">AT<small>Server</small></span>
+        <span className="team-runtime-mark"><BrandSymbol /><small>Server</small></span>
         <i />
         <span className="team-companion-mark"><img src="/publishing-companion-icon.ico" alt="" /><small>Companion</small></span>
       </div>
@@ -2594,7 +2599,7 @@ function ConnectedAccountsSection() {
         ))}
 
         <div className="connected-control-hub">
-          <span className="connected-control-mark" aria-hidden="true">AT</span>
+          <span className="connected-control-mark" aria-hidden="true"><BrandSymbol /></span>
           <strong>AgenticThat</strong>
           <small><i />Control layer</small>
         </div>
@@ -2646,7 +2651,7 @@ function SynchronizedWorkspaceSection() {
             style={{ "--sync-tone": tone, "--sync-index": index, "--drop-order": dropOrder }}
           >
             <span className={`synchronized-layer-icon${id === "workspace" ? " is-brand" : ""}`} aria-hidden="true">
-              {Icon ? <Icon /> : "AT"}
+              {Icon ? <Icon /> : <BrandSymbol />}
             </span>
             <strong>{label}</strong>
           </div>
@@ -2708,7 +2713,7 @@ function CapabilityMap() {
         ))}
 
         <div className="capability-hub">
-          <span className="capability-hub-mark" aria-hidden="true">AT</span>
+          <span className="capability-hub-mark" aria-hidden="true"><BrandSymbol /></span>
           <strong>AgenticThat</strong>
         </div>
       </div>
@@ -2875,17 +2880,17 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
 
   return (
     <main className="site-shell">
-      <nav className="nav-bar" aria-label="Main navigation">
+      <nav className="nav-bar nav-with-tools" aria-label="Main navigation">
         
         <a className="brand" href="/" aria-label="AgenticThat home">
-          <span className="brand-mark">AT</span>
-          <span className="brand-word">Agentic<span>That</span></span>
+          <BrandLogo className="brand-logo" symbolColor="#FACC15" height={40} />
         </a>
 
         <div className="nav-links">
           {navItems.map((item) => (
             <a href={item.href} key={item.label}>{item.label}</a>
           ))}
+          <ToolsMenu />
         </div>
 
         <div className="nav-actions">
@@ -2965,7 +2970,9 @@ function PlatformHome({ initialUser = null, initialAuthMode = "", initialNextPat
             engagement: null,
           }}
         />
+        <SiteFaq />
       </div>
+      <SiteFooter />
       <AuthModal
         open={authOpen}
         initialMode={authMode}

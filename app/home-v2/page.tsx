@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   title: "AgenticThat — Autonomous agents for scraping, publishing & messaging",
   description:
     "Deploy headless browser agents that extract structured data, schedule social publishing, and run messaging workflows from one control plane.",
+  // Draft of the home page: keep it out of search so it doesn't compete with "/".
+  robots: { index: false, follow: false },
 };
 
 export default function HomeV2Page() {

@@ -12,13 +12,14 @@ import {
 } from "lucide-react";
 import ProductShell from "./ProductShell";
 import { serviceDetailHref } from "./product-catalog";
-import { useProductStatus } from "./use-product-status";
+import { guestActionFor, guestSignInHref, useProductStatus } from "./use-product-status";
 import styles from "./marketplace.module.css";
 
 const WhatsAppServiceDetail = dynamic(() => import("./WhatsAppServiceDetail"));
 const PremiumServiceDetail = dynamic(() => import("./PremiumServiceDetail"));
 
 function actionFor(service, status) {
+  if (status.state === "guest") return guestActionFor(service);
   if (status.state === "coming-soon") return { label: "Coming soon", disabled: true };
   if (status.state === "checking") return { label: "Checking connection", disabled: true };
   if (service.connectionKind === "none") return { label: "Start scraping", href: service.dashboardHref };
@@ -26,7 +27,8 @@ function actionFor(service, status) {
   return { label: `Open ${service.platformName} workspace`, disabled: true };
 }
 
-function secondaryActionFor(service) {
+function secondaryActionFor(service, guest) {
+  if (guest && service.availability === "live") return { label: "Sign in", href: guestSignInHref(service) };
   if (service.availability !== "live") return { label: "Explore available apps", href: "/apps" };
   if (service.connectionKind === "none") return { label: "Browse all apps", href: "/apps" };
   return { label: "Manage connections", href: "/config-manager" };
@@ -42,11 +44,11 @@ function DetailStatus({ status }) {
 }
 
 function StandardServiceDetail({ user, service, category, related }) {
-  const { statusFor } = useProductStatus();
+  const { statusFor } = useProductStatus({ guest: !user });
   const status = statusFor(service);
   const action = actionFor(service, status);
-  const secondaryAction = secondaryActionFor(service);
-  const needsConnection = service.availability === "live" && service.connectionKind !== "none" && status.state !== "connected" && status.state !== "checking";
+  const secondaryAction = secondaryActionFor(service, !user);
+  const needsConnection = service.availability === "live" && service.connectionKind !== "none" && !["connected", "checking", "guest"].includes(status.state);
 
   return (
     <ProductShell user={user} active="apps">

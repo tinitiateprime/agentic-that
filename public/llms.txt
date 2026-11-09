@@ -1,0 +1,27 @@
+# AgenticThat
+
+> AgenticThat runs AI agents for a business's social channels from one workspace: messaging automation, social scraping, scheduled publishing and post engagement.
+
+Website: https://agenticthat.com/
+Contact: agenticthat@gmail.com
+Address: Vivekananda Nagar, Dilsukhnagar, Hyderabad, Telangana 500060, India
+
+## Products
+
+- Chat Workflow Automation: automates contacts, campaigns, templates, inbox replies and outbound messages on WhatsApp and Telegram.
+- Social and Search Scrapers: collects public Instagram and Facebook profiles, Pages, posts, reels, comments, views and engagement signals into clean JSON or CSV files. Search results, maps listings and professional profiles are planned.
+- Publish Queue Runner: creates, queues, schedules and tracks posts to Instagram, X, LinkedIn, Facebook and YouTube.
+- Post Engagement Agent: runs monitored engagement workflows for posts, replies and interactions across social channels.
+
+## How it runs
+
+- Managed execution for supported work.
+- A Local Companion app for account-bound browser sessions, so social account passwords stay on the customer's own machine.
+- Human review and visible sessions keep important actions accountable.
+
+## Pages
+
+- Home: https://agenticthat.com/
+- About: https://agenticthat.com/about
+- FAQ: https://agenticthat.com/#faq
+- Publishing Companion privacy policy: https://agenticthat.com/publishing/privacy

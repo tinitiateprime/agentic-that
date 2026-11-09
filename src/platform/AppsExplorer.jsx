@@ -127,7 +127,8 @@ function ServiceCard({ service, status, allowed }) {
 
 export default function AppsExplorer({ user, access = {} }) {
   const [query, setQuery] = useState("");
-  const { statusFor } = useProductStatus();
+  const guest = !user;
+  const { statusFor } = useProductStatus({ guest });
   const normalizedQuery = query.trim().toLowerCase();
   const visibleCategories = useMemo(() => productCategories.map((category) => ({
     ...category,
@@ -190,7 +191,7 @@ export default function AppsExplorer({ user, access = {} }) {
                     <ServiceCard
                       service={service}
                       status={statusFor(service)}
-                      allowed={accessSatisfies(access[accessResourceForService(service)] || "none", "view")
+                      allowed={guest || accessSatisfies(access[accessResourceForService(service)] || "none", "view")
                         && (!service.availability || service.availability !== "live" || user?.capabilities?.includes(`${service.category}.view`))}
                       key={`${service.category}-${service.slug}`}
                     />

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientServiceToken } from "./client-service-token";
+import { serviceDetailHref } from "./product-catalog";
 
 const PUBLISH_ACCOUNT_SUMMARY_KEY = "agenticthat-publish-account-summary";
 
@@ -63,13 +64,27 @@ async function loadTelegram(path) {
   return jsonResponse(response);
 }
 
-export function useProductStatus() {
+// What a visitor who is not signed in should do on a live app: create an account,
+// then come straight back to the same app page.
+export function guestActionFor(service) {
+  const next = encodeURIComponent(serviceDetailHref(service));
+  return { label: "Create account to start", href: `/?auth=signup&next=${next}` };
+}
+
+export function guestSignInHref(service) {
+  return `/?auth=login&next=${encodeURIComponent(serviceDetailHref(service))}`;
+}
+
+// `guest`: the visitor is not signed in. No account APIs are called and live apps
+// report the "guest" state, so pages can show sign-up actions instead of connections.
+export function useProductStatus({ guest = false } = {}) {
   const [whatsapp, setWhatsapp] = useState({ state: "checking" });
   const [telegram, setTelegram] = useState({ state: "checking", accounts: 0 });
   const [publishing, setPublishing] = useState({ state: "checking" });
   const [publishingAccounts, setPublishingAccounts] = useState([]);
 
   const refresh = useCallback(async () => {
+    if (guest) return;
     setWhatsapp({ state: "checking" });
     setTelegram({ state: "checking", accounts: 0 });
 
@@ -107,7 +122,7 @@ export function useProductStatus() {
         setTelegram({ state: count ? "connected" : "setup", accounts: count });
       })
       .catch(() => setTelegram({ state: "setup", accounts: 0 }));
-  }, []);
+  }, [guest]);
 
   useEffect(() => {
     void refresh();
@@ -117,6 +132,7 @@ export function useProductStatus() {
     if (service.availability !== "live" || service.connectionKind === "unavailable") {
       return { state: "coming-soon", label: "Coming soon" };
     }
+    if (guest) return { state: "guest", label: "Available now" };
     if (service.connectionKind === "none") return { state: "ready", label: "Ready to use" };
     if (service.connectionKind === "whatsapp") {
       if (whatsapp.state === "connected") {
@@ -142,7 +158,7 @@ export function useProductStatus() {
         : { state: "setup", label: "Setup required" };
     }
     return { state: "setup", label: "Setup required" };
-  }, [publishing, publishingAccounts, telegram, whatsapp]);
+  }, [guest, publishing, publishingAccounts, telegram, whatsapp]);
 
   const summary = useMemo(() => ({ whatsapp, telegram, publishing, publishingAccounts }), [publishing, publishingAccounts, telegram, whatsapp]);
   return { statusFor, refresh, summary };
