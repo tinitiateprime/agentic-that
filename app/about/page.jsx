@@ -5,10 +5,10 @@ import styles from "./about.module.css";
 
 const title = "About AgenticThat";
 const description =
-  "AgenticThat builds AI agents that run the social side of a business: messaging, scraping, publishing and engagement in one workspace, with people in control.";
+  "AgenticThat builds AI agents for the online side of a business: websites, messaging, phone calls and social posting in one workspace, with people in control.";
 
 export const metadata = {
-  title: `${title} — AI agents for social operations`,
+  title: `${title} — AI agents for business`,
   description,
   alternates: { canonical: "/about" },
   openGraph: { title, description, url: `${SITE_URL}/about`, type: "website", siteName: SITE_NAME, images: [OG_IMAGE] },

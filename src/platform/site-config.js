@@ -4,7 +4,7 @@ export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://agentictha
 
 export const SITE_NAME = "AgenticThat";
 
-export const SITE_TITLE = "AgenticThat — AI agents for messaging, scraping, publishing and engagement";
+export const SITE_TITLE = "AgenticThat — AI agents for websites, messaging and social";
 
 export const CONTACT_EMAIL = "agenticthat@gmail.com";
 
@@ -26,6 +26,11 @@ export const LOCATION = {
   label: "Vivekananda Nagar, Dilsukhnagar, Hyderabad, Telangana 500060, India",
 };
 
+// Search-result description: keep under 160 characters (Bing and Google cut longer text).
+export const SITE_META_DESCRIPTION =
+  "AI agents that build websites, answer WhatsApp, Telegram and phone calls, research public data and schedule posts to Instagram, X, LinkedIn, YouTube and more.";
+
+// Longer description for structured data and llms.txt.
 export const SITE_DESCRIPTION =
   "AgenticThat runs AI agents for your business from one workspace: AI-built websites, WhatsApp and Telegram messaging, an AI phone receptionist, Instagram and Facebook public-data research, and scheduled publishing to Instagram, Facebook, X, LinkedIn, YouTube and Reddit.";
 

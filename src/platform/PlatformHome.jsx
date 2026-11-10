@@ -686,7 +686,7 @@ function MessengerActivation({ platform, logo, isVisible, isArrived, isRevealed 
   return (
     <div className={`messenger-activation${isVisible ? " is-visible" : ""}${isArrived ? " is-arrived" : ""}${isRevealed ? " is-revealed" : ""}`} aria-hidden="true">
       <div className="messenger-activation-chip">
-        <img src={logo} alt="" />
+        <img src={logo} alt={`${platform} logo`} />
         <span><strong>{platform}</strong><small><i />Opening workspace</small></span>
       </div>
     </div>
@@ -701,7 +701,7 @@ function WhatsAppWorkspaceLauncher({ isPressed, isOpen, onOpen }) {
       aria-label="Open WhatsApp workspace"
       onClick={onOpen}
     >
-      <img src={WhatsAppLogo} alt="" />
+      <img src={WhatsAppLogo} alt="WhatsApp logo" />
       <strong>WhatsApp</strong>
     </button>
   );
@@ -715,7 +715,7 @@ function TelegramWorkspaceLauncher({ isPressed, isOpen, onOpen }) {
       aria-label="Open Telegram workspace"
       onClick={onOpen}
     >
-      <img src={TelegramLogo} alt="" />
+      <img src={TelegramLogo} alt="Telegram logo" />
       <strong>Telegram</strong>
     </button>
   );
@@ -724,7 +724,7 @@ function TelegramWorkspaceLauncher({ isPressed, isOpen, onOpen }) {
 function EmptyConversation({ logo, platform }) {
   return (
     <div className="messenger-empty-conversation" aria-hidden="true">
-      <img src={logo} alt="" />
+      <img src={logo} alt={`${platform} logo`} />
       <strong>Select a conversation</strong>
       <span>Choose a customer to continue</span>
     </div>
@@ -746,7 +746,7 @@ function WhatsAppPreview({ typedText, isTyping, isSending, isSent, isSelected, i
 
       <aside className="wa-sidebar">
         <header className="wa-sidebar-header">
-          <div className={`wa-sidebar-brand${isLaunchPressed ? " is-pressed" : ""}`}><img src={WhatsAppLogo} alt="" /><strong>WhatsApp</strong></div>
+          <div className={`wa-sidebar-brand${isLaunchPressed ? " is-pressed" : ""}`}><img src={WhatsAppLogo} alt="WhatsApp logo" /><strong>WhatsApp</strong></div>
           <div><button type="button" aria-label="New chat"><MessageSquareReply /></button><button type="button" aria-label="Menu"><MoreVertical /></button></div>
         </header>
         <label className="wa-search"><Search /><span>Search or start a new chat</span></label>
@@ -791,7 +791,7 @@ function TelegramPreview({ typedText, isTyping, isSending, isSent, isSelected, i
     <article className={`tg-desktop${isWorkspaceOpen ? " is-workspace-open" : " is-workspace-closed"}`} aria-label="Telegram Desktop dark interface preview">
       <aside className="tg-sidebar">
         <header className="tg-sidebar-header">
-          <div className={`tg-sidebar-brand${isLaunchPressed ? " is-pressed" : ""}`}><img src={TelegramLogo} alt="" /><strong>Telegram</strong></div>
+          <div className={`tg-sidebar-brand${isLaunchPressed ? " is-pressed" : ""}`}><img src={TelegramLogo} alt="Telegram logo" /><strong>Telegram</strong></div>
           <button type="button" aria-label="Menu"><Menu /></button>
         </header>
         <label className="tg-search"><Search /><span>Search</span></label>
@@ -848,7 +848,7 @@ function ServicePlanFooter({ tone, trustText, href, ctaLabel, platforms, availab
         </a>
         <span className="service-plan-availability" aria-label={`${platforms.map((platform) => platform.name).join(", ")}. ${availability}`}>
           <span className="service-plan-logos" aria-hidden="true">
-            {platforms.map((platform) => <img src={platform.logo} alt="" key={platform.name} />)}
+            {platforms.map((platform) => <img src={platform.logo} alt={`${platform.name} logo`} key={platform.name} />)}
           </span>
           {availability}
         </span>
@@ -1195,7 +1195,7 @@ function ScrapingIntelligenceShowcase() {
                   title={source.name}
                   key={source.name}
                 >
-                  <img src={source.logo} alt="" />
+                  <img src={source.logo} alt={`${source.name} logo`} />
                 </div>
               ))}
             </div>
@@ -1424,12 +1424,12 @@ function ExecutionModelSection() {
           <strong className="execution-exact-label is-local">Local<br />Companion</strong>
 
           <div className="execution-exact-cloud">
-            <span><img src="/execution-cloud-runner.png" alt="" /></span>
+            <span><img src="/execution-cloud-runner.png" alt="AgenticThat cloud runner" /></span>
             <strong>Cloud runner</strong>
           </div>
 
           <div className="execution-exact-browser">
-            <span className="execution-exact-browser-art"><img src="/execution-local-companion.png" alt="" /></span>
+            <span className="execution-exact-browser-art"><img src="/execution-local-companion.png" alt="AgenticThat Local Companion app" /></span>
             <strong>Browser on your machine</strong>
           </div>
 
@@ -1610,13 +1610,13 @@ function PublishingAutomationShowcase() {
           </div>
         </article>
 
-        <div className={`publishing-stage-connector${isAtLeast("channels") ? " is-active" : ""}${demo.phase === "channels" ? " is-transferring" : ""}`} aria-hidden="true"><i /><span>&rsaquo;</span><b><img src="/publishing-nature-cove.webp" alt="" /></b></div>
+        <div className={`publishing-stage-connector${isAtLeast("channels") ? " is-active" : ""}${demo.phase === "channels" ? " is-transferring" : ""}`} aria-hidden="true"><i /><span>&rsaquo;</span><b><img src="/publishing-nature-cove.webp" alt="Tropical cove photo for a scheduled social post" /></b></div>
 
         <article className={`publishing-stage publishing-schedule-stage${currentPublishingStage === 2 ? " is-current" : currentPublishingStage > 2 ? " is-stage-complete" : ""}`}>
           <div className="publishing-channel-picker">
             {publishingShowcasePlatforms.map((platform, index) => (
               <div className={index < demo.selectedChannels ? "is-selected" : ""} key={platform.name}>
-                <img src={platform.logo} alt="" />
+                <img src={platform.logo} alt={`${platform.name} logo`} />
                 <span>{platform.name}</span>
                 <i><CheckCheck /></i>
               </div>
@@ -1629,7 +1629,7 @@ function PublishingAutomationShowcase() {
               <b><ShieldCheck />Ready</b>
             </header>
             <div className="publishing-review-post">
-              <img src="/publishing-nature-cove.webp" alt="" />
+              <img src="/publishing-nature-cove.webp" alt="Tropical cove photo for a scheduled social post" />
               <p><strong>Morning light over the alpine lake</strong><small>1 image &middot; Caption &middot; 3 hashtags</small></p>
             </div>
             <ul className="publishing-review-checks">
@@ -1647,7 +1647,7 @@ function PublishingAutomationShowcase() {
           </div>
         </article>
 
-        <div className={`publishing-stage-connector${isAtLeast("handoff") ? " is-active" : ""}${demo.phase === "handoff" ? " is-transferring" : ""}`} aria-hidden="true"><i /><span>&rsaquo;</span><b><img src="/publishing-nature-cove.webp" alt="" /></b></div>
+        <div className={`publishing-stage-connector${isAtLeast("handoff") ? " is-active" : ""}${demo.phase === "handoff" ? " is-transferring" : ""}`} aria-hidden="true"><i /><span>&rsaquo;</span><b><img src="/publishing-nature-cove.webp" alt="Tropical cove photo for a scheduled social post" /></b></div>
 
         <article className={`publishing-stage publishing-delivery-stage${currentPublishingStage === 3 ? " is-current" : ""}${isAtLeast("success") ? " is-stage-complete" : ""}`}>
           <div className="publishing-delivery-visual">
@@ -1671,7 +1671,7 @@ function PublishingAutomationShowcase() {
 
             {publishingShowcasePlatforms.map((platform, index) => (
               <span className={`publishing-post-flight is-${platform.position}${demo.phase === "publishing" && index === demo.deliveredChannels ? " is-active" : ""}${index < demo.deliveredChannels ? " is-delivered" : ""}`} aria-hidden="true" key={`flight-${platform.name}`}>
-                <img src="/publishing-nature-cove.webp" alt="" />
+                <img src="/publishing-nature-cove.webp" alt="Tropical cove photo for a scheduled social post" />
               </span>
             ))}
             <small className="publishing-delivery-status">
@@ -1688,7 +1688,7 @@ function PublishingAutomationShowcase() {
 
           <div className={`publishing-recent-activity${demo.phase === "complete" ? " is-visible" : ""}`}>
             <header><strong>Recent Activity</strong><small>View all</small></header>
-            <div><img src="/publishing-nature-cove.webp" alt="Published tropical cove post" /><img src={InstagramLogo} alt="" /><p><strong>Instagram</strong><small>Aug 18, 2026 at 11:00 AM</small></p><span>Published</span></div>
+            <div><img src="/publishing-nature-cove.webp" alt="Published tropical cove post" /><img src={InstagramLogo} alt="Instagram logo" /><p><strong>Instagram</strong><small>Aug 18, 2026 at 11:00 AM</small></p><span>Published</span></div>
           </div>
         </article>
       </div>
@@ -1841,7 +1841,7 @@ function PostEngagementShowcase() {
             <div className="engagement-platform-list">
               {engagementShowcaseTargets.map((target, index) => (
                 <div className={`engagement-platform-row${index < demo.visiblePlatforms ? " is-visible" : ""}${index === 0 && demo.phase === "routing" ? " is-detecting" : ""}${index === 0 && isAtLeast("assigned") ? " is-assigned" : ""}`} key={target.name}>
-                  <img src={target.logo} alt="" />
+                  <img src={target.logo} alt={`${target.name} logo`} />
                   <span>{target.name}</span>
                   <b className={index === 0 && isAtLeast("assigned") ? "is-connected" : ""}>
                     {index === 0 && isAtLeast("assigned") ? "Connected" : "Not connected"}
@@ -1854,7 +1854,7 @@ function PostEngagementShowcase() {
           <section className={`engagement-live-column${sessionIsLive ? " is-live" : ""}`} aria-label="Live Instagram engagement session">
             <article className={`engagement-instagram-app${sessionIsLive ? " is-open" : " is-locked"}${demo.phase === "liking" ? " is-liking" : ""}${demo.phase === "commenting" ? " is-commenting" : ""}${demo.phase === "reposting" ? " is-reposting" : ""}${demo.phase === "following" ? " is-following" : ""}`}>
               <div className="engagement-app-waiting">
-                <img src={InstagramLogo} alt="" />
+                <img src={InstagramLogo} alt="Instagram logo" />
                 <strong>{isAtLeast("assigned") ? "Opening assigned post" : "Waiting for assigned URL"}</strong>
                 <small>{isAtLeast("assigned") ? "instagram.com/p/emerald-cove/" : "The post activates after routing"}</small>
               </div>
@@ -1868,7 +1868,7 @@ function PostEngagementShowcase() {
 
                   <section className="engagement-ig-comments-panel">
                     <header>
-                      <img src="/engagement-rainforest-cove-post.png" alt="" />
+                      <img src="/engagement-rainforest-cove-post.png" alt="Instagram post of a rainforest cove" />
                       <p><strong>coastline.journal</strong><small>Emerald Cove</small></p>
                       <button className={`engagement-follow-button${demo.phase === "following" ? " is-performing" : ""}${demo.completedActions >= 4 ? " is-complete" : ""}`} type="button">
                         {demo.phase === "following" ? "Following…" : demo.completedActions >= 4 ? "Following" : "Follow"}
@@ -1878,7 +1878,7 @@ function PostEngagementShowcase() {
 
                     <div className="engagement-ig-comment-thread">
                       <div className="engagement-ig-comment is-caption">
-                        <img src="/engagement-rainforest-cove-post.png" alt="" />
+                        <img src="/engagement-rainforest-cove-post.png" alt="Instagram post of a rainforest cove" />
                         <p><span><strong>coastline.journal</strong> Where the rainforest meets the sea. Clear water, a quiet shoreline, and one hidden tropical cove.</span><small>2d&nbsp;&nbsp; Reply</small></p>
                       </div>
                       <div className="engagement-ig-comment">
@@ -1923,7 +1923,7 @@ function PostEngagementShowcase() {
           </section>
 
           {demo.phase === "routing" ? (
-            <div className="engagement-routing-token" aria-hidden="true"><img src={InstagramLogo} alt="" /><span>instagram.com/p/emerald-cove/</span><CheckCheck /></div>
+            <div className="engagement-routing-token" aria-hidden="true"><img src={InstagramLogo} alt="Instagram logo" /><span>instagram.com/p/emerald-cove/</span><CheckCheck /></div>
           ) : null}
         </div>
       </div>
@@ -2475,7 +2475,7 @@ function TeamBenefitProof({ type }) {
       <div className="team-benefit-proof is-execution" aria-label="Server and Local Companion execution">
         <span className="team-runtime-mark"><BrandSymbol /><small>Server</small></span>
         <i />
-        <span className="team-companion-mark"><img src="/publishing-companion-icon.ico" alt="" /><small>Companion</small></span>
+        <span className="team-companion-mark"><img src="/publishing-companion-icon.ico" alt="AgenticThat Companion icon" /><small>Companion</small></span>
       </div>
     );
   }
@@ -2588,7 +2588,7 @@ function ConnectedAccountsSection() {
             key={account.id}
             style={{ "--account-tone": account.tone, "--account-index": index }}
           >
-            <span className="connected-account-logo"><img src={account.logo} alt="" /></span>
+            <span className="connected-account-logo"><img src={account.logo} alt={`${account.name} logo`} /></span>
             <span className="connected-account-label">
               <strong>{account.name}</strong>
               <small><i />Connected</small>

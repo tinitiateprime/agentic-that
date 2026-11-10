@@ -8,25 +8,25 @@ import "../src/platform/platform-home.css";
 import "../services/scraping/instagram/console/src/instagram-scraper.css";
 import "../services/scraping/facebook/console/src/facebook-scraper.css";
 
-import { SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@platform/site-config";
+import { SITE_META_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@platform/site-config";
 
 export const metadata = {
   metadataBase: new URL(SITE_URL),
   title: SITE_TITLE,
-  description: SITE_DESCRIPTION,
+  description: SITE_META_DESCRIPTION,
   applicationName: SITE_NAME,
   openGraph: {
     type: "website",
     siteName: SITE_NAME,
     title: SITE_TITLE,
-    description: SITE_DESCRIPTION,
+    description: SITE_META_DESCRIPTION,
     url: SITE_URL,
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
     title: SITE_TITLE,
-    description: SITE_DESCRIPTION,
+    description: SITE_META_DESCRIPTION,
   },
 };
 
