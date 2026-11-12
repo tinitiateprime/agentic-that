@@ -198,10 +198,13 @@ function ServiceCard({ service, status, allowed }) {
   );
 }
 
+// "Get found online" services are open to every signed-in user.
+const OPEN_CATEGORIES = new Set(["seo"]);
+
 function TaskCard({ task, services, statusFor, user, access }) {
   const Icon = task.icon;
-  const allowedFor = (service) => accessSatisfies(access[accessResourceForService(service)] || "none", "view")
-    && Boolean(user?.capabilities?.includes(`${service.category}.view`));
+  const allowedFor = (service) => OPEN_CATEGORIES.has(service.category) || (accessSatisfies(access[accessResourceForService(service)] || "none", "view")
+    && Boolean(user?.capabilities?.includes(`${service.category}.view`)));
   const usable = services.filter(allowedFor);
   const allowed = usable.length > 0;
   const needsSetup = Boolean(task.setupHref);
@@ -384,8 +387,8 @@ export default function AppsExplorer({ user, access = {} }) {
                       <ServiceCard
                         service={service}
                         status={statusFor(service)}
-                        allowed={accessSatisfies(access[accessResourceForService(service)] || "none", "view")
-                          && (!service.availability || service.availability !== "live" || user?.capabilities?.includes(`${service.category}.view`))}
+                        allowed={OPEN_CATEGORIES.has(service.category) || (accessSatisfies(access[accessResourceForService(service)] || "none", "view")
+                          && (!service.availability || service.availability !== "live" || user?.capabilities?.includes(`${service.category}.view`)))}
                         key={`${service.category}-${service.slug}`}
                       />
                     ))}

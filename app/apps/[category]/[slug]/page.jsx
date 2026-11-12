@@ -6,7 +6,7 @@ import {
   getServicesByCategory,
 } from "@platform/product-catalog";
 import { accessResourceForService } from "@platform/access-catalog";
-import { requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
+import { requireAccess, requireOpenServicePrincipal, requirePrincipalCapability } from "@platform/server/access-control";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,11 @@ export default async function AppDetailPage({ params }) {
   const category = getProductCategory(categoryId);
   if (!service || !category) notFound();
 
-  let user = await requireAccess(accessResourceForService(service), "view", `/apps/${categoryId}/${slug}`);
+  // "Get found online" services are open to every signed-in user.
+  const openService = categoryId === "seo";
+  let user = openService
+    ? await requireOpenServicePrincipal(`/apps/${categoryId}/${slug}`)
+    : await requireAccess(accessResourceForService(service), "view", `/apps/${categoryId}/${slug}`);
   if (service.availability === "live" && ["website", "messaging", "publishing", "scraping"].includes(categoryId)) {
     user = await requirePrincipalCapability(user, `${categoryId}.view`, `/apps/${categoryId}/${slug}`);
   }
@@ -38,7 +42,7 @@ export default async function AppDetailPage({ params }) {
   return (
     <ServiceDetail
       user={{ id: user.userId, name: user.name, email: user.email, businessName: user.businessName, isGlobalAdmin: user.isGlobalAdmin, billingStatus: user.billingStatus, trialStartsAt: user.trialStartsAt, trialEndsAt: user.trialEndsAt, capabilities: user.capabilities }}
-      accessLevel={user.access[accessResourceForService(service)]}
+      accessLevel={openService ? "configure" : user.access[accessResourceForService(service)]}
       service={service}
       category={category}
       related={related}

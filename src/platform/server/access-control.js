@@ -308,6 +308,33 @@ export function accessErrorResponse(error) {
   throw error;
 }
 
+// Open services (such as Social SEO) are available to every signed-in, active
+// workspace member. They need no role, plan grant, or database permission.
+function assertOpenServicePrincipal(principal) {
+  if (!principal) throw new AccessDeniedError(401, "UNAUTHENTICATED", "Sign in to continue.");
+  if (principal.status === "pending") throw new AccessDeniedError(403, "APPROVAL_PENDING", "Your account is waiting for approval.");
+  if (principal.status !== "active") throw new AccessDeniedError(403, "ACCOUNT_DISABLED", "This account is not active.");
+  if (principal.isGlobalAdmin && principal.mfaRequired) throw new AccessDeniedError(403, "MFA_REQUIRED", "Complete administrator MFA to continue.");
+  return principal;
+}
+
+export async function requireOpenServicePrincipal(returnTo = "/apps") {
+  const principal = await getCurrentPrincipal();
+  if (!principal) redirect(`/?auth=login&next=${encodeURIComponent(returnTo)}`);
+  if (principal.status === "pending") redirect("/pending-approval");
+  try {
+    return assertOpenServicePrincipal(principal);
+  } catch (error) {
+    if (error instanceof AccessDeniedError && error.code === "MFA_REQUIRED") redirect(`/admin-mfa?next=${encodeURIComponent(returnTo)}`);
+    if (error instanceof AccessDeniedError) redirect("/access-denied");
+    throw error;
+  }
+}
+
+export async function authorizeOpenServiceApi() {
+  return assertOpenServicePrincipal(await getCurrentPrincipal());
+}
+
 export async function authorizeApiAccess(resourceKey, requiredLevel = "view") {
   const principal = await getCurrentPrincipal();
   return assertPrincipalAccess(principal, resourceKey, requiredLevel);
