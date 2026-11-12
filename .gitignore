@@ -29,7 +29,13 @@ public/console/
 public/telegram-console-assets/
 /data/
 /.data/
+# Local server data: database, browser profiles, media and scraping results.
+/.server-data/
 /artifacts/
 apps/publishing-companion-desktop/out/
 apps/publishing-companion-desktop/runtime/
 apps/publishing-companion-desktop/assets/app-icon.icns
+
+# Local AI engine and model downloads (Social SEO)
+services/**/ai-data/
+ai-data/
