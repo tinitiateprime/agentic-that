@@ -286,6 +286,7 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDirectory;
   process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = browserDataDirectory;
+  process.env.PUBLISH_QUEUE_AI_DIR = path.join(userDataDirectory, "ai");
   const legacyUserDataDirectory = legacyCompanionUserDataDirectory();
   if (legacyUserDataDirectory) {
     process.env.PUBLISH_QUEUE_LEGACY_DATA_PATH = path.join(
