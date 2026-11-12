@@ -74,6 +74,7 @@
     "aws:storage:check": "node scripts/check-aws-storage.mjs",
     "aws:live:check": "node scripts/check-aws-live.mjs",
     "storage:migrate:netlify": "node scripts/migrate-netlify-storage.mjs",
+    "test:social-seo": "node --import tsx --test src/platform/social-seo/social-seo.test.js src/platform/social-seo/social-seo.quality.test.js services/publishing/queue-runner/server/services/ai/post-seo.test.ts",
     "test:pdf": "node --test src/platform/pdf/pdf-operations.test.js src/platform/pdf/pdf-advanced.test.js",
     "test:pdf:browser": "node scripts/test-pdf-browser.mjs",
     "test:pdf:advanced:browser": "node scripts/test-pdf-advanced-browser.mjs"
