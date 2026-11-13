@@ -109,4 +109,8 @@ await Promise.all(msixAssets.map(async ([fileName, width, height]) => {
   await writeFile(path.join(msixAssetDirectory, fileName), image);
 }));
 
+// Apply the Keystone icons last so packaging keeps the small-size symbols and
+// Store tiles instead of replacing them with scaled copies of the large icon.
+await import("./build-companion-icons.mjs");
+
 console.log("Publishing companion brand assets generated.");

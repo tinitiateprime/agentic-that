@@ -51,6 +51,7 @@ function configuredDashboardUrl() {
 const DASHBOARD_URL = configuredDashboardUrl();
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 const PUBLISHING_CONNECTIONS_URL = `${DASHBOARD_ORIGIN}/config-manager?service=publishing`;
+const SOCIAL_SEO_URL = `${DASHBOARD_ORIGIN}/social-seo`;
 const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
   || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
 // Companion is a focused worker and local session manager. The SaaS workspace
@@ -124,6 +125,17 @@ let runtimeError = null;
 let updateStatus = "unsupported";
 let updatePromptTimer = null;
 let updatePromptPending = false;
+// Social SEO: what each connected AI (ChatGPT, Claude, Gemini) is doing, sent by
+// the local server and shown in the Companion's Social SEO view.
+let aiActivityState = { providers: [], recent: [], updatedAt: new Date().toISOString() };
+
+function updateAiActivity(state) {
+  aiActivityState = { providers: [], recent: [], ...(state || {}), updatedAt: new Date().toISOString() };
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("companion:ai-state", aiActivityState);
+  }
+}
+
 let scrapingActivityState = {
   activeJob: null,
   queuedJobs: [],
@@ -286,7 +298,6 @@ function configureRuntimeEnvironment() {
   process.env.PUBLISH_QUEUE_DATA_PATH = path.join(dataDirectory, "store.json");
   process.env.PUBLISH_QUEUE_UPLOAD_DIR = uploadDirectory;
   process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = browserDataDirectory;
-  process.env.PUBLISH_QUEUE_AI_DIR = path.join(userDataDirectory, "ai");
   const legacyUserDataDirectory = legacyCompanionUserDataDirectory();
   if (legacyUserDataDirectory) {
     process.env.PUBLISH_QUEUE_LEGACY_DATA_PATH = path.join(
@@ -1391,6 +1402,7 @@ function installPublishingDesktopHost() {
     clearAccountBrowserData,
     flushAccountBrowserData,
     migrateLegacyAccountBrowserData,
+    updateAiActivity,
   };
   globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {
     openBrowser: openInstagramScrapingBrowser,
@@ -1608,6 +1620,7 @@ function registerIpc() {
   ipcMain.handle("companion:status", () => serviceStatus());
   ipcMain.handle("companion:workspace-state", () => workspaceState());
   ipcMain.handle("companion:scraping-state", () => scrapingActivity());
+  ipcMain.handle("companion:ai-state", () => aiActivityState);
   ipcMain.handle("companion:set-layout", (_event, layout) => {
     dashboardBounds = EMBED_FULL_PUBLISHING_WORKSPACE ? safeBounds(layout?.dashboard) : null;
     browserBounds = new Map(
@@ -1626,6 +1639,16 @@ function registerIpc() {
   ipcMain.handle("companion:open-dashboard", () => {
     if (EMBED_FULL_PUBLISHING_WORKSPACE) showCompanion("dashboard");
     else void shell.openExternal(DASHBOARD_URL);
+    return true;
+  });
+  ipcMain.handle("companion:open-social-seo", () => {
+    void shell.openExternal(SOCIAL_SEO_URL);
+    return true;
+  });
+  // Social SEO: bring an AI's window forward when it needs the user (login or a human check).
+  ipcMain.handle("companion:ai-show", async (_event, provider) => {
+    if (!["chatgpt", "claude", "gemini"].includes(provider)) return false;
+    await globalThis.__AGENTICTHAT_SOCIAL_SEO_CONTROL__?.showWindow?.(provider);
     return true;
   });
   ipcMain.handle("companion:open-connections", () => {

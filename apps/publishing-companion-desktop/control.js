@@ -3,6 +3,7 @@ const byId = id => document.getElementById(id);
 const views = {
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
+  seo: { panel: byId("seo-panel"), title: "Social SEO", eyebrow: "CHATGPT, CLAUDE AND GEMINI" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
@@ -28,6 +29,7 @@ let activeView = "activity";
 let currentStatus = null;
 let currentWorkspace = { sessions: [] };
 let currentScraping = { activeJob: null, queuedJobs: [], recentJobs: [], concurrency: 1 };
+let currentAi = { providers: [], recent: [] };
 let logEntries = [];
 let layoutFrame = null;
 let liveLayoutMode = "focus";
@@ -126,10 +128,33 @@ function updateGlobalStop() {
   byId("global-stop").disabled = activeSessions().length === 0 && scrapingWorkCount() === 0;
 }
 
+// The official logo of each publishing platform (the same files the website uses).
+const PLATFORM_LOGOS = {
+  instagram: "assets/platforms/instagram-logo.svg",
+  facebook: "assets/platforms/facebook-logo.svg",
+  youtube: "assets/platforms/youtube-logo.svg",
+  x: "assets/platforms/x-logo.svg",
+  reddit: "assets/platforms/reddit-logo.svg",
+  linkedin: "assets/platforms/linkedin-logo.png",
+};
+
+function platformLogo(platform) {
+  const image = document.createElement("img");
+  image.src = PLATFORM_LOGOS[platform];
+  image.alt = "";
+  return image;
+}
+
 function platformMark(session) {
   const mark = document.createElement("span");
   mark.className = `platform-mark platform-${session.platform}`;
-  mark.textContent = session.platform === "x" ? "X" : platformLabel(session.platform).slice(0, 2);
+  if (PLATFORM_LOGOS[session.platform]) {
+    mark.classList.add("has-logo");
+    mark.title = platformLabel(session.platform);
+    mark.append(platformLogo(session.platform));
+  } else {
+    mark.textContent = platformLabel(session.platform).slice(0, 2);
+  }
   return mark;
 }
 
@@ -438,7 +463,14 @@ function renderScraping() {
   byId("scrape-detail").textContent = active
     ? active.progress?.message || `Collecting current public ${activePlatform} data.`
     : "Start a Local Companion scrape from AgenticThat. The hidden browser runs separately from publishing and its progress will appear here.";
-  byId("scrape-platform-mark").textContent = active ? (activePlatform === "Facebook" ? "FB" : "IG") : "IG+FB";
+  // The real logos: the platform being scraped, or both while waiting.
+  const scrapeLogos = active ? [activePlatform === "Facebook" ? "facebook" : "instagram"] : ["instagram", "facebook"];
+  const scrapeMark = byId("scrape-platform-mark");
+  if (scrapeMark.dataset.platforms !== scrapeLogos.join(",")) {
+    scrapeMark.dataset.platforms = scrapeLogos.join(",");
+    scrapeMark.setAttribute("aria-label", active ? activePlatform : "Instagram and Facebook");
+    scrapeMark.replaceChildren(...scrapeLogos.map(platformLogo));
+  }
   byId("scrape-elapsed").textContent = active
     ? durationLabel(active.startedAt || active.createdAt)
     : currentScraping.recentJobs?.[0]
@@ -496,6 +528,162 @@ function renderScraping() {
   badge.hidden = workCount === 0;
   badge.textContent = String(workCount);
   updateGlobalStop();
+}
+
+// ---- Social SEO: the user's own ChatGPT, Claude and Gemini --------------------------
+
+const AI_STEPS = [
+  { id: "opening", label: "Opening", hint: "Hidden browser" },
+  { id: "uploading", label: "Uploading", hint: "Your post" },
+  { id: "sending", label: "Sending", hint: "The request" },
+  { id: "writing", label: "Writing", hint: "Live answer" },
+];
+
+function aiWorking(provider) {
+  return provider.state === "working" || provider.state === "needs-you" || provider.state === "connecting";
+}
+
+function elapsedLabel(startedAt) {
+  if (!startedAt) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function aiStatusLabel(provider) {
+  if (provider.state === "needs-you") return "Needs you";
+  if (provider.state === "connecting") return "Waiting for login";
+  if (provider.state === "working") return AI_STEPS.find(step => step.id === provider.step)?.label || "Working";
+  return provider.connected ? "Connected" : "Not connected";
+}
+
+function createAiCard(provider) {
+  const card = document.createElement("article");
+  card.className = "seo-ai-card";
+  card.dataset.state = provider.state;
+
+  const head = document.createElement("div");
+  head.className = "seo-ai-head";
+  const logo = document.createElement("img");
+  logo.src = `assets/ai-logos/${provider.id}.svg`;
+  logo.alt = "";
+  const name = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = provider.label;
+  const pill = document.createElement("span");
+  pill.className = "seo-ai-pill";
+  pill.textContent = aiStatusLabel(provider);
+  name.append(title, pill);
+  const time = document.createElement("time");
+  time.className = "seo-ai-time";
+  time.dataset.startedAt = provider.startedAt || "";
+  time.textContent = aiWorking(provider) ? elapsedLabel(provider.startedAt) : "";
+  head.append(logo, name, time);
+  card.append(head);
+
+  const detail = document.createElement("p");
+  detail.className = "seo-ai-detail";
+  detail.textContent = provider.detail || (provider.connected
+    ? "Ready. It writes your post when you click Create on the Social SEO page."
+    : "Connect it on the Social SEO page: log in once and it is remembered.");
+  card.append(detail);
+
+  if (provider.state === "working") {
+    const current = AI_STEPS.findIndex(step => step.id === provider.step);
+    const steps = document.createElement("div");
+    steps.className = "seo-ai-steps";
+    AI_STEPS.forEach((step, index) => {
+      const item = document.createElement("div");
+      item.dataset.status = index < current ? "done" : index === current ? "active" : "waiting";
+      const dot = document.createElement("i");
+      const label = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = step.label;
+      const small = document.createElement("small");
+      small.textContent = step.hint;
+      label.append(strong, small);
+      item.append(dot, label);
+      steps.append(item);
+    });
+    const track = document.createElement("div");
+    track.className = "seo-ai-track";
+    const fill = document.createElement("i");
+    fill.style.width = `${Math.round(((Math.max(0, current) + 0.5) / AI_STEPS.length) * 100)}%`;
+    track.append(fill);
+    card.append(track, steps);
+  }
+
+  if (provider.state === "needs-you" || provider.state === "connecting") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.append(createIcon("external"));
+    const label = document.createElement("span");
+    label.className = "button-label";
+    label.textContent = `Show ${provider.label} window`;
+    button.append(label);
+    button.addEventListener("click", () => void api.showAiWindow(provider.id));
+    card.append(button);
+  }
+  return card;
+}
+
+function createAiRunItem(run) {
+  const item = document.createElement("div");
+  item.className = `scrape-job-item ${run.ok ? "" : "failed"}`;
+  const logo = document.createElement("img");
+  logo.className = "seo-run-logo";
+  logo.src = `assets/ai-logos/${run.provider}.svg`;
+  logo.alt = "";
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = run.ok ? `${run.label} wrote your posts in ${run.seconds}s` : `${run.label} could not finish`;
+  const detail = document.createElement("small");
+  const date = new Date(run.at);
+  const time = Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  detail.textContent = run.ok ? `Finished at ${time}. The results are on the Social SEO page.` : `${time} · ${run.message || "Try again from the Social SEO page."}`;
+  copy.append(title, detail);
+  item.append(logo, copy);
+  return item;
+}
+
+function renderAi() {
+  const providers = currentAi.providers || [];
+  const grid = byId("seo-ai-grid");
+  if (providers.length) grid.replaceChildren(...providers.map(createAiCard));
+  else {
+    const empty = document.createElement("span");
+    empty.className = "timeline-empty";
+    empty.textContent = "Starting the AI service…";
+    grid.replaceChildren(empty);
+  }
+  const working = providers.filter(aiWorking);
+  const connected = providers.filter(provider => provider.connected);
+  byId("seo-headline").textContent = working.length
+    ? `${working.map(provider => provider.label).join(", ")} ${working.length === 1 ? "is" : "are"} working on your post`
+    : connected.length
+      ? `${connected.map(provider => provider.label).join(", ")} ${connected.length === 1 ? "is" : "are"} ready`
+      : "Social SEO with your own AI accounts";
+
+  const recent = currentAi.recent || [];
+  byId("seo-recent-summary").textContent = recent.length ? `${recent.length} recent` : "None yet";
+  const list = byId("seo-recent-list");
+  if (recent.length) list.replaceChildren(...recent.slice(0, 8).map(createAiRunItem));
+  else {
+    const empty = document.createElement("span");
+    empty.className = "timeline-empty";
+    empty.textContent = "Each AI's finished or failed runs will appear here.";
+    list.replaceChildren(empty);
+  }
+
+  const badge = byId("seo-badge");
+  badge.hidden = working.length === 0;
+  badge.textContent = String(working.length);
+  badge.classList.toggle("needs-you", providers.some(provider => provider.state === "needs-you"));
+}
+
+async function refreshAi() {
+  currentAi = (await api.aiState?.()) || currentAi;
+  renderAi();
 }
 
 function renderStatus(status) {
@@ -695,6 +883,10 @@ api.onScrapingState(state => {
   currentScraping = state;
   renderScraping();
 });
+api.onAiState?.(state => {
+  currentAi = state;
+  renderAi();
+});
 api.onNavigate(section => setView(views[section] ? section : "activity"));
 api.onLog(entry => {
   logEntries = [...logEntries.slice(-79), entry];
@@ -707,11 +899,18 @@ window.addEventListener("resize", () => {
 });
 document.addEventListener("visibilitychange", scheduleLayout);
 
-void Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping()]).then(() => {
+byId("open-social-seo").addEventListener("click", () => void api.openSocialSeo?.());
+
+void Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping(), refreshAi()]).then(() => {
   renderLogs();
   scheduleLayout();
 });
 setInterval(refreshStatus, 5000);
 setInterval(() => {
   if (scrapingWorkCount() > 0) renderScraping();
+  // Keep each working AI's elapsed time ticking.
+  document.querySelectorAll(".seo-ai-time[data-started-at]").forEach(element => {
+    const startedAt = Number(element.dataset.startedAt);
+    if (startedAt) element.textContent = elapsedLabel(startedAt);
+  });
 }, 1000);

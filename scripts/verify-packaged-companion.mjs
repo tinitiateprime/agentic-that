@@ -42,6 +42,11 @@ await Promise.all([
   access(path.join(applicationRoot, "runtime", "server.mjs")),
   access(path.join(applicationRoot, "node_modules", "sharp", "package.json")),
   access(path.join(applicationRoot, "assets", "app-icon-1024.png")),
+  // Social SEO: the AI logos and the platform logos the Companion window shows.
+  access(path.join(applicationRoot, "assets", "ai-logos", "chatgpt.svg")),
+  access(path.join(applicationRoot, "assets", "ai-logos", "claude.svg")),
+  access(path.join(applicationRoot, "assets", "ai-logos", "gemini.svg")),
+  access(path.join(applicationRoot, "assets", "platforms", "instagram-logo.svg")),
 ]);
 
 if (platform === "darwin" && architecture === "universal") {
@@ -59,12 +64,14 @@ if (packagedManifest.version !== manifest.version) {
 }
 const mainSource = await readFile(path.join(applicationRoot, "main.js"), "utf8");
 const runtimeSource = await readFile(path.join(applicationRoot, "runtime", "server.mjs"), "utf8");
-for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session", "flushAccountBrowserData"]) {
+for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session", "flushAccountBrowserData", "updateAiActivity", "companion:ai-show"]) {
   if (!mainSource.includes(requiredText)) throw new Error(`Packaged main process is missing ${requiredText}.`);
 }
-for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles", "if (upload.scheduleId) return isDueByPostSchedule", 'if (mode === "scheduledOnly") return isDueScheduledUpload']) {
+for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles", "if (upload.scheduleId) return isDueByPostSchedule", 'if (mode === "scheduledOnly") return isDueScheduledUpload', "__AGENTICTHAT_SOCIAL_SEO_CONTROL__", "INSTAGRAM CAPTION"]) {
   if (!runtimeSource.includes(requiredText)) throw new Error(`Packaged runtime is missing ${requiredText}.`);
 }
+const controlSource = await readFile(path.join(applicationRoot, "control.html"), "utf8");
+if (!controlSource.includes('id="seo-panel"')) throw new Error("Packaged Companion window is missing the Social SEO view.");
 if (runtimeSource.includes("if (upload.scheduledAt || upload.scheduleId) return false")) {
   throw new Error("Packaged runtime still rejects all scheduled publishing jobs.");
 }
