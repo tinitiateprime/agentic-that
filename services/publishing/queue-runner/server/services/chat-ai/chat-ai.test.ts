@@ -5,8 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import express from "express";
 import { signServiceAccessToken } from "../../../../../../lib/service-access-token.js";
-import { REFINE_PROMPT, markerCount, masterPrompt, parseAnswer } from "./master-prompt.js";
-import { PROVIDERS, isAiProvider, looksLikeHumanCheck, onAppPage, uploadLimitNotice, usageLimitNotice } from "./providers.js";
+import { markerCount, masterPrompt, parseAnswer, splitPrompt } from "./master-prompt.js";
+import { PROVIDERS, isAiProvider, looksLikeHumanCheck, onAppPage, appErrorReply, uploadLimitNotice, usageLimitNotice } from "./providers.js";
 
 // Keep the test away from the real Companion profiles.
 process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chat-ai-test-"));
@@ -160,12 +160,12 @@ test("invented YouTube timestamps are removed, the rest of the description stays
   assert.equal(results.youtube?.description, "Build your skill stack.\n\nSubscribe for more!");
 });
 
-test("the rewrite prompt is short and asks for the same sections", () => {
-  assert.ok(REFINE_PROMPT.length < 500);
-  assert.match(REFINE_PROMPT, /10\/10/);
-  assert.match(REFINE_PROMPT, /Same sections/);
+test("an answer is finished only when it has the sections the prompt asks for", () => {
+  const prompt = masterPrompt({ platforms: ["instagram", "x"], mediaKind: "image", imageCount: 1 });
+  assert.equal(markerCount(prompt), 5);
+  assert.equal(markerCount("Analyzing the image and planning the posts..."), 0, "a thinking status is not an answer");
   assert.equal(markerCount("=== INSTAGRAM CAPTION ===\nHi\n**=== INSTAGRAM HASHTAGS ===**\n#a"), 2);
-  assert.equal(PROVIDERS.gemini.refine, true);
+  assert.equal("refine" in PROVIDERS.gemini, false, "Gemini's answer is used as written");
 });
 
 test("source chips with any image file name are removed", () => {
@@ -202,4 +202,24 @@ test("X and Reddit: their facts are in the prompt and their parts are parsed", (
   assert.equal(results.x?.fullText, "One skill isn't enough anymore. Stack them.\n\n#SkillStack #TechCareers");
   assert.equal(results.reddit?.title, "Is one tech skill still enough in 2026?");
   assert.deepEqual(results.reddit?.subreddits, ["r/cscareerquestions", "r/learnprogramming"]);
+});
+
+test("an app's error reply is told apart from an answer", () => {
+  assert.equal(appErrorReply("I encountered an error doing what you asked. Could you try again?"), true);
+  assert.equal(appErrorReply("Something went wrong. Please try again later."), true);
+  assert.equal(appErrorReply("=== X POST ===\nCould you try again? Our course starts Monday.\n=== X HASHTAGS ===\n#Data"), false);
+  assert.equal(appErrorReply("Here are your posts: please try again tomorrow if the link fails. ".repeat(10)), false);
+});
+
+test("Gemini is asked plainly first, then asked to arrange its own posts word for word", () => {
+  const prompt = masterPrompt({ platforms: ["instagram", "reddit"], mediaKind: "image", imageCount: 1 });
+  const parts = splitPrompt(prompt);
+  assert.ok(parts);
+  assert.match(parts.ask, /^Give me the best of the best, 10\/10 social media SEO for this post, for Instagram and Reddit\. You know what to do\./);
+  assert.match(parts.ask, /at most 5 hashtags/);
+  assert.doesNotMatch(parts.ask, /===/);
+  assert.match(parts.arrange, /word for word/);
+  assert.equal(markerCount(parts.arrange), 6);
+  assert.equal(PROVIDERS.gemini.askPlainlyFirst, true);
+  assert.equal(PROVIDERS.claude.askPlainlyFirst, undefined);
 });

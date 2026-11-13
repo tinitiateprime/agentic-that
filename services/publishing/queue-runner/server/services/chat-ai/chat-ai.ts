@@ -20,9 +20,9 @@ import {
 } from "../../engines/external-browser/index.js";
 import { publishingBrowserDataDirectory } from "../../runtime-paths.js";
 import { publishingDesktopHost } from "../desktop-host.js";
-import { REFINE_PROMPT, markerCount } from "./master-prompt.js";
+import { markerCount, splitPrompt } from "./master-prompt.js";
 import { setWindowPresence } from "./native-window.js";
-import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec, uploadLimitNotice, usageLimitNotice } from "./providers.js";
+import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec, appErrorReply, uploadLimitNotice, usageLimitNotice } from "./providers.js";
 
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const NEEDS_YOU_TIMEOUT_MS = 10 * 60 * 1000;
@@ -712,8 +712,9 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
 
     log(provider, `ready at ${new URL(page.url()).pathname}`);
     step(images.length ? "uploading" : "sending", images.length ? `Uploading your post to ${spec.label}…` : `Sending to ${spec.label}…`);
-    await typePrompt(page, await freshBox(page, spec, box), prompt);
-    log(provider, "prompt typed");
+    const plainly = spec.askPlainlyFirst ? splitPrompt(prompt) : null;
+    await typePrompt(page, await freshBox(page, spec, box), plainly ? plainly.ask : prompt);
+    log(provider, plainly ? "prompt typed (asked plainly first)" : "prompt typed");
     await attachImages(page, spec, await freshBox(page, spec, box), images);
     log(provider, `${images.length} image(s) attached`);
 
@@ -726,8 +727,10 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
       await sleep(700);
     }
     const live = window;
-    // Sends what is in the box and reads the reply until it stops changing.
-    const sendAndRead = async (writing: string) => {
+    // Sends what is in the box and reads the reply until it stops changing. With
+    // sections, a finished answer has the sections the prompt asks for.
+    const sendAndRead = async (writing: string, sections = true) => {
+      const wanted = sections ? markerCount(prompt) : 0;
       const before = (await lastAnswer(page, spec)).count;
       step("sending", `Sending to ${spec.label}…`);
 
@@ -768,7 +771,10 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
             limitCheckedAt = Date.now();
             await throwIfUsageLimit(page, spec);
           }
-          if (Date.now() - started > 120_000) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
+          // Thinking ("Extra thorough") can take minutes before the answer shows:
+          // keep waiting while the app's stop button says it is working.
+          const waited = Date.now() - started;
+          if (waited > 120_000 && (waited > 360_000 || !(await firstVisible(page, spec.stop)))) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
           continue;
         }
         if (now.text !== text) {
@@ -783,31 +789,44 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
         } else {
           stableFor += 1;
         }
+        // Done only when the real answer is there. While an app thinks (Gemini on
+        // "Extra thorough") it shows a short status line that stays still for a
+        // while, so the answer must have the sections the prompt asks for. Gemini's
+        // stop button can also stay on screen after it finishes.
         const streaming = Boolean(await firstVisible(page, spec.stop));
-        if (text && !streaming && stableFor >= 3) break;
+        const found = markerCount(text);
+        if (text && found >= wanted && stableFor >= 3 && (!streaming || stableFor >= 15)) break;
+        if (text && found >= wanted / 2 && stableFor >= 20 && (!streaming || stableFor >= 40)) break;
+        if (text && stableFor >= 90 && (!streaming || stableFor >= 150)) break;
+        // The app's own error reply ("Could you try again?"): no need to wait.
+        if (stableFor >= 4 && appErrorReply(text)) break;
       }
       if (!text) throw new Error(`${spec.label} took too long to answer.`);
       log(provider, `answer read (${text.length} characters) in ${Math.round((Date.now() - started) / 1000)}s`);
       return text;
     };
 
-    let text = await sendAndRead(`${spec.label} is writing your posts…`);
-    if (spec.refine) {
-      // A second pass: the app judges its own answer and rewrites it. The first
-      // answer is kept if the rewrite fails or loses sections.
-      try {
-        await typePrompt(page, await freshBox(page, spec, box), REFINE_PROMPT);
-        const better = await sendAndRead(`${spec.label} is polishing your posts to 10/10…`);
-        // Every section the prompt asks for (the first answer can have more when
-        // the app restarts mid-answer, which a clean rewrite fixes).
-        // A rewrite that shrank a lot has collapsed (e.g. into the poster's own words).
-        const wanted = markerCount(prompt);
-        if (markerCount(better) >= wanted && better.length >= text.length * 0.6) text = better;
-        else log(provider, `rewrite kept the first answer (${markerCount(better)} of ${wanted} sections, ${better.length} vs ${text.length} characters)`);
-      } catch (error) {
-        log(provider, `rewrite skipped: ${error instanceof Error ? error.message.slice(0, 100) : error}`);
-        onEvent({ state: "writing", live: text });
+    // Apps sometimes fail a request ("I encountered an error… Could you try
+    // again?"): ask again in the same chat, which still has the post.
+    const answer = async (writing: string, sections: boolean) => {
+      let reply = await sendAndRead(writing, sections);
+      for (let retry = 1; retry <= 2 && appErrorReply(reply); retry += 1) {
+        log(provider, `the app replied with an error, asking again (${retry}): ${reply.slice(0, 80)}`);
+        await sleep(3000);
+        await typePrompt(page, await freshBox(page, spec, box), "That didn't work. Please try again: the same request, in full.");
+        reply = await sendAndRead(`${spec.label} had a hiccup, asking again…`, sections);
       }
+      if (appErrorReply(reply)) throw new Error(`${spec.label} couldn't answer right now. It said: "${reply.replace(/\s+/g, " ").trim()}" Please try ${spec.label} again in a few minutes.`);
+      return reply;
+    };
+
+    let text = await answer(`${spec.label} is writing your posts…`, !plainly);
+    if (plainly) {
+      // Its full answer, then the same posts arranged into the sections.
+      await typePrompt(page, await freshBox(page, spec, box), plainly.arrange);
+      const arranged = await answer(`${spec.label} is putting your posts in place…`, true);
+      if (markerCount(arranged) * 2 >= markerCount(prompt)) text = arranged;
+      else log(provider, `arranging gave ${markerCount(arranged)} sections: showing the full answer`);
     }
     rememberRun({ provider, label: spec.label, ok: true, seconds: Math.round((Date.now() - startedAt) / 1000), at: new Date().toISOString() });
     return text;

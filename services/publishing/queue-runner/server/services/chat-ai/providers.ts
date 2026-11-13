@@ -32,8 +32,11 @@ export type ProviderSpec = {
    * optional submenu and the option to pick (matched by their visible text).
    */
   qualityMenu?: { button: string[]; submenu?: string; option: string };
-  /** Asks the app to judge and rewrite its first answer in the same chat. */
-  refine?: boolean;
+  /**
+   * Asked plainly first (its richest answer), then asked to arrange that answer
+   * into the sections word for word.
+   */
+  askPlainlyFirst?: boolean;
 };
 
 export const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
@@ -108,9 +111,9 @@ export const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
     // Signed in, Gemini defaults to "Thinking level: Low" (fast, shallow posts).
     // "High · Extra thorough" is available on free plans and writes far better ones.
     qualityMenu: { button: ["button[data-test-id='bard-mode-menu-button']", "button[aria-label*='mode picker']"], submenu: "Thinking level", option: "Extra thorough" },
-    // Even on "Extra thorough", Gemini's first answer is solid but generic (and can
-    // invent details); judging and rewriting it in the same chat lifts it to its best.
-    refine: true,
+    // Told up front that its answer goes into sections, Gemini writes short,
+    // plain posts; asked plainly, it writes its full, rich answer.
+    askPlainlyFirst: true,
   },
 };
 
@@ -156,4 +159,14 @@ export function usageLimitNotice(text: string) {
   const flat = text.replace(/\s+/g, " ");
   const sentence = flat.match(/(?:(?:you(?:'|’)ve|you have) (?:hit|reached) (?:the|your|our)[^.!?]{0,40}limit|(?:you(?:'|’)re |you are )?out of free messages|(?:usage|message|weekly|daily|session|\d+[- ]hour) (?:limit|cap) (?:reached|hit|exceeded))[^.!?]*[.!?]?/i);
   return sentence ? sentence[0].trim().slice(0, 160) : null;
+}
+
+/**
+ * The app's own "something went wrong, try again" reply in place of an answer
+ * (Gemini: "I encountered an error doing what you asked. Could you try again?").
+ */
+export function appErrorReply(text: string) {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat || flat.length > 400 || /={2,}\s*[A-Z]/.test(flat)) return false;
+  return /encountered an error|something went wrong|an error (?:occurred|has occurred)|could you try again|please try again|(?:couldn'?t|could not|can'?t|unable to) (?:complete|process|generate|finish)|network error|request failed/i.test(flat);
 }

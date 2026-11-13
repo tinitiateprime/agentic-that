@@ -89,20 +89,26 @@ export function masterPrompt(details: PostDetails) {
     ...context,
     ...details.platforms.map((platform) => PLATFORM_FACTS[platform]).filter(Boolean),
     "",
-    "Put the finished text in these sections, each starting with its marker on its own line, because your answer is shown in an app with a copy button for each part:",
+    SECTIONS_INTRO,
     ...markers,
   ].join("\n");
 }
 
+const SECTIONS_INTRO = "Put the finished text in these sections, each starting with its marker on its own line, because your answer is shown in an app with a copy button for each part:";
+
 /**
- * A second pass in the same chat, for apps whose first answer is good but not
- * their best (Gemini): it judges its own work and rewrites it.
+ * For apps that write their richest answer when asked plainly (Gemini): the
+ * request without the sections, then a message that only arranges that answer
+ * into the sections, word for word.
  */
-export const REFINE_PROMPT = [
-  "Be your own toughest critic: is that truly 10/10, the best a top social media expert could write for this post (the hook, the keywords people search for, the hashtags, each app's own style)? Rewrite it so it is.",
-  "Don't invent facts such as timestamps, prices or statistics.",
-  "Same sections, each starting with its marker on its own line.",
-].join("\n");
+export function splitPrompt(prompt: string) {
+  const at = prompt.indexOf(SECTIONS_INTRO);
+  if (at < 0) return null;
+  return {
+    ask: prompt.slice(0, at).trim(),
+    arrange: `Now put your posts above into these sections, word for word. Keep everything you wrote for each app (don't shorten, summarise or rewrite it); leave out only notes about the strategy. ${SECTIONS_INTRO.replace("Put the finished text in these sections, ", "Each section starts with its marker on its own line, ")}\n${prompt.slice(at + SECTIONS_INTRO.length).trim()}`,
+  };
+}
 
 /** How many section markers an answer has (a rewrite must keep them all). */
 export function markerCount(answer: string) {

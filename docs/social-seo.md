@@ -28,7 +28,8 @@ Website: upload photo/video (description optional)
   -> Companion: for each connected AI, its own Chrome/Edge profile opens hidden and off the taskbar,
      starts a new chat, types the master prompt, attaches the images, sends, reads the answer as it is written
   -> answer split into each app's parts by section markers -> shown on the Social SEO page
-  -> Gemini (thinking level "Extra thorough") judges and rewrites its first answer in the same chat
+  -> Gemini (thinking level "Extra thorough") is asked plainly first, as a person would, then asked to put its own
+     posts into the sections word for word; an error reply ("Could you try again?") is asked again in the same chat
   -> the AI's browser closes as soon as its answer is read
   -> an AI stopped by its own plan (upload or message limit) shows "Plan limit reached" with the app's words
 ```
