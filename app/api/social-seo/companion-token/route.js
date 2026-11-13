@@ -3,7 +3,7 @@ import { signServiceAccessToken } from "@/lib/service-access-token.js";
 
 export const dynamic = "force-dynamic";
 
-// A five-minute token that lets this user's own Companion run free local AI
+// A five-minute token that lets this user's Companion use their connected AI accounts
 // for Social SEO. Social SEO is open to every signed-in, active user.
 export async function POST() {
   try {

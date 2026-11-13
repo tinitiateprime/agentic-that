@@ -61,6 +61,8 @@ export type PublishingDesktopHost = {
   stopPublishingBrowsers(reason: string): Promise<void> | void;
   clearAccountBrowserData(accountId: string): Promise<void> | void;
   flushAccountBrowserData?(accountId: string): Promise<void> | void;
+  /** Social SEO: what each connected AI (ChatGPT, Claude, Gemini) is doing, for the Companion's view. */
+  updateAiActivity?(state: unknown): void;
   migrateLegacyAccountBrowserData?(accountId: string, platform: Platform): Promise<number> | number;
 };
 

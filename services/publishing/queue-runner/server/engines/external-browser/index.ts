@@ -61,7 +61,7 @@ function writeJsonFile(filePath: string, data: Record<string, any>) {
   fs.writeFileSync(filePath, JSON.stringify(data));
 }
 
-function prepareExternalBrowserProfile(profileDir: string) {
+export function prepareExternalBrowserProfile(profileDir: string) {
   const preferencesPath = path.join(profileDir, "Default", "Preferences");
   const preferences = readJsonFile(preferencesPath);
   preferences.browser = { ...(preferences.browser ?? {}), has_seen_welcome_page: true };
@@ -72,7 +72,7 @@ function prepareExternalBrowserProfile(profileDir: string) {
   writeJsonFile(preferencesPath, preferences);
 }
 
-function getFreePort() {
+export function getFreePort() {
   return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
@@ -85,7 +85,7 @@ function getFreePort() {
   });
 }
 
-function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
+export function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
   if (processHandle.exitCode !== null || processHandle.killed) return Promise.resolve(true);
   return new Promise<boolean>((resolve) => {
     const timeout = setTimeout(() => resolve(false), timeoutMs);
@@ -96,7 +96,7 @@ function waitForProcessExit(processHandle: ChildProcess, timeoutMs: number) {
   });
 }
 
-async function waitForDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
+export async function waitForDebugEndpoint(port: number, processHandle: ChildProcess, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   const endpoint = `http://127.0.0.1:${port}`;
   while (Date.now() < deadline) {

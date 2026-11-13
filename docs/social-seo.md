@@ -7,66 +7,55 @@ The user uploads media and writes a short description. Everything else is sugges
 
 ## Status
 
-| Platform  | Free local AI (Companion) | Without the Companion |
-|-----------|---------------------------|-----------------------|
-| Instagram | Live                      | Rule-based engine     |
-| Facebook  | Live                      | Needs the Companion   |
-| LinkedIn  | Live                      | Needs the Companion   |
-| YouTube   | Live                      | Needs the Companion   |
+| Platform  | With a connected AI (Companion) | Without one             |
+|-----------|---------------------------------|-------------------------|
+| Instagram | Live                            | Rule-based engine       |
+| Facebook  | Live                            | Needs a connected AI    |
+| LinkedIn  | Live                            | Needs a connected AI    |
+| YouTube   | Live                            | Needs a connected AI    |
 
-## Free local AI (in the Companion)
+## Your own AI accounts (in the Companion)
 
-When the AgenticThat Companion is running, Social SEO uses a free, open-source vision model on the user's own
-computer and writes ready-to-post results for **Instagram, Facebook, LinkedIn and YouTube**. The website falls back
-to the rule-based Instagram engine below when the Companion isn't running.
+The user logs in to **ChatGPT, Claude or Gemini** once in the AgenticThat Companion. When they click
+**Create SEO posts**, every connected AI writes its own version for all four apps at the same time, and the
+website shows each one in its own card.
 
 ```
-Website: page opens → model loads in the background (/warm)
-  → upload photo/video (description optional): media resized in the browser (5 frames for a video),
-    sent only to 127.0.0.1:8792, and studied at once (/analyze) while the user types
-  → Create: 1 writing pass per app (/write with live: true), the open tab first; the caption
-    appears word by word while it is written
-  → results fitted to each app's limits, with an SEO score out of 10 → shown on the Social SEO page
+Website: upload photo/video (description optional)
+  -> media resized in the browser (1600 px, 1024 px per slide, 5 frames for a video), sent only to 127.0.0.1:8792
+  -> Companion: for each connected AI, its own Chrome/Edge profile opens hidden and off the taskbar,
+     starts a new chat, types the master prompt, attaches the images, sends, reads the answer as it is written
+  -> answer split into each app's parts by section markers -> shown on the Social SEO page
+  -> the AI's browser closes as soon as its answer is read
 ```
 
-- **Engine**: llama.cpp `llama-server` build `b11946`, bound to 127.0.0.1
-  (`services/publishing/queue-runner/server/services/ai/ai-engine.ts`).
-  - On first start it times the graphics (Vulkan) build against the processor build once and keeps the faster one
-    (`backendMeasured` in `ai-settings.json`). Integrated graphics are often slower than the processor.
-  - Quality first: the chosen model is always used. Low free memory only makes it slower (the page then suggests
-    closing other apps); a smaller model is used only if total memory cannot hold the chosen one.
-  - Fixed instructions come first in every request and `--cache-ram 1024` keeps them, so the next post only reads its
-    own details. It stops after 10 minutes idle, never while a request is running.
-- **What the AI reads** (`analyzeMedia`): the message, mood and post type (selling, quote or motivation, tips, humour,
-  news, personal), the quote on the media, the brand, every list exactly as written (sections with columns, step flows
-  and plain lists), the slogan and the contact details. Our code, not the model, puts lists and contacts in the post.
-- **Business posts** get the lists (each section with its own heading), the poster's slogan, a DM keyword line on
-  Instagram (only promising what the owner stated), contacts, the brand and a local hashtag. **Creator posts**
-  (quotes, moods, humour, moments) are written for message, saves and replies, with theme hashtags.
-- **SEO score** (10 checks per app): Instagram (`instagramScore`, separate checks for creator posts), Facebook,
-  LinkedIn and YouTube (`appScore`). Each missing point comes with a tip.
-- Invented urgency ("limited slots", "hurry") is removed unless the author or the media says it.
-- **Models** (`ai-catalog.ts`), each file pinned and checked against its SHA-256:
-
-  | Tier | Model | Download | Memory | Licence |
-  |---|---|---|---|---|
-  | Standard (default) | Qwen3-VL 4B | 3.0 GB | 8 GB | Apache 2.0 |
-  | High quality | Qwen3-VL 8B | 5.8 GB | 16 GB | Apache 2.0 |
-  | Lite | Qwen3-VL 2B | 1.6 GB | 6 GB | Apache 2.0 |
-
-  All are official Qwen builds. Qwen2.5-VL 3B is excluded because its licence is research-only.
-- **One-time setup**: the user picks a tier (recommended by memory) and the Companion downloads it into
-  `<Companion data>/ai` (`PUBLISH_QUEUE_AI_DIR`).
-- **Limits applied to AI output** (`post-seo.ts`): Instagram 5 hashtags and 2,200 characters; Facebook 3 hashtags;
-  LinkedIn 5 hashtags and 3,000 characters; YouTube title 100 characters, tags 500 characters, 3 hashtags, and
-  `#Shorts` for vertical videos up to 3 minutes. Alt text is capped at 125 characters. The location tag always comes
-  from photo GPS or the description, never from the model.
-- **Endpoints** (Companion): `GET /api/social-seo/ai/status` (open), and `POST` `install`, `warm`, `analyze`,
-  `write` (one JSON line per update with `live: true`) and `generate` under `/api/social-seo/ai/`. All but status
-  require a five-minute `social-seo` token from `POST /api/social-seo/companion-token` on the website.
-- **Manual checks** (real AI, not part of the test suite): `node --import tsx scripts/ai-flow-bench.ts <image>` in
-  `services/publishing/queue-runner` prints timings, the SEO score and the post (`APPS=instagram`, `DESC`, `BRAND`,
-  `LOCATION`, `BUSINESS`).
+- **Code**: `services/publishing/queue-runner/server/services/chat-ai/`
+  - `providers.ts`: per-app selectors (prompt box, upload, send, stop, answer, signed-out signs), checked on the live
+    sites in 2026-11, each a list with fallbacks because these sites change often.
+  - `chat-ai.ts`: login windows, hidden work windows, "needs you" handling, attaching with proof (a thumbnail must
+    appear), sending until the message leaves the box, reading the answer, a step log and the Companion view state.
+  - `native-window.ts`: on Windows, takes the AI windows off the taskbar and Alt+Tab while they work (they stay
+    shown off screen, so Chrome keeps the page running at full speed).
+  - `master-prompt.ts`: the short master prompt ("Give me the best of the best, 10/10 social media SEO for this
+    post… You know what to do.") with the post's details and the section markers, and the answer parser.
+  - `chat-ai-routes.ts`: `GET /status` (open), `POST /connect`, `/disconnect`, `/show` and `/generate` (one JSON
+    line per update) under `/api/social-seo/ai/`. All but status need a five-minute `social-seo` token from
+    `POST /api/social-seo/companion-token` on the website.
+- **Logins** use the real Chrome or Edge (the same engine as publishing), so Google sign-in works. Each AI has its
+  own profile in `<Companion data>/publishing-data/browser-data/ai-accounts/<ai>`; `accounts.json` records which
+  are connected. Disconnect deletes that profile.
+- **The user is needed** when an AI asks to log in again or shows a "verify you are human" check: its window comes
+  forward (back on the taskbar), the website and the Companion show "needs you", and the work continues by itself.
+- **Not run twice**: the website keeps each AI's result per post (media, description, brand, business details).
+  Create only runs AIs that are missing or failed; "Write again" asks one AI for a fresh version.
+- **Answer cleaning**: Instagram keeps the AI's first 5 hashtags (the platform limit since December 2025, also stated
+  in the prompt); Gemini's source chips ("post-1.jpg"), ChatGPT's card headings and hashtags repeated at the end of
+  a caption are removed.
+- **Companion view**: "Social SEO" in the Companion shows each AI's step (Opening, Uploading, Sending, Writing),
+  "needs you" with a button to show its window, and recent runs. The step log is `ai-accounts/ai.log` (steps and
+  timings only, never prompts, answers or images).
+- **Requirements**: Google Chrome, Microsoft Edge or Chromium, and an account with the AI (free plans work, with
+  their usage limits).
 
 ## How it works (no AI)
 

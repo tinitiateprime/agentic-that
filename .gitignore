@@ -36,6 +36,6 @@ apps/publishing-companion-desktop/out/
 apps/publishing-companion-desktop/runtime/
 apps/publishing-companion-desktop/assets/app-icon.icns
 
-# Local AI engine and model downloads (Social SEO)
+# Keep model downloads left over from older Companion versions private.
 services/**/ai-data/
 ai-data/

@@ -11,7 +11,7 @@ import { requireYouTubeOptions } from "../shared/youtube-options.js";
 import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-workspace-auth.js";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { downloadCentralArtifact, type CentralJobArtifact } from "./central-artifact.js";
-import { registerAiRoutes } from "./services/ai/ai-routes.js";
+import { registerAiRoutes } from "./services/chat-ai/chat-ai-routes.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import {
   cancelAllInstagramCompanionJobs,
@@ -1616,7 +1616,7 @@ app.use(
     }
   })
 );
-// Free local AI (Post SEO) has its own, larger body limit for image data.
+// Social SEO with the user's own AI logins has its own, larger body limit for image data.
 registerAiRoutes(app);
 app.use(express.json({ limit: "2mb" }));
 if (fs.existsSync(runtimeDesktopAssets)) {

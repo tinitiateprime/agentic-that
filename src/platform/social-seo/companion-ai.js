@@ -1,11 +1,11 @@
-// Browser client for the free local AI that runs inside the AgenticThat
-// Companion. Media is resized in the browser and sent only to 127.0.0.1.
+// Browser client for Social SEO with the user's own ChatGPT, Claude and Gemini
+// logins in the AgenticThat Companion. Media is resized in the browser and sent
+// only to 127.0.0.1; the Companion passes it to the AI apps the user connected.
 
 const COMPANION_AI = "http://127.0.0.1:8792/api/social-seo/ai";
-// Every 32x32 pixels costs the AI one token of reading time, so images are kept
-// just big enough to read text: one photo 768 px, carousel slides and video frames smaller.
-const MAX_IMAGE_SIDE = 768;
-const MULTI_IMAGE_SIDE = 512;
+// Big enough for ChatGPT, Claude and Gemini to read small text on posters.
+const MAX_IMAGE_SIDE = 1600;
+const MULTI_IMAGE_SIDE = 1024;
 const VIDEO_FRAMES = 5;
 
 let cachedToken = null;
@@ -14,7 +14,7 @@ async function companionToken() {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) return cachedToken.token;
   const response = await fetch("/api/social-seo/companion-token", { method: "POST", credentials: "same-origin", cache: "no-store" });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.token) throw new Error(data.error || "Sign in again to use the free AI.");
+  if (!response.ok || !data.token) throw new Error(data.error || "Sign in again to use your AI accounts.");
   cachedToken = { token: data.token, expiresAt: Date.now() + (data.expiresInSeconds || 300) * 1000 };
   return cachedToken.token;
 }
@@ -34,7 +34,7 @@ async function call(path, { method = "GET", body, timeoutMs = 4000, auth = false
   }
 }
 
-/** AI status from the Companion, or null when the Companion is not running. */
+/** Which AI apps are connected in the Companion, or null when the Companion is not running. */
 export async function companionAiStatus() {
   try {
     return await call("/status", { timeoutMs: 2500 });
@@ -43,28 +43,33 @@ export async function companionAiStatus() {
   }
 }
 
-export function installCompanionAi(tier) {
-  return call("/install", { method: "POST", body: { tier }, auth: true, timeoutMs: 15_000 });
+/** Opens the AI app's own login window on this computer. */
+export function connectCompanionAi(provider) {
+  return call("/connect", { method: "POST", body: { provider }, auth: true, timeoutMs: 60_000 });
 }
 
-/** Step 1: the AI looks at the media once. Slow computers can take a few minutes. */
-export function analyzeWithCompanionAi(payload) {
-  return call("/analyze", { method: "POST", body: payload, auth: true, timeoutMs: 15 * 60 * 1000 });
+export function disconnectCompanionAi(provider) {
+  return call("/disconnect", { method: "POST", body: { provider }, auth: true, timeoutMs: 20_000 });
+}
+
+/** Brings the AI app's window to the front (when it needs the user). */
+export function showCompanionAiWindow(provider) {
+  return call("/show", { method: "POST", body: { provider }, auth: true, timeoutMs: 10_000 }).catch(() => null);
 }
 
 /**
- * Step 2: write a ready-to-post result for one app, with the latest description,
- * brand and location. onLive(text) receives the caption while it is written.
+ * Sends the post to every connected AI app at once. onEvent receives each update:
+ * { provider, state: "working" | "needs-you", detail }, { provider, state: "writing", live },
+ * { provider, ok: true, results, complete, raw } or { provider, ok: false, message }.
  */
-export async function writeWithCompanionAi(analysisId, platform, details = {}, onLive) {
-  if (!onLive) return call("/write", { method: "POST", body: { analysisId, platform, ...details }, auth: true, timeoutMs: 15 * 60 * 1000 });
+export async function generateWithCompanionAis(payload, onEvent) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+  const timer = setTimeout(() => controller.abort(), 20 * 60 * 1000);
   try {
-    const response = await fetch(`${COMPANION_AI}/write`, {
+    const response = await fetch(`${COMPANION_AI}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${await companionToken()}` },
-      body: JSON.stringify({ analysisId, platform, ...details, live: true }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     if (!response.ok || !response.body) {
@@ -74,7 +79,7 @@ export async function writeWithCompanionAi(analysisId, platform, details = {}, o
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let final = null;
+    let completed = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -83,28 +88,17 @@ export async function writeWithCompanionAi(analysisId, platform, details = {}, o
       while ((newline = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        if (!line) continue;
-        const event = JSON.parse(line);
-        if (typeof event.live === "string") onLive(event.live);
-        else final = event;
+        if (line) {
+          const event = JSON.parse(line);
+          if (event.done === true) completed = true;
+          onEvent(event);
+        }
       }
     }
-    if (!final) throw new Error("The Companion stopped before the post was finished. Please try again.");
-    if (!final.ok) throw new Error(final.message || "The local AI could not finish.");
-    return final;
+    if (!completed) throw new Error("The Companion connection ended before every AI finished. Please try again.");
   } finally {
     clearTimeout(timer);
   }
-}
-
-/** Load the model in the background when the page opens, so the first post does not wait for it. */
-export function warmCompanionAi() {
-  return call("/warm", { method: "POST", auth: true, timeoutMs: 10_000 }).catch(() => null);
-}
-
-export function generateWithCompanionAi(payload) {
-  // A first run loads the model; allow generous time on slower computers.
-  return call("/generate", { method: "POST", body: payload, auth: true, timeoutMs: 6 * 60 * 1000 });
 }
 
 // ---- Preparing media in the browser ---------------------------------------------
@@ -154,7 +148,7 @@ function orientationOf(width, height) {
   return ratio < 0.9 ? "vertical" : ratio > 1.1 ? "landscape" : "square";
 }
 
-/** Turn the uploaded media into small JPEGs the local AI can look at. */
+/** Turn the uploaded media into small JPEGs the connected AI apps can read. */
 export async function prepareMediaForAi(media) {
   const first = media[0];
   if (first?.kind === "video") {
