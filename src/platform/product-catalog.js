@@ -1,6 +1,8 @@
 export const productCategories = [
   {
     id: "website",
+    // Hidden for now: set hidden to false to show Websites again.
+    hidden: true,
     label: "Websites",
     eyebrow: "Autonomous website delivery",
     title: "Turn a short business brief into a complete, published website",
@@ -246,6 +248,8 @@ export const productServices = [
   },
   {
     slug: "ai-phone-front-desk",
+    // Hidden for now: set hidden to false to show Phone AI again.
+    hidden: true,
     category: "messaging",
     name: "AI Phone Front Desk",
     platformName: "Phone Front Desk",
@@ -604,15 +608,15 @@ export const productServices = [
     platformName: "Social SEO",
     provider: "AgenticThat SEO Labs",
     logo: "/seo-hashtag-caption.svg",
-    accent: "#d94f27",
-    tint: "#fff1ec",
+    accent: "#a56f05",
+    tint: "#fffbea",
     availability: "live",
     connectionKind: "none",
-    shortDescription: "Upload a post and a short description, then get a search-ready caption, hashtags, alt text, keywords and format checks for each social platform.",
-    promise: "Upload once, describe it in a sentence, and get everything a post needs to be found.",
-    formatLabel: "Social SEO · Captions · Hashtags · Media checks",
-    detailHeading: "Platform-ready Social SEO suggestions from a single upload",
-    detailDescription: "Social SEO reads your post the way your audience would (its message, mood, lists and contact details) and writes ready-to-post captions, hashtags, alt text and an SEO score for Instagram, Facebook, LinkedIn and YouTube. With the free AgenticThat Companion, a free AI runs privately on your own computer.",
+    shortDescription: "Upload a post and get ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written by your own ChatGPT, Claude or Gemini.",
+    promise: "Upload once and let the AI you already use write SEO posts for every app.",
+    formatLabel: "Social SEO · ChatGPT, Claude, Gemini · Every app",
+    detailHeading: "SEO posts for every app, written by the AI you already use",
+    detailDescription: "Log in to ChatGPT, Claude or Gemini once in the AgenticThat Companion. Upload a post here and each connected AI writes its own ready-to-post caption, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, so you can pick the best. Their browsers work hidden in the background and close as soon as the answer is ready.",
     dashboardHref: "/social-seo",
     actionLabel: "Open Social SEO",
     capabilities: [
@@ -622,14 +626,14 @@ export const productServices = [
       { title: "Media format checks", description: "Check aspect ratio, resolution, length and file size, and suggest the best cover frame for videos." },
     ],
     steps: [
-      { title: "Upload the post", description: "Add the photo, carousel or video. It never leaves your computer: the free AI runs in the Companion on the same machine." },
-      { title: "Add a sentence if you like", description: "Optional: say what the post is about, and save your city and business details once for local search." },
-      { title: "Copy the posts", description: "Get a ready-to-post result for each app with its SEO score and tips, then copy what you want to use." },
+      { title: "Connect your AI", description: "In the Companion, log in once to ChatGPT, Claude or Gemini (Google, Microsoft, Apple or email). The login is remembered." },
+      { title: "Upload the post", description: "Add the photo, carousel or video and, if you like, a sentence about it. Save your city and business details once for local search." },
+      { title: "Copy the posts", description: "Watch each AI write, then copy the caption, hashtags and alt text for every app." },
     ],
     useCases: ["Instagram posts and Reels", "Facebook and LinkedIn posts", "YouTube videos and Shorts", "Course, menu and product posters", "Quotes and creator content"],
-    requirements: ["A photo or video to post", "The free AgenticThat Companion for the AI (otherwise Instagram rules only)", "No social account connection is required"],
-    outcomes: ["Caption options", "Hashtag set", "Alt text", "Format and SEO checklist"],
-    note: "With the Companion, a free open-source AI (Qwen3-VL, Apache 2.0) runs on your own computer, so your media never leaves it. Without it, Instagram suggestions come from built-in rules and free public search-suggestion data. No platform can guarantee reach, so the score reflects best-practice coverage, not predicted views.",
+    requirements: ["A photo or video to post", "The free AgenticThat Companion and Google Chrome or Microsoft Edge", "A ChatGPT, Claude or Gemini account (a free plan works)"],
+    outcomes: ["A version from each connected AI", "Captions and posts for 4 apps", "Hashtags and YouTube tags", "Alt text"],
+    note: "Your post goes from this computer to the AI accounts you connect, through their own websites and your own logins. Without a connected AI, Instagram suggestions come from built-in rules and free public search-suggestion data. No platform can guarantee reach.",
   },
   engagementService({ slug: "instagram", name: "Instagram", logo: "/instagram-logo.svg", accent: "#d94672", tint: "#fff0f4", description: "Plan a reviewable workspace for Instagram comments, replies, and post-level follow-up." }),
   engagementService({ slug: "facebook", name: "Facebook", logo: "/facebook-logo.svg", accent: "#2563b8", tint: "#edf4ff", description: "Coordinate Facebook post replies and engagement review with clear human approval." }),
@@ -653,3 +657,8 @@ export function getServicesByCategory(categoryId) {
 export function serviceDetailHref(service) {
   return `/apps/${service.category}/${service.slug}`;
 }
+
+/** Categories and services shown in the app (hidden ones stay in the catalog for later). */
+export const shownProductCategories = productCategories.filter((category) => !category.hidden);
+const hiddenCategoryIds = new Set(productCategories.filter((category) => category.hidden).map((category) => category.id));
+export const shownProductServices = productServices.filter((service) => !service.hidden && !hiddenCategoryIds.has(service.category));

@@ -24,9 +24,10 @@ const sections = [
     ],
   },
   { id: "publishing", label: "Social posts", icon: SquarePen, href: "/publishing", capability: "publishing.view" },
-  { id: "website", label: "Websites", icon: Globe2, href: "/website-studio" },
+  // Websites and Phone AI are hidden for now: remove "hidden" to show them again.
+  { id: "website", label: "Websites", icon: Globe2, href: "/website-studio", hidden: true },
   { id: "social-seo", label: "Social SEO", icon: Search, href: "/social-seo" },
-  { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk" },
+  { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk", hidden: true },
   { id: "content", label: "Activity", icon: ClipboardList, href: "/content-manager", anyCapability: ["publishing.view", "messaging.view"] },
 ];
 
@@ -72,7 +73,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
 
   const visibleMore = moreChildren.filter(allowed);
   const railSections = [
-    ...sections.filter(allowed).map((section) => (
+    ...sections.filter((section) => !section.hidden && allowed(section)).map((section) => (
       section.children ? { ...section, children: section.children.filter(allowed) } : section
     )),
     { id: "more", label: "More", icon: null, children: visibleMore },

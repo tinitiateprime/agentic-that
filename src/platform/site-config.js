@@ -28,11 +28,11 @@ export const LOCATION = {
 
 // Search-result description: keep under 160 characters (Bing and Google cut longer text).
 export const SITE_META_DESCRIPTION =
-  "AI agents that build websites, answer WhatsApp, Telegram and phone calls, research public data and schedule posts to Instagram, X, LinkedIn, YouTube and more.";
+  "AI agents that write social SEO posts, answer WhatsApp and Telegram, research public data and schedule posts to Instagram, X, LinkedIn, YouTube and more.";
 
 // Longer description for structured data and llms.txt.
 export const SITE_DESCRIPTION =
-  "AgenticThat runs AI agents for your business from one workspace: AI-built websites, WhatsApp and Telegram messaging, an AI phone receptionist, Instagram and Facebook public-data research, and scheduled publishing to Instagram, Facebook, X, LinkedIn, YouTube and Reddit.";
+  "AgenticThat runs AI agents for your business from one workspace: social SEO posts written with your ChatGPT, Claude or Gemini, WhatsApp and Telegram messaging, Instagram and Facebook public-data research, and scheduled publishing to Instagram, Facebook, X, LinkedIn, YouTube and Reddit.";
 
 // Paths that need a signed-in account. Search engines are asked not to crawl them.
 export const PRIVATE_PATHS = [

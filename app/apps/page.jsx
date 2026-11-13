@@ -4,7 +4,7 @@ import { getCurrentPrincipal } from "@platform/server/access-control";
 
 export const metadata = {
   title: "Home — AgenticThat",
-  description: "Omnichannel publishing and messaging apps for Instagram, YouTube, Facebook, X, LinkedIn, WhatsApp, and Telegram, plus AI websites, public-data, SEO, and engagement tools.",
+  description: "Omnichannel publishing and messaging apps for Instagram, YouTube, Facebook, X, LinkedIn, WhatsApp, and Telegram, plus Social SEO, public-data research, and engagement tools.",
 };
 
 export default async function AppsPage() {

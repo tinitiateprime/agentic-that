@@ -36,9 +36,8 @@ const principles = [
 ];
 
 const products = [
-  { name: "AI Website Studio", detail: "Three website designs from one short brief, then delivered and published.", status: "Live" },
+  { name: "Social SEO", detail: "Ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini.", status: "Live" },
   { name: "Messaging automation", detail: "WhatsApp and Telegram: contacts, campaigns, templates and inbox replies.", status: "Live" },
-  { name: "AI Phone Front Desk", detail: "An AI receptionist that answers calls, captures leads and summarizes them.", status: "Live" },
   { name: "Scheduled publishing", detail: "Instagram, Facebook, X, LinkedIn, YouTube and Reddit from one publish queue.", status: "Live" },
   { name: "Public-data research", detail: "Public Instagram and Facebook data, exported as JSON or CSV.", status: "Live" },
   { name: "Post engagement", detail: "Reviewable replies and interactions across social channels.", status: "Coming soon" },

@@ -60,9 +60,8 @@ const structuredData = {
       description: SITE_DESCRIPTION,
       publisher: { "@id": `${SITE_URL}/#organization` },
       featureList: [
-        "AI Website Studio: three responsive website designs from one brief, delivered and published",
+        "Social SEO: ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini",
         "Chat workflow automation for WhatsApp and Telegram: contacts, campaigns, templates and inbox replies",
-        "AI Phone Front Desk: an AI receptionist that answers calls, captures leads and summarizes them",
         "Instagram and Facebook public-data research: profiles, Pages, posts, reels and comments to JSON or CSV",
         "Scheduled publishing to Instagram, Facebook, X, LinkedIn, YouTube and Reddit",
       ],

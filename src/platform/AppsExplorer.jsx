@@ -28,7 +28,7 @@ import {
   Video,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { productCategories, productServices, serviceDetailHref } from "./product-catalog";
+import { serviceDetailHref, shownProductCategories as productCategories, shownProductServices as productServices } from "./product-catalog";
 import { useProductStatus } from "./use-product-status";
 import ProductShell, { billingLabel } from "./ProductShell";
 import styles from "./app-store.module.css";
@@ -110,7 +110,18 @@ const tasks = [
     category: "publishing",
   },
   {
+    id: "social-seo",
+    group: "ai",
+    title: "Write SEO posts with AI",
+    description: "Upload a post and get ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube from your ChatGPT, Claude or Gemini.",
+    icon: Search,
+    href: "/social-seo",
+    category: "seo",
+    slugs: ["social-seo"],
+  },
+  {
     id: "website",
+    hidden: true,
     anchor: "category-website",
     group: "ai",
     title: "Build a website",
@@ -122,6 +133,7 @@ const tasks = [
   },
   {
     id: "phone",
+    hidden: true,
     group: "ai",
     title: "Answer phone calls with AI",
     description: "Try an AI receptionist that greets callers and writes down their details.",
@@ -339,7 +351,7 @@ export default function AppsExplorer({ user, access = {} }) {
               <i />
             </div>
             <section className={styles.taskGrid} aria-label="Messages and social media">
-              {tasks.filter((task) => task.group === "work").map((task) => (
+              {tasks.filter((task) => task.group === "work" && !task.hidden).map((task) => (
                 <TaskCard task={task} services={servicesFor(task)} statusFor={statusFor} user={user} access={access} key={task.id} />
               ))}
             </section>
@@ -349,7 +361,7 @@ export default function AppsExplorer({ user, access = {} }) {
               <i />
             </div>
             <section className={styles.taskGrid} aria-label="AI services">
-              {tasks.filter((task) => task.group === "ai").map((task) => (
+              {tasks.filter((task) => task.group === "ai" && !task.hidden).map((task) => (
                 <TaskCard task={task} services={servicesFor(task)} statusFor={statusFor} user={user} access={access} key={task.id} />
               ))}
             </section>
