@@ -15,6 +15,8 @@ const PLATFORMS = [
   { id: "facebook", label: "Facebook", logo: "/facebook-logo.svg" },
   { id: "linkedin", label: "LinkedIn", logo: "/linkedin-logo.png" },
   { id: "youtube", label: "YouTube", logo: "/youtube-logo.svg" },
+  { id: "x", label: "X", logo: "/x-logo.svg" },
+  { id: "reddit", label: "Reddit", logo: "/reddit-logo.svg" },
 ];
 const AI_PLATFORMS = PLATFORMS.map((entry) => entry.id);
 const MAX_HASHTAGS = 5;
@@ -236,14 +238,14 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
       }, (event) => {
         if (!event.provider) return;
         if (event.ok === true) update(event.provider, { state: "done", results: event.results, complete: event.complete, raw: event.raw, ms: event.ms, live: "" });
-        else if (event.ok === false) update(event.provider, { state: "failed", message: event.message });
+        else if (event.ok === false) update(event.provider, { state: event.limit ? "limit" : "failed", message: event.message });
         else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
       });
     } catch (runError) {
       // The Companion closed or the connection dropped: mark what was still running.
       setAiResult((current) => current && ({
         ...current,
-        providers: Object.fromEntries(Object.entries(current.providers).map(([id, entry]) => [id, ids.includes(id) && !["done", "failed"].includes(entry.state) ? { ...entry, state: "failed", message: runError.message } : entry])),
+        providers: Object.fromEntries(Object.entries(current.providers).map(([id, entry]) => [id, ids.includes(id) && !["done", "failed", "limit"].includes(entry.state) ? { ...entry, state: "failed", message: runError.message } : entry])),
       }));
     } finally {
       refreshAiStatus();
@@ -491,7 +493,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
             <div className={styles.emptyState}>
               <Sparkles size={30} />
               <h2>Connect an AI for {PLATFORMS.find((entry) => entry.id === platform)?.label}</h2>
-              <p>Facebook, LinkedIn and YouTube posts are written by your ChatGPT, Claude or Gemini through the Companion. Basic SEO is available for Instagram.</p>
+              <p>Facebook, LinkedIn, YouTube, X and Reddit posts are written by your ChatGPT, Claude or Gemini through the Companion. Basic SEO is available for Instagram.</p>
             </div>
           )}
 

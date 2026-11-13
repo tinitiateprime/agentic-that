@@ -5,8 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import express from "express";
 import { signServiceAccessToken } from "../../../../../../lib/service-access-token.js";
-import { masterPrompt, parseAnswer } from "./master-prompt.js";
-import { PROVIDERS, isAiProvider, looksLikeHumanCheck, onAppPage } from "./providers.js";
+import { REFINE_PROMPT, markerCount, masterPrompt, parseAnswer } from "./master-prompt.js";
+import { PROVIDERS, isAiProvider, looksLikeHumanCheck, onAppPage, uploadLimitNotice, usageLimitNotice } from "./providers.js";
 
 // Keep the test away from the real Companion profiles.
 process.env.PUBLISH_QUEUE_BROWSER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "chat-ai-test-"));
@@ -142,4 +142,64 @@ test("routes: status is open, everything else needs a valid AgenticThat token", 
   } finally {
     server.close();
   }
+});
+
+test("an app's upload limit is recognised and explained", () => {
+  assert.equal(uploadLimitNotice("Get Plus for more uploads\nOr wait 19 hours to upload again\nAdd from library"), "wait 19 hours to upload again");
+  assert.equal(uploadLimitNotice("Get Plus for more uploads"), "upload again later");
+  assert.equal(uploadLimitNotice("Add photos & files\nCreate image\nWeb search"), null);
+});
+
+test("invented YouTube timestamps are removed, the rest of the description stays", () => {
+  const answer = [
+    "=== YOUTUBE TITLE ===", "Why One Skill Isn't Enough",
+    "=== YOUTUBE DESCRIPTION ===", "Build your skill stack.", "", "Timestamps / Key Topics:", "0:00 - The Shift", "1:15 – Why it matters", "**3:30** The 5 Pillars", "", "Subscribe for more!",
+    "=== YOUTUBE TAGS ===", "skills, careers",
+  ].join("\n");
+  const { results } = parseAnswer(answer, ["youtube"]);
+  assert.equal(results.youtube?.description, "Build your skill stack.\n\nSubscribe for more!");
+});
+
+test("the rewrite prompt is short and asks for the same sections", () => {
+  assert.ok(REFINE_PROMPT.length < 500);
+  assert.match(REFINE_PROMPT, /10\/10/);
+  assert.match(REFINE_PROMPT, /Same sections/);
+  assert.equal(markerCount("=== INSTAGRAM CAPTION ===\nHi\n**=== INSTAGRAM HASHTAGS ===**\n#a"), 2);
+  assert.equal(PROVIDERS.gemini.refine, true);
+});
+
+test("source chips with any image file name are removed", () => {
+  const { results } = parseAnswer("=== LINKEDIN POST ===\nOne skill isn't enough.   \nposter.jpg\n+ 3\n\nBuild a stack.\n=== LINKEDIN HASHTAGS ===\n#Skills", ["linkedin"]);
+  assert.equal(results.linkedin?.post, "One skill isn't enough.\n\nBuild a stack.");
+});
+
+test("an app's message limit is recognised", () => {
+  assert.equal(usageLimitNotice("Ask anything\nYou've hit the Free plan limit for GPT-5. Responses will use another model until 6:00 PM."), "You've hit the Free plan limit for GPT-5.");
+  assert.equal(usageLimitNotice("You are out of free messages until 5:00 PM"), "You are out of free messages until 5:00 PM");
+  assert.equal(usageLimitNotice("Claude\n5-hour limit reached ∙ resets 5:00 PM"), "5-hour limit reached ∙ resets 5:00 PM");
+  assert.equal(usageLimitNotice("Usage limit reached — your limit will reset at 9:00 PM."), "Usage limit reached — your limit will reset at 9:00 PM.");
+  assert.equal(usageLimitNotice("You've reached your usage limit. Upgrade to Pro"), "You've reached your usage limit.");
+  assert.equal(usageLimitNotice("You have 3 messages remaining until 5 PM"), null);
+  assert.equal(usageLimitNotice("Where should we start? Gemini Auto"), null);
+});
+
+test("X and Reddit: their facts are in the prompt and their parts are parsed", () => {
+  const prompt = masterPrompt({ platforms: ["x", "reddit"], mediaKind: "image", imageCount: 1 });
+  assert.match(prompt, /for X \(Twitter\) and Reddit\./);
+  assert.match(prompt, /280 characters/);
+  assert.match(prompt, /Reddit doesn't use hashtags/);
+  assert.match(prompt, /=== REDDIT SUBREDDITS ===/);
+  const answer = [
+    "=== X POST ===", "One skill isn't enough anymore. Stack them.", "#SkillStack",
+    "=== X HASHTAGS ===", "#SkillStack #TechCareers",
+    "=== REDDIT TITLE ===", "Is one tech skill still enough in 2026?",
+    "=== REDDIT POST ===", "I've been thinking about this…",
+    "=== REDDIT SUBREDDITS ===", "- r/cscareerquestions", "- /r/learnprogramming", "- r/cscareerquestions", "Check each subreddit's rules before posting, and post to one or two at a time.", "just now",
+  ].join("\n");
+  const { results, complete } = parseAnswer(answer, ["x", "reddit"]);
+  assert.equal(complete, true);
+  assert.equal(results.x?.post, "One skill isn't enough anymore. Stack them.");
+  assert.equal(results.x?.fullText, "One skill isn't enough anymore. Stack them.\n\n#SkillStack #TechCareers");
+  assert.equal(results.reddit?.title, "Is one tech skill still enough in 2026?");
+  assert.deepEqual(results.reddit?.subreddits, ["r/cscareerquestions", "r/learnprogramming"]);
 });

@@ -636,7 +636,7 @@ function createAiRunItem(run) {
   logo.alt = "";
   const copy = document.createElement("span");
   const title = document.createElement("strong");
-  title.textContent = run.ok ? `${run.label} wrote your posts in ${run.seconds}s` : `${run.label} could not finish`;
+  title.textContent = run.ok ? `${run.label} wrote your posts in ${run.seconds}s` : run.limit ? `${run.label}: plan limit reached` : `${run.label} could not finish`;
   const detail = document.createElement("small");
   const date = new Date(run.at);
   const time = Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });

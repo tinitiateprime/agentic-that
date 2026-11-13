@@ -152,6 +152,11 @@
 .stepTrack [data-status="active"] { color: var(--seo-ink); }
 .stepTrack [data-status="active"] i { background: var(--seo-gold); box-shadow: 0 0 0 4px rgba(250, 204, 21, .3); animation: seo-pulse 1.4s ease-in-out infinite; }
 @keyframes seo-pulse { 50% { box-shadow: 0 0 0 8px transparent; } }
+.limitBox { display: flex; gap: 12px; margin: 14px 0 0; padding: 12px 14px; border: 1px solid var(--seo-line); border-left: 3px solid var(--seo-attention); border-radius: 12px; background: #fffbeb; color: var(--seo-attention); }
+.limitBox div { display: grid; flex: 1 1 220px; gap: 4px; }
+.limitBox strong { color: var(--seo-ink); }
+.limitBox span { color: var(--seo-muted); font-size: 13.5px; line-height: 1.5; }
+.aiCard[data-state="limit"] .aiCardStatus { color: var(--seo-attention); }
 .needsYouBox { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0 0; padding: 12px 14px; border: 1px solid #fed7aa; border-left: 3px solid var(--seo-attention); border-radius: 12px; background: #fff7ed; color: var(--seo-attention); }
 .needsYouBox div { display: grid; flex: 1 1 220px; gap: 2px; }
 .needsYouBox strong { color: var(--seo-ink); }

@@ -27,6 +27,13 @@ export type ProviderSpec = {
   answer: string[];
   /** Visible only when signed out. */
   signedOut: string[];
+  /**
+   * The app's best answer setting, chosen before each post: the menu button, an
+   * optional submenu and the option to pick (matched by their visible text).
+   */
+  qualityMenu?: { button: string[]; submenu?: string; option: string };
+  /** Asks the app to judge and rewrite its first answer in the same chat. */
+  refine?: boolean;
 };
 
 export const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
@@ -39,7 +46,17 @@ export const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
     loginPaths: /^\/(auth|login)/,
     // Checked on the live site (2026-11): a textarea named "prompt" and a "Send message"
     // button. Older layouts (#prompt-textarea, data-testid buttons) are kept as fallbacks.
-    prompt: ["textarea[name='prompt']", "#mobile-composer-prompt", "textarea[aria-label*='ChatGPT']", "#prompt-textarea", "div[contenteditable='true'][id='prompt-textarea']", "form div[contenteditable='true']"],
+    // Signed in, ChatGPT first shows a placeholder (textarea#pending-home-input) and
+    // swaps in the real editor (a contenteditable div, "Ask ChatGPT") ~4 s later:
+    // the real editor comes first and the "pending" placeholder is never used.
+    prompt: [
+      "div[contenteditable='true'][aria-label*='ChatGPT']",
+      "div#prompt-textarea[contenteditable='true']",
+      "form div[contenteditable='true']",
+      "textarea[name='prompt']:not([id^='pending'])",
+      "#mobile-composer-prompt",
+      "textarea[aria-label*='ChatGPT']:not([id^='pending'])",
+    ],
     // Signed in, the inputs have generated ids; each is tried until a thumbnail appears.
     fileInput: ["input[type='file'][id*='files-input']", "input[type='file'][id*='photos-input']", "input[type='file'][accept='image/*,video/*']", "input[type='file']:not([accept])", "input[type='file'][accept*='image']", "input[type='file']"],
     // Signed in, the upload inputs appear a few seconds after the chat box; the
@@ -88,6 +105,12 @@ export const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
     stop: ["button[aria-label='Stop response']", "button[aria-label*='Stop']"],
     answer: ["model-response message-content", "model-response .markdown", "model-response"],
     signedOut: ["a[href*='ServiceLogin']", "a[aria-label='Sign in']", "a:has-text('Sign in')"],
+    // Signed in, Gemini defaults to "Thinking level: Low" (fast, shallow posts).
+    // "High · Extra thorough" is available on free plans and writes far better ones.
+    qualityMenu: { button: ["button[data-test-id='bard-mode-menu-button']", "button[aria-label*='mode picker']"], submenu: "Thinking level", option: "Extra thorough" },
+    // Even on "Extra thorough", Gemini's first answer is solid but generic (and can
+    // invent details); judging and rewriting it in the same chat lifts it to its best.
+    refine: true,
   },
 };
 
@@ -110,4 +133,27 @@ export function looksLikeHumanCheck(title: string, url: string, frameUrls: strin
   return /just a moment|verify (that )?you are human|attention required|unusual traffic|are you a robot/i.test(title)
     || /\/sorry\/|challenges\.cloudflare\.com|\/cdn-cgi\/challenge/i.test(url)
     || frameUrls.some((frame) => /challenges\.cloudflare\.com|recaptcha|hcaptcha/i.test(frame));
+}
+
+/**
+ * The app's own "no more uploads" notice (ChatGPT's free plan: "Get Plus for more
+ * uploads · Or wait 19 hours to upload again"), shown when its "+" menu is open.
+ */
+export function uploadLimitNotice(text: string) {
+  const flat = text.replace(/\s+/g, " ");
+  const wait = flat.match(/wait ([^.]{1,25}?) to upload again/i);
+  if (wait) return `wait ${wait[1]} to upload again`;
+  return /for more uploads|upload limit (reached|exceeded)|reached (your|the) (upload|file) limit/i.test(flat) ? "upload again later" : null;
+}
+
+/**
+ * The app's own "you've used up your plan for now" notice (messages, not uploads):
+ * the sentence it shows, or null. Covers ChatGPT ("You've hit the Free plan limit"),
+ * Claude ("You are out of free messages until 5 PM", "5-hour limit reached",
+ * "Usage limit reached") and Gemini ("You've reached your limit").
+ */
+export function usageLimitNotice(text: string) {
+  const flat = text.replace(/\s+/g, " ");
+  const sentence = flat.match(/(?:(?:you(?:'|’)ve|you have) (?:hit|reached) (?:the|your|our)[^.!?]{0,40}limit|(?:you(?:'|’)re |you are )?out of free messages|(?:usage|message|weekly|daily|session|\d+[- ]hour) (?:limit|cap) (?:reached|hit|exceeded))[^.!?]*[.!?]?/i);
+  return sentence ? sentence[0].trim().slice(0, 160) : null;
 }

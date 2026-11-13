@@ -137,7 +137,7 @@ export function registerAiRoutes(app: express.Express) {
           const { results, complete } = parseAnswer(answer, platforms);
           send({ provider, ok: true, results, complete, raw: answer, ms: Date.now() - started });
         } catch (error) {
-          send({ provider, ok: false, message: error instanceof Error ? error.message : "This AI could not finish." });
+          send({ provider, ok: false, limit: (error as { limit?: boolean })?.limit === true, message: error instanceof Error ? error.message : "This AI could not finish." });
         }
       }));
     } finally {

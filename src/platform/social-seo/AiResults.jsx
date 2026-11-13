@@ -4,7 +4,7 @@ import { AlertTriangle, AppWindow, Check, Copy, RefreshCw, Sparkles } from "luci
 import { AiLogo } from "./AiStatusBar";
 import styles from "./social-seo.module.css";
 
-const LABELS = { instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn", youtube: "YouTube" };
+const LABELS = { instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn", youtube: "YouTube", x: "X", reddit: "Reddit" };
 const STEPS = [
   { id: "opening", label: "Opening" },
   { id: "uploading", label: "Uploading" },
@@ -69,9 +69,18 @@ function PlatformFields({ provider, platform, result, copied, onCopy }) {
       </>
     );
   }
+  if (platform === "reddit") {
+    return (
+      <>
+        <Field id={`${key}-title`} title="Title" value={result.title} copied={copied} onCopy={onCopy} />
+        <Field id={`${key}-post`} title="Post" value={result.post} copied={copied} onCopy={onCopy} multiline />
+        <Tags id={`${key}-subreddits`} title="Subreddits to post in" tags={result.subreddits} joiner=", " copied={copied} onCopy={onCopy} />
+      </>
+    );
+  }
   return (
     <>
-      <Field id={`${key}-post`} title="Post" value={result.post} copied={copied} onCopy={onCopy} multiline />
+      <Field id={`${key}-post`} title="Post" value={result.post} copied={copied} onCopy={onCopy} multiline hint={platform === "x" && result.post ? `${[result.post, ...(result.hashtags || [])].join(" ").length} of 280 characters with hashtags` : undefined} />
       <Tags id={`${key}-tags`} title="Hashtags" tags={result.hashtags} joiner=" " copied={copied} onCopy={onCopy} />
     </>
   );
@@ -92,7 +101,7 @@ function StepTrack({ step }) {
   );
 }
 
-const STATUS = { working: "Working", writing: "Writing", "needs-you": "Needs you", done: "Done", failed: "Couldn't finish" };
+const STATUS = { working: "Working", writing: "Writing", "needs-you": "Needs you", done: "Done", failed: "Couldn't finish", limit: "Plan limit reached" };
 
 function ProviderCard({ entry, platform, copied, onCopy, onShow, onRerun, busy }) {
   const result = entry.results?.[platform];
@@ -109,9 +118,9 @@ function ProviderCard({ entry, platform, copied, onCopy, onShow, onRerun, busy }
           <span className={styles.aiCardStatus}>{STATUS[entry.state] || entry.state}{entry.state === "done" && seconds ? ` · ${seconds}s` : ""}</span>
         </div>
         <div className={styles.cardActions}>
-          {(entry.state === "done" || entry.state === "failed") && (
+          {(entry.state === "done" || entry.state === "failed" || entry.state === "limit") && (
             <button type="button" className={styles.copyButton} onClick={() => onRerun(entry.id)} disabled={busy} title={`Ask ${entry.label} for a new version of this post`}>
-              <RefreshCw size={15} /> {entry.state === "failed" ? "Try again" : "Write again"}
+              <RefreshCw size={15} /> {entry.state === "done" ? "Write again" : "Try again"}
             </button>
           )}
           {hasParts && result.fullText && (
@@ -147,6 +156,17 @@ function ProviderCard({ entry, platform, copied, onCopy, onShow, onRerun, busy }
         : <Field id={`${entry.id}-raw`} title={`${entry.label}'s answer`} value={entry.raw} copied={copied} onCopy={onCopy} multiline hint="It didn't use the usual sections, so here is its full answer." />)}
 
       {entry.state === "failed" && <p className={styles.error} role="alert">{entry.message}</p>}
+
+      {entry.state === "limit" && (
+        <div className={styles.limitBox} role="status">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>{entry.label}'s plan limit is reached, not a problem with your post</strong>
+            <span>{entry.message}</span>
+            <span>Your other connected AIs still write this post.</span>
+          </div>
+        </div>
+      )}
     </article>
   );
 }
@@ -154,7 +174,7 @@ function ProviderCard({ entry, platform, copied, onCopy, onShow, onRerun, busy }
 /** Ready-to-post results for one app, one card per connected AI. */
 export default function AiResults({ data, platform, copied, onCopy, onShow, onRerun, busy = false, draft = "" }) {
   const entries = data.order.map((id) => data.providers[id]).filter(Boolean);
-  const working = entries.some((entry) => entry.state !== "done" && entry.state !== "failed");
+  const working = entries.some((entry) => !["done", "failed", "limit"].includes(entry.state));
   return (
     <>
       {entries.map((entry) => (

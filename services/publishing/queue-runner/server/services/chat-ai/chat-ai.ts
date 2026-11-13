@@ -20,8 +20,9 @@ import {
 } from "../../engines/external-browser/index.js";
 import { publishingBrowserDataDirectory } from "../../runtime-paths.js";
 import { publishingDesktopHost } from "../desktop-host.js";
+import { REFINE_PROMPT, markerCount } from "./master-prompt.js";
 import { setWindowPresence } from "./native-window.js";
-import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec } from "./providers.js";
+import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec, uploadLimitNotice, usageLimitNotice } from "./providers.js";
 
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const NEEDS_YOU_TIMEOUT_MS = 10 * 60 * 1000;
@@ -87,7 +88,7 @@ const opening = new Map<AiProviderId, Promise<AiWindow>>();
 
 export type AiStep = "opening" | "uploading" | "sending" | "writing";
 type Activity = { state: "connecting" | "needs-you" | "working"; detail: string; step?: AiStep; startedAt: number };
-type RecentRun = { provider: AiProviderId; label: string; ok: boolean; seconds: number; at: string; message?: string };
+type RecentRun = { provider: AiProviderId; label: string; ok: boolean; seconds: number; at: string; message?: string; limit?: boolean };
 
 const activity = new Map<AiProviderId, Activity>();
 const recentRuns: RecentRun[] = [];
@@ -399,15 +400,20 @@ async function pasteText(page: Page, box: Locator, text: string) {
 }
 
 async function typePrompt(page: Page, box: Locator, text: string) {
-  const isTextarea = await box.evaluate((element) => element.tagName === "TEXTAREA").catch(() => false);
+  const isTextarea = await box.evaluate((element) => element.tagName === "TEXTAREA", undefined, { timeout: 3000 }).catch(() => false);
   if (isTextarea) {
     await box.fill(text);
     return;
   }
+  // Apps restore an unsent draft (ChatGPT does): start from an empty box so
+  // nothing from an earlier post mixes into this one.
+  await focusBox(box);
+  await page.keyboard.press("ControlOrMeta+A").catch(() => undefined);
+  await page.keyboard.press("Backspace").catch(() => undefined);
   await pasteText(page, box, text);
   await sleep(400);
   const probe = text.slice(0, 40).replace(/\s+/g, " ");
-  const typed = (await box.innerText().catch(() => "")).replace(/\s+/g, " ");
+  const typed = (await box.innerText({ timeout: 3000 }).catch(() => "")).replace(/\s+/g, " ");
   // Some editors ignore synthetic paste: type it instead.
   if (!typed.includes(probe.slice(0, 20))) {
     await focusBox(box);
@@ -442,8 +448,77 @@ async function press(target: Locator) {
   try {
     await target.click({ timeout: 4000 });
   } catch {
-    await target.evaluate((element) => (element as HTMLElement).click());
+    await target.evaluate((element) => (element as HTMLElement).click(), undefined, { timeout: 3000 });
   }
+}
+
+/**
+ * The message box once the page has settled. Apps can show a placeholder first
+ * and swap in the real editor seconds later (ChatGPT does, ~4 s after loading):
+ * the box is used only after it has been the same element for 1.5 seconds.
+ */
+async function settledPromptBox(page: Page, spec: ProviderSpec, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  let stableChecks = 0;
+  let box: Locator | null = null;
+  while (Date.now() < deadline) {
+    box = await firstVisible(page, spec.prompt);
+    const signature = box
+      ? await box.evaluate((element) => `${element.tagName}|${element.id}|${element.getAttribute("aria-label") || ""}|${element.className}`, undefined, { timeout: 2000 }).catch(() => "")
+      : "";
+    if (signature && signature === last) {
+      stableChecks += 1;
+      if (stableChecks >= 3) return box;
+    } else {
+      stableChecks = 0;
+      last = signature;
+    }
+    await sleep(500);
+  }
+  return box;
+}
+
+/**
+ * Picks the app's best answer setting (Gemini: thinking level "High"). It is
+ * remembered by the app, so later posts usually find it already chosen. If the
+ * menu has changed, the post is still written with the app's default.
+ */
+async function chooseBestQuality(page: Page, spec: ProviderSpec) {
+  const menu = spec.qualityMenu;
+  if (!menu) return;
+  // The menu button is drawn a few seconds after the chat box.
+  const button = await waitVisible(page, menu.button, 10_000);
+  if (!button) {
+    log(spec.id, "answer setting: menu button not found, using the app's default");
+    return;
+  }
+  try {
+    await button.click({ timeout: 5000 }).catch(() => press(button));
+    await sleep(1000);
+    if (menu.submenu) {
+      const submenu = page.getByText(menu.submenu, { exact: true }).first();
+      await submenu.waitFor({ state: "visible", timeout: 4000 });
+      await submenu.click({ timeout: 4000 });
+      await sleep(1000);
+    }
+    const option = page.getByText(menu.option, { exact: true }).first();
+    await option.waitFor({ state: "visible", timeout: 4000 });
+    await option.click({ timeout: 4000 });
+    log(spec.id, `answer setting: ${menu.option}`);
+  } catch (error) {
+    log(spec.id, `answer setting not changed: ${error instanceof Error ? error.message.split("\n")[0].slice(0, 100) : error}`);
+  } finally {
+    await sleep(500);
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await sleep(200);
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+}
+
+/** The message box as it is now (pages re-render it), or the last one found. */
+async function freshBox(page: Page, spec: ProviderSpec, fallback: Locator) {
+  return (await firstVisible(page, spec.prompt)) || fallback;
 }
 
 /** Puts the cursor in the message box, even under a banner. */
@@ -451,8 +526,27 @@ async function focusBox(box: Locator) {
   try {
     await box.click({ timeout: 4000 });
   } catch {
-    await box.evaluate((element) => (element as HTMLElement).focus());
+    await box.evaluate((element) => (element as HTMLElement).focus(), undefined, { timeout: 3000 }).catch(() => undefined);
   }
+}
+
+/** An app's own plan limit (uploads or messages): not something a retry now can fix. */
+export class AiLimitError extends Error {
+  readonly limit = true;
+}
+
+/** Throws a clear limit error when the app shows that its plan's messages are used up. */
+async function throwIfUsageLimit(page: Page, spec: ProviderSpec) {
+  const notice = usageLimitNotice(await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
+  if (!notice) return;
+  log(spec.id, `usage limit: ${notice}`);
+  throw new AiLimitError(`${spec.label} has used up your plan's messages for now. It says: "${notice}" Try ${spec.label} again then, or upgrade your ${spec.label} plan.`);
+}
+
+async function uploadLimitReached(page: Page) {
+  // The notice sits beside ChatGPT's menu items, not inside them: read the page
+  // (a new, empty chat at this point).
+  return uploadLimitNotice(await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
 }
 
 /** Picture thumbnails on the page: a new one proves an attachment worked. */
@@ -493,7 +587,7 @@ async function attachImages(page: Page, spec: ProviderSpec, box: Locator, files:
     const count = await inputs.count().catch(() => 0);
     for (let index = 0; index < count; index += 1) {
       // The same input can match several selectors: try each only once.
-      const key = await inputs.nth(index).evaluate((element) => element.id || element.outerHTML.slice(0, 120)).catch(() => `${selector}-${index}`);
+      const key = await inputs.nth(index).evaluate((element) => element.id || element.outerHTML.slice(0, 120), undefined, { timeout: 3000 }).catch(() => `${selector}-${index}`);
       if (tried.has(key)) continue;
       tried.add(key);
       try {
@@ -518,6 +612,12 @@ async function attachImages(page: Page, spec: ProviderSpec, box: Locator, files:
       return chooser;
     };
     let picker = await opensPicker(attach, spec.attachMenuItems.length ? 2500 : 5000);
+    const limit = picker ? null : await uploadLimitReached(page);
+    if (limit) {
+      await page.keyboard.press("Escape").catch(() => undefined);
+      log(spec.id, `upload limit: ${limit}`);
+      throw new AiLimitError(`${spec.label} won't take more images on your free plan right now. It says: "${limit[0].toUpperCase()}${limit.slice(1)}." Try ${spec.label} again then, or upgrade your ${spec.label} plan.`);
+    }
     if (!picker) {
       // Inputs that appeared after the click.
       for (const selector of spec.fileInput) {
@@ -565,7 +665,7 @@ async function attachImages(page: Page, spec: ProviderSpec, box: Locator, files:
 async function sendButtonReady(page: Page, spec: ProviderSpec) {
   const button = await firstVisible(page, spec.send);
   if (!button) return null;
-  const disabled = await button.evaluate((element) => (element as HTMLButtonElement).disabled || element.getAttribute("aria-disabled") === "true").catch(() => true);
+  const disabled = await button.evaluate((element) => (element as HTMLButtonElement).disabled || element.getAttribute("aria-disabled") === "true", undefined, { timeout: 3000 }).catch(() => true);
   return disabled ? null : button;
 }
 
@@ -606,14 +706,15 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
     const { page } = window;
     await readyToChat(window, spec, onEvent);
     if (activity.get(provider)?.state !== "working") step("opening", `Opening ${spec.label}…`);
-    const box = await waitVisible(page, spec.prompt, 30_000);
+    await chooseBestQuality(page, spec);
+    const box = await settledPromptBox(page, spec);
     if (!box) throw new Error(`Couldn't find the message box in ${spec.label}. Its page may have changed; please try again.`);
 
     log(provider, `ready at ${new URL(page.url()).pathname}`);
     step(images.length ? "uploading" : "sending", images.length ? `Uploading your post to ${spec.label}…` : `Sending to ${spec.label}…`);
-    await typePrompt(page, box, prompt);
+    await typePrompt(page, await freshBox(page, spec, box), prompt);
     log(provider, "prompt typed");
-    await attachImages(page, spec, box, images);
+    await attachImages(page, spec, await freshBox(page, spec, box), images);
     log(provider, `${images.length} image(s) attached`);
 
     // Let the upload finish: the send button turns on when it is ready, and
@@ -624,65 +725,96 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
       if (await humanCheck(page)) await readyToChat(window, spec, onEvent);
       await sleep(700);
     }
-    const before = (await lastAnswer(page, spec)).count;
-    step("sending", `Sending to ${spec.label}…`);
+    const live = window;
+    // Sends what is in the box and reads the reply until it stops changing.
+    const sendAndRead = async (writing: string) => {
+      const before = (await lastAnswer(page, spec)).count;
+      step("sending", `Sending to ${spec.label}…`);
 
-    // Send, and make sure it really left the box: an app can ignore a click
-    // while an upload is still finishing, so press again until it goes.
-    const promptText = async () => (await box.evaluate((element) => ("value" in element ? String((element as HTMLTextAreaElement).value) : element.textContent || "")).catch(() => "")).trim();
-    const sendDeadline = Date.now() + 90_000;
-    let sent = false;
-    for (let attempt = 1; !sent && Date.now() < sendDeadline; attempt += 1) {
-      const send = await sendButtonReady(page, spec);
-      if (send) await press(send);
-      else await box.press("Enter").catch(() => undefined);
-      for (let waited = 0; waited < 6000 && !sent; waited += 500) {
-        await sleep(500);
-        sent = (await lastAnswer(page, spec)).count > before || (await promptText()).length < 20;
-      }
-      log(provider, `send attempt ${attempt}: ${sent ? "sent" : "still in the box"}`);
-    }
-    if (!sent) throw new Error(`${spec.label} didn't take the message. Check its window: it may need you, or your plan's limit may be reached.`);
-    step("writing", `${spec.label} is writing your posts…`);
-
-    // Read the answer while it is written, until it stops changing.
-    const started = Date.now();
-    let text = "";
-    let stableFor = 0;
-    let answering = false;
-    while (Date.now() - started < ANSWER_TIMEOUT_MS) {
-      await sleep(1000);
-      if (window.closed) throw new Error(`The ${spec.label} window was closed.`);
-      if (await humanCheck(page)) await readyToChat(window, spec, onEvent);
-      const now = await lastAnswer(page, spec);
-      if (now.count > before) answering = true;
-      if (!answering) {
-        if (Date.now() - started > 120_000) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
-        continue;
-      }
-      if (now.text !== text) {
-        text = now.text;
-        stableFor = 0;
-        if (text) {
-          onEvent({ state: "writing", live: text });
-          const current = activity.get(provider);
-          if (current) activity.set(provider, { ...current, detail: `${spec.label} is writing your posts… ${text.length.toLocaleString("en")} characters so far` });
-          publishActivity();
+      // Send, and make sure it really left the box: an app can ignore a click
+      // while an upload is still finishing, so press again until it goes.
+      const promptText = async () => (await (await freshBox(page, spec, box)).evaluate((element) => ("value" in element ? String((element as HTMLTextAreaElement).value) : element.textContent || ""), undefined, { timeout: 3000 }).catch(() => "")).trim();
+      const sendDeadline = Date.now() + 90_000;
+      let sent = false;
+      for (let attempt = 1; !sent && Date.now() < sendDeadline; attempt += 1) {
+        const send = await sendButtonReady(page, spec);
+        if (send) await press(send);
+        else await (await freshBox(page, spec, box)).press("Enter", { timeout: 3000 }).catch(() => undefined);
+        for (let waited = 0; waited < 6000 && !sent; waited += 500) {
+          await sleep(500);
+          sent = (await lastAnswer(page, spec)).count > before || (await promptText()).length < 20;
         }
-      } else {
-        stableFor += 1;
+        log(provider, `send attempt ${attempt}: ${sent ? "sent" : "still in the box"}`);
       }
-      const streaming = Boolean(await firstVisible(page, spec.stop));
-      if (text && !streaming && stableFor >= 3) break;
+      if (!sent) await throwIfUsageLimit(page, spec);
+      if (!sent) throw new Error(`${spec.label} didn't take the message. Check its window: it may need you, or your plan's limit may be reached.`);
+      step("writing", writing);
+
+      // Read the answer while it is written, until it stops changing.
+      const started = Date.now();
+      let text = "";
+      let stableFor = 0;
+      let answering = false;
+      let limitCheckedAt = 0;
+      while (Date.now() - started < ANSWER_TIMEOUT_MS) {
+        await sleep(1000);
+        if (live.closed) throw new Error(`The ${spec.label} window was closed.`);
+        if (await humanCheck(page)) await readyToChat(live, spec, onEvent);
+        const now = await lastAnswer(page, spec);
+        if (now.count > before) answering = true;
+        if (!answering) {
+          // An app out of messages says so instead of answering: stop waiting.
+          if (Date.now() - limitCheckedAt > 10_000) {
+            limitCheckedAt = Date.now();
+            await throwIfUsageLimit(page, spec);
+          }
+          if (Date.now() - started > 120_000) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
+          continue;
+        }
+        if (now.text !== text) {
+          text = now.text;
+          stableFor = 0;
+          if (text) {
+            onEvent({ state: "writing", live: text });
+            const current = activity.get(provider);
+            if (current) activity.set(provider, { ...current, detail: `${writing} ${text.length.toLocaleString("en")} characters so far` });
+            publishActivity();
+          }
+        } else {
+          stableFor += 1;
+        }
+        const streaming = Boolean(await firstVisible(page, spec.stop));
+        if (text && !streaming && stableFor >= 3) break;
+      }
+      if (!text) throw new Error(`${spec.label} took too long to answer.`);
+      log(provider, `answer read (${text.length} characters) in ${Math.round((Date.now() - started) / 1000)}s`);
+      return text;
+    };
+
+    let text = await sendAndRead(`${spec.label} is writing your posts…`);
+    if (spec.refine) {
+      // A second pass: the app judges its own answer and rewrites it. The first
+      // answer is kept if the rewrite fails or loses sections.
+      try {
+        await typePrompt(page, await freshBox(page, spec, box), REFINE_PROMPT);
+        const better = await sendAndRead(`${spec.label} is polishing your posts to 10/10…`);
+        // Every section the prompt asks for (the first answer can have more when
+        // the app restarts mid-answer, which a clean rewrite fixes).
+        // A rewrite that shrank a lot has collapsed (e.g. into the poster's own words).
+        const wanted = markerCount(prompt);
+        if (markerCount(better) >= wanted && better.length >= text.length * 0.6) text = better;
+        else log(provider, `rewrite kept the first answer (${markerCount(better)} of ${wanted} sections, ${better.length} vs ${text.length} characters)`);
+      } catch (error) {
+        log(provider, `rewrite skipped: ${error instanceof Error ? error.message.slice(0, 100) : error}`);
+        onEvent({ state: "writing", live: text });
+      }
     }
-    if (!text) throw new Error(`${spec.label} took too long to answer.`);
-    log(provider, `answer read (${text.length} characters) in ${Math.round((Date.now() - started) / 1000)}s`);
     rememberRun({ provider, label: spec.label, ok: true, seconds: Math.round((Date.now() - startedAt) / 1000), at: new Date().toISOString() });
     return text;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(provider, `FAILED: ${message}`);
-    rememberRun({ provider, label: spec.label, ok: false, seconds: Math.round((Date.now() - startedAt) / 1000), at: new Date().toISOString(), message });
+    rememberRun({ provider, label: spec.label, ok: false, seconds: Math.round((Date.now() - startedAt) / 1000), at: new Date().toISOString(), message, limit: error instanceof AiLimitError });
     throw error;
   } finally {
     if (window) window.busy -= 1;

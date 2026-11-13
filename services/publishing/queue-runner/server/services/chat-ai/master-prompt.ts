@@ -2,7 +2,7 @@
 // media SEO, so there are no writing rules: only the post's details and the
 // section markers that let the website show each part with its own copy button.
 
-export const SEO_PLATFORMS = ["instagram", "facebook", "linkedin", "youtube"] as const;
+export const SEO_PLATFORMS = ["instagram", "facebook", "linkedin", "youtube", "x", "reddit"] as const;
 export type SeoPlatform = (typeof SEO_PLATFORMS)[number];
 
 type Section = { key: string; marker: string; kind: "text" | "hashtags" | "tags" };
@@ -26,9 +26,18 @@ export const SECTIONS: Record<SeoPlatform, Section[]> = {
     { key: "description", marker: "YOUTUBE DESCRIPTION", kind: "text" },
     { key: "tags", marker: "YOUTUBE TAGS", kind: "tags" },
   ],
+  x: [
+    { key: "post", marker: "X POST", kind: "text" },
+    { key: "hashtags", marker: "X HASHTAGS", kind: "hashtags" },
+  ],
+  reddit: [
+    { key: "title", marker: "REDDIT TITLE", kind: "text" },
+    { key: "post", marker: "REDDIT POST", kind: "text" },
+    { key: "subreddits", marker: "REDDIT SUBREDDITS", kind: "tags" },
+  ],
 };
 
-const LABELS: Record<SeoPlatform, string> = { instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn", youtube: "YouTube" };
+const LABELS: Record<SeoPlatform, string> = { instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn", youtube: "YouTube", x: "X (Twitter)", reddit: "Reddit" };
 
 export type PostDetails = {
   platforms: SeoPlatform[];
@@ -56,6 +65,8 @@ function mediaLine(details: PostDetails) {
  */
 const PLATFORM_FACTS: Partial<Record<SeoPlatform, string>> = {
   instagram: "Instagram now allows at most 5 hashtags per post.",
+  x: "X posts on free accounts are limited to 280 characters, hashtags included.",
+  reddit: "Reddit doesn't use hashtags; post titles are limited to 300 characters.",
 };
 
 /** Hashtags each app accepts; extra ones are dropped (the AI lists its strongest first). */
@@ -83,15 +94,44 @@ export function masterPrompt(details: PostDetails) {
   ].join("\n");
 }
 
+/**
+ * A second pass in the same chat, for apps whose first answer is good but not
+ * their best (Gemini): it judges its own work and rewrites it.
+ */
+export const REFINE_PROMPT = [
+  "Be your own toughest critic: is that truly 10/10, the best a top social media expert could write for this post (the hook, the keywords people search for, the hashtags, each app's own style)? Rewrite it so it is.",
+  "Don't invent facts such as timestamps, prices or statistics.",
+  "Same sections, each starting with its marker on its own line.",
+].join("\n");
+
+/** How many section markers an answer has (a rewrite must keep them all). */
+export function markerCount(answer: string) {
+  return answer.replace(/\r\n?/g, "\n").split("\n").filter((line) => MARKER_LINE.test(line)).length;
+}
+
+/**
+ * The AIs only see a picture or a few frames, so chapter timestamps in a
+ * YouTube description are invented: they are removed with their heading.
+ */
+export function withoutInventedTimestamps(text: string) {
+  return text
+    .replace(/^[ \t]*[*_]*(?:timestamps?|chapters|key (?:topics|moments))\b[^\n]*:?[*_]*[ \t]*$/gim, "")
+    .replace(/^[ \t]*[-*•]?[ \t]*[*_]*\(?(?:\d{1,2}:)?\d{1,2}:\d{2}\)?[*_]*[ \t]*[-–—:|)]?[ \t]+\S[^\n]*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const MARKER_LINE = /^[\s>*#_`]*={2,}\s*([A-Z][A-Z ]*[A-Z])\s*={2,}[\s*_`]*$/;
 
 function cleanBlock(text: string) {
   return text
     // Gemini shows the source of a sentence as a chip ("post-1.jpg", "+ 1"): not part of the post.
-    .replace(/^[ \t]*(?:post-\d+\.(?:jpe?g|png|webp)|\+[ \t]*\d+)[ \t]*$/gim, "")
+    .replace(/^[ \t]*(?:[\w.-]+\.(?:jpe?g|png|webp|gif|heic)|\+[ \t]*\d+)[ \t]*$/gim, "")
     // ChatGPT shows each app's text in a card headed with the app's name (or a
     // code label like "text"): the heading is not part of the post.
-    .replace(/^[ \t]*(?:instagram|facebook|linkedin|youtube|text|plaintext|markdown)[ \t]*$/gim, "")
+    .replace(/^[ \t]*(?:instagram|facebook|linkedin|youtube|x|twitter|x \(twitter\)|reddit|text|plaintext|markdown)[ \t]*$/gim, "")
+    // The app's own message time ("just now", "2 minutes ago") under its answer.
+    .replace(/^[ \t]*(?:just now|\d+ (?:seconds?|minutes?|mins?) ago)[ \t]*$/gim, "")
     .replace(/[ \t]+$/gm, "")
     .replace(/^\s*```[a-z]*\s*$/gim, "")
     .replace(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/gm, "")
@@ -135,7 +175,11 @@ export function parseAnswer(answer: string, platforms: SeoPlatform[]): ParsedAns
       if (section.kind === "hashtags") {
         entry[section.key] = [...new Set(block.match(/#[\p{L}\p{N}_]+/gu) || [])].slice(0, MAX_HASHTAGS[platform] ?? 30);
       } else if (section.kind === "tags") {
-        entry[section.key] = [...new Set(block.split(/[,\n]/).map((tag) => tag.replace(/^[\s\-*•\d.)]+/, "").replace(/^#/, "").trim()).filter(Boolean))];
+        const tags = block.split(/[,\n]/).map((tag) => tag.replace(/^[\s\-*•\d.)]+/, "").replace(/^#/, "").trim()).filter(Boolean);
+        // Subreddits: only real "r/name" entries (not a note the AI added after the list).
+        entry[section.key] = [...new Set(section.key === "subreddits"
+          ? tags.map((tag) => tag.match(/^\/?r\/([A-Za-z0-9_]{2,21})\b/)?.[1]).filter(Boolean).map((name) => `r/${name}`)
+          : tags)];
       } else {
         entry[section.key] = block;
       }
@@ -148,9 +192,10 @@ export function parseAnswer(answer: string, platforms: SeoPlatform[]): ParsedAns
         entry[field] = (entry[field] as string).replace(/(?:\n[ \t]*(?:#[\p{L}\p{N}_]+[ \t]*)+)+\s*$/u, "").trim();
       }
     }
+    if (platform === "youtube" && typeof entry.description === "string") entry.description = withoutInventedTimestamps(entry.description);
     // Copy-everything text, ready to paste into the app.
     if (platform === "instagram") entry.fullText = [entry.caption, (entry.hashtags as string[]).join(" ")].filter(Boolean).join("\n\n");
-    if (platform === "facebook" || platform === "linkedin") entry.fullText = [entry.post, (entry.hashtags as string[]).join(" ")].filter(Boolean).join("\n\n");
+    if (platform === "facebook" || platform === "linkedin" || platform === "x") entry.fullText = [entry.post, (entry.hashtags as string[]).join(" ")].filter(Boolean).join("\n\n");
     results[platform] = entry;
   }
   return { results, complete };

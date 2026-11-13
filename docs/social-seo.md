@@ -13,11 +13,13 @@ The user uploads media and writes a short description. Everything else is sugges
 | Facebook  | Live                            | Needs a connected AI    |
 | LinkedIn  | Live                            | Needs a connected AI    |
 | YouTube   | Live                            | Needs a connected AI    |
+| X         | Live                            | Needs a connected AI    |
+| Reddit    | Live (title, post, subreddits)  | Needs a connected AI    |
 
 ## Your own AI accounts (in the Companion)
 
 The user logs in to **ChatGPT, Claude or Gemini** once in the AgenticThat Companion. When they click
-**Create SEO posts**, every connected AI writes its own version for all four apps at the same time, and the
+**Create SEO posts**, every connected AI writes its own version for all six apps at the same time, and the
 website shows each one in its own card.
 
 ```
@@ -26,7 +28,9 @@ Website: upload photo/video (description optional)
   -> Companion: for each connected AI, its own Chrome/Edge profile opens hidden and off the taskbar,
      starts a new chat, types the master prompt, attaches the images, sends, reads the answer as it is written
   -> answer split into each app's parts by section markers -> shown on the Social SEO page
+  -> Gemini (thinking level "Extra thorough") judges and rewrites its first answer in the same chat
   -> the AI's browser closes as soon as its answer is read
+  -> an AI stopped by its own plan (upload or message limit) shows "Plan limit reached" with the app's words
 ```
 
 - **Code**: `services/publishing/queue-runner/server/services/chat-ai/`
