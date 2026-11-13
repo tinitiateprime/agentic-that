@@ -4,7 +4,7 @@ import { requireOpenServicePrincipal } from "@platform/server/access-control";
 
 export const metadata = {
   title: "Social SEO — AgenticThat",
-  description: "Upload a post and get a search-ready caption, hashtags, alt text and format checks for each social platform.",
+  description: "Upload a post and get ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written by your own ChatGPT, Claude or Gemini.",
 };
 
 export const dynamic = "force-dynamic";

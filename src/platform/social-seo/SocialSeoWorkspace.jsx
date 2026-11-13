@@ -6,8 +6,8 @@ import {
 } from "lucide-react";
 import { probeMediaFile } from "./media-probe";
 import AiResults from "./AiResults";
-import AiStatusBar from "./AiStatusBar";
-import { analyzeWithCompanionAi, companionAiStatus, installCompanionAi, prepareMediaForAi, warmCompanionAi, writeWithCompanionAi } from "./companion-ai";
+import AiStatusBar, { AiLogo } from "./AiStatusBar";
+import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow } from "./companion-ai";
 import styles from "./social-seo.module.css";
 
 const PLATFORMS = [
@@ -109,8 +109,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
   const [platform, setPlatform] = useState("instagram");
   const [aiStatus, setAiStatus] = useState(undefined);
   const [aiResult, setAiResult] = useState(null);
-  const [tierChoice, setTierChoice] = useState("");
-  const [installing, setInstalling] = useState(false);
+  const [aiBusy, setAiBusy] = useState("");
   const [media, setMedia] = useState([]);
   const [probing, setProbing] = useState(false);
   const [description, setDescription] = useState("");
@@ -118,6 +117,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
   const [brandName, setBrandName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [result, setResult] = useState(null);
   const [variantId, setVariantId] = useState("polished");
   const [captionEdits, setCaptionEdits] = useState({});
@@ -133,8 +133,10 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
   const [business, setBusiness] = useState({ city: "", details: "" });
   useEffect(() => { setBusiness(readStoredBusiness()); }, []);
 
-  // Keep the free-AI status fresh: every 3 s while downloading, otherwise every 20 s.
-  const downloading = aiStatus?.phase === "downloading";
+  // Keep the AI accounts fresh: every 3 s while someone is logging in or an AI
+  // needs the user, otherwise every 15 s (the Companion may start later).
+  const waitingForUser = Boolean(aiStatus?.providers?.some((provider) => provider.state === "connecting" || provider.state === "needs-you"));
+  const refreshAiStatus = async () => setAiStatus(await companionAiStatus());
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
@@ -142,44 +144,23 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
       if (!cancelled) setAiStatus(next);
     };
     refresh();
-    const timer = setInterval(refresh, downloading ? 3000 : 20000);
+    const timer = setInterval(refresh, waitingForUser || loading ? 3000 : 15000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [downloading]);
+  }, [waitingForUser, loading]);
 
-  const aiReady = Boolean(aiStatus && ["installed", "ready", "starting"].includes(aiStatus.phase));
+  const connectedAis = aiStatus?.providers?.filter((provider) => provider.connected) || [];
+  const aiReady = connectedAis.length > 0;
 
-  // Speed: load the model as soon as the page opens...
-  const warmed = useRef(false);
-  useEffect(() => {
-    if (!aiReady || warmed.current || !canGenerate) return;
-    warmed.current = true;
-    warmCompanionAi();
-  }, [aiReady, canGenerate]);
-
-  // ...and study the media the moment it is added, while the user is still
-  // typing. The description is used later, when each app is written.
-  const earlyAnalysis = useRef({ key: "", promise: null });
-  const mediaKey = media.map((item) => item.id).join("|");
-  useEffect(() => {
-    if (!aiReady || !canGenerate || !mediaKey) return undefined;
-    const timer = setTimeout(() => {
-      if (earlyAnalysis.current.key === mediaKey) return;
-      const promise = prepareMediaForAi(mediaRef.current).then((prepared) => analyzeWithCompanionAi(prepared));
-      promise.catch(() => undefined);
-      earlyAnalysis.current = { key: mediaKey, promise };
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [aiReady, canGenerate, mediaKey]);
-
-  async function installAi(tier) {
-    setInstalling(true);
+  async function aiAction(provider, action) {
+    setAiBusy(provider);
     setError("");
     try {
-      setAiStatus(await installCompanionAi(tier));
-    } catch (installError) {
-      setError(installError.message);
+      setAiStatus(await action(provider));
+    } catch (actionError) {
+      setError(actionError.message);
     } finally {
-      setInstalling(false);
+      setAiBusy("");
+      refreshAiStatus();
     }
   }
 
@@ -214,78 +195,119 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
     setAiResult(null);
   }
 
+  // The same post (media, description, brand and business details) is never sent
+  // again to an AI that already answered it: Create only runs the AIs that are
+  // missing or failed. "Write again" on a card asks one AI for a fresh version.
+  const postKey = JSON.stringify([media.map((item) => item.id), description.trim(), brandName.trim(), business.city.trim(), business.details.trim(), useLocation]);
+
+  /** Sends the post to these AI apps; cards of other AIs keep their results. */
+  async function runAis(ids, quick, key) {
+    const labels = Object.fromEntries((aiStatus?.providers || []).map((provider) => [provider.id, provider.label]));
+    setAiResult((current) => {
+      const keep = current?.key === key ? current : { key, order: [], providers: {} };
+      return {
+        key,
+        order: [...keep.order, ...ids.filter((id) => !keep.order.includes(id))],
+        providers: {
+          ...keep.providers,
+          ...Object.fromEntries(ids.map((id) => [id, { id, label: labels[id] || id, state: "working", detail: `Sending your post to ${labels[id] || id}…` }])),
+        },
+      };
+    });
+    const update = (id, change) => setAiResult((current) => current && ({
+      ...current,
+      providers: { ...current.providers, [id]: { ...current.providers[id], ...change } },
+    }));
+    try {
+      const prepared = await prepareMediaForAi(media);
+      await generateWithCompanionAis({
+        providers: ids,
+        images: prepared.images,
+        mediaKind: prepared.mediaKind,
+        durationSeconds: prepared.durationSeconds,
+        platforms: AI_PLATFORMS,
+        description: description.trim() || undefined,
+        // The brand typed or named in the description. The workspace name is never
+        // used here: the AI reads the real brand from the media instead.
+        brandName: brandName.trim() || (quick?.brand?.source !== "workspace" ? quick?.brand?.name : "") || undefined,
+        // A city the business saved wins; otherwise the photo's location.
+        location: business.city.trim() || quick?.locationTag || undefined,
+        businessDetails: business.details.trim() || undefined,
+      }, (event) => {
+        if (!event.provider) return;
+        if (event.ok === true) update(event.provider, { state: "done", results: event.results, complete: event.complete, raw: event.raw, ms: event.ms, live: "" });
+        else if (event.ok === false) update(event.provider, { state: "failed", message: event.message });
+        else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
+      });
+    } catch (runError) {
+      // The Companion closed or the connection dropped: mark what was still running.
+      setAiResult((current) => current && ({
+        ...current,
+        providers: Object.fromEntries(Object.entries(current.providers).map(([id, entry]) => [id, ids.includes(id) && !["done", "failed"].includes(entry.state) ? { ...entry, state: "failed", message: runError.message } : entry])),
+      }));
+    } finally {
+      refreshAiStatus();
+    }
+  }
+
   async function generate(event) {
     event.preventDefault();
     if (!media.length) { setError("Add a photo or video first."); return; }
     if (!aiReady && description.trim().length < 10) { setError("Describe the post in at least a short sentence."); return; }
+    const samePost = aiResult?.key === postKey;
+    const pending = connectedAis.map((provider) => provider.id).filter((id) => !(samePost && aiResult.providers[id]?.state === "done"));
+    if (aiReady && samePost && !pending.length) {
+      setError("");
+      setNotice("Every connected AI has already written this post. Use “Write again” on a card for a fresh version.");
+      return;
+    }
     setLoading(true);
     setError("");
-    setAiResult(null);
+    setNotice("");
     storeBrand(brandName);
     storeBusiness(business);
     try {
-      // Media checks and location always come from the quick check; with the
-      // free AI, a description is optional.
-      const checkDescription = description.trim().length >= 10 ? description : `${media[0].kind === "video" ? "Video" : "Photo"} post for social media`;
-      const response = await fetch("/api/social-seo/instagram", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          description: checkDescription,
-          brandName,
-          gps: useLocation ? gps : null,
-          media: media.map(({ kind, name, mimeType, width, height, durationSeconds, sizeBytes, coverFrame }) => ({ kind, name, mimeType, width, height, durationSeconds, sizeBytes, coverFrame })),
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "Unable to prepare suggestions.");
-      setResult(payload.result);
-      setVariantId(payload.result.captions[0]?.id || "polished");
-      setCaptionEdits({});
-      setSelectedTags(payload.result.hashtags.selected.map((entry) => entry.tag));
-
-      if (aiReady) {
-        // Look once, then fill in each app as soon as it is written, starting
-        // with the tab the user is looking at.
-        const order = [platform, ...AI_PLATFORMS.filter((entry) => entry !== platform)];
-        const started = Date.now();
-        setAiResult({ stage: "analyzing", results: {}, pending: order, started });
-        const details = {
-          description: description.trim() || undefined,
-          // The brand typed or named in the description. The workspace name is
-          // never used here: the AI reads the real brand from the media instead.
-          brandName: brandName.trim() || (payload.result.brand?.source !== "workspace" ? payload.result.brand?.name : "") || undefined,
-          // A city the business saved wins; otherwise the photo's location.
-          location: business.city.trim() || payload.result.locationTag || undefined,
-          businessDetails: business.details.trim() || undefined,
-        };
-        // Usually already finished (or nearly) because it started on upload.
-        let analyzed = null;
-        if (earlyAnalysis.current.key === mediaKey && earlyAnalysis.current.promise) {
-          analyzed = await earlyAnalysis.current.promise.catch(() => null);
-        }
-        if (!analyzed) {
-          analyzed = await analyzeWithCompanionAi({ ...(await prepareMediaForAi(media)), ...details });
-          earlyAnalysis.current = { key: mediaKey, promise: Promise.resolve(analyzed) };
-        }
-        setAiResult({ stage: "writing", engine: analyzed.engine, analysis: analyzed.analysis, results: {}, pending: order, started });
-        for (const app of order) {
-          // The caption appears word by word while the AI writes it.
-          const written = await writeWithCompanionAi(analyzed.analysisId, app, details, (text) => {
-            setAiResult((current) => ({ ...current, live: { ...(current.live || {}), [app]: text } }));
-          });
-          setAiResult((current) => ({
-            ...current,
-            live: { ...(current.live || {}), [app]: "" },
-            results: { ...current.results, [app]: written.result },
-            pending: current.pending.filter((entry) => entry !== app),
-            stage: current.pending.length <= 1 ? "done" : "writing",
-            timings: { totalMs: Date.now() - started },
-          }));
-        }
+      // Media checks and location come from the quick check, once per post.
+      let quick = samePost ? result : null;
+      if (!quick) {
+        const checkDescription = description.trim().length >= 10 ? description : `${media[0].kind === "video" ? "Video" : "Photo"} post for social media`;
+        const response = await fetch("/api/social-seo/instagram", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: checkDescription,
+            brandName,
+            gps: useLocation ? gps : null,
+            media: media.map(({ kind, name, mimeType, width, height, durationSeconds, sizeBytes, coverFrame }) => ({ kind, name, mimeType, width, height, durationSeconds, sizeBytes, coverFrame })),
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Unable to prepare suggestions.");
+        quick = payload.result;
+        setResult(quick);
+        setVariantId(quick.captions[0]?.id || "polished");
+        setCaptionEdits({});
+        setSelectedTags(quick.hashtags.selected.map((entry) => entry.tag));
       }
+      if (aiReady) await runAis(pending, quick, postKey);
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** "Write again" / "Try again" on one AI's card. */
+  async function rerunAi(id) {
+    if (!aiResult || !result) return;
+    if (aiResult.key !== postKey) {
+      setError("Your post details changed. Create posts again to use the updated details.");
+      return;
+    }
+    setLoading(true);
+    setNotice("");
+    try {
+      await runAis([id], result, aiResult.key);
     } finally {
       setLoading(false);
     }
@@ -306,107 +328,93 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
 
   return (
     <div className={styles.page}>
-      <header className={styles.hero}>
-        <span className={styles.eyebrow}><Search size={14} /> Get found online</span>
-        <h1>Social SEO</h1>
-        <p>Upload your photo or video. We prepare the caption, hashtags, alt text and everything else each app needs so the right people find your post.</p>
-        <div className={styles.platformTabs} role="tablist" aria-label="Platform">
-          {PLATFORMS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              role="tab"
-              aria-selected={entry.id === platform}
-              className={entry.id === platform ? styles.platformActive : ""}
-              onClick={() => setPlatform(entry.id)}
-            >
-              <img src={entry.logo} alt="" width={18} height={18} />
-              {entry.label}
-            </button>
-          ))}
+      <header className={styles.top}>
+        <div>
+          <span className={styles.eyebrow}><Search size={14} /> Get found online</span>
+          <h1>Social SEO</h1>
+          <p>Upload a post. {aiReady ? `${connectedAis.map((provider) => provider.label).join(", ").replace(/, ([^,]*)$/, " and $1")} write` : "Your ChatGPT, Claude or Gemini write"} ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube.</p>
         </div>
       </header>
 
       <AiStatusBar
         status={aiStatus}
-        tierChoice={tierChoice || aiStatus?.recommendedTier}
-        onTierChange={setTierChoice}
-        onInstall={installAi}
-        installing={installing}
+        busy={aiBusy}
+        onConnect={(provider) => aiAction(provider, connectCompanionAi)}
+        onDisconnect={(provider) => aiAction(provider, disconnectCompanionAi)}
+        onShow={showCompanionAiWindow}
       />
-      {aiReady && aiStatus?.lowMemory && (
-        <p className={styles.memoryNote} role="status">
-          Your computer has only {aiStatus.freeMemoryGb} GB of memory free, so the AI will be slower (the result is just as good).
-          Close other apps or browser tabs before you create a post to make it faster.
-        </p>
-      )}
 
       <div className={styles.layout}>
         <form className={styles.inputCard} onSubmit={generate}>
-          <h2>Your post</h2>
-          <div
-            className={`${styles.dropzone} ${dragging ? styles.dropzoneActive : ""}`}
-            onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}
-          >
-            <Upload size={26} />
-            <strong>Drop photos or a video here</strong>
-            <span>Several photos make a carousel. Files stay on your device; only their size, length and shape are checked.</span>
-            <button type="button" className={styles.secondaryButton} onClick={() => inputRef.current?.click()} disabled={probing}>
-              {probing ? <Loader2 size={16} className={styles.spin} /> : <ImagePlus size={16} />}
-              {probing ? "Reading media…" : "Choose files"}
-            </button>
-            <input ref={inputRef} type="file" accept="image/*,video/*" multiple hidden onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }} />
-          </div>
+          <h2><span className={styles.stepNumber}>1</span> Your post</h2>
 
           {media.length > 0 && (
-            <ul className={styles.mediaList}>
+            <ul className={styles.mediaGrid} aria-label="Your post">
               {media.map((item, index) => (
                 <li key={item.id}>
                   {item.kind === "image"
-                    ? <img src={item.previewUrl} alt="" />
-                    : item.coverPreview ? <img src={item.coverPreview} alt="" /> : <span className={styles.videoThumb}><Film size={20} /></span>}
-                  <div>
-                    <strong>{media.length > 1 ? `${index + 1}. ` : ""}{item.name}</strong>
-                    <span>
-                      {item.kind === "video" ? `Video · ${formatDuration(item.durationSeconds)}` : "Photo"}
-                      {item.width ? ` · ${item.width} × ${item.height}` : ""} · {formatBytes(item.sizeBytes)}
-                    </span>
-                  </div>
-                  <button type="button" aria-label={`Remove ${item.name}`} onClick={() => removeMedia(item.id)}><Trash2 size={16} /></button>
+                    ? <img src={item.previewUrl} alt={item.name} />
+                    : item.coverPreview ? <img src={item.coverPreview} alt={item.name} /> : <span className={styles.videoThumb}><Film size={26} /></span>}
+                  <span className={styles.mediaMeta}>
+                    {media.length > 1 ? `${index + 1} · ` : ""}{item.kind === "video" ? `Video ${formatDuration(item.durationSeconds)}` : item.width ? `${item.width} × ${item.height}` : "Photo"} · {formatBytes(item.sizeBytes)}
+                  </span>
+                  <button type="button" aria-label={`Remove ${item.name}`} title="Remove" onClick={() => removeMedia(item.id)}><Trash2 size={15} /></button>
                 </li>
               ))}
             </ul>
           )}
 
-          <label className={styles.field}>
-            <span>What is this post about?{aiReady && <em> (optional)</em>}</span>
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              rows={6}
-              maxLength={2200}
-              placeholder="e.g. Our new Hyderabadi chicken biryani is slow cooked on dum for 4 hours. Available every weekend at our Banjara Hills kitchen."
-            />
-            <small>{description.length} / 2200 · {aiReady ? "The AI looks at your media. Add offers, prices or links it can't see." : "Write it the way you'd tell a customer. Specific words help people find it."}</small>
-          </label>
+          <div
+            className={`${styles.dropzone} ${media.length ? styles.dropzoneCompact : ""} ${dragging ? styles.dropzoneActive : ""}`}
+            onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}
+          >
+            {!media.length && <Upload size={28} />}
+            {!media.length && <strong>Drop a photo, carousel or video here</strong>}
+            {!media.length && <span>It stays on your computer: the Companion passes it only to the AI apps you connected.</span>}
+            <button type="button" className={styles.secondaryButton} onClick={() => inputRef.current?.click()} disabled={probing}>
+              {probing ? <Loader2 size={16} className={styles.spin} /> : <ImagePlus size={16} />}
+              {probing ? "Reading media…" : media.length ? "Add more" : "Choose files"}
+            </button>
+            <input ref={inputRef} type="file" accept="image/*,video/*" multiple hidden onChange={(event) => { addFiles(event.target.files); event.target.value = ""; }} />
+          </div>
 
-          <label className={styles.field}>
-            <span>Brand name <em>(optional)</em></span>
-            <input
-              type="text"
-              value={brandName}
-              maxLength={60}
-              onChange={(event) => setBrandName(event.target.value)}
-              placeholder={workspaceName && !/^workspace$/i.test(workspaceName) ? `e.g. ${workspaceName}` : "e.g. Tinitiate AI"}
-            />
-            <small>Used for your brand hashtag and alt text. Leave empty and we&apos;ll use the brand written on your image or named in your description.</small>
-          </label>
+          <section className={styles.details} aria-labelledby="seo-details-title">
+            <div className={styles.detailsHead}>
+              <strong id="seo-details-title">Help the AI</strong>
+              <span className={styles.detailsPill}>{aiReady ? "Recommended" : "Needed for basic SEO"}</span>
+            </div>
+            <p className={styles.detailsWhy}>
+              {aiReady
+                ? "Your AI reads the image. Tell it what it can't see: these details are what turn a good post into one that ranks and sells."
+                : "Describe the post the way you'd tell a customer: specific words help people find it."}
+            </p>
 
-          {aiReady && (
-            <details className={styles.businessBox} open={!business.city && !business.details ? undefined : true}>
-              <summary>Business details <em>(optional, saved for every post)</em></summary>
+            <label className={styles.field}>
+              <span>About this post</span>
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={4}
+                maxLength={2200}
+                placeholder={aiReady ? "What's new, offers, prices, dates or links" : "What it is, who it's for and what's special about it"}
+              />
+              <small>{description.length ? `${description.length} / 2200 · ` : ""}Used as you write it, so add facts exactly.</small>
+            </label>
+
+            <div className={styles.detailsRow}>
+              <label className={styles.field}>
+                <span>Brand</span>
+                <input
+                  type="text"
+                  value={brandName}
+                  maxLength={60}
+                  onChange={(event) => setBrandName(event.target.value)}
+                  onBlur={() => storeBrand(brandName)}
+                  placeholder={workspaceName && !/^workspace$/i.test(workspaceName) ? workspaceName : "Business or page name"}
+                />
+              </label>
               <label className={styles.field}>
                 <span>City or area</span>
                 <input
@@ -415,24 +423,24 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
                   maxLength={60}
                   onChange={(event) => setBusiness((current) => ({ ...current, city: event.target.value }))}
                   onBlur={() => storeBusiness(business)}
-                  placeholder="e.g. Hyderabad"
+                  placeholder="For local search"
                 />
-                <small>Adds local search words and a local hashtag, like #HyderabadITTraining.</small>
               </label>
-              <label className={styles.field}>
-                <span>What makes you different</span>
-                <input
-                  type="text"
-                  value={business.details}
-                  maxLength={300}
-                  onChange={(event) => setBusiness((current) => ({ ...current, details: event.target.value }))}
-                  onBlur={() => storeBusiness(business)}
-                  placeholder="e.g. Live projects, placement support, free trial sessions"
-                />
-                <small>Only true facts: the AI uses them in your posts but never invents its own.</small>
-              </label>
-            </details>
-          )}
+            </div>
+
+            <label className={styles.field}>
+              <span>What makes you different</span>
+              <input
+                type="text"
+                value={business.details}
+                maxLength={300}
+                onChange={(event) => setBusiness((current) => ({ ...current, details: event.target.value }))}
+                onBlur={() => storeBusiness(business)}
+                placeholder="What customers love about you"
+              />
+            </label>
+            <p className={styles.detailsSaved}>Brand, city and what makes you different are saved for your next posts.</p>
+          </section>
 
           {gps && (
             <label className={styles.checkbox}>
@@ -442,30 +450,66 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
           )}
 
           {error && <p className={styles.error} role="alert">{error}</p>}
+          {notice && <p className={styles.notice} role="status">{notice}</p>}
 
           <button className={styles.primaryButton} type="submit" disabled={!canGenerate || loading || probing}>
             {loading ? <Loader2 size={18} className={styles.spin} /> : <Sparkles size={18} />}
-            {loading ? (aiReady ? "Writing with free AI…" : "Preparing suggestions…") : aiReady ? "Create SEO posts for all apps" : "Get Instagram SEO"}
+            {loading ? (aiReady ? `Writing with ${connectedAis.map((provider) => provider.label).join(", ")}…` : "Preparing suggestions…") : aiReady ? "Create SEO posts" : "Get Instagram SEO"}
           </button>
+          {aiReady && !loading && (
+            <p className={styles.sendsTo}>
+              <span>Written by</span>
+              {connectedAis.map((provider) => <AiLogo key={provider.id} id={provider.id} size={18} />)}
+              <span>for Instagram, Facebook, LinkedIn and YouTube</span>
+            </p>
+          )}
           {!canGenerate && <p className={styles.muted}>Your role can view Social SEO but not generate suggestions.</p>}
         </form>
 
         <section className={styles.results} aria-live="polite">
-          {aiResult && <AiResults data={aiResult} platform={platform} copied={copied} onCopy={copy} draft={platform === "instagram" ? fullCaption : ""} />}
+          <div className={styles.resultsHead}>
+            <h2><span className={styles.stepNumber}>2</span> Your SEO posts</h2>
+            <div className={styles.platformTabs} role="tablist" aria-label="App">
+              {PLATFORMS.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={entry.id === platform}
+                  className={entry.id === platform ? styles.platformActive : ""}
+                  onClick={() => setPlatform(entry.id)}
+                >
+                  <img src={entry.logo} alt="" width={18} height={18} />
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {aiResult && <AiResults data={aiResult} platform={platform} copied={copied} onCopy={copy} onShow={showCompanionAiWindow} onRerun={rerunAi} busy={loading} draft={platform === "instagram" ? fullCaption : ""} />}
 
           {!aiResult && result && platform !== "instagram" && (
             <div className={styles.emptyState}>
               <Sparkles size={30} />
-              <h2>Turn on the free AI for {PLATFORMS.find((entry) => entry.id === platform)?.label}</h2>
-              <p>Facebook, LinkedIn and YouTube posts are written by the free AI in the Companion. Basic SEO is available for Instagram.</p>
+              <h2>Connect an AI for {PLATFORMS.find((entry) => entry.id === platform)?.label}</h2>
+              <p>Facebook, LinkedIn and YouTube posts are written by your ChatGPT, Claude or Gemini through the Companion. Basic SEO is available for Instagram.</p>
             </div>
           )}
 
           {!result && (
             <div className={styles.emptyState}>
-              <Sparkles size={30} />
-              <h2>Your suggestions appear here</h2>
-              <p>You&apos;ll get three caption options, a focused hashtag set, alt text, the keywords to say and show on screen, and a check of whether your media fits Instagram.</p>
+              {aiReady ? (
+                <>
+                  <div className={styles.emptyLogos} aria-hidden="true">{connectedAis.map((provider) => <AiLogo key={provider.id} id={provider.id} size={34} />)}</div>
+                  <h2>Your posts appear here</h2>
+                  <p>Add your post on the left and click <strong>Create SEO posts</strong>. You can read each AI&apos;s answer as it is written, then copy the caption, hashtags and alt text for every app.</p>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={30} />
+                  <h2>Your suggestions appear here</h2>
+                  <p>Connect ChatGPT, Claude or Gemini above for posts on every app. Without one, you get Instagram captions, hashtags, alt text and a media check.</p>
+                </>
+              )}
             </div>
           )}
 
