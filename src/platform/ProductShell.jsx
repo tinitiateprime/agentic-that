@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, UsersRound, X } from "lucide-react";
+import { ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
@@ -27,6 +27,7 @@ const sections = [
   // Websites and Phone AI are hidden for now: remove "hidden" to show them again.
   { id: "website", label: "Websites", icon: Globe2, href: "/website-studio", hidden: true },
   { id: "social-seo", label: "Social SEO", icon: Search, href: "/social-seo" },
+  { id: "groups", label: "Groups", icon: Users, href: "/group-manager" },
   { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk", hidden: true },
   { id: "content", label: "Activity", icon: ClipboardList, href: "/content-manager", anyCapability: ["publishing.view", "messaging.view"] },
 ];

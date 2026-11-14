@@ -52,6 +52,7 @@ const DASHBOARD_URL = configuredDashboardUrl();
 const DASHBOARD_ORIGIN = new URL(DASHBOARD_URL).origin;
 const PUBLISHING_CONNECTIONS_URL = `${DASHBOARD_ORIGIN}/config-manager?service=publishing`;
 const SOCIAL_SEO_URL = `${DASHBOARD_ORIGIN}/social-seo`;
+const GROUP_MANAGER_URL = `${DASHBOARD_ORIGIN}/group-manager`;
 const SERVICE_TOKEN_PUBLIC_KEY_URL = process.env.AGENTICTHAT_SERVICE_TOKEN_PUBLIC_KEY_URL?.trim()
   || `${DASHBOARD_ORIGIN}/api/platform-auth/service-token-public-key`;
 // Companion is a focused worker and local session manager. The SaaS workspace
@@ -133,6 +134,16 @@ function updateAiActivity(state) {
   aiActivityState = { providers: [], recent: [], ...(state || {}), updatedAt: new Date().toISOString() };
   if (mainWindow && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send("companion:ai-state", aiActivityState);
+  }
+}
+
+// Group Manager: app connections and recent work, shown in the Companion's Groups view.
+let groupActivityState = { started: false, connections: [], working: {}, recent: [], updatedAt: new Date().toISOString() };
+
+function updateGroupActivity(state) {
+  groupActivityState = { started: false, connections: [], working: {}, recent: [], ...(state || {}), updatedAt: new Date().toISOString() };
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("companion:groups-state", groupActivityState);
   }
 }
 
@@ -468,7 +479,7 @@ function scheduleSafeUpdatePrompt() {
   updatePromptPending = true;
   const attemptPrompt = async () => {
     const activity = publishingRuntime?.companionRuntimeActivity?.();
-    if (activity?.publishing || activity?.scraping) {
+    if (activity?.publishing || activity?.scraping || activity?.groups) {
       console.log("Companion update is ready and will ask to restart after active work finishes.");
       updatePromptTimer = setTimeout(() => void attemptPrompt(), 10_000);
       return;
@@ -549,7 +560,7 @@ async function closePublishingServer() {
 async function restartPublishingService(reason) {
   if (serviceRestartPromise) return serviceRestartPromise;
   const activity = publishingRuntime?.companionRuntimeActivity?.();
-  if (activity?.publishing || activity?.scraping) {
+  if (activity?.publishing || activity?.scraping || activity?.groups) {
     console.warn(`Companion watchdog postponed a service restart while local work is active: ${reason}`);
     return;
   }
@@ -1403,6 +1414,7 @@ function installPublishingDesktopHost() {
     flushAccountBrowserData,
     migrateLegacyAccountBrowserData,
     updateAiActivity,
+    updateGroupActivity,
   };
   globalThis.__AGENTICTHAT_INSTAGRAM_COMPANION_DESKTOP_HOST__ = {
     openBrowser: openInstagramScrapingBrowser,
@@ -1621,6 +1633,7 @@ function registerIpc() {
   ipcMain.handle("companion:workspace-state", () => workspaceState());
   ipcMain.handle("companion:scraping-state", () => scrapingActivity());
   ipcMain.handle("companion:ai-state", () => aiActivityState);
+  ipcMain.handle("companion:groups-state", () => groupActivityState);
   ipcMain.handle("companion:set-layout", (_event, layout) => {
     dashboardBounds = EMBED_FULL_PUBLISHING_WORKSPACE ? safeBounds(layout?.dashboard) : null;
     browserBounds = new Map(
@@ -1643,6 +1656,10 @@ function registerIpc() {
   });
   ipcMain.handle("companion:open-social-seo", () => {
     void shell.openExternal(SOCIAL_SEO_URL);
+    return true;
+  });
+  ipcMain.handle("companion:open-group-manager", () => {
+    void shell.openExternal(GROUP_MANAGER_URL);
     return true;
   });
   // Social SEO: bring an AI's window forward when it needs the user (login or a human check).

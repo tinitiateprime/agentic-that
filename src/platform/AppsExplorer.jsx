@@ -25,6 +25,7 @@ import {
   SquarePen,
   Type,
   UserRound,
+  Users,
   Video,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -108,6 +109,20 @@ const tasks = [
     setupLabel: "a social media account",
     showLogos: true,
     category: "publishing",
+  },
+  {
+    id: "groups",
+    group: "work",
+    open: true,
+    title: "Manage your groups",
+    description: "Create a group once and it's made in your real WhatsApp, Telegram and Discord. Add people from your contacts and message everyone together.",
+    icon: Users,
+    href: "/group-manager",
+    logos: [
+      { src: "/whatsapp-logo.svg", label: "WhatsApp" },
+      { src: "/telegram-logo.svg", label: "Telegram" },
+      { src: "/discord-logo.svg", label: "Discord" },
+    ],
   },
   {
     id: "social-seo",
@@ -217,13 +232,14 @@ function TaskCard({ task, services, statusFor, user, access }) {
   const Icon = task.icon;
   const allowedFor = (service) => OPEN_CATEGORIES.has(service.category) || (accessSatisfies(access[accessResourceForService(service)] || "none", "view")
     && Boolean(user?.capabilities?.includes(`${service.category}.view`)));
-  const usable = services.filter(allowedFor);
-  const allowed = usable.length > 0;
+  // Open tasks need no connected service or role (they work through the Companion).
+  const usable = task.open ? [] : services.filter(allowedFor);
+  const allowed = task.open || usable.length > 0;
   const needsSetup = Boolean(task.setupHref);
   const connectedCount = usable.filter((service) => statusFor(service).state === "connected").length;
   const connected = needsSetup && connectedCount > 0;
   const checking = needsSetup && !connected && usable.some((service) => statusFor(service).state === "checking");
-  const deniedHref = `/access-denied?resource=${encodeURIComponent(accessResourceForService(services[0]))}`;
+  const deniedHref = services[0] ? `/access-denied?resource=${encodeURIComponent(accessResourceForService(services[0]))}` : "/access-denied";
 
   let chip = { text: "Ready to use", tone: "ready" };
   let primary = { href: task.href, label: "Open" };
@@ -251,7 +267,11 @@ function TaskCard({ task, services, statusFor, user, access }) {
       <p>{task.description}</p>
 
       <div className={styles.taskFooter}>
-        {task.showLogos && allowed ? (
+        {task.logos ? (
+          <ul className={styles.logoStrip} aria-label="Apps this works with">
+            {task.logos.map((logo) => <li className={styles.logoOn} title={logo.label} key={logo.src}><img src={logo.src} alt={logo.label} /></li>)}
+          </ul>
+        ) : task.showLogos && allowed ? (
           <ul className={styles.logoStrip} aria-label="Accounts this will use">
             {usable.map((service) => {
               const status = statusFor(service);

@@ -12,6 +12,8 @@ import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-wo
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { downloadCentralArtifact, type CentralJobArtifact } from "./central-artifact.js";
 import { registerAiRoutes } from "./services/chat-ai/chat-ai-routes.js";
+import { groupManagerBusy, registerGroupRoutes, startGroupManagerIfUsed } from "./services/groups/routes.js";
+import { setGroupReporter } from "./services/groups/reporting.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import {
   cancelAllInstagramCompanionJobs,
@@ -707,6 +709,8 @@ export function companionRuntimeActivity() {
     // restart. Only a browser task that is actively executing must delay a
     // watchdog restart or update installation.
     scraping: instagram.activeJobs > 0 || facebook.activeJobs > 0,
+    // Adding people or sending group messages: finish before restarting.
+    groups: groupManagerBusy(),
   };
 }
 
@@ -1618,6 +1622,19 @@ app.use(
 );
 // Social SEO with the user's own AI logins has its own, larger body limit for image data.
 registerAiRoutes(app);
+// Group Manager: real WhatsApp, Telegram and Discord groups. Results are reported
+// to AgenticThat's database over this Companion's workspace pairing.
+registerGroupRoutes(app);
+setGroupReporter(async (groups) => {
+  const pairing = await readCentralPairing();
+  if (!pairing) return false;
+  await supabaseRpc(pairing, "companion_group_sync", {
+    p_token: pairing.pairingToken,
+    p_instance_id: publishingCompanionId(),
+    p_groups: groups,
+  });
+  return true;
+});
 app.use(express.json({ limit: "2mb" }));
 if (fs.existsSync(runtimeDesktopAssets)) {
   app.use("/desktop", express.static(runtimeDesktopAssets));
@@ -2986,6 +3003,11 @@ export function createPublishingHttpServer(options: PublishingHttpServerOptions 
     const resolvedPort = typeof address === "object" && address ? address.port : serverPort;
     console.log(`Publish Queue Runner API listening on http://${serverHost}:${resolvedPort}`);
     if (!startBackgroundServices) return;
+    try {
+      startGroupManagerIfUsed();
+    } catch (error) {
+      console.warn("Group Manager could not start:", error instanceof Error ? error.message : error);
+    }
     void (async () => {
       try {
         const recovery = await recoverInterruptedPublishingWork();

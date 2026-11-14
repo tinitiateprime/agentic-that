@@ -1,8 +1,8 @@
 {
   "name": "agenticthat-publishing-companion",
   "productName": "AgenticThat Companion",
-  "version": "2.3.2",
-  "description": "Secure desktop engine for AgenticThat publishing, Social SEO with your own AI accounts, sessions, and scraping",
+  "version": "2.4.0",
+  "description": "Secure desktop engine for AgenticThat publishing, Social SEO with your own AI accounts, Group Manager for WhatsApp, Telegram and Discord, sessions, and scraping",
   "author": "AgenticThat",
   "repository": "https://github.com/tinitiateprime/agentic-that",
   "private": true,

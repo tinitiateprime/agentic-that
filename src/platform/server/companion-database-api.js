@@ -8,6 +8,8 @@ const METHODS = {
   companion_heartbeat: ["p_token", "p_instance_id", "p_version", "p_runtime_status", "p_update_status", "p_last_error", "p_platform", "p_architecture", "p_secure_storage", "p_accounts"],
   companion_claim_jobs: ["p_token", "p_instance_id", "p_limit"],
   companion_update_job: ["p_token", "p_instance_id", "p_job_id", "p_status", "p_progress", "p_message", "p_retry", "p_result", "p_error", "p_final_action"],
+  // Group Manager: what the Companion did in WhatsApp, Telegram and Discord.
+  companion_group_sync: ["p_token", "p_instance_id", "p_groups"],
 };
 
 class RequestError extends Error {
@@ -131,6 +133,13 @@ export function validateCompanionRpc(name, input) {
     result.p_limit = input.p_limit ?? 1;
     if (!Number.isInteger(result.p_limit) || result.p_limit < 1 || result.p_limit > 5) throw new RequestError(400, "Invalid job limit.");
   }
+  if (name === "companion_group_sync") {
+    result.p_groups = input.p_groups;
+    if (!Array.isArray(result.p_groups) || result.p_groups.length > 50
+        || result.p_groups.some((group) => !group || typeof group !== "object" || Array.isArray(group))) {
+      throw new RequestError(400, "Invalid Group Manager results.");
+    }
+  }
   if (name === "companion_update_job") {
     result.p_job_id = text(input, "p_job_id", null, 1, 240);
     result.p_status = text(input, "p_status", null, 1, 80);
@@ -159,6 +168,23 @@ export async function executeCompanionRpc(sql, name, input) {
     case "companion_update_job":
       rows = await sql`SELECT public.companion_update_job(${input.p_token}::text, ${input.p_instance_id}::text, ${input.p_job_id}::text, ${input.p_status}::text, ${sql.json(input.p_progress)}::jsonb, ${input.p_message}::text, ${input.p_retry}::boolean, ${input.p_result === null ? null : sql.json(input.p_result)}::jsonb, ${input.p_error === null ? null : sql.json(input.p_error)}::jsonb, ${input.p_final_action}::boolean) AS result`;
       break;
+    case "companion_group_sync": {
+      // The pairing decides the workspace: a Companion can only report on its own workspace's groups.
+      const [device] = await sql`
+        SELECT workspace_id, companion_instance_id FROM public.companion_devices
+         WHERE token_hash = private.companion_token_hash(${input.p_token}::text) AND revoked_at IS NULL`;
+      if (!device || (input.p_instance_id && device.companion_instance_id && device.companion_instance_id !== input.p_instance_id)) {
+        throw Object.assign(new Error("Invalid Companion pairing."), { code: "28000" });
+      }
+      try {
+        // Loaded only here: scripts that use this module run in plain Node without the website's modules.
+        const { applyGroupSync } = await import("./group-manager-store.js");
+        return await applyGroupSync(String(device.workspace_id), { groups: input.p_groups }, sql);
+      } catch (error) {
+        if (error?.name === "ZodError") throw new RequestError(400, "Invalid Group Manager results.");
+        throw error;
+      }
+    }
     default: throw new RequestError(404, "Unknown Companion operation.");
   }
   return rows[0]?.result ?? null;

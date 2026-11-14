@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   workspaceState: () => ipcRenderer.invoke("companion:workspace-state"),
   scrapingState: () => ipcRenderer.invoke("companion:scraping-state"),
   aiState: () => ipcRenderer.invoke("companion:ai-state"),
+  groupsState: () => ipcRenderer.invoke("companion:groups-state"),
+  openGroupManager: () => ipcRenderer.invoke("companion:open-group-manager"),
   setLayout: layout => ipcRenderer.invoke("companion:set-layout", layout),
   openDashboard: () => ipcRenderer.invoke("companion:open-dashboard"),
   openConnections: () => ipcRenderer.invoke("companion:open-connections"),
@@ -25,6 +27,7 @@ contextBridge.exposeInMainWorld("publishingCompanion", {
   onWorkspaceState: callback => ipcRenderer.on("companion:workspace-state", (_event, state) => callback(state)),
   onScrapingState: callback => ipcRenderer.on("companion:scraping-state", (_event, state) => callback(state)),
   onAiState: callback => ipcRenderer.on("companion:ai-state", (_event, state) => callback(state)),
+  onGroupsState: callback => ipcRenderer.on("companion:groups-state", (_event, state) => callback(state)),
   onNavigate: callback => ipcRenderer.on("companion:navigate", (_event, section) => callback(section)),
   onLog: callback => ipcRenderer.on("companion:log", (_event, entry) => callback(entry)),
 });

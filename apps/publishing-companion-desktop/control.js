@@ -4,6 +4,7 @@ const views = {
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   seo: { panel: byId("seo-panel"), title: "Social SEO", eyebrow: "CHATGPT, CLAUDE AND GEMINI" },
+  groups: { panel: byId("groups-panel"), title: "Group Manager", eyebrow: "WHATSAPP, TELEGRAM AND DISCORD" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
@@ -681,6 +682,92 @@ function renderAi() {
   badge.classList.toggle("needs-you", providers.some(provider => provider.state === "needs-you"));
 }
 
+// ---- Group Manager ---------------------------------------------------------------------------
+
+const GROUP_APPS = [
+  { id: "whatsapp", label: "WhatsApp", logo: "assets/platforms/whatsapp-logo.svg", how: "Linked like WhatsApp Web (QR code once)." },
+  { id: "telegram", label: "Telegram", logo: "assets/platforms/telegram-logo.svg", how: "Your account, through Telegram's official API." },
+  { id: "discord", label: "Discord", logo: "assets/platforms/discord-logo.svg", how: "Your bot, through Discord's official API." },
+];
+const GROUP_STATES = { connected: "Connected", connecting: "Connecting…", qr: "Waiting for the QR scan", code: "Waiting for the code", password: "Waiting for the password", error: "Needs attention", disconnected: "Not connected" };
+let currentGroups = { started: false, connections: [], working: {}, recent: [] };
+
+function createGroupAppCard(app) {
+  const connection = (currentGroups.connections || []).find(entry => entry.app === app.id) || { state: "disconnected" };
+  const working = Number(currentGroups.working?.[app.id] || 0);
+  const card = document.createElement("article");
+  card.className = "seo-ai-card";
+  card.dataset.state = working ? "working" : connection.state === "connected" ? "connected" : connection.state === "error" ? "needs-you" : "idle";
+  const head = document.createElement("div");
+  head.className = "seo-ai-head";
+  const logo = document.createElement("img");
+  logo.src = app.logo;
+  logo.alt = "";
+  const name = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = app.label;
+  const pill = document.createElement("span");
+  pill.className = "seo-ai-pill";
+  pill.textContent = working ? `Working · ${working} to do` : GROUP_STATES[connection.state] || "Not connected";
+  name.append(title, pill);
+  head.append(logo, name);
+  const detail = document.createElement("p");
+  detail.className = "seo-ai-detail";
+  detail.textContent = connection.state === "connected"
+    ? `${connection.account || "Connected"}. ${app.how}`
+    : connection.detail || `Connect it on the Group Manager page. ${app.how}`;
+  card.append(head, detail);
+  return card;
+}
+
+function createGroupActivityItem(entry) {
+  const item = document.createElement("div");
+  item.className = `scrape-job-item ${entry.ok ? "" : "failed"}`;
+  const logo = document.createElement("img");
+  logo.className = "seo-run-logo";
+  logo.src = `assets/platforms/${entry.app}-logo.svg`;
+  logo.alt = "";
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = entry.text;
+  const detail = document.createElement("small");
+  const date = new Date(entry.at);
+  const time = Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  detail.textContent = [entry.group, time].filter(Boolean).join(" · ");
+  copy.append(title, detail);
+  item.append(logo, copy);
+  return item;
+}
+
+function renderGroups() {
+  byId("groups-app-grid").replaceChildren(...GROUP_APPS.map(createGroupAppCard));
+  const working = Object.values(currentGroups.working || {}).reduce((total, count) => total + Number(count || 0), 0);
+  const connected = GROUP_APPS.filter(app => (currentGroups.connections || []).some(entry => entry.app === app.id && entry.state === "connected"));
+  byId("groups-headline").textContent = working
+    ? `Updating your groups · ${working} change${working === 1 ? "" : "s"} to go`
+    : connected.length
+      ? `${connected.map(app => app.label).join(", ")} ${connected.length === 1 ? "is" : "are"} connected`
+      : "Group Manager";
+  const recent = currentGroups.recent || [];
+  byId("groups-recent-summary").textContent = recent.length ? `${recent.length} recent` : "None yet";
+  const list = byId("groups-recent-list");
+  if (recent.length) list.replaceChildren(...recent.slice(0, 12).map(createGroupActivityItem));
+  else {
+    const empty = document.createElement("span");
+    empty.className = "timeline-empty";
+    empty.textContent = "Groups created, people added or removed and messages sent will appear here.";
+    list.replaceChildren(empty);
+  }
+  const badge = byId("groups-badge");
+  badge.hidden = working === 0;
+  badge.textContent = String(working);
+}
+
+async function refreshGroups() {
+  currentGroups = (await api.groupsState?.()) || currentGroups;
+  renderGroups();
+}
+
 async function refreshAi() {
   currentAi = (await api.aiState?.()) || currentAi;
   renderAi();
@@ -883,6 +970,10 @@ api.onScrapingState(state => {
   currentScraping = state;
   renderScraping();
 });
+api.onGroupsState?.(state => {
+  currentGroups = state || currentGroups;
+  renderGroups();
+});
 api.onAiState?.(state => {
   currentAi = state;
   renderAi();
@@ -900,8 +991,9 @@ window.addEventListener("resize", () => {
 document.addEventListener("visibilitychange", scheduleLayout);
 
 byId("open-social-seo").addEventListener("click", () => void api.openSocialSeo?.());
+byId("open-group-manager").addEventListener("click", () => void api.openGroupManager?.());
 
-void Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping(), refreshAi()]).then(() => {
+void Promise.all([refreshStatus(), refreshWorkspace(), refreshScraping(), refreshAi(), refreshGroups()]).then(() => {
   renderLogs();
   scheduleLayout();
 });

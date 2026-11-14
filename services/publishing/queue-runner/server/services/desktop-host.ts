@@ -63,6 +63,8 @@ export type PublishingDesktopHost = {
   flushAccountBrowserData?(accountId: string): Promise<void> | void;
   /** Social SEO: what each connected AI (ChatGPT, Claude, Gemini) is doing, for the Companion's view. */
   updateAiActivity?(state: unknown): void;
+  /** Group Manager: app connections and what is being done in WhatsApp, Telegram and Discord. */
+  updateGroupActivity?(state: unknown): void;
   migrateLegacyAccountBrowserData?(accountId: string, platform: Platform): Promise<number> | number;
 };
 
