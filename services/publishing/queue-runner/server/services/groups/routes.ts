@@ -3,6 +3,7 @@
 // groups live in AgenticThat's database; the Companion holds the app logins,
 // does the work in WhatsApp, Telegram and Discord, and reports every result.
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import express from "express";
@@ -25,16 +26,53 @@ export type GroupServices = {
   discord: Pick<DiscordAdapter, "connect" | "refreshGuilds" | "disconnect">;
 };
 
-let services: GroupServices | null = null;
+// Each AgenticThat workspace has its own app logins and working copy, in its own
+// folder: a person signed in to another workspace on this computer can neither
+// see nor use them.
+const services = new Map<string, GroupServices>();
+let lastWorkspace = "";
 
-/** What the Companion's own window shows in its Group Manager section. */
+function workspaceKey(workspaceId: string) {
+  return createHash("sha256").update(`agenticthat-groups:${workspaceId}`).digest("hex").slice(0, 32);
+}
+
+function workspaceDirectory(workspaceId: string) {
+  return path.join(groupsDirectory(), "workspaces", workspaceKey(workspaceId));
+}
+
+// Logins saved by Companion 2.4.0 before they were kept per workspace belong to
+// the workspace this Companion is paired with; never to whoever signs in first.
+const LEGACY_FILES = ["groups.json", "whatsapp.json", "telegram.json", "discord.json"];
+let pairedWorkspace: () => Promise<string | null> = async () => null;
+
+export function setGroupPairedWorkspace(resolver: () => Promise<string | null>) {
+  pairedWorkspace = resolver;
+}
+
+async function adoptLegacyLogins(workspaceId: string) {
+  const root = groupsDirectory();
+  const legacy = LEGACY_FILES.filter((file) => fs.existsSync(path.join(root, file)));
+  if (!legacy.length || (await pairedWorkspace().catch(() => null)) !== workspaceId) return;
+  const target = workspaceDirectory(workspaceId);
+  fs.mkdirSync(target, { recursive: true });
+  for (const file of legacy) {
+    if (!fs.existsSync(path.join(target, file))) fs.renameSync(path.join(root, file), path.join(target, file));
+  }
+}
+
+/** What the Companion's own window shows: the workspace used most recently on this computer. */
 export function groupManagerSnapshot() {
-  if (!services) return { started: false, connections: GROUP_APPS.map((app) => ({ app, state: "disconnected" })), working: {}, recent: [] };
-  const activity = services.engine.activity();
+  const current = services.get(lastWorkspace) || [...services.values()][0];
+  if (!current) return { started: false, connections: GROUP_APPS.map((app) => ({ app, state: "disconnected" })), working: {}, recent: [] };
+  const working: Record<string, number> = {};
+  for (const entry of services.values()) {
+    for (const [app, count] of Object.entries(entry.engine.activity().working)) working[app] = (working[app] || 0) + Number(count || 0);
+  }
   return {
     started: true,
-    connections: services.engine.connections().map(({ app, state, account, detail }) => ({ app, state, account, detail })),
-    ...activity,
+    connections: current.engine.connections().map(({ app, state, account, detail }) => ({ app, state, account, detail })),
+    working,
+    recent: [...services.values()].flatMap((entry) => entry.engine.activity().recent).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 20),
   };
 }
 
@@ -42,10 +80,15 @@ function publishActivity() {
   publishingDesktopHost()?.updateGroupActivity?.(groupManagerSnapshot());
 }
 
-/** Started on first use (or at Companion start when apps are already connected). */
-export function groupServices(): GroupServices {
-  if (services) return services;
-  const directory = groupsDirectory();
+/** One workspace's Group Manager, started on first use. */
+export function groupServices(workspaceId: string): GroupServices {
+  const existing = services.get(workspaceId);
+  if (existing) return existing;
+  const directory = workspaceDirectory(workspaceId);
+  fs.mkdirSync(directory, { recursive: true });
+  // Which workspace the folder belongs to, so its apps reconnect when the Companion starts.
+  const owner = path.join(directory, "workspace.json");
+  if (!fs.existsSync(owner)) fs.writeFileSync(owner, JSON.stringify({ workspaceId }), { mode: 0o600 });
   const store = new GroupStore(directory);
   const whatsapp = new WhatsAppAdapter(directory);
   const telegram = new TelegramAdapter(directory);
@@ -54,30 +97,51 @@ export function groupServices(): GroupServices {
   const engine = new GroupEngine(store, adapters);
   store.onChange((group) => reportGroup(group));
   engine.onActivity(publishActivity);
-  services = { store, engine, whatsapp, telegram, discord };
+  const created = { store, engine, whatsapp, telegram, discord };
+  services.set(workspaceId, created);
   publishActivity();
-  return services;
+  return created;
 }
 
-/** At Companion start: reconnect the apps and finish unfinished work, if Group Manager was used before. */
-export function startGroupManagerIfUsed() {
-  const directory = groupsDirectory();
-  if (["groups.json", "whatsapp.json", "telegram.json", "discord.json"].some((file) => fs.existsSync(path.join(directory, file)))) groupServices();
+/** At Companion start: reconnect each workspace's apps and finish unfinished work. */
+export async function startGroupManagerIfUsed() {
+  const paired = await pairedWorkspace().catch(() => null);
+  if (paired) await adoptLegacyLogins(paired);
+  const root = path.join(groupsDirectory(), "workspaces");
+  if (!fs.existsSync(root)) return;
+  for (const folder of fs.readdirSync(root)) {
+    try {
+      const { workspaceId } = JSON.parse(fs.readFileSync(path.join(root, folder, "workspace.json"), "utf8")) as { workspaceId?: string };
+      if (workspaceId && workspaceDirectory(workspaceId) === path.join(root, folder)) groupServices(workspaceId);
+    } catch {
+      // A folder without its owner record is left alone.
+    }
+  }
 }
 
 /** True while Group Manager is adding people or sending messages. */
 export function groupManagerBusy() {
-  return services?.engine.busy() ?? false;
+  return [...services.values()].some((entry) => entry.engine.busy());
 }
 
-function requireToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+type GroupRequest = express.Request & { groupWorkspace?: string };
+
+function requireToken(req: GroupRequest, res: express.Response, next: express.NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!token || !verifyServiceAccessToken(token, "group-manager")) {
+  const claims = token ? verifyServiceAccessToken(token, "group-manager") as { workspaceId?: string } | null : null;
+  if (!claims?.workspaceId) {
     res.status(401).json({ message: "Sign in to AgenticThat to manage your groups." });
     return;
   }
-  next();
+  req.groupWorkspace = String(claims.workspaceId);
+  lastWorkspace = req.groupWorkspace;
+  void adoptLegacyLogins(req.groupWorkspace).then(() => next(), () => next());
+}
+
+/** The signed-in workspace (from the AgenticThat token). */
+function workspaceOf(req: express.Request) {
+  return (req as GroupRequest).groupWorkspace || "";
 }
 
 function fail(res: express.Response, error: unknown) {
@@ -152,48 +216,47 @@ function telegramApp(input: z.output<typeof telegramStartSchema>) {
   return { apiId, apiHash };
 }
 
-export function registerGroupRoutes(app: express.Express, get: () => GroupServices = groupServices) {
+export function registerGroupRoutes(app: express.Express, get: (workspaceId: string) => GroupServices = groupServices) {
   const router = express.Router();
   router.use(express.json({ limit: "2mb" }));
 
-  // Safe without a token: only whether each app is connected.
+  // Safe without a token: only that this Companion has Group Manager (connections are per workspace).
   router.get("/status", (_req, res) => {
-    const connections = services ? services.engine.connections().map(({ app: id, state }) => ({ app: id, state })) : GROUP_APPS.map((id) => ({ app: id, state: "unknown" }));
-    res.json({ ok: true, connections });
+    res.json({ ok: true, connections: GROUP_APPS.map((id) => ({ app: id, state: "unknown" })) });
   });
 
   router.use(requireToken);
 
   // The app connections, and this Companion's latest results (the page copies them to AgenticThat).
-  router.get("/state", handle(() => {
-    const { store, engine } = get();
+  router.get("/state", handle((req) => {
+    const { store, engine } = get(workspaceOf(req));
     return { connections: engine.connections(), groups: store.groups().map((group) => ({ ...groupReport(group), updatedAt: group.updatedAt })), busy: engine.busy() };
   }));
 
   // Work for one group: take it in, do the action, then everything pending.
   router.post("/jobs", handle((req) => {
     const job = jobSchema.parse(req.body) as GroupJob;
-    const group = get().engine.run(job);
+    const group = get(workspaceOf(req)).engine.run(job);
     return { group: { ...groupReport(group), updatedAt: group.updatedAt } };
   }));
   router.delete("/groups/:id", handle((req) => {
-    get().engine.forget(String(req.params.id));
+    get(workspaceOf(req)).engine.forget(String(req.params.id));
     return {};
   }));
 
   // ---- App connections ----------------------------------------------------------------------
-  router.post("/connect/whatsapp", handle(async () => ({ connection: await get().whatsapp.start() })));
+  router.post("/connect/whatsapp", handle(async (req) => ({ connection: await get(workspaceOf(req)).whatsapp.start() })));
   router.post("/connect/telegram", handle(async (req) => {
     const input = telegramStartSchema.parse(req.body);
-    return { connection: await get().telegram.startLogin({ phone: input.phone.replace(/[^\d+]/g, ""), ...telegramApp(input) }) };
+    return { connection: await get(workspaceOf(req)).telegram.startLogin({ phone: input.phone.replace(/[^\d+]/g, ""), ...telegramApp(input) }) };
   }));
-  router.post("/connect/telegram/code", handle(async (req) => ({ connection: await get().telegram.submitCode(z.object({ code: z.string().trim().min(3).max(12) }).parse(req.body).code) })));
-  router.post("/connect/telegram/password", handle(async (req) => ({ connection: await get().telegram.submitPassword(z.object({ password: z.string().min(1).max(256) }).parse(req.body).password) })));
-  router.post("/connect/discord", handle(async (req) => ({ connection: await get().discord.connect(z.object({ token: z.string().trim().min(30, "Paste the bot token from the Discord Developer Portal.").max(200) }).parse(req.body).token) })));
-  router.post("/connect/discord/refresh", handle(async () => ({ connection: await get().discord.refreshGuilds() })));
+  router.post("/connect/telegram/code", handle(async (req) => ({ connection: await get(workspaceOf(req)).telegram.submitCode(z.object({ code: z.string().trim().min(3).max(12) }).parse(req.body).code) })));
+  router.post("/connect/telegram/password", handle(async (req) => ({ connection: await get(workspaceOf(req)).telegram.submitPassword(z.object({ password: z.string().min(1).max(256) }).parse(req.body).password) })));
+  router.post("/connect/discord", handle(async (req) => ({ connection: await get(workspaceOf(req)).discord.connect(z.object({ token: z.string().trim().min(30, "Paste the bot token from the Discord Developer Portal.").max(200) }).parse(req.body).token) })));
+  router.post("/connect/discord/refresh", handle(async (req) => ({ connection: await get(workspaceOf(req)).discord.refreshGuilds() })));
   router.post("/disconnect/:app", handle(async (req) => {
     const target = z.enum(GROUP_APPS).parse(req.params.app);
-    return { connection: await get()[target].disconnect() };
+    return { connection: await get(workspaceOf(req))[target].disconnect() };
   }));
 
   app.use("/api/group-manager", router);

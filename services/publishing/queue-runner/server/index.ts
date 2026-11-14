@@ -12,7 +12,7 @@ import { verifyPublishingWorkspaceIdentity } from "../../../../lib/publishing-wo
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { downloadCentralArtifact, type CentralJobArtifact } from "./central-artifact.js";
 import { registerAiRoutes } from "./services/chat-ai/chat-ai-routes.js";
-import { groupManagerBusy, registerGroupRoutes, startGroupManagerIfUsed } from "./services/groups/routes.js";
+import { groupManagerBusy, registerGroupRoutes, setGroupPairedWorkspace, startGroupManagerIfUsed } from "./services/groups/routes.js";
 import { setGroupReporter } from "./services/groups/reporting.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import {
@@ -1625,6 +1625,8 @@ registerAiRoutes(app);
 // Group Manager: real WhatsApp, Telegram and Discord groups. Results are reported
 // to AgenticThat's database over this Companion's workspace pairing.
 registerGroupRoutes(app);
+// App logins saved before they were kept per workspace belong to the paired workspace.
+setGroupPairedWorkspace(async () => (await readCentralPairing())?.workspaceId || null);
 setGroupReporter(async (groups) => {
   const pairing = await readCentralPairing();
   if (!pairing) return false;
@@ -3003,11 +3005,9 @@ export function createPublishingHttpServer(options: PublishingHttpServerOptions 
     const resolvedPort = typeof address === "object" && address ? address.port : serverPort;
     console.log(`Publish Queue Runner API listening on http://${serverHost}:${resolvedPort}`);
     if (!startBackgroundServices) return;
-    try {
-      startGroupManagerIfUsed();
-    } catch (error) {
+    void startGroupManagerIfUsed().catch((error) => {
       console.warn("Group Manager could not start:", error instanceof Error ? error.message : error);
-    }
+    });
     void (async () => {
       try {
         const recovery = await recoverInterruptedPublishingWork();

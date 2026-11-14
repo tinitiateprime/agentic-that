@@ -9,7 +9,7 @@ import { DiscordAdapter, splitDiscordMessage } from "./discord.js";
 import { type AddResult, type ConnectionState, type GroupAppAdapter, GroupEngine } from "./engine.js";
 import { type Contact, type Group, type GroupApp, contactFromInput, discordChannelName, normalizeDiscord, normalizePhone, normalizeTelegram } from "./model.js";
 import { type GroupReport, reportGroup, setGroupReporter } from "./reporting.js";
-import { type GroupServices, registerGroupRoutes } from "./routes.js";
+import { type GroupServices, groupServices, registerGroupRoutes, setGroupPairedWorkspace } from "./routes.js";
 import { GroupStore } from "./store.js";
 import { explainTelegramError } from "./telegram.js";
 import { explainAddStatus, whatsappJid } from "./whatsapp.js";
@@ -335,5 +335,39 @@ test("routes: status is open, everything else needs a valid group-manager token"
     assert.equal(bad.status, 400);
   } finally {
     server.close();
+  }
+});
+
+test("each workspace only reaches its own app logins, and older logins go to the paired workspace", async () => {
+  const root = tempDirectory();
+  process.env.AGENTICTHAT_GROUPS_DIR = root;
+  // Logins saved before they were kept per workspace (a working copy file stands in for them).
+  new GroupStore(root).upsertContacts([contact("asha", { name: "Asha" })]);
+  setGroupPairedWorkspace(async () => "paired-workspace");
+  const asked: string[] = [];
+  const app = express();
+  registerGroupRoutes(app, (workspaceId) => {
+    asked.push(workspaceId);
+    return groupServices(workspaceId);
+  });
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/group-manager`;
+  const tokenFor = (workspaceId: string) => ({ Authorization: `Bearer ${signServiceAccessToken({ audience: "group-manager", subject: "u1", workspaceId })}` });
+  try {
+    // Someone else signs in on this computer first: they get their own, empty Group Manager.
+    const other = await (await fetch(`${base}/state`, { headers: tokenFor("other-workspace") })).json();
+    assert.deepEqual(other.connections.map((entry: { state: string }) => entry.state), ["disconnected", "disconnected", "disconnected"]);
+    assert.ok(fs.existsSync(path.join(root, "groups.json")), "older logins are not handed to another workspace");
+    // The paired workspace: the older logins move to its own folder.
+    await fetch(`${base}/state`, { headers: tokenFor("paired-workspace") });
+    assert.equal(fs.existsSync(path.join(root, "groups.json")), false);
+    assert.deepEqual(asked, ["other-workspace", "paired-workspace"]);
+    const folders = fs.readdirSync(path.join(root, "workspaces"));
+    assert.equal(folders.length, 2, "one folder per workspace");
+    assert.ok(folders.some((folder) => fs.existsSync(path.join(root, "workspaces", folder, "groups.json")) && JSON.parse(fs.readFileSync(path.join(root, "workspaces", folder, "workspace.json"), "utf8")).workspaceId === "paired-workspace"));
+  } finally {
+    server.close();
+    setGroupPairedWorkspace(async () => null);
+    delete process.env.AGENTICTHAT_GROUPS_DIR;
   }
 });

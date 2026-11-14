@@ -27,7 +27,10 @@ Website /group-manager
   per group. They are shared across devices and the workspace's team, and visible with the Companion closed.
 - **The Companion holds** only the app logins (WhatsApp link keys, Telegram session, Discord bot token) and a working
   copy of the groups it is doing work for, all encrypted (AES-256-GCM with the Companion's session key, protected by
-  the operating system's secure storage) in `publishing-data/browser-data/groups/`.
+  the operating system's secure storage) in `publishing-data/browser-data/groups/workspaces/<workspace hash>/`.
+- **Logins are kept per workspace.** The workspace comes from the signed AgenticThat token, so someone signed in to
+  another workspace on the same computer sees "Not connected" and can neither see nor use them. Logins saved by
+  Companion 2.4.0 (before this separation) move to the workspace the Companion is paired with.
 - Work saved while the Companion was closed (or on another device) is sent to it automatically when the page finds it
   running. Work interrupted by closing the Companion resumes by itself after it restarts.
 - The paired report checks the Companion's pairing token and installation, and only touches groups of the pairing's
