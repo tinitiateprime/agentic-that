@@ -163,15 +163,28 @@ export class InstagramAdapter implements GroupAppAdapter {
     await this.dismissPopups(page);
   }
 
-  /** The chat's details panel (the "i" at the top right). */
+  /** The chat's details panel (the "i" at the top right), left open if it already is. */
   private async openDetails(page: Page) {
+    if (await firstVisible([page.getByRole("button", { name: pattern("^change group name$") }), page.locator("svg[aria-label='Member settings']")], 1500)) return;
     const info = await firstVisible([
       page.locator("svg[aria-label='Conversation information']").locator("xpath=ancestor::*[@role='button'][1]"),
-      page.getByRole("button", { name: pattern("conversation information") }),
+      page.locator("svg[aria-label='Conversation information']"),
     ], 15_000);
     if (!info) throw new Error("Instagram's chat details didn't open.");
     await info.click();
-    await sleep(1500);
+    await sleep(2000);
+  }
+
+  /** A member's row in the details panel (a link holding their name and username), or null. */
+  private async memberRow(page: Page, username: string) {
+    if (!(await firstVisible([page.locator("svg[aria-label='Member settings']")], 10_000))) throw new Error("Instagram's member list didn't open. Try again.");
+    const rows = page.locator("a[role='link']").filter({ has: page.locator("svg[aria-label='Member settings']") });
+    const count = await rows.count();
+    for (let index = 0; index < count; index += 1) {
+      const lines = (await rows.nth(index).innerText().catch(() => "")).split("\n").map((line) => line.trim().toLowerCase());
+      if (lines.includes(username.toLowerCase())) return rows.nth(index);
+    }
+    return null;
   }
 
   // ---- The work -----------------------------------------------------------------------------
@@ -221,7 +234,7 @@ export class InstagramAdapter implements GroupAppAdapter {
   /** Names the group (details → Change, next to the group name). */
   private async rename(page: Page, name: string) {
     await this.openDetails(page);
-    const change = await firstVisible([page.getByRole("button", { name: pattern("^change$") }), page.getByText(pattern("^change$"))], 5000);
+    const change = await firstVisible([page.getByRole("button", { name: pattern("^change group name$|^change$") }), page.getByText(pattern("^change$"))], 5000);
     if (!change) return;
     await change.click();
     const input = await firstVisible([page.locator("[role='dialog'] input[type='text'], [role='dialog'] input:not([type])")], 6000);
@@ -233,25 +246,35 @@ export class InstagramAdapter implements GroupAppAdapter {
   }
 
   async addMember(ref: Record<string, string>, username: string): Promise<AddResult> {
-    // People ticked when the group was made are already in it.
-    if ((ref.members || "").split(",").includes(username.toLowerCase())) return { state: "added" };
     return this.session.run(async (page) => {
       await this.openThread(page, ref.threadId);
       await this.openDetails(page);
+      // Checked in the real member list (they may have been removed since the group was made).
+      if (await this.memberRow(page, username)) return { state: "added", detail: "In the group." };
       const add = await firstVisible([page.getByRole("button", { name: pattern("^add people$") }), page.getByText(pattern("^add people$"))], 8000);
       if (!add) throw new Error("Instagram's Add people button didn't show (only the group's admins can add people).");
       await add.click();
-      const dialog = page.locator("[role='dialog']").filter({ has: page.locator("input[name='queryBox'], input[type='text']") }).last();
+      const dialog = page.locator("[role='dialog']").filter({ has: page.locator("input[name='queryBox']") }).last();
       await dialog.waitFor({ state: "visible", timeout: 15_000 });
       if (!(await this.tick(page, dialog, username))) {
         await page.keyboard.press("Escape").catch(() => undefined);
         return { state: "not-on-app", detail: `Instagram's search didn't find @${username}.` };
       }
-      const confirm = await firstVisible([dialog.getByRole("button", { name: pattern("^next$|^add$|^done$|^chat$") }), dialog.getByText(pattern("^next$|^add$|^done$"))], 8000);
-      if (!confirm) throw new Error("Instagram's Add button didn't show.");
-      await confirm.click();
-      await sleep(2500);
-      return { state: "added" };
+      const next = dialog.getByRole("button", { name: pattern("^next$|^add$|^done$") }).last();
+      const ready = Date.now() + 6000;
+      while (Date.now() < ready && (await next.getAttribute("aria-disabled").catch(() => "true")) === "true") await sleep(300);
+      await next.click();
+      // Some versions ask once more ("Add").
+      const again = await firstVisible([page.locator("[role='dialog']").getByRole("button", { name: pattern("^add$|^add people$") })], 3000);
+      await again?.click();
+      // Added only when they show in the member list.
+      const shown = Date.now() + 15_000;
+      while (Date.now() < shown) {
+        await sleep(1000);
+        await this.openDetails(page).catch(() => undefined);
+        if (await this.memberRow(page, username).catch(() => null)) return { state: "added" };
+      }
+      return { state: "failed", detail: "Instagram didn't show them in the group after adding. Try again." };
     });
   }
 
@@ -259,16 +282,26 @@ export class InstagramAdapter implements GroupAppAdapter {
     await this.session.run(async (page) => {
       await this.openThread(page, ref.threadId);
       await this.openDetails(page);
-      const row = await firstVisible([page.locator("[role='button'], [role='listitem']").filter({ hasText: pattern(`^${username.replace(/[.]/g, "\\.")}$|\\n${username.replace(/[.]/g, "\\.")}(\\n|$)`) })], 6000);
+      const row = await this.memberRow(page, username);
+      // The member list loaded and they aren't in it: nothing to remove.
       if (!row) return;
-      const more = await firstVisible([row.locator("svg[aria-label*='ptions'], svg[aria-label='More']").locator("xpath=ancestor::*[@role='button'][1]")], 3000);
-      await (more || row).click();
-      const remove = await firstVisible([page.getByRole("button", { name: pattern("remove from group") }), page.getByText(pattern("^remove from group$"))], 5000);
-      if (!remove) throw new Error("Instagram didn't offer to remove them (only the group's admins can).");
+      const settings = row.locator("[role='button']").filter({ has: page.locator("svg[aria-label='Member settings']") }).first();
+      await ((await settings.count()) ? settings : row).click();
+      const remove = await firstVisible([page.getByRole("button", { name: pattern("^remove from group$") })], 6000);
+      if (!remove) {
+        await page.keyboard.press("Escape").catch(() => undefined);
+        throw new Error("Instagram didn't offer to remove them (only the group's admins can).");
+      }
       await remove.click();
       const confirm = await firstVisible([page.locator("[role='dialog']").getByRole("button", { name: pattern("^remove$") })], 4000);
       await confirm?.click();
-      await sleep(2000);
+      // Removed only when they're really gone from the member list.
+      const deadline = Date.now() + 12_000;
+      while (Date.now() < deadline) {
+        await sleep(800);
+        if (!(await this.memberRow(page, username).catch(() => row))) return;
+      }
+      throw new Error("Instagram didn't confirm the removal. Try again.");
     });
   }
 

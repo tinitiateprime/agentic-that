@@ -202,11 +202,19 @@ export class MessengerAdapter implements GroupAppAdapter {
     await sleep(800);
   }
 
+  /** Each member's "Member settings for <name>" button in the chat's member list (shown once it has loaded). */
+  private async memberButtons(page: Page) {
+    const all = page.getByRole("button", { name: pattern("^member settings for ") });
+    if (!(await firstVisible([all], 10_000))) throw new Error("Messenger's member list didn't open. Try again.");
+    return all;
+  }
+
   private async memberRow(page: Page, person: FacebookPerson) {
-    return firstVisible([
-      ...(person.id ? [page.locator(`[role='complementary'] a[href*='${person.id}']`)] : []),
-      page.locator("[role='complementary'] [role='listitem'], [role='complementary'] [role='row']").filter({ hasText: person.name }),
-    ], 4000);
+    await this.memberButtons(page);
+    const own = page.getByRole("button", { name: `Member settings for ${person.name}`, exact: true });
+    const count = await own.count();
+    if (count > 1) throw new Error(`More than one "${person.name}" is in this Messenger group, so nobody was changed.`);
+    return count === 1 ? own.first() : null;
   }
 
   // ---- The work -----------------------------------------------------------------------------
@@ -279,51 +287,91 @@ export class MessengerAdapter implements GroupAppAdapter {
   }
 
   async addMember(ref: Record<string, string>, identity: string): Promise<AddResult> {
-    if ((ref.members || "").split("\n").includes(identity)) return { state: "added" };
     return this.session.run(async (page) => {
       const person = await this.person(page, identity);
       if (!person) return { state: "not-on-app", detail: "No Facebook profile found for this contact (or it isn't visible to you)." };
       await this.openThread(page, ref);
       await this.openMembers(page);
+      // Checked in the real member list (they may have been removed since the group was made).
       if (await this.memberRow(page, person)) return { state: "added", detail: "In the group." };
-      const add = await firstVisible([page.getByRole("button", { name: pattern("^add people") }), page.getByText(pattern("^add people$"))], 8000);
+      const add = await firstVisible([page.locator("[role='main'] [role='button'][aria-label='Add']"), page.getByRole("button", { name: pattern("^add people$") })], 8000);
       if (!add) throw new Error("Messenger's Add people button didn't show.");
       await add.click();
-      const dialog = page.locator("[role='dialog']").last();
-      const search = await firstVisible([dialog.locator("input")], 10_000);
+      const dialog = page.locator("[role='dialog']").filter({ hasText: pattern("add people") }).last();
+      const search = await firstVisible([dialog.locator("input[aria-label='Search']"), dialog.locator("input[type='text']")], 10_000);
       if (!search) throw new Error("Messenger's Add people search didn't open.");
-      if (!(await this.pick(page, search, person))) {
-        await page.keyboard.press("Escape").catch(() => undefined);
-        return { state: "failed", detail: `${person.name} didn't come up in Messenger's search. You may need to be Facebook friends.` };
+      await search.click();
+      await search.fill("");
+      await search.pressSequentially(person.name, { delay: 60 });
+      // People show as tick boxes; the profile number settles which "Alex Smith" it is.
+      let ticked = false;
+      const deadline = Date.now() + 12_000;
+      while (!ticked && Date.now() < deadline) {
+        await sleep(700);
+        const boxes = dialog.getByRole("checkbox");
+        const count = await boxes.count().catch(() => 0);
+        const byName: Locator[] = [];
+        for (let index = 0; index < count; index += 1) {
+          const box = boxes.nth(index);
+          const html = await box.evaluate((element) => element.outerHTML).catch(() => "");
+          if (person.id && html.includes(person.id)) {
+            byName.splice(0, byName.length, box);
+            break;
+          }
+          if ((await box.innerText().catch(() => "")).split("\n")[0].trim().toLowerCase() === person.name.toLowerCase()) byName.push(box);
+        }
+        if (byName.length > 1) {
+          await page.keyboard.press("Escape").catch(() => undefined);
+          return { state: "failed", detail: `More than one "${person.name}" came up in Messenger, so nobody was added. Save their Facebook profile link in Contact Master.` };
+        }
+        if (byName.length === 1) {
+          if ((await byName[0].getAttribute("aria-checked")) !== "true") await byName[0].click();
+          ticked = true;
+        }
       }
-      const confirm = await firstVisible([dialog.getByRole("button", { name: pattern("^add people$|^add$") })], 6000);
-      if (!confirm) throw new Error("Messenger's Add button didn't show.");
+      if (!ticked) {
+        await page.keyboard.press("Escape").catch(() => undefined);
+        return { state: "failed", detail: `${person.name} didn't come up in Messenger's Add people search. You may need to be Facebook friends.` };
+      }
+      const confirm = dialog.getByRole("button", { name: pattern("^add people$") });
+      const ready = Date.now() + 6000;
+      while (Date.now() < ready && (await confirm.getAttribute("aria-disabled").catch(() => "true")) === "true") await sleep(300);
       await confirm.click();
-      await sleep(2500);
-      return { state: "added" };
+      // Added only when they show in the member list.
+      const shown = Date.now() + 15_000;
+      while (Date.now() < shown) {
+        await sleep(1000);
+        if (await this.memberRow(page, person).catch(() => null)) return { state: "added" };
+      }
+      return { state: "failed", detail: "Messenger didn't show them in the group after adding. Try again." };
     });
   }
 
   async removeMember(ref: Record<string, string>, identity: string) {
     await this.session.run(async (page) => {
       const person = await this.person(page, identity);
-      if (!person) return;
+      if (!person) throw new Error("Their Facebook profile couldn't be found, so they weren't removed.");
       await this.openThread(page, ref);
       await this.openMembers(page);
-      const row = await this.memberRow(page, person);
-      if (!row) return;
-      await row.hover().catch(() => undefined);
-      const options = await firstVisible([
-        page.locator("[role='complementary'] [role='listitem'], [role='complementary'] [role='row']").filter({ hasText: person.name }).getByRole("button", { name: pattern("member settings|more|options") }),
-      ], 5000);
-      if (!options) throw new Error("Messenger's member options didn't show.");
-      await options.click();
-      const remove = await firstVisible([page.getByRole("menuitem", { name: pattern("remove (from group|member)") })], 5000);
-      if (!remove) throw new Error("Messenger didn't offer to remove them (only group admins can).");
+      const settings = await this.memberRow(page, person);
+      // The member list loaded and they aren't in it: nothing to remove.
+      if (!settings) return;
+      await settings.click();
+      const remove = await firstVisible([page.getByRole("menuitem", { name: pattern("^remove (member|from group)$") })], 6000);
+      if (!remove) {
+        await page.keyboard.press("Escape").catch(() => undefined);
+        throw new Error("Messenger didn't offer to remove them (only the group's admins can).");
+      }
       await remove.click();
-      const confirm = await firstVisible([page.locator("[role='dialog']").getByRole("button", { name: pattern("^remove") })], 5000);
+      const confirm = await firstVisible([page.locator("[role='dialog']").getByRole("button", { name: pattern("^remove") })], 6000);
       await confirm?.click();
-      await sleep(2000);
+      // Removed only when they're really gone from the member list.
+      const deadline = Date.now() + 12_000;
+      while (Date.now() < deadline) {
+        await sleep(800);
+        if (!(await this.memberRow(page, person).catch(() => settings))) return;
+      }
+      throw new Error("Messenger didn't confirm the removal. Try again.");
     });
   }
 
