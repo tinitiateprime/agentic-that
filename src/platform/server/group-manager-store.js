@@ -204,17 +204,25 @@ export async function createManagedGroup(actor, input) {
   return oneGroup(sql, workspaceId, id);
 }
 
-/** Adds people (pending) in every app the group is live or being created in. */
+/**
+ * Adds people (pending) in every app of the group. An app whose group couldn't be
+ * made yet (Messenger and Instagram need 2 people) is asked to make it again.
+ */
 export async function addManagedGroupMembers(actor, groupId, input) {
   const workspaceId = workspaceOf(actor);
   const { contactIds } = parse(membersInputSchema, input);
   const sql = await database();
   const group = await oneGroup(sql, workspaceId, groupId);
-  const apps = GROUP_APPS.filter((app) => ["ready", "creating"].includes(group.apps[app]?.state));
-  if (!apps.length) throw new GroupManagerError("This group isn't ready in any app yet.", 409);
+  const apps = GROUP_APPS.filter((app) => ["ready", "creating", "failed"].includes(group.apps[app]?.state));
+  if (!apps.length) throw new GroupManagerError("This group isn't in any app.", 409);
   const valid = await workspaceContactIds(sql, workspaceId, [...new Set(contactIds)]);
   const at = now();
+  const failed = apps.filter((app) => group.apps[app]?.state === "failed");
   await sql.begin(async (transaction) => {
+    if (failed.length) {
+      const nextApps = { ...group.apps, ...Object.fromEntries(failed.map((app) => [app, { state: "creating", at }])) };
+      await transaction`UPDATE public.group_manager_groups SET apps = ${transaction.json(nextApps)}, updated_at = now() WHERE id = ${group.id} AND workspace_id = ${workspaceId}`;
+    }
     for (const contactId of valid) {
       const existing = group.members.find((member) => member.contactId === contactId);
       const next = { ...(existing?.apps || {}) };

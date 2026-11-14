@@ -7,7 +7,9 @@ import express from "express";
 import { signServiceAccessToken } from "../../../../../../lib/service-access-token.js";
 import { DiscordAdapter, splitDiscordMessage } from "./discord.js";
 import { type AddResult, type ConnectionState, type GroupAppAdapter, GroupEngine } from "./engine.js";
-import { type Contact, type Group, type GroupApp, contactFromInput, discordChannelName, normalizeDiscord, normalizePhone, normalizeTelegram } from "./model.js";
+import { type Contact, type Group, type GroupApp, contactFromInput, contactIdentity, discordChannelName, normalizeDiscord, normalizeFacebook, normalizeInstagram, normalizePhone, normalizeTelegram } from "./model.js";
+import { explainInstagramError, instagramThreadFromUrl } from "./instagram.js";
+import { profileIdFromHtml, profileNameFromHtml, threadFromUrl } from "./messenger.js";
 import { type GroupReport, reportGroup, setGroupReporter } from "./reporting.js";
 import { type GroupServices, groupServices, registerGroupRoutes, setGroupPairedWorkspace } from "./routes.js";
 import { GroupStore } from "./store.js";
@@ -60,7 +62,13 @@ class FakeAdapter implements GroupAppAdapter {
 
 function setup(directory = tempDirectory(), resumeAfterMs = -1) {
   const store = new GroupStore(directory);
-  const adapters = { whatsapp: new FakeAdapter("whatsapp"), telegram: new FakeAdapter("telegram"), discord: new FakeAdapter("discord") };
+  const adapters = {
+    whatsapp: new FakeAdapter("whatsapp"),
+    telegram: new FakeAdapter("telegram"),
+    discord: new FakeAdapter("discord"),
+    messenger: new FakeAdapter("messenger"),
+    instagram: new FakeAdapter("instagram"),
+  };
   const engine = new GroupEngine(store, adapters, resumeAfterMs);
   return { directory, store, adapters, engine };
 }
@@ -103,6 +111,17 @@ test("contact numbers and IDs are cleaned and checked", () => {
   assert.equal(made.instagram, "tinitiateai");
   assert.equal(made.reddit, "tinitiate");
   assert.throws(() => contactFromInput({ name: "" }), /name/);
+  assert.equal(normalizeInstagram("https://www.instagram.com/Tinitiate.AI/?hl=en"), "tinitiate.ai");
+  assert.throws(() => normalizeInstagram("not valid!"), /Instagram username/);
+  assert.equal(normalizeFacebook("https://www.facebook.com/profile.php?id=100012345678901"), "100012345678901");
+  assert.equal(normalizeFacebook("facebook.com/Kaushik.Reddy?ref=x"), "kaushik.reddy");
+  assert.equal(normalizeFacebook("https://m.facebook.com/kaushik.reddy/"), "kaushik.reddy");
+  assert.throws(() => normalizeFacebook("https://www.facebook.com/profile.php"), /Facebook profile/);
+  assert.equal(normalizeFacebook("  Tintiate   Kaushik "), "Tintiate Kaushik");
+  assert.equal(normalizeFacebook("kaushik.reddy"), "kaushik.reddy");
+  // Messenger finds people by their Facebook profile.
+  assert.equal(contactIdentity(contact("x", { name: "A", facebook: "kaushik.reddy" }), "messenger"), "kaushik.reddy");
+  assert.equal(contactIdentity(contact("x", { name: "A", instagram: "asha" }), "instagram"), "asha");
 });
 
 test("the Companion's working copy is saved encrypted and read back", () => {
@@ -261,6 +280,18 @@ test("each app's answers are explained in plain words", () => {
   assert.equal(discordChannelName("Tinitiate Batch 5 — Data Eng!"), "tinitiate-batch-5-data-eng");
   const long = `${"a".repeat(1500)}\n${"b".repeat(1500)}`;
   assert.deepEqual(splitDiscordMessage(long).map((part) => part.length), [1500, 1500]);
+  assert.match(explainInstagramError({ status: 400, json: { status: "fail", message: "feedback_required" } }), /limiting/);
+  assert.match(explainInstagramError({ status: 400, json: { message: "challenge_required" } }), /confirm it's you/);
+  assert.match(explainInstagramError({ status: 401, json: null }), /logged this computer out/);
+  assert.equal(profileIdFromHtml('..."userID":"100012345678901",...'), "100012345678901");
+  assert.deepEqual(threadFromUrl("https://www.facebook.com/messages/e2ee/t/7712345678901234/"), { threadId: "7712345678901234", e2ee: "1" });
+  assert.deepEqual(threadFromUrl("https://www.facebook.com/messages/t/123456789/"), { threadId: "123456789", e2ee: "" });
+  assert.equal(threadFromUrl("https://www.facebook.com/messages/new/"), null);
+  const profile = '{"__typename":"User","id":"61593507754763","friendship_status":"CAN_REQUEST","name":"Hello Uhfh","__isNode":"User"}';
+  assert.equal(profileNameFromHtml(profile, "61593507754763"), "Hello Uhfh");
+  assert.equal(profileNameFromHtml('{"id":"61593507754763","name":"Ravi \u00e9"}', "61593507754763"), "Ravi é");
+  assert.equal(profileNameFromHtml(profile, "999"), "");
+  assert.equal(instagramThreadFromUrl("https://www.instagram.com/direct/t/18098168560910730/"), "18098168560910730");
 });
 
 test("Discord: a private channel is created, server members are added, others get the invite", async () => {
@@ -311,6 +342,8 @@ test("routes: status is open, everything else needs a valid group-manager token"
     whatsapp: { start: async () => connection(), disconnect: async () => connection() },
     telegram: { startLogin: async () => connection(), submitCode: async () => connection(), submitPassword: async () => connection(), disconnect: async () => connection() },
     discord: { connect: async () => connection(), refreshGuilds: async () => connection(), disconnect: async () => connection() },
+    messenger: { connect: async () => connection(), disconnect: async () => connection() },
+    instagram: { connect: async () => connection(), disconnect: async () => connection() },
   };
   const app = express();
   registerGroupRoutes(app, () => fake);
@@ -330,7 +363,7 @@ test("routes: status is open, everything else needs a valid group-manager token"
     await until(() => !engine.busy());
     const state = await (await fetch(`${base}/state`, { headers })).json();
     assert.equal(state.groups[0].members[0].apps.whatsapp.state, "added");
-    assert.equal(state.connections.length, 3);
+    assert.equal(state.connections.length, 5);
     const bad = await fetch(`${base}/jobs`, { method: "POST", headers, body: JSON.stringify({ group: { id: "x" } }) });
     assert.equal(bad.status, 400);
   } finally {
@@ -356,7 +389,7 @@ test("each workspace only reaches its own app logins, and older logins go to the
   try {
     // Someone else signs in on this computer first: they get their own, empty Group Manager.
     const other = await (await fetch(`${base}/state`, { headers: tokenFor("other-workspace") })).json();
-    assert.deepEqual(other.connections.map((entry: { state: string }) => entry.state), ["disconnected", "disconnected", "disconnected"]);
+    assert.deepEqual(other.connections.map((entry: { state: string }) => entry.state), ["disconnected", "disconnected", "disconnected", "disconnected", "disconnected"]);
     assert.ok(fs.existsSync(path.join(root, "groups.json")), "older logins are not handed to another workspace");
     // The paired workspace: the older logins move to its own folder.
     await fetch(`${base}/state`, { headers: tokenFor("paired-workspace") });

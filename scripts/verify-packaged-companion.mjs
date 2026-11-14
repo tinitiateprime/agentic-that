@@ -51,6 +51,7 @@ await Promise.all([
   access(path.join(applicationRoot, "assets", "platforms", "whatsapp-logo.svg")),
   access(path.join(applicationRoot, "assets", "platforms", "telegram-logo.svg")),
   access(path.join(applicationRoot, "assets", "platforms", "discord-logo.svg")),
+  access(path.join(applicationRoot, "assets", "platforms", "messenger-logo.svg")),
 ]);
 
 if (platform === "darwin" && architecture === "universal") {
@@ -71,7 +72,7 @@ const runtimeSource = await readFile(path.join(applicationRoot, "runtime", "serv
 for (const requiredText of ["secureStorageAvailable", "linuxAutostartDesktopEntry", "subscribeFacebookCompanionActivity", "isolated public browser session", "flushAccountBrowserData", "updateAiActivity", "companion:ai-show", "updateGroupActivity", "companion:open-group-manager"]) {
   if (!mainSource.includes(requiredText)) throw new Error(`Packaged main process is missing ${requiredText}.`);
 }
-for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles", "if (upload.scheduleId) return isDueByPostSchedule", 'if (mode === "scheduledOnly") return isDueScheduledUpload', "__AGENTICTHAT_SOCIAL_SEO_CONTROL__", "INSTAGRAM CAPTION", "/api/group-manager", "companion_group_sync", "groupParticipantsUpdate", "InviteToChannel"]) {
+for (const requiredText of ["companion_claim_jobs", "scrape.instagram", "scraping.facebook", "instagram-ready.jpg", "c_user", "reels_tab", "public_search_index", "not_made_for_kids", "platformOptions", "DOM.setFileInputFiles", "if (upload.scheduleId) return isDueByPostSchedule", 'if (mode === "scheduledOnly") return isDueScheduledUpload', "__AGENTICTHAT_SOCIAL_SEO_CONTROL__", "INSTAGRAM CAPTION", "/api/group-manager", "companion_group_sync", "groupParticipantsUpdate", "InviteToChannel", "create_group_thread", "/messages/new/"]) {
   if (!runtimeSource.includes(requiredText)) throw new Error(`Packaged runtime is missing ${requiredText}.`);
 }
 const controlSource = await readFile(path.join(applicationRoot, "control.html"), "utf8");

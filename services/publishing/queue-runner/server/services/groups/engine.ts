@@ -10,6 +10,7 @@ import {
   type Contact,
   GROUP_APPS,
   type Group,
+  IDENTITY_LABELS,
   type GroupApp,
   type MemberAppStatus,
   type MemberState,
@@ -197,7 +198,7 @@ export class GroupEngine {
       }
       const identity = contactIdentity(contact, app);
       if (!identity) {
-        this.setMember(groupId, contactId, app, { state: "missing-id", detail: `No ${APP_LABELS[app]} ${app === "discord" ? "ID" : "number"} saved for ${contact.name}.` });
+        this.setMember(groupId, contactId, app, { state: "missing-id", detail: `No ${IDENTITY_LABELS[app]} saved for ${contact.name}.` });
         return;
       }
       try {

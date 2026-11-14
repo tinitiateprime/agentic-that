@@ -1,7 +1,8 @@
 // Companion endpoints for Group Manager. The website calls them on 127.0.0.1
 // with a short-lived signed "group-manager" token from AgenticThat. Contacts and
 // groups live in AgenticThat's database; the Companion holds the app logins,
-// does the work in WhatsApp, Telegram and Discord, and reports every result.
+// does the work in WhatsApp, Telegram, Discord, Messenger and Instagram, and
+// reports every result.
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -12,6 +13,8 @@ import { verifyServiceAccessToken } from "../../../../../../lib/service-access-t
 import { publishingDesktopHost } from "../desktop-host.js";
 import { DiscordAdapter } from "./discord.js";
 import { type GroupAppAdapter, GroupEngine, type GroupJob } from "./engine.js";
+import { InstagramAdapter } from "./instagram.js";
+import { MessengerAdapter } from "./messenger.js";
 import { GROUP_APPS, type GroupApp } from "./model.js";
 import { groupReport, reportGroup } from "./reporting.js";
 import { GroupStore, groupsDirectory } from "./store.js";
@@ -24,6 +27,8 @@ export type GroupServices = {
   whatsapp: Pick<WhatsAppAdapter, "start" | "disconnect">;
   telegram: Pick<TelegramAdapter, "startLogin" | "submitCode" | "submitPassword" | "disconnect">;
   discord: Pick<DiscordAdapter, "connect" | "refreshGuilds" | "disconnect">;
+  messenger: Pick<MessengerAdapter, "connect" | "disconnect">;
+  instagram: Pick<InstagramAdapter, "connect" | "disconnect">;
 };
 
 // Each AgenticThat workspace has its own app logins and working copy, in its own
@@ -93,11 +98,13 @@ export function groupServices(workspaceId: string): GroupServices {
   const whatsapp = new WhatsAppAdapter(directory);
   const telegram = new TelegramAdapter(directory);
   const discord = new DiscordAdapter(directory);
-  const adapters: Record<GroupApp, GroupAppAdapter> = { whatsapp, telegram, discord };
+  const messenger = new MessengerAdapter(directory);
+  const instagram = new InstagramAdapter(directory);
+  const adapters: Record<GroupApp, GroupAppAdapter> = { whatsapp, telegram, discord, messenger, instagram };
   const engine = new GroupEngine(store, adapters);
   store.onChange((group) => reportGroup(group));
   engine.onActivity(publishActivity);
-  const created = { store, engine, whatsapp, telegram, discord };
+  const created = { store, engine, whatsapp, telegram, discord, messenger, instagram };
   services.set(workspaceId, created);
   publishActivity();
   return created;
@@ -254,6 +261,9 @@ export function registerGroupRoutes(app: express.Express, get: (workspaceId: str
   router.post("/connect/telegram/password", handle(async (req) => ({ connection: await get(workspaceOf(req)).telegram.submitPassword(z.object({ password: z.string().min(1).max(256) }).parse(req.body).password) })));
   router.post("/connect/discord", handle(async (req) => ({ connection: await get(workspaceOf(req)).discord.connect(z.object({ token: z.string().trim().min(30, "Paste the bot token from the Discord Developer Portal.").max(200) }).parse(req.body).token) })));
   router.post("/connect/discord/refresh", handle(async (req) => ({ connection: await get(workspaceOf(req)).discord.refreshGuilds() })));
+  // Messenger and Instagram: a window opens on the app's own login page; connected once the user has logged in.
+  router.post("/connect/messenger", handle(async (req) => ({ connection: await get(workspaceOf(req)).messenger.connect() })));
+  router.post("/connect/instagram", handle(async (req) => ({ connection: await get(workspaceOf(req)).instagram.connect() })));
   router.post("/disconnect/:app", handle(async (req) => {
     const target = z.enum(GROUP_APPS).parse(req.params.app);
     return { connection: await get(workspaceOf(req))[target].disconnect() };

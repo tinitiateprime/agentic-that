@@ -196,7 +196,7 @@ export default function GroupManagerWorkspace({ workspaceName = "" }) {
         <div>
           <span className={styles.eyebrow}><UsersRound size={14} /> Group Manager</span>
           <h1>Your groups, in every app</h1>
-          <p>Create a group once and it&apos;s made in your real WhatsApp, Telegram and Discord. Add people from Contact Master and they&apos;re added there too; message everyone in one go.</p>
+          <p>Create a group once and it&apos;s made in your real WhatsApp, Telegram, Discord, Messenger and Instagram. Add people from Contact Master and they&apos;re added there too; message everyone in one go.</p>
         </div>
       </header>
 
@@ -205,7 +205,7 @@ export default function GroupManagerWorkspace({ workspaceName = "" }) {
           <MonitorDown size={22} />
           <div>
             <strong>Open the AgenticThat Companion to make changes in the apps</strong>
-            <span>Your contacts and groups are saved on AgenticThat. The Companion on this computer holds your WhatsApp, Telegram and Discord logins and makes the changes there. This page connects as soon as it&apos;s running.</span>
+            <span>Your contacts and groups are saved on AgenticThat. The Companion on this computer holds your WhatsApp, Telegram, Discord, Messenger and Instagram logins and makes the changes there. This page connects as soon as it&apos;s running.</span>
           </div>
           <Link className={styles.primary} href="/companion/download">Get the Companion</Link>
         </div>
@@ -267,7 +267,7 @@ export default function GroupManagerWorkspace({ workspaceName = "" }) {
                 <div className={styles.emptyState}>
                   <UsersRound size={30} />
                   <h2>{online ? "Connect an app to start" : "Open the Companion to create groups"}</h2>
-                  <p>{online ? "Connect WhatsApp, Telegram or Discord above. Then create a group, and it's made in the real app." : "You can add people to Contact Master now. Creating groups in WhatsApp, Telegram and Discord needs the Companion running on this computer."}</p>
+                  <p>{online ? "Connect WhatsApp, Telegram, Discord, Messenger or Instagram above. Then create a group, and it's made in the real app." : "You can add people to Contact Master now. Creating groups in the apps needs the Companion running on this computer."}</p>
                 </div>
               ) : creating || !groups.length ? (
                 <NewGroupForm

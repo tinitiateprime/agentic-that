@@ -5,7 +5,7 @@
 
 import path from "node:path";
 import type { AddResult, ConnectionState, GroupAppAdapter } from "./engine.js";
-import { discordChannelName, isDiscordUserId } from "./model.js";
+import { discordChannelName, isDiscordUserId, splitMessage } from "./model.js";
 import { readSecureFile, removeSecureFile, writeSecureFile } from "./secure-file.js";
 
 const API = "https://discord.com/api/v10";
@@ -33,17 +33,7 @@ export class DiscordError extends Error {
 
 /** Splits long text into Discord-sized messages, at line breaks where possible. */
 export function splitDiscordMessage(text: string) {
-  const parts: string[] = [];
-  let rest = text.trim();
-  while (rest.length > MESSAGE_LIMIT) {
-    let at = rest.lastIndexOf("\n", MESSAGE_LIMIT);
-    if (at < MESSAGE_LIMIT * 0.5) at = rest.lastIndexOf(" ", MESSAGE_LIMIT);
-    if (at < 1) at = MESSAGE_LIMIT;
-    parts.push(rest.slice(0, at).trim());
-    rest = rest.slice(at).trim();
-  }
-  if (rest) parts.push(rest);
-  return parts;
+  return splitMessage(text, MESSAGE_LIMIT);
 }
 
 export class DiscordAdapter implements GroupAppAdapter {

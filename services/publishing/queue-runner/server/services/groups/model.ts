@@ -1,12 +1,27 @@
 // Group Manager's data: the user's contacts (Contact Master) and the groups they
-// create in WhatsApp, Telegram and Discord, with every member's status in each app.
+// create in WhatsApp, Telegram, Discord, Messenger and Instagram, with every
+// member's status in each app.
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-export const GROUP_APPS = ["whatsapp", "telegram", "discord"] as const;
+export const GROUP_APPS = ["whatsapp", "telegram", "discord", "messenger", "instagram"] as const;
 export type GroupApp = (typeof GROUP_APPS)[number];
-export const APP_LABELS: Record<GroupApp, string> = { whatsapp: "WhatsApp", telegram: "Telegram", discord: "Discord" };
+export const APP_LABELS: Record<GroupApp, string> = {
+  whatsapp: "WhatsApp",
+  telegram: "Telegram",
+  discord: "Discord",
+  messenger: "Messenger",
+  instagram: "Instagram",
+};
+/** What a contact needs saved for each app. */
+export const IDENTITY_LABELS: Record<GroupApp, string> = {
+  whatsapp: "WhatsApp number",
+  telegram: "Telegram number or username",
+  discord: "Discord ID",
+  messenger: "Facebook profile",
+  instagram: "Instagram username",
+};
 
 /** Where a member stands in one app's group. */
 export type MemberState =
@@ -95,6 +110,45 @@ export function normalizeDiscord(value: string) {
   throw new Error("Use the Discord user ID (17–20 digits) or the username.");
 }
 
+/** "@Name", "instagram.com/name/" → "name". */
+export function normalizeInstagram(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const username = trimmed
+    .replace(/^(https?:\/\/)?(www\.)?instagram\.com\//i, "")
+    .replace(/[/?#].*$/, "")
+    .replace(/^@/, "")
+    .toLowerCase();
+  if (/^[a-z0-9._]{1,30}$/.test(username)) return username;
+  throw new Error("Use the Instagram username, for example @agenticthat.");
+}
+
+/** A full name as shown on Facebook ("Tintiate Kaushik"): at least two words. */
+export function isFacebookName(value: string) {
+  return /^[\p{L}\p{M}][\p{L}\p{M}'’.-]*( [\p{L}\p{M}][\p{L}\p{M}'’.-]*){1,5}$/u.test(value);
+}
+
+/**
+ * A Facebook profile: its link, username or number. "facebook.com/profile.php?id=1000…"
+ * → "1000…"; "facebook.com/Some.Name" → "some.name". Or the person's full name as
+ * shown on Facebook ("Tintiate Kaushik"). Messenger uses it to find the person.
+ */
+export function normalizeFacebook(value: string) {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (!trimmed) return "";
+  if (isFacebookName(trimmed)) return trimmed;
+  const id = trimmed.match(/[?&]id=(\d{5,20})/);
+  if (id) return id[1];
+  const name = trimmed
+    .replace(/^(https?:\/\/)?((www|m|web|mbasic)\.)?(facebook|fb)\.com\//i, "")
+    .replace(/^(messages\/t\/|people\/[^/]+\/)/i, "")
+    .replace(/[/?#].*$/, "")
+    .replace(/^@/, "");
+  if (/^\d{5,20}$/.test(name)) return name;
+  if (/^[A-Za-z0-9.]{5,50}$/.test(name) && !/^profile\.php$/i.test(name)) return name.toLowerCase();
+  throw new Error("Use the Facebook profile link (for example facebook.com/your.name) or the full name as shown on Facebook.");
+}
+
 export function isDiscordUserId(value: string) {
   return /^\d{17,20}$/.test(value);
 }
@@ -124,8 +178,8 @@ export function contactFromInput(input: unknown, existing?: Contact): Contact {
     whatsapp: normalizePhone(parsed.whatsapp),
     telegram: normalizeTelegram(parsed.telegram),
     discord: normalizeDiscord(parsed.discord),
-    instagram: parsed.instagram.replace(/^@/, ""),
-    facebook: parsed.facebook,
+    instagram: normalizeInstagram(parsed.instagram),
+    facebook: normalizeFacebook(parsed.facebook),
     x: parsed.x.replace(/^@/, ""),
     reddit: parsed.reddit.replace(/^u\//i, ""),
     linkedin: parsed.linkedin,
@@ -135,9 +189,24 @@ export function contactFromInput(input: unknown, existing?: Contact): Contact {
   };
 }
 
-/** The contact's number or ID in one app ("" when they have none). */
+/** The contact's number or ID in one app ("" when they have none). Messenger uses the Facebook profile. */
 export function contactIdentity(contact: Contact, app: GroupApp) {
-  return contact[app] || "";
+  return (app === "messenger" ? contact.facebook : contact[app]) || "";
+}
+
+/** Splits long text into messages of at most `limit` characters, at line breaks where possible. */
+export function splitMessage(text: string, limit: number) {
+  const parts: string[] = [];
+  let rest = text.trim();
+  while (rest.length > limit) {
+    let at = rest.lastIndexOf("\n", limit);
+    if (at < limit * 0.5) at = rest.lastIndexOf(" ", limit);
+    if (at < 1) at = limit;
+    parts.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
 }
 
 // ---- Groups -----------------------------------------------------------------------

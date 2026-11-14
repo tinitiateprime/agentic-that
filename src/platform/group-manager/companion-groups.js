@@ -1,7 +1,8 @@
 // Browser clients for Group Manager:
 //  - website: contacts and groups, saved in AgenticThat's database (Hetzner).
 //  - companion: the app connections and the work, done by the AgenticThat
-//    Companion on 127.0.0.1 with the user's own WhatsApp, Telegram and Discord.
+//    Companion on 127.0.0.1 with the user's own WhatsApp, Telegram, Discord,
+//    Messenger and Instagram.
 
 const COMPANION = "http://127.0.0.1:8792/api/group-manager";
 
@@ -120,5 +121,7 @@ export const companion = {
   telegramPassword: (password) => call("/connect/telegram/password", { method: "POST", body: { password }, timeoutMs: 45_000 }),
   connectDiscord: (token) => call("/connect/discord", { method: "POST", body: { token }, timeoutMs: 30_000 }),
   refreshDiscord: () => call("/connect/discord/refresh", { method: "POST" }),
+  /** Messenger or Instagram: opens the app's login page in a window on this computer. */
+  connectBrowserApp: (app) => call(`/connect/${app}`, { method: "POST", timeoutMs: 60_000 }),
   disconnect: (app) => call(`/disconnect/${app}`, { method: "POST", timeoutMs: 30_000 }),
 };

@@ -156,8 +156,10 @@ async function closeWindow(provider: AiProviderId) {
   if (!window) return;
   windows.delete(provider);
   window.closed = true;
-  await Promise.race([window.browser.close().catch(() => undefined), sleep(1500)]);
-  if (!(await waitForProcessExit(window.process, 3000))) window.process.kill();
+  // Ask Chrome itself to quit, so it writes the login to disk first.
+  await Promise.race([window.cdp.send("Browser.close").catch(() => undefined), sleep(3000)]);
+  if (!(await waitForProcessExit(window.process, 15_000))) window.process.kill();
+  await window.browser.close().catch(() => undefined);
 }
 
 async function launchWindow(provider: AiProviderId, url: string, visible: boolean): Promise<AiWindow> {

@@ -4,7 +4,7 @@ const views = {
   activity: { panel: byId("activity-panel"), title: "Login and publishing activity", eyebrow: "VISIBLE AUTOMATION" },
   scraping: { panel: byId("scraping-panel"), title: "Social scraping activity", eyebrow: "PRIVATE LOCAL ENGINE" },
   seo: { panel: byId("seo-panel"), title: "Social SEO", eyebrow: "CHATGPT, CLAUDE AND GEMINI" },
-  groups: { panel: byId("groups-panel"), title: "Group Manager", eyebrow: "WHATSAPP, TELEGRAM AND DISCORD" },
+  groups: { panel: byId("groups-panel"), title: "Group Manager", eyebrow: "YOUR GROUPS IN EVERY APP" },
   settings: { panel: byId("settings-panel"), title: "Companion settings", eyebrow: "LOCAL DESKTOP SERVICE" },
 };
 
@@ -688,6 +688,8 @@ const GROUP_APPS = [
   { id: "whatsapp", label: "WhatsApp", logo: "assets/platforms/whatsapp-logo.svg", how: "Linked like WhatsApp Web (QR code once)." },
   { id: "telegram", label: "Telegram", logo: "assets/platforms/telegram-logo.svg", how: "Your account, through Telegram's official API." },
   { id: "discord", label: "Discord", logo: "assets/platforms/discord-logo.svg", how: "Your bot, through Discord's official API." },
+  { id: "messenger", label: "Messenger", logo: "assets/platforms/messenger-logo.svg", how: "Your Facebook, in its own browser window on this computer." },
+  { id: "instagram", label: "Instagram", logo: "assets/platforms/instagram-logo.svg", how: "Your Instagram, in its own browser window on this computer." },
 ];
 const GROUP_STATES = { connected: "Connected", connecting: "Connecting…", qr: "Waiting for the QR scan", code: "Waiting for the code", password: "Waiting for the password", error: "Needs attention", disconnected: "Not connected" };
 let currentGroups = { started: false, connections: [], working: {}, recent: [] };

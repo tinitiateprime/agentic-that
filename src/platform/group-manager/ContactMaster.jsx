@@ -10,8 +10,8 @@ export const CONTACT_FIELDS = [
   { key: "whatsapp", label: "WhatsApp number", placeholder: "+91 63091 23485", inputMode: "tel" },
   { key: "telegram", label: "Telegram number or @username", placeholder: "+91 63091 23485 or @name" },
   { key: "discord", label: "Discord user ID", placeholder: "17–20 digits (or username)", hint: "In Discord: Settings → Advanced → Developer Mode on, then right-click the person → Copy User ID." },
-  { key: "instagram", label: "Instagram ID", placeholder: "@username" },
-  { key: "facebook", label: "Facebook ID", placeholder: "profile name or link" },
+  { key: "facebook", label: "Facebook (for Messenger)", placeholder: "Profile link, or full name as on Facebook", hint: "Best: open their Facebook profile and copy the link from the address bar. Their full name (e.g. Tintiate Kaushik) also works if only one person by that name comes up." },
+  { key: "instagram", label: "Instagram username", placeholder: "@username" },
   { key: "x", label: "X ID", placeholder: "@username" },
   { key: "reddit", label: "Reddit ID", placeholder: "u/username" },
   { key: "linkedin", label: "LinkedIn", placeholder: "profile link" },
@@ -49,7 +49,7 @@ function ContactForm({ initial, onSaved, onCancel }) {
       {error && <p className={styles.error} role="alert">{error}</p>}
       <label className={styles.field}><span><UserRound size={15} /> Contact name</span><input value={form.name} onChange={set("name")} required maxLength={80} autoFocus /></label>
       <p className={styles.formSection}>Messaging</p>
-      {CONTACT_FIELDS.slice(0, 3).map((field) => (
+      {CONTACT_FIELDS.slice(0, 5).map((field) => (
         <label key={field.key} className={styles.field}>
           <span><AppLogo app={field.key} size={16} /> {field.label}</span>
           <input value={form[field.key]} onChange={set(field.key)} placeholder={field.placeholder} inputMode={field.inputMode} />
@@ -58,7 +58,7 @@ function ContactForm({ initial, onSaved, onCancel }) {
       ))}
       <p className={styles.formSection}>Social media</p>
       <div className={styles.twoFields}>
-        {CONTACT_FIELDS.slice(3).map((field) => (
+        {CONTACT_FIELDS.slice(5).map((field) => (
           <label key={field.key} className={styles.field}>
             <span><AppLogo app={field.key} size={16} /> {field.label}</span>
             <input value={form[field.key]} onChange={set(field.key)} placeholder={field.placeholder} />
@@ -68,7 +68,7 @@ function ContactForm({ initial, onSaved, onCancel }) {
       <label className={styles.field}><span>Note (optional)</span><input value={form.note} onChange={set("note")} maxLength={240} /></label>
       <div className={styles.formActions}>
         <button type="button" className={styles.secondary} onClick={onCancel}>Cancel</button>
-        <button type="submit" className={styles.primary} disabled={busy || !form.name.trim()}>{busy && <Loader2 size={16} className={styles.spin} />} Save contact</button>
+        <button type="submit" className={styles.primary} disabled={busy}>{busy && <Loader2 size={16} className={styles.spin} />} Save contact</button>
       </div>
     </form>
   );
@@ -139,7 +139,7 @@ export default function ContactMaster({ contacts, workspaceName, onChanged, disa
             <span className={styles.avatar} aria-hidden="true">{contact.name.charAt(0).toUpperCase()}</span>
             <div>
               <strong>{contact.name}</strong>
-              <span>{contact.whatsapp || contact.telegram || contact.discord || contact.instagram || contact.note || ""}</span>
+              <span>{contact.whatsapp || contact.telegram || contact.discord || contact.instagram || contact.facebook || contact.note || ""}</span>
             </div>
             <ContactApps contact={contact} />
             <div className={styles.rowActions}>

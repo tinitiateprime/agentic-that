@@ -141,7 +141,7 @@ export default function GroupDetail({ group, contacts, actions, onChanged, onDel
         </div>
         <div className={styles.groupActions}>
           {needsRetry && <button type="button" className={styles.secondary} disabled={Boolean(busy)} onClick={() => run("retry", () => actions.retry(group))}>{busy === "retry" ? <Loader2 size={15} className={styles.spin} /> : <RotateCcw size={15} />} Try again</button>}
-          <button type="button" className={styles.primary} disabled={Boolean(busy) || !readyApps.length} onClick={() => setAdding((open) => !open)}><UserPlus size={15} /> Add people</button>
+          <button type="button" className={styles.primary} disabled={Boolean(busy) || !apps.length} onClick={() => setAdding((open) => !open)}><UserPlus size={15} /> Add people</button>
           <button type="button" className={styles.iconButton} disabled={Boolean(busy)} onClick={forget} aria-label="Remove group from Group Manager"><Trash2 size={16} /></button>
         </div>
       </header>
@@ -151,9 +151,9 @@ export default function GroupDetail({ group, contacts, actions, onChanged, onDel
       {adding && (
         <div className={styles.addPeople}>
           <div className={styles.formHead}><strong>Add people to {group.name}</strong><button type="button" className={styles.iconButton} onClick={() => setAdding(false)} aria-label="Close"><X size={16} /></button></div>
-          <ContactPicker contacts={contacts} selected={selected} onChange={setSelected} apps={readyApps} exclude={group.members.map((member) => member.contactId)} />
+          <ContactPicker contacts={contacts} selected={selected} onChange={setSelected} apps={apps} exclude={group.members.map((member) => member.contactId)} />
           <div className={styles.formActions}>
-            <button type="button" className={styles.primary} disabled={!selected.length || busy === "add"} onClick={addPeople}>{busy === "add" && <Loader2 size={15} className={styles.spin} />} Add {selected.length || ""} to {readyApps.map((app) => APPS[app].label).join(" and ")}</button>
+            <button type="button" className={styles.primary} disabled={!selected.length || busy === "add"} onClick={addPeople}>{busy === "add" && <Loader2 size={15} className={styles.spin} />} Add {selected.length || ""} to {apps.map((app) => APPS[app].label).join(" and ")}</button>
           </div>
         </div>
       )}

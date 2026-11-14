@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
-import AppLogo, { APPS, MESSAGING_APPS, SOCIAL_APPS } from "./AppLogo";
+import AppLogo, { APPS, MESSAGING_APPS, SOCIAL_APPS, contactIdentity } from "./AppLogo";
 import { ContactApps } from "./ContactMaster";
 import styles from "./group-manager.module.css";
 
@@ -20,7 +20,7 @@ export function ContactPicker({ contacts, selected, onChange, apps = [], exclude
       {contacts.length > 6 && <label className={styles.search}><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search contacts" aria-label="Search contacts" /></label>}
       <ul>
         {shown.map((contact) => {
-          const missing = apps.filter((app) => !contact[app]);
+          const missing = apps.filter((app) => !contactIdentity(contact, app));
           return (
             <li key={contact.id}>
               <label className={selected.includes(contact.id) ? styles.pickerOn : ""}>
@@ -28,7 +28,7 @@ export function ContactPicker({ contacts, selected, onChange, apps = [], exclude
                 <span className={styles.check} aria-hidden="true"><Check size={13} /></span>
                 <strong>{contact.name}</strong>
                 <ContactApps contact={contact} size={14} />
-                {missing.length > 0 && <small>No {missing.map((app) => APPS[app].label).join(" or ")} saved</small>}
+                {missing.length > 0 && <small>No {missing.map((app) => (app === "messenger" ? "Facebook profile" : APPS[app].label)).join(" or ")} saved</small>}
               </label>
             </li>
           );
@@ -95,7 +95,7 @@ export default function NewGroupForm({ contacts, connections, onCreate, onCreate
                 <input type="checkbox" checked={apps.includes(app)} disabled={!ready} onChange={() => toggleApp(app)} />
                 <AppLogo app={app} size={26} />
                 <strong>{APPS[app].label}</strong>
-                <small>{ready ? (app === "discord" ? "Private channel" : "Group") : "Connect it first"}</small>
+                <small>{ready ? (app === "discord" ? "Private channel" : app === "messenger" || app === "instagram" ? "Group chat" : "Group") : "Connect it first"}</small>
               </label>
             );
           })}

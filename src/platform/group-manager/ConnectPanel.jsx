@@ -1,12 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Loader2, LogOut, QrCode, RefreshCw, X } from "lucide-react";
-import AppLogo, { APPS } from "./AppLogo";
+import { ExternalLink, Loader2, LogIn, LogOut, QrCode, RefreshCw, X } from "lucide-react";
+import AppLogo, { APPS, BROWSER_APPS } from "./AppLogo";
 import { companion } from "./companion-groups";
 import styles from "./group-manager.module.css";
 
-/** Connecting one app: WhatsApp by QR code, Telegram by phone and code, Discord by bot token. */
+/**
+ * Connecting one app: WhatsApp by QR code, Telegram by phone and code, Discord by
+ * bot token, Messenger and Instagram by logging in once in a window the Companion opens.
+ */
+const BROWSER_LOGIN = {
+  messenger: {
+    site: "Facebook",
+    intro: "Messenger has no way for apps to make group chats, so the Companion does it in your own Facebook, like you would: log in once in a window it opens on this computer. After that it works in the background.",
+    who: "a Facebook profile link",
+  },
+  instagram: {
+    site: "Instagram",
+    intro: "Instagram has no way for apps to make group chats, so the Companion does it in your own Instagram, like you would: log in once in a window it opens on this computer. After that it works in the background.",
+    who: "an Instagram username",
+  },
+};
+
 export default function ConnectPanel({ app, connection, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -113,6 +129,31 @@ export default function ConnectPanel({ app, connection, onClose, onChanged }) {
           </div>
         )}
 
+        {BROWSER_APPS.includes(app) && state !== "connected" && (
+          <div className={styles.dialogBody}>
+            {state === "connecting" ? (
+              <>
+                <p className={styles.notice}><Loader2 size={15} className={styles.spin} /> {connection?.detail || `Log in to ${BROWSER_LOGIN[app].site} in the window that opened.`}</p>
+                <p className={styles.muted}>Use your usual login, including any code {BROWSER_LOGIN[app].site} asks for. This page notices by itself when you&apos;re in, and the window closes.</p>
+                <button type="button" className={styles.secondary} disabled={busy} onClick={() => run(() => companion.connectBrowserApp(app))}>Show the login window again</button>
+              </>
+            ) : (
+              <>
+                <p className={styles.muted}>{BROWSER_LOGIN[app].intro}</p>
+                {connection?.detail && <p className={styles.notice}>{connection.detail}</p>}
+                <ul className={styles.steps}>
+                  <li>Your password goes only to {BROWSER_LOGIN[app].site}, in its own page. AgenticThat never sees it.</li>
+                  <li>A group chat needs at least 2 people with {BROWSER_LOGIN[app].who} saved in Contact Master.</li>
+                  <li>{label} limits accounts that add people quickly, so Group Manager adds one person about every 10 seconds.</li>
+                </ul>
+                <button type="button" className={styles.primary} disabled={busy} onClick={() => run(() => companion.connectBrowserApp(app))}>
+                  {busy ? <Loader2 size={16} className={styles.spin} /> : <LogIn size={16} />} Log in to {BROWSER_LOGIN[app].site}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {app === "discord" && state !== "connected" && (
           <form className={styles.dialogBody} onSubmit={(event) => { event.preventDefault(); void run(() => companion.connectDiscord(token)); }}>
             <p className={styles.muted}>Discord groups are run by your own bot, through Discord&apos;s official API. It takes two minutes, once:</p>
@@ -151,6 +192,7 @@ export default function ConnectPanel({ app, connection, onClose, onChanged }) {
               </>
             )}
             {app !== "discord" && <p className={styles.muted}>Groups you create here are made in your {label}, and members see them like any group.</p>}
+            {connection?.detail && <p className={styles.notice}>{connection.detail}</p>}
             <button type="button" className={styles.dangerLink} disabled={busy} onClick={disconnect}><LogOut size={15} /> Disconnect {label}</button>
           </div>
         )}
