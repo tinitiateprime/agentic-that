@@ -373,8 +373,22 @@ function migrateLegacyAccountBrowserData(accountId, platform) {
 
 async function configureServiceTokenVerifier() {
   if (process.env.SERVICE_TOKEN_PUBLIC_KEY?.trim()) return;
+  // A slow moment on AgenticThat (for example while it deploys) must not stop the Companion from starting.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fetchServiceTokenPublicKey(10_000 + attempt * 5_000);
+      return;
+    } catch (error) {
+      if (attempt >= 3) throw error;
+      console.warn(`AgenticThat sign-in key not loaded yet (attempt ${attempt}); trying again.`);
+      await new Promise(resolve => setTimeout(resolve, 2_000 * attempt));
+    }
+  }
+}
+
+async function fetchServiceTokenPublicKey(timeoutMs) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(SERVICE_TOKEN_PUBLIC_KEY_URL, {
       cache: "no-store",

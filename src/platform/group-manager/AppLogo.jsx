@@ -5,16 +5,16 @@ export const APPS = {
   discord: { label: "Discord", logo: "/discord-logo.svg", color: "#5865f2", kind: "messaging" },
   messenger: { label: "Messenger", logo: "/messenger-logo.svg", color: "#0a7cff", kind: "messaging" },
   instagram: { label: "Instagram", logo: "/instagram-logo.svg", color: "#d62976", kind: "messaging" },
-  x: { label: "X Lists", logo: "/x-logo.svg", color: "#171717", kind: "social" },
+  x: { label: "X", logo: "/x-logo.svg", color: "#171717", kind: "messaging" },
   reddit: { label: "Reddit Community", logo: "/reddit-logo.svg", color: "#ff4500", kind: "social" },
   linkedin: { label: "LinkedIn Group", logo: "/linkedin-logo.png", color: "#0a66c2", kind: "social" },
   facebook: { label: "Facebook Group", logo: "/facebook-logo.svg", color: "#1877f2", kind: "social" },
 };
 
-export const MESSAGING_APPS = ["whatsapp", "telegram", "discord", "messenger", "instagram"];
-export const SOCIAL_APPS = ["x", "reddit", "linkedin", "facebook"];
+export const MESSAGING_APPS = ["whatsapp", "telegram", "discord", "messenger", "instagram", "x"];
+export const SOCIAL_APPS = ["reddit", "linkedin", "facebook"];
 /** Apps that log in through a window on the app's own login page (no API for groups). */
-export const BROWSER_APPS = ["messenger", "instagram"];
+export const BROWSER_APPS = ["messenger", "instagram", "x"];
 
 /** The contact field each app uses: Messenger finds people by their Facebook profile. */
 export function contactIdentity(contact, app) {

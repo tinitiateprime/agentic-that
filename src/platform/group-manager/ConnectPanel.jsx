@@ -21,6 +21,11 @@ const BROWSER_LOGIN = {
     intro: "Instagram has no way for apps to make group chats, so the Companion does it in your own Instagram, like you would: log in once in a window it opens on this computer. After that it works in the background.",
     who: "an Instagram username",
   },
+  x: {
+    site: "X",
+    intro: "X's API for chats is paid, so the Companion does it in your own X, like you would: log in once in a window it opens on this computer. After that it works in the background. Each group is an X group chat.",
+    who: "an X username",
+  },
 };
 
 export default function ConnectPanel({ app, connection, onClose, onChanged }) {
@@ -144,6 +149,8 @@ export default function ConnectPanel({ app, connection, onClose, onChanged }) {
                 <ul className={styles.steps}>
                   <li>Your password goes only to {BROWSER_LOGIN[app].site}, in its own page. AgenticThat never sees it.</li>
                   <li>A group chat needs at least 2 people with {BROWSER_LOGIN[app].who} saved in Contact Master.</li>
+                  {app === "x" && <li>X asks for your Chat passcode once on this computer; the window shows when it does. People can be added if their X settings allow messages from you.</li>}
+                  {app === "messenger" && <li>Messenger asks you to create or enter your chats PIN once on this computer; the window shows when it does.</li>}
                   <li>{label} limits accounts that add people quickly, so Group Manager adds one person about every 10 seconds.</li>
                 </ul>
                 <button type="button" className={styles.primary} disabled={busy} onClick={() => run(() => companion.connectBrowserApp(app))}>

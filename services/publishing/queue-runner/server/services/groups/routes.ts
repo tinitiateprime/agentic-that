@@ -15,6 +15,7 @@ import { DiscordAdapter } from "./discord.js";
 import { type GroupAppAdapter, GroupEngine, type GroupJob } from "./engine.js";
 import { InstagramAdapter } from "./instagram.js";
 import { MessengerAdapter } from "./messenger.js";
+import { XAdapter } from "./x.js";
 import { GROUP_APPS, type GroupApp } from "./model.js";
 import { groupReport, reportGroup } from "./reporting.js";
 import { GroupStore, groupsDirectory } from "./store.js";
@@ -29,6 +30,7 @@ export type GroupServices = {
   discord: Pick<DiscordAdapter, "connect" | "refreshGuilds" | "disconnect">;
   messenger: Pick<MessengerAdapter, "connect" | "disconnect">;
   instagram: Pick<InstagramAdapter, "connect" | "disconnect">;
+  x: Pick<XAdapter, "connect" | "disconnect">;
 };
 
 // Each AgenticThat workspace has its own app logins and working copy, in its own
@@ -100,11 +102,12 @@ export function groupServices(workspaceId: string): GroupServices {
   const discord = new DiscordAdapter(directory);
   const messenger = new MessengerAdapter(directory);
   const instagram = new InstagramAdapter(directory);
-  const adapters: Record<GroupApp, GroupAppAdapter> = { whatsapp, telegram, discord, messenger, instagram };
+  const x = new XAdapter(directory);
+  const adapters: Record<GroupApp, GroupAppAdapter> = { whatsapp, telegram, discord, messenger, instagram, x };
   const engine = new GroupEngine(store, adapters);
   store.onChange((group) => reportGroup(group));
   engine.onActivity(publishActivity);
-  const created = { store, engine, whatsapp, telegram, discord, messenger, instagram };
+  const created = { store, engine, whatsapp, telegram, discord, messenger, instagram, x };
   services.set(workspaceId, created);
   publishActivity();
   return created;
@@ -264,6 +267,7 @@ export function registerGroupRoutes(app: express.Express, get: (workspaceId: str
   // Messenger and Instagram: a window opens on the app's own login page; connected once the user has logged in.
   router.post("/connect/messenger", handle(async (req) => ({ connection: await get(workspaceOf(req)).messenger.connect() })));
   router.post("/connect/instagram", handle(async (req) => ({ connection: await get(workspaceOf(req)).instagram.connect() })));
+  router.post("/connect/x", handle(async (req) => ({ connection: await get(workspaceOf(req)).x.connect() })));
   router.post("/disconnect/:app", handle(async (req) => {
     const target = z.enum(GROUP_APPS).parse(req.params.app);
     return { connection: await get(workspaceOf(req))[target].disconnect() };

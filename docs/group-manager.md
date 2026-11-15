@@ -1,6 +1,6 @@
 # Group Manager
 
-Create a group once and it is made in the user's real WhatsApp, Telegram, Discord, Messenger and Instagram. Contacts are kept once in
+Create a group once and it is made in the user's real WhatsApp, Telegram, Discord, Messenger, Instagram and X. Contacts are kept once in
 **Contact Master** with their number or ID for every app; adding a contact to a group adds them in each app, and a
 message is sent to every app the group is in.
 
@@ -18,7 +18,7 @@ Website /group-manager
        WhatsApp: the user's own number, linked like WhatsApp Web (QR code once), as a direct connection (Baileys)
        Telegram: the user's own account, through Telegram's official API (GramJS), phone number + code
        Discord:  the user's own bot, through Discord's official API (bot token)
-       Messenger, Instagram: the user's own login, in a dedicated Chrome/Edge profile, worked like a person would
+       Messenger, Instagram, X: the user's own login, in a dedicated Chrome/Edge profile, worked like a person would
   <- results reported to Hetzner as they happen:
        1. by the Companion itself, over its workspace pairing: /rest/v1/rpc/companion_group_sync
        2. by the open page, from the Companion's /state (when the Companion is not paired)
@@ -69,6 +69,13 @@ Apply with `npm run db:migrate`.
 | Message | sent in the chat | sent in the chat (split at 1,000 characters) |
 | Contact field | Facebook profile link (best), number, username, or full name as shown on Facebook | Instagram username |
 
+**X** groups are X group chats (X Chat, x.com/i/chat): New message → Create a group → pick people → Next (this makes
+the group at once), then Edit Group sets the name; add and remove from the group's details (More → Add / More options
+for a person → Remove from group); messages in the chat. Contact field: X username. X only lets the user add people who
+follow them and have set up X Chat; X's own reason is shown otherwise. X reopens an existing group that has exactly
+the same people, which Group Manager reports instead of sharing it. X asks for the user's Chat passcode once per
+computer.
+
 Messenger and Instagram have no API for group chats. The Companion works in the user's own logged-in browser (a
 dedicated Chrome or Edge profile per workspace, `browser-messenger` / `browser-instagram`), off screen, finding buttons
 by their accessible names. People are picked by profile number or exact username; a full name is used only when
@@ -77,7 +84,7 @@ security check) the window comes on screen and the group card says what to do. I
 Direct messages no longer work (they answer 404), which is why both use the page.
 
 Members are added one at a time per app: every 6 seconds on WhatsApp (WhatsApp limits numbers that add people
-quickly), 4 seconds on Telegram, about 1 second on Discord and 9 seconds on Messenger and Instagram. "Try again" retries what failed; a failed removal is
+quickly), 4 seconds on Telegram, about 1 second on Discord, 9 seconds on Messenger and Instagram and 8 seconds on X. "Try again" retries what failed; a failed removal is
 retried as a removal. Deleting a group in Group Manager does not delete the real groups in the apps.
 
 ## Connecting the apps (in the Companion, from the page)
@@ -86,7 +93,7 @@ retried as a removal. Deleting a group in Group Manager does not delete the real
 - **Telegram**: the user enters only their phone number and the code Telegram sends (and the two-step verification
   password, if any). Everyone shares AgenticThat's Telegram app identity: set `TELEGRAM_API_ID` and
   `TELEGRAM_API_HASH` (my.telegram.org) in the website environment (AWS Amplify).
-- **Messenger / Instagram**: click the card, then "Log in to Facebook" / "Log in to Instagram"; a window opens on the
+- **Messenger / Instagram / X**: click the card, then "Log in to …"; a window opens on the
   app's own login page; the page notices when the user is in and the window closes.
 - **Discord**: create an application in the Discord Developer Portal, paste its bot token, then add the bot to a
   server the user owns or manages (the page explains creating one and notices when the bot joins).
@@ -99,7 +106,7 @@ Group Manager page.
 
 ## Posting apps (later)
 
-X Lists, Reddit communities, LinkedIn groups and Facebook groups are shown as "Coming later".
+Reddit communities, LinkedIn groups and Facebook groups are shown as "Coming later".
 Contact Master already stores each contact's Instagram, Facebook, X, Reddit and LinkedIn IDs for them.
 
 ## Code
@@ -109,5 +116,5 @@ Contact Master already stores each contact's Instagram, Facebook, X, Reddit and 
   `src/platform/server/group-manager-store.js`, the `companion_group_sync` operation in
   `src/platform/server/companion-database-api.js`
 - Companion: `services/publishing/queue-runner/server/services/groups/` (`routes.ts`, `engine.ts`, `store.ts`,
-  `reporting.ts`, `whatsapp.ts`, `telegram.ts`, `discord.ts`, `browser-app.ts`, `messenger.ts`, `instagram.ts`, `secure-file.ts`, tests in `groups.test.ts`), and the
+  `reporting.ts`, `whatsapp.ts`, `telegram.ts`, `discord.ts`, `browser-app.ts`, `messenger.ts`, `instagram.ts`, `x.ts`, `secure-file.ts`, tests in `groups.test.ts`), and the
   Group Manager view in `apps/publishing-companion-desktop/control.*`

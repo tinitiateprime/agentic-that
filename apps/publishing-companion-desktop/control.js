@@ -690,6 +690,7 @@ const GROUP_APPS = [
   { id: "discord", label: "Discord", logo: "assets/platforms/discord-logo.svg", how: "Your bot, through Discord's official API." },
   { id: "messenger", label: "Messenger", logo: "assets/platforms/messenger-logo.svg", how: "Your Facebook, in its own browser window on this computer." },
   { id: "instagram", label: "Instagram", logo: "assets/platforms/instagram-logo.svg", how: "Your Instagram, in its own browser window on this computer." },
+  { id: "x", label: "X", logo: "assets/platforms/x-logo.svg", how: "Your X, in its own browser window on this computer." },
 ];
 const GROUP_STATES = { connected: "Connected", connecting: "Connecting…", qr: "Waiting for the QR scan", code: "Waiting for the code", password: "Waiting for the password", error: "Needs attention", disconnected: "Not connected" };
 let currentGroups = { started: false, connections: [], working: {}, recent: [] };

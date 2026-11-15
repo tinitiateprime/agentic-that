@@ -12,7 +12,7 @@ export const CONTACT_FIELDS = [
   { key: "discord", label: "Discord user ID", placeholder: "17–20 digits (or username)", hint: "In Discord: Settings → Advanced → Developer Mode on, then right-click the person → Copy User ID." },
   { key: "facebook", label: "Facebook (for Messenger)", placeholder: "Profile link, or full name as on Facebook", hint: "Best: open their Facebook profile and copy the link from the address bar. Their full name (e.g. Tintiate Kaushik) also works if only one person by that name comes up." },
   { key: "instagram", label: "Instagram username", placeholder: "@username" },
-  { key: "x", label: "X ID", placeholder: "@username" },
+  { key: "x", label: "X username", placeholder: "@username" },
   { key: "reddit", label: "Reddit ID", placeholder: "u/username" },
   { key: "linkedin", label: "LinkedIn", placeholder: "profile link" },
 ];
@@ -49,7 +49,7 @@ function ContactForm({ initial, onSaved, onCancel }) {
       {error && <p className={styles.error} role="alert">{error}</p>}
       <label className={styles.field}><span><UserRound size={15} /> Contact name</span><input value={form.name} onChange={set("name")} required maxLength={80} autoFocus /></label>
       <p className={styles.formSection}>Messaging</p>
-      {CONTACT_FIELDS.slice(0, 5).map((field) => (
+      {CONTACT_FIELDS.slice(0, 6).map((field) => (
         <label key={field.key} className={styles.field}>
           <span><AppLogo app={field.key} size={16} /> {field.label}</span>
           <input value={form[field.key]} onChange={set(field.key)} placeholder={field.placeholder} inputMode={field.inputMode} />
@@ -58,7 +58,7 @@ function ContactForm({ initial, onSaved, onCancel }) {
       ))}
       <p className={styles.formSection}>Social media</p>
       <div className={styles.twoFields}>
-        {CONTACT_FIELDS.slice(5).map((field) => (
+        {CONTACT_FIELDS.slice(6).map((field) => (
           <label key={field.key} className={styles.field}>
             <span><AppLogo app={field.key} size={16} /> {field.label}</span>
             <input value={form[field.key]} onChange={set(field.key)} placeholder={field.placeholder} />

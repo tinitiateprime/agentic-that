@@ -28,7 +28,7 @@ export function ContactPicker({ contacts, selected, onChange, apps = [], exclude
                 <span className={styles.check} aria-hidden="true"><Check size={13} /></span>
                 <strong>{contact.name}</strong>
                 <ContactApps contact={contact} size={14} />
-                {missing.length > 0 && <small>No {missing.map((app) => (app === "messenger" ? "Facebook profile" : APPS[app].label)).join(" or ")} saved</small>}
+                {missing.length > 0 && <small>No {missing.map((app) => (app === "messenger" ? "Facebook profile" : app === "x" ? "X username" : APPS[app].label)).join(" or ")} saved</small>}
               </label>
             </li>
           );
@@ -95,7 +95,7 @@ export default function NewGroupForm({ contacts, connections, onCreate, onCreate
                 <input type="checkbox" checked={apps.includes(app)} disabled={!ready} onChange={() => toggleApp(app)} />
                 <AppLogo app={app} size={26} />
                 <strong>{APPS[app].label}</strong>
-                <small>{ready ? (app === "discord" ? "Private channel" : app === "messenger" || app === "instagram" ? "Group chat" : "Group") : "Connect it first"}</small>
+                <small>{ready ? (app === "discord" ? "Private channel" : ["messenger", "instagram", "x"].includes(app) ? "Group chat" : "Group") : "Connect it first"}</small>
               </label>
             );
           })}

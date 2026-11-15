@@ -7,7 +7,8 @@ import express from "express";
 import { signServiceAccessToken } from "../../../../../../lib/service-access-token.js";
 import { DiscordAdapter, splitDiscordMessage } from "./discord.js";
 import { type AddResult, type ConnectionState, type GroupAppAdapter, GroupEngine } from "./engine.js";
-import { type Contact, type Group, type GroupApp, contactFromInput, contactIdentity, discordChannelName, normalizeDiscord, normalizeFacebook, normalizeInstagram, normalizePhone, normalizeTelegram } from "./model.js";
+import { type Contact, type Group, type GroupApp, contactFromInput, contactIdentity, discordChannelName, normalizeDiscord, normalizeFacebook, normalizeInstagram, normalizePhone, normalizeTelegram, normalizeX } from "./model.js";
+import { chatIdFromUrl, explainXAddBlock } from "./x.js";
 import { explainInstagramError, instagramThreadFromUrl } from "./instagram.js";
 import { profileIdFromHtml, profileNameFromHtml, threadFromUrl } from "./messenger.js";
 import { type GroupReport, reportGroup, setGroupReporter } from "./reporting.js";
@@ -68,6 +69,7 @@ function setup(directory = tempDirectory(), resumeAfterMs = -1) {
     discord: new FakeAdapter("discord"),
     messenger: new FakeAdapter("messenger"),
     instagram: new FakeAdapter("instagram"),
+    x: new FakeAdapter("x"),
   };
   const engine = new GroupEngine(store, adapters, resumeAfterMs);
   return { directory, store, adapters, engine };
@@ -119,6 +121,14 @@ test("contact numbers and IDs are cleaned and checked", () => {
   assert.throws(() => normalizeFacebook("https://www.facebook.com/profile.php"), /Facebook profile/);
   assert.equal(normalizeFacebook("  Tintiate   Kaushik "), "Tintiate Kaushik");
   assert.equal(normalizeFacebook("kaushik.reddy"), "kaushik.reddy");
+  assert.equal(normalizeX("https://x.com/AgenticThat?s=20"), "AgenticThat");
+  assert.equal(normalizeX("twitter.com/tinitiate_ai"), "tinitiate_ai");
+  assert.equal(normalizeX("@abc_1"), "abc_1");
+  assert.throws(() => normalizeX("way_too_long_username_here"), /X username/);
+  assert.equal(chatIdFromUrl("https://x.com/i/chat/g2121989064165667319"), "g2121989064165667319");
+  assert.equal(chatIdFromUrl("https://x.com/i/chat"), "");
+  assert.match(explainXAddBlock("Cannot Add User The user you're trying to add does not follow you"), /follow you/);
+  assert.match(explainXAddBlock("Cannot Add User This person's inbox is closed. They need to update their message settings"), /message settings/);
   // Messenger finds people by their Facebook profile.
   assert.equal(contactIdentity(contact("x", { name: "A", facebook: "kaushik.reddy" }), "messenger"), "kaushik.reddy");
   assert.equal(contactIdentity(contact("x", { name: "A", instagram: "asha" }), "instagram"), "asha");
@@ -344,6 +354,7 @@ test("routes: status is open, everything else needs a valid group-manager token"
     discord: { connect: async () => connection(), refreshGuilds: async () => connection(), disconnect: async () => connection() },
     messenger: { connect: async () => connection(), disconnect: async () => connection() },
     instagram: { connect: async () => connection(), disconnect: async () => connection() },
+    x: { connect: async () => connection(), disconnect: async () => connection() },
   };
   const app = express();
   registerGroupRoutes(app, () => fake);
@@ -363,7 +374,7 @@ test("routes: status is open, everything else needs a valid group-manager token"
     await until(() => !engine.busy());
     const state = await (await fetch(`${base}/state`, { headers })).json();
     assert.equal(state.groups[0].members[0].apps.whatsapp.state, "added");
-    assert.equal(state.connections.length, 5);
+    assert.equal(state.connections.length, 6);
     const bad = await fetch(`${base}/jobs`, { method: "POST", headers, body: JSON.stringify({ group: { id: "x" } }) });
     assert.equal(bad.status, 400);
   } finally {
@@ -389,7 +400,7 @@ test("each workspace only reaches its own app logins, and older logins go to the
   try {
     // Someone else signs in on this computer first: they get their own, empty Group Manager.
     const other = await (await fetch(`${base}/state`, { headers: tokenFor("other-workspace") })).json();
-    assert.deepEqual(other.connections.map((entry: { state: string }) => entry.state), ["disconnected", "disconnected", "disconnected", "disconnected", "disconnected"]);
+    assert.deepEqual(other.connections.map((entry: { state: string }) => entry.state), ["disconnected", "disconnected", "disconnected", "disconnected", "disconnected", "disconnected"]);
     assert.ok(fs.existsSync(path.join(root, "groups.json")), "older logins are not handed to another workspace");
     // The paired workspace: the older logins move to its own folder.
     await fetch(`${base}/state`, { headers: tokenFor("paired-workspace") });

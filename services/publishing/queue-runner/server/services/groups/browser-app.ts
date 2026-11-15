@@ -23,7 +23,7 @@ import type { ConnectionState } from "./engine.js";
 import { APP_LABELS, type GroupApp } from "./model.js";
 import { readSecureFile, removeSecureFile, writeSecureFile } from "./secure-file.js";
 
-export type BrowserApp = Extract<GroupApp, "messenger" | "instagram">;
+export type BrowserApp = Extract<GroupApp, "messenger" | "instagram" | "x">;
 
 export type BrowserAppSpec = {
   app: BrowserApp;

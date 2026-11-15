@@ -5,13 +5,14 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-export const GROUP_APPS = ["whatsapp", "telegram", "discord", "messenger", "instagram"] as const;
+export const GROUP_APPS = ["whatsapp", "telegram", "discord", "messenger", "instagram", "x"] as const;
 export type GroupApp = (typeof GROUP_APPS)[number];
 export const APP_LABELS: Record<GroupApp, string> = {
   whatsapp: "WhatsApp",
   telegram: "Telegram",
   discord: "Discord",
   messenger: "Messenger",
+  x: "X",
   instagram: "Instagram",
 };
 /** What a contact needs saved for each app. */
@@ -20,6 +21,7 @@ export const IDENTITY_LABELS: Record<GroupApp, string> = {
   telegram: "Telegram number or username",
   discord: "Discord ID",
   messenger: "Facebook profile",
+  x: "X username",
   instagram: "Instagram username",
 };
 
@@ -149,6 +151,18 @@ export function normalizeFacebook(value: string) {
   throw new Error("Use the Facebook profile link (for example facebook.com/your.name) or the full name as shown on Facebook.");
 }
 
+/** "@Name", "x.com/Name", "twitter.com/Name" → "Name" (X usernames: letters, digits, _; up to 15). */
+export function normalizeX(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const username = trimmed
+    .replace(/^(https?:\/\/)?((www|mobile)\.)?(x|twitter)\.com\//i, "")
+    .replace(/[/?#].*$/, "")
+    .replace(/^@/, "");
+  if (/^[A-Za-z0-9_]{1,15}$/.test(username)) return username;
+  throw new Error("Use the X username, for example @agenticthat.");
+}
+
 export function isDiscordUserId(value: string) {
   return /^\d{17,20}$/.test(value);
 }
@@ -180,7 +194,7 @@ export function contactFromInput(input: unknown, existing?: Contact): Contact {
     discord: normalizeDiscord(parsed.discord),
     instagram: normalizeInstagram(parsed.instagram),
     facebook: normalizeFacebook(parsed.facebook),
-    x: parsed.x.replace(/^@/, ""),
+    x: normalizeX(parsed.x),
     reddit: parsed.reddit.replace(/^u\//i, ""),
     linkedin: parsed.linkedin,
     note: parsed.note,
