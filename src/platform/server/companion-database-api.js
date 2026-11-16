@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { getDatabaseSql } from "../../../lib/database-document-store.js";
+import { objectStorageConfiguration, presignObjectUrl, requireObjectStorage, signMediaToken, verifyMediaToken } from "./object-storage.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MEDIA_PREFIX = "/storage/v1/object/sign/job-artifacts/";
+const MEDIA_LINK_TTL_SECONDS = 30 * 24 * 60 * 60;
 const METHODS = {
   companion_redeem_pairing: ["p_pairing_code", "p_instance_id", "p_version", "p_platform", "p_architecture", "p_secure_storage"],
   companion_heartbeat: ["p_token", "p_instance_id", "p_version", "p_runtime_status", "p_update_status", "p_last_error", "p_platform", "p_architecture", "p_secure_storage", "p_accounts"],
@@ -31,10 +33,17 @@ function origin(value) {
 }
 
 function apiOrigins(environment) {
-  const website = origin(environment.PLATFORM_PUBLIC_URL);
-  const storage = origin(environment.NEXT_PUBLIC_SUPABASE_URL || environment.SUPABASE_URL);
-  if (website === storage) throw new Error("Companion API and media storage must have different origins.");
-  return { website, storage };
+  return { website: origin(environment.PLATFORM_PUBLIC_URL) };
+}
+
+/**
+ * The identifier paired Companions send with every call ("apikey" header).
+ * Companions paired before media moved to Hetzner were given the old
+ * Supabase publishable key, so it is still accepted when set.
+ */
+export function companionApiKey(environment = process.env) {
+  return environment.COMPANION_RPC_API_KEY || environment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || environment.SUPABASE_PUBLISHABLE_KEY
+    || environment.NEXT_PUBLIC_SUPABASE_ANON_KEY || environment.SUPABASE_ANON_KEY || "";
 }
 
 export function companionPairingConfiguration(configuration, environment = process.env) {
@@ -47,8 +56,7 @@ function response(value, status = 200) {
 }
 
 function publicApiKey(environment) {
-  return environment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || environment.SUPABASE_PUBLISHABLE_KEY
-    || environment.NEXT_PUBLIC_SUPABASE_ANON_KEY || environment.SUPABASE_ANON_KEY || "";
+  return companionApiKey(environment);
 }
 
 function matchingApiKey(request, environment) {
@@ -190,17 +198,33 @@ export async function executeCompanionRpc(sql, name, input) {
   return rows[0]?.result ?? null;
 }
 
+/** The object key in a media link ("/storage/v1/object/sign/job-artifacts/<key>?token=…"), or "". */
+function mediaKeyFromPath(pathname) {
+  if (!pathname.startsWith(MEDIA_PREFIX)) return "";
+  const parts = pathname.slice(MEDIA_PREFIX.length).split("/").map((part) => {
+    try { return decodeURIComponent(part); } catch { return ""; }
+  });
+  if (parts.length < 2 || parts.some((part) => !part || part === "." || part === ".." || /[\\/\u0000-\u001f]/.test(part))) return "";
+  return parts.join("/");
+}
+
+/** A fresh AgenticThat download link for one object (the website verifies it, then redirects to the bucket). */
+export function signedCompanionMediaUrl(key, environment = process.env, ttlSeconds = MEDIA_LINK_TTL_SECONDS) {
+  const configuration = requireObjectStorage(environment);
+  const token = signMediaToken(configuration, key, Date.now() + ttlSeconds * 1000, environment);
+  const encoded = key.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return `${apiOrigins(environment).website}${MEDIA_PREFIX}${encoded}?token=${encodeURIComponent(token)}`;
+}
+
+/** Every media link in a job, signed again when the Companion takes the job, so it is always valid. */
 export function companionDownloadUrls(value, environment = process.env, depth = 0) {
   if (depth > 25 || value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((item) => companionDownloadUrls(item, environment, depth + 1));
-  const { website, storage } = apiOrigins(environment);
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
     if (key === "downloadUrl" && typeof item === "string") {
       try {
-        const url = new URL(item);
-        if (url.origin === storage && url.pathname.startsWith(MEDIA_PREFIX) && url.searchParams.has("token")) {
-          return [key, `${website}${url.pathname}${url.search}`];
-        }
+        const objectKey = mediaKeyFromPath(new URL(item).pathname);
+        if (objectKey && objectStorageConfiguration(environment)) return [key, signedCompanionMediaUrl(objectKey, environment)];
       } catch { /* Non-URL fields are returned without modification. */ }
     }
     return [key, companionDownloadUrls(item, environment, depth + 1)];
@@ -234,24 +258,27 @@ export async function handleCompanionMedia(request, { environment = process.env 
   if (!companionDatabaseApiEnabled(environment)) return response({ message: "Companion database API is disabled." }, 404);
   try {
     const url = new URL(request.url);
-    const path = url.pathname.slice(MEDIA_PREFIX.length);
-    if (!url.pathname.startsWith(MEDIA_PREFIX) || path.length > 4096 || path.split("/").length < 2
-        || path.split("/").some((part) => { const decoded = decodeURIComponent(part); return !decoded || decoded === "." || decoded === ".." || /[\\/\u0000-\u001f]/.test(decoded); })) {
-      return response({ message: "Invalid private media path." }, 400);
-    }
+    const key = mediaKeyFromPath(url.pathname);
+    if (!key || url.pathname.length > 4096) return response({ message: "Invalid private media path." }, 400);
     const token = url.searchParams.get("token");
-    if (!token || token.length > 16000 || [...url.searchParams.keys()].some((key) => !["token", "download"].includes(key))) {
+    if (!token || token.length > 16000 || [...url.searchParams.keys()].some((name) => !["token", "download"].includes(name))) {
       return response({ message: "A signed private media URL is required." }, 401);
     }
     const range = request.headers.get("range");
     if (range && !/^bytes=\d+-\d*$/.test(range)) return response({ message: "Invalid media range." }, 416);
-    const destination = new URL(`${url.pathname}${url.search}`, apiOrigins(environment).storage);
-    // Released Companions validate the initial website origin and follow this
-    // fixed-origin redirect. Media stays on storage, including 5 MiB parts that
-    // would exceed Amplify's compute response limit after binary encoding.
+    const configuration = requireObjectStorage(environment);
+    if (!verifyMediaToken(configuration, token, key, environment)) {
+      return response({ message: "This private media link is invalid or has expired." }, 401);
+    }
+    // Media stays on the bucket: a short-lived signed link there, which released
+    // Companions follow (5 MiB parts would exceed the website's response limit).
     return new Response(null, {
       status: 307,
-      headers: { location: destination.toString(), "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
+      headers: {
+        location: presignObjectUrl(configuration, "GET", key, { expiresIn: 900 }),
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+      },
     });
   } catch {
     return response({ message: "Private media download is temporarily unavailable." }, 502);

@@ -5,12 +5,13 @@ import nextEnvironment from "@next/env";
 import { amplifyEnvironment, normalizeEnvironmentAliases, serializeEnvironment, workerEnvironment } from "./amplify-environment.mjs";
 
 test("Amplify forwards app configuration and excludes AWS build credentials and old provider state", () => {
-  const values = amplifyEnvironment({ DATABASE_URL: "postgres://host/db", DATA_STORE: "netlify-blobs", RUN_DATABASE_MIGRATIONS: "true", AWS_SECRET_ACCESS_KEY: "secret", NETLIFY_AUTH_TOKEN: "old-token", NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co" });
+  const values = amplifyEnvironment({ DATABASE_URL: "postgres://host/db", DATA_STORE: "netlify-blobs", RUN_DATABASE_MIGRATIONS: "true", AWS_SECRET_ACCESS_KEY: "secret", NETLIFY_AUTH_TOKEN: "old-token", MEDIA_S3_BUCKET: "agenticthat-media", NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co" });
   assert.equal(values.DATA_STORE, "postgres");
   assert.equal(values.RUN_DATABASE_MIGRATIONS, "false");
   assert.equal(values.AWS_SECRET_ACCESS_KEY, undefined);
   assert.equal(values.NETLIFY_AUTH_TOKEN, undefined);
-  assert.equal(values.NEXT_PUBLIC_SUPABASE_URL, "https://test.supabase.co");
+  assert.equal(values.MEDIA_S3_BUCKET, "agenticthat-media");
+  assert.equal(values.NEXT_PUBLIC_SUPABASE_URL, undefined, "media no longer uses Supabase");
 });
 
 test("AWS retains supported legacy keys and limits worker secrets to its services", () => {
@@ -50,12 +51,13 @@ test("escaped console signing keys remain a usable matching pair after Next load
   assert.equal(crypto.verify(null, payload, crypto.createPublicKey(parsed.TEST_AWS_PUBLIC_SIGNING_KEY), signature), true);
 });
 
-test("Amplify accepts supported Supabase aliases and defaults the worker region", () => {
+test("Amplify keeps paired Companions' identifier and defaults the worker region", () => {
   const values = amplifyEnvironment({ SUPABASE_DATABASE_URL: "postgres://host/db", SUPABASE_URL: "https://test.supabase.co", SUPABASE_ANON_KEY: "public-key", SUPABASE_SERVICE_ROLE_KEY: "server-key", AWS_REGION: "eu-west-1" });
   assert.equal(values.DATABASE_URL, "postgres://host/db");
-  assert.equal(values.NEXT_PUBLIC_SUPABASE_URL, "https://test.supabase.co");
-  assert.equal(values.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, "public-key");
-  assert.equal(values.SUPABASE_SECRET_KEY, "server-key");
+  // Companions paired earlier send the old publishable key; it becomes COMPANION_RPC_API_KEY.
+  assert.equal(values.COMPANION_RPC_API_KEY, "public-key");
+  assert.equal(amplifyEnvironment({ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_live" }).COMPANION_RPC_API_KEY, "sb_publishable_live");
+  assert.equal(amplifyEnvironment({ COMPANION_RPC_API_KEY: "explicit", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_live" }).COMPANION_RPC_API_KEY, "explicit");
   assert.equal(values.BACKGROUND_JOB_REGION, "eu-west-1");
   assert.equal(values.AWS_REGION, undefined);
   assert.equal(amplifyEnvironment({}).BACKGROUND_JOB_REGION, "us-east-1");
@@ -71,9 +73,9 @@ test("AWS production links use www while preserving explicitly configured previe
 
 test("canonicalizing each layer preserves newer cloud aliases over a private export", () => {
   const values = amplifyEnvironment({
-    ...normalizeEnvironmentAliases({ SUPABASE_SECRET_KEY: "old-local-key", RESEND_API_KEY: "old-email-key" }),
-    ...normalizeEnvironmentAliases({ SUPABASE_SERVICE_ROLE_KEY: "cloud-server-key", RESEND_API_KEY: "cloud-email-key" }),
+    ...normalizeEnvironmentAliases({ COMPANION_RPC_API_KEY: "old-local-key", RESEND_API_KEY: "old-email-key" }),
+    ...normalizeEnvironmentAliases({ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "cloud-public-key", RESEND_API_KEY: "cloud-email-key" }),
   });
-  assert.equal(values.SUPABASE_SECRET_KEY, "cloud-server-key");
+  assert.equal(values.COMPANION_RPC_API_KEY, "cloud-public-key");
   assert.equal(values.RESEND_API_KEY, "cloud-email-key");
 });

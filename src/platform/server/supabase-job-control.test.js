@@ -1,66 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readSupabasePublishingMediaObject, supabaseJobControlTestHelpers } from "./supabase-job-control.js";
+import { presignObjectUrl, signMediaToken, verifyMediaToken } from "./object-storage.js";
 
-test("AWS media reads use workspace-scoped signed downloads and reject incomplete ranges", async (context) => {
-  const values = { NEXT_PUBLIC_SUPABASE_URL: "https://media-test.supabase.co", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test", SUPABASE_SECRET_KEY: "sb_secret_test" };
-  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+const MEDIA = {
+  MEDIA_S3_ENDPOINT: "https://fsn1.media.example.test",
+  MEDIA_S3_REGION: "fsn1",
+  MEDIA_S3_BUCKET: "agenticthat-media",
+  MEDIA_S3_ACCESS_KEY_ID: "TESTACCESSKEY",
+  MEDIA_S3_SECRET_ACCESS_KEY: "test-secret-access-key",
+};
+const BUCKET = { endpoint: MEDIA.MEDIA_S3_ENDPOINT, bucket: MEDIA.MEDIA_S3_BUCKET, accessKeyId: MEDIA.MEDIA_S3_ACCESS_KEY_ID, secretAccessKey: MEDIA.MEDIA_S3_SECRET_ACCESS_KEY, region: MEDIA.MEDIA_S3_REGION };
+
+function withEnvironment(context, values) {
+  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
   Object.assign(process.env, values);
   context.after(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   });
+}
+
+test("media reads use the bucket's own signed requests, workspace-scoped, and reject incomplete ranges", async (context) => {
+  withEnvironment(context, MEDIA);
   let downloadStatus = 206;
   const calls = [];
   context.mock.method(globalThis, "fetch", async (url, options = {}) => {
     calls.push({ url, options });
-    if (options.method === "POST") return Response.json({ signedURL: "/object/sign/job-artifacts/workspace_1/video.mp4?token=test" });
     return new Response(Uint8Array.from([2, 3, 4]), { status: downloadStatus });
   });
   assert.deepEqual(await readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 4 }), Buffer.from([2, 3, 4]));
-  assert.equal(calls[0].url, "https://media-test.supabase.co/storage/v1/object/sign/job-artifacts/workspace_1/video.mp4");
-  assert.equal(new Headers(calls[1].options.headers).get("range"), "bytes=2-4");
-  assert.equal(calls[1].options.headers.apikey, undefined);
-  downloadStatus = 200;
+  assert.equal(calls[0].url, "https://fsn1.media.example.test/agenticthat-media/workspace_1/video.mp4");
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(calls[0].options.headers.range, "bytes=2-4");
+  assert.match(calls[0].options.headers.authorization, /^AWS4-HMAC-SHA256 Credential=TESTACCESSKEY\/\d{8}\/fsn1\/s3\/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=[0-9a-f]{64}$/);
+  assert.ok(!JSON.stringify(calls[0].options).includes(MEDIA.MEDIA_S3_SECRET_ACCESS_KEY), "the secret is never sent");
+  downloadStatus = 500;
   await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 4 }));
   downloadStatus = 206;
-  await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 5 }));
+  await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "video.mp4", { start: 2, end: 5 }), /incomplete/);
+  await assert.rejects(readSupabasePublishingMediaObject("workspace_1", "../secret", null), /invalid/);
 });
 
-test("Supabase Storage signed paths retain the storage API prefix", () => {
-  assert.equal(
-    supabaseJobControlTestHelpers.absoluteSignedArtifactUrl(
-      "https://project.supabase.co",
-      "/object/sign/job-artifacts/workspace/file.jpg?token=secret",
-    ),
-    "https://project.supabase.co/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=secret",
-  );
-  assert.equal(
-    supabaseJobControlTestHelpers.absoluteSignedArtifactUrl(
-      "https://project.supabase.co",
-      "/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=secret",
-    ),
-    "https://project.supabase.co/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=secret",
-  );
+test("signed bucket links are path-style, expire, and are capped at seven days", () => {
+  const now = new Date("2026-11-16T10:00:00Z");
+  const url = new URL(presignObjectUrl(BUCKET, "PUT", "workspace_1/photo one.jpg.parts/0000", { expiresIn: 3600, now }));
+  assert.equal(url.origin, BUCKET.endpoint);
+  assert.equal(url.pathname, "/agenticthat-media/workspace_1/photo%20one.jpg.parts/0000");
+  assert.equal(url.searchParams.get("X-Amz-Algorithm"), "AWS4-HMAC-SHA256");
+  assert.equal(url.searchParams.get("X-Amz-Credential"), "TESTACCESSKEY/20261116/fsn1/s3/aws4_request");
+  assert.equal(url.searchParams.get("X-Amz-Date"), "20261116T100000Z");
+  assert.equal(url.searchParams.get("X-Amz-Expires"), "3600");
+  assert.equal(url.searchParams.get("X-Amz-SignedHeaders"), "host");
+  assert.match(url.searchParams.get("X-Amz-Signature"), /^[0-9a-f]{64}$/);
+  assert.equal(presignObjectUrl(BUCKET, "PUT", "workspace_1/photo one.jpg.parts/0000", { expiresIn: 3600, now }), url.toString(), "deterministic");
+  assert.equal(new URL(presignObjectUrl(BUCKET, "GET", "w/f", { expiresIn: 30 * 86400, now })).searchParams.get("X-Amz-Expires"), String(7 * 86400));
+  assert.throws(() => presignObjectUrl(BUCKET, "GET", "../escape", { now }), /invalid/);
 });
 
-test("new Supabase API keys are never misused as bearer JWTs", () => {
-  assert.deepEqual(
-    supabaseJobControlTestHelpers.supabaseApiHeaders("sb_publishable_example"),
-    { apikey: "sb_publishable_example" },
-  );
-  assert.deepEqual(
-    supabaseJobControlTestHelpers.supabaseApiHeaders("eyJlegacy.jwt.value"),
-    { apikey: "eyJlegacy.jwt.value", authorization: "Bearer eyJlegacy.jwt.value" },
-  );
-});
-
-test("an existing private media bucket is accepted during cold starts", () => {
-  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(409, "Conflict"), true);
-  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "The resource already exists"), true);
-  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Bucket already exists"), true);
-  assert.equal(supabaseJobControlTestHelpers.storageResourceAlreadyExists(400, "Invalid bucket configuration"), false);
+test("AgenticThat media tokens open one object until they expire", () => {
+  const now = Date.parse("2026-11-16T10:00:00Z");
+  const token = signMediaToken(BUCKET, "workspace_1/photo.jpg", now + 60_000, {});
+  assert.equal(verifyMediaToken(BUCKET, token, "workspace_1/photo.jpg", {}, now), "workspace_1/photo.jpg");
+  assert.equal(verifyMediaToken(BUCKET, token, "workspace_2/photo.jpg", {}, now), null, "another object");
+  assert.equal(verifyMediaToken(BUCKET, token, "workspace_1/photo.jpg", {}, now + 120_000), null, "expired");
+  assert.equal(verifyMediaToken(BUCKET, `${token.split(".")[0]}.forged`, "workspace_1/photo.jpg", {}, now), null, "forged");
+  assert.equal(verifyMediaToken({ ...BUCKET, secretAccessKey: "other" }, token, "workspace_1/photo.jpg", {}, now), null, "another bucket key");
 });
 
 test("direct media upload parts use bounded, workspace-scoped object paths", () => {

@@ -13,9 +13,12 @@ const environment = {
   SERVICE_TOKEN_PRIVATE_KEY: keys.privateKey,
   SERVICE_TOKEN_PUBLIC_KEY: keys.publicKey,
   PLATFORM_SUPER_ADMIN_EMAILS: "admin@example.test",
-  NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co",
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
-  SUPABASE_SECRET_KEY: "sb_secret_test",
+  COMPANION_RPC_API_KEY: "companion_identifier_test",
+  MEDIA_S3_ENDPOINT: "https://hel1.media.example.test",
+  MEDIA_S3_REGION: "hel1",
+  MEDIA_S3_BUCKET: "agenticthat-media",
+  MEDIA_S3_ACCESS_KEY_ID: "TESTACCESSKEY",
+  MEDIA_S3_SECRET_ACCESS_KEY: "test-secret-access-key",
   PLATFORM_PUBLIC_URL: "https://example.test",
   AUTH_EMAIL_FROM: "AgenticThat <accounts@example.test>",
   RESEND_API_KEY: "test-email-key",
@@ -56,5 +59,5 @@ test("PostgreSQL Companion transport requires a separate trusted website origin"
   assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres" }).status, 0);
   assert.equal(check({ COMPANION_RPC_TRANSPORT: "unknown" }).status, 1);
   assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres", PLATFORM_PUBLIC_URL: "https://user:password@example.test" }).status, 1);
-  assert.equal(check({ COMPANION_RPC_TRANSPORT: "postgres", PLATFORM_PUBLIC_URL: environment.NEXT_PUBLIC_SUPABASE_URL }).status, 1);
+  assert.equal(check({ MEDIA_S3_BUCKET: "" }).status, 1, "private media storage is required");
 });

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getDatabaseSql } from "../../../lib/database-document-store.js";
-import { companionPairingConfiguration } from "./companion-database-api.js";
+import { companionApiKey, companionPairingConfiguration } from "./companion-database-api.js";
+import { deleteObject, getObject, objectSize, presignObjectUrl, putObject, requireObjectStorage, signMediaToken } from "./object-storage.js";
 
 const COMPANION_ONLINE_MS = 90_000;
 const PAIRING_TTL_MS = 5 * 60_000;
@@ -181,159 +182,55 @@ async function minimumVersion(sql) {
   return row?.value || "2.1.8";
 }
 
-export function supabasePublicConfiguration() {
-  const url = safeText(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL, 500).replace(/\/$/, "");
-  const apiKey = safeText(
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-      || process.env.SUPABASE_PUBLISHABLE_KEY
-      || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      || process.env.SUPABASE_ANON_KEY,
-    5000,
-  );
-  if (!url || !apiKey) {
-    throw new Error("NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY are required for Companion pairing.");
-  }
-  const parsed = new URL(url);
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
-  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && local)) {
-    throw new Error("The Supabase API URL must use HTTPS.");
-  }
-  if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("The Supabase API URL is invalid.");
-  }
-  return { supabaseUrl: parsed.origin, supabaseApiKey: apiKey };
+/** What a Companion is given when it pairs: where to call (the website) and the identifier it sends. */
+function companionConnectionConfiguration() {
+  const apiKey = companionApiKey();
+  if (!apiKey) throw new Error("COMPANION_RPC_API_KEY is required for Companion pairing.");
+  return companionPairingConfiguration({ supabaseUrl: websiteOrigin(), supabaseApiKey: apiKey });
 }
 
-function supabaseServiceConfiguration() {
-  const publicConfiguration = supabasePublicConfiguration();
-  const serviceKey = safeText(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY, 10000);
-  if (!serviceKey) throw new Error("SUPABASE_SECRET_KEY is required for private publishing media.");
-  return { ...publicConfiguration, serviceKey };
+// ---- Private media: Hetzner Object Storage (see object-storage.js) -------------------------
+
+function mediaStorage() {
+  return requireObjectStorage();
 }
 
-function supabaseApiHeaders(apiKey) {
-  const headers = { apikey: apiKey };
-  if (!apiKey.startsWith("sb_")) headers.authorization = `Bearer ${apiKey}`;
-  return headers;
+function websiteOrigin() {
+  const value = safeText(process.env.PLATFORM_PUBLIC_URL || process.env.NEXT_PUBLIC_SITE_URL, 500);
+  if (!value) throw new Error("PLATFORM_PUBLIC_URL is required for private media links.");
+  return new URL(value).origin;
 }
 
+/** "workspace_1/photo.jpg": the object's key in the bucket. */
 function storageObjectPath(workspaceId, fileName) {
-  const workspace = encodeURIComponent(safeText(workspaceId, 180));
-  const file = encodeURIComponent(safeText(fileName, 240));
-  if (!workspace || !file) throw new Error("The private media storage path is invalid.");
+  const workspace = safeText(workspaceId, 180);
+  const file = safeText(fileName, 240);
+  if (!workspace || !file || /[\\/\u0000-\u001f]/.test(workspace) || /[\\/\u0000-\u001f]/.test(file) || [workspace, file].some((part) => part === "." || part === "..")) {
+    throw new Error("The private media storage path is invalid.");
+  }
   return `${workspace}/${file}`;
-}
-
-let artifactBucketReady = null;
-
-async function ensureArtifactBucket(configuration) {
-  if (artifactBucketReady) return artifactBucketReady;
-  artifactBucketReady = (async () => {
-    const response = await fetch(`${configuration.supabaseUrl}/storage/v1/bucket`, {
-      method: "POST",
-      headers: {
-        ...supabaseApiHeaders(configuration.serviceKey),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        id: ARTIFACT_BUCKET,
-        name: ARTIFACT_BUCKET,
-        public: false,
-        file_size_limit: SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES,
-        allowed_mime_types: ["image/*", "video/*"],
-      }),
-    });
-    if (!response.ok) {
-      const message = await storageErrorMessage(response, `Could not initialize private media storage (${response.status}).`);
-      if (!storageResourceAlreadyExists(response.status, message)) throw new Error(message);
-    }
-  })().catch((error) => {
-    artifactBucketReady = null;
-    throw error;
-  });
-  return artifactBucketReady;
-}
-
-function storageResourceAlreadyExists(status, message) {
-  return status === 409 || (
-    status === 400
-    && /(?:resource|bucket)\s+(?:already\s+)?exists|already\s+exists/i.test(String(message || ""))
-  );
-}
-
-async function signedArtifactUrl(configuration, objectPath) {
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/sign/${ARTIFACT_BUCKET}/${objectPath}`, {
-    method: "POST",
-    headers: {
-      ...supabaseApiHeaders(configuration.serviceKey),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ expiresIn: ARTIFACT_URL_TTL_SECONDS }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  const signedPath = payload.signedURL || payload.signedUrl;
-  if (!response.ok || !signedPath) throw new Error(payload.message || "Could not authorize private media download.");
-  return absoluteSignedArtifactUrl(configuration.supabaseUrl, signedPath);
-}
-
-function absoluteSignedArtifactUrl(supabaseUrl, signedPath) {
-  if (/^https:\/\//i.test(signedPath)) return signedPath;
-  const normalizedPath = signedPath.startsWith("/storage/v1/")
-    ? signedPath
-    : `/storage/v1${signedPath.startsWith("/") ? signedPath : `/${signedPath}`}`;
-  return new URL(normalizedPath, supabaseUrl).toString();
-}
-
-async function storageErrorMessage(response, fallback) {
-  const text = await response.text().catch(() => "");
-  try {
-    const payload = JSON.parse(text);
-    return safeText(payload?.message || payload?.error || fallback, 1000);
-  } catch {
-    return safeText(text || fallback, 1000);
-  }
-}
-
-async function uploadArtifactObject(configuration, objectPath, bytes, mimeType) {
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/${ARTIFACT_BUCKET}/${objectPath}`, {
-    method: "POST",
-    headers: {
-      ...supabaseApiHeaders(configuration.serviceKey),
-      "content-type": mimeType || "application/octet-stream",
-      "x-upsert": "true",
-    },
-    body: bytes,
-  });
-  if (!response.ok) {
-    throw new Error(await storageErrorMessage(response, `Private media upload failed (${response.status}).`));
-  }
-}
-
-async function signedArtifactUrls(configuration, objectPaths) {
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/sign/${ARTIFACT_BUCKET}`, {
-    method: "POST",
-    headers: {
-      ...supabaseApiHeaders(configuration.serviceKey),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ expiresIn: ARTIFACT_URL_TTL_SECONDS, paths: objectPaths }),
-  });
-  if (!response.ok) {
-    throw new Error(await storageErrorMessage(response, `Could not authorize private media download (${response.status}).`));
-  }
-  const payload = await response.json().catch(() => []);
-  if (!Array.isArray(payload) || payload.length !== objectPaths.length) {
-    throw new Error("Could not authorize every private media part.");
-  }
-  return payload.map((item) => {
-    if (item?.error || !item?.signedURL) throw new Error(item?.error || "Could not authorize a private media part.");
-    return absoluteSignedArtifactUrl(configuration.supabaseUrl, item.signedURL);
-  });
 }
 
 function artifactPartObjectPath(workspaceId, fileName, index) {
   if (!Number.isInteger(index) || index < 0 || index > 9999) throw new Error("The private media part number is invalid.");
   return `${storageObjectPath(workspaceId, fileName)}.parts/${String(index).padStart(4, "0")}`;
+}
+
+function validStoredPath(value) {
+  const path = String(value || "");
+  return Boolean(path) && !path.startsWith("/") && !path.split("/").some((part) => !part || part === "." || part === "..");
+}
+
+/**
+ * An AgenticThat link the Companion downloads from: the website checks its
+ * token and redirects to a short-lived signed link on the bucket. It stays
+ * valid for 30 days, so posts scheduled weeks ahead still find their media.
+ */
+export function privateMediaDownloadUrl(key, ttlSeconds = ARTIFACT_URL_TTL_SECONDS) {
+  if (!validStoredPath(key)) throw new Error("The private media storage path is invalid.");
+  const token = signMediaToken(mediaStorage(), key, Date.now() + ttlSeconds * 1000);
+  const encoded = key.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return `${websiteOrigin()}/storage/v1/object/sign/${ARTIFACT_BUCKET}/${encoded}?token=${encodeURIComponent(token)}`;
 }
 
 function validateArtifactPartInput({ index, offset, byteSize }) {
@@ -346,35 +243,14 @@ function validateArtifactPartInput({ index, offset, byteSize }) {
 
 export async function authorizeSupabaseJobArtifactPartUpload({ workspaceId, fileName, mimeType, index, offset, byteSize }) {
   validateArtifactPartInput({ index, offset, byteSize });
-  const configuration = supabaseServiceConfiguration();
-  await ensureArtifactBucket(configuration);
-  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/upload/sign/${ARTIFACT_BUCKET}/${objectPath}`, {
-    method: "POST",
-    headers: {
-      ...supabaseApiHeaders(configuration.serviceKey),
-      "content-type": "application/json",
-      "x-upsert": "true",
-    },
-    body: "{}",
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.url) {
-    throw new Error(safeText(payload.message || payload.error || `Could not authorize private media upload (${response.status}).`, 1000));
-  }
-  const signedUrl = /^https:\/\//i.test(payload.url)
-    ? payload.url
-    : `${configuration.supabaseUrl}/storage/v1${String(payload.url).startsWith("/") ? "" : "/"}${payload.url}`;
-  const parsed = new URL(signedUrl);
-  if (parsed.origin !== configuration.supabaseUrl || !parsed.pathname.startsWith("/storage/v1/object/upload/sign/")) {
-    throw new Error("The private media upload URL is invalid.");
-  }
+  const key = artifactPartObjectPath(workspaceId, fileName, index);
   return {
-    signedUrl: parsed.toString(),
+    // The browser sends this part straight to the bucket with a one-hour signed link.
+    signedUrl: presignObjectUrl(mediaStorage(), "PUT", key, { expiresIn: 3600 }),
     index,
     offset,
     byteSize,
-    path: decodeURIComponent(objectPath),
+    path: key,
     mimeType: mimeType || "application/octet-stream",
   };
 }
@@ -388,25 +264,11 @@ export async function authorizeSupabaseJobArtifactPartUploads(inputs) {
 
 export async function verifySupabaseJobArtifactPartUpload({ workspaceId, fileName, index, offset, byteSize }) {
   validateArtifactPartInput({ index, offset, byteSize });
-  const configuration = supabaseServiceConfiguration();
-  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/info/${ARTIFACT_BUCKET}/${objectPath}`, {
-    headers: supabaseApiHeaders(configuration.serviceKey),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(safeText(payload.message || payload.error || `Private media upload verification failed (${response.status}).`, 1000));
-  }
-  const storedSize = Number(payload?.metadata?.size ?? payload?.size);
-  if (!Number.isInteger(storedSize) || storedSize !== byteSize) {
-    throw new Error("The uploaded private media part has the wrong size.");
-  }
-  return {
-    index,
-    offset,
-    path: decodeURIComponent(objectPath),
-    byteSize,
-  };
+  const key = artifactPartObjectPath(workspaceId, fileName, index);
+  const storedSize = await objectSize(mediaStorage(), key);
+  if (storedSize === null) throw new Error("The private media part hasn't arrived yet. Try again.");
+  if (storedSize !== byteSize) throw new Error("The uploaded private media part has the wrong size.");
+  return { index, offset, path: key, byteSize };
 }
 
 export async function verifySupabaseJobArtifactPartUploads(inputs) {
@@ -419,21 +281,17 @@ export async function verifySupabaseJobArtifactPartUploads(inputs) {
 export async function deleteSupabaseStagedArtifactParts({ workspaceId, fileName, partCount }) {
   const count = Number(partCount);
   if (!Number.isInteger(count) || count < 0 || count > 1000) throw new Error("The private media part count is invalid.");
-  await deleteSupabaseJobArtifactParts(Array.from({ length: count }, (_, index) => ({
-    path: decodeURIComponent(artifactPartObjectPath(workspaceId, fileName, index)),
-  })));
+  await deleteSupabaseJobArtifactParts(Array.from({ length: count }, (_, index) => ({ path: artifactPartObjectPath(workspaceId, fileName, index) })));
 }
 
 export async function storeSupabaseJobArtifactPart(bytes, { workspaceId, fileName, mimeType, index, offset }) {
   if (!bytes?.length || bytes.length > SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) throw new Error("The private media part size is invalid.");
-  const configuration = supabaseServiceConfiguration();
-  await ensureArtifactBucket(configuration);
-  const objectPath = artifactPartObjectPath(workspaceId, fileName, index);
-  await uploadArtifactObject(configuration, objectPath, bytes, mimeType);
+  const key = artifactPartObjectPath(workspaceId, fileName, index);
+  await putObject(mediaStorage(), key, bytes, mimeType);
   return {
     index,
     offset,
-    path: decodeURIComponent(objectPath),
+    path: key,
     byteSize: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
@@ -445,79 +303,69 @@ export async function finalizeSupabaseJobArtifact({ workspaceId, fileName, origi
   let expectedOffset = 0;
   for (let index = 0; index < ordered.length; index += 1) {
     const part = ordered[index];
-    if (part.index !== index || part.offset !== expectedOffset || !part.path || !Number.isInteger(part.byteSize) || part.byteSize < 1) {
+    if (part.index !== index || part.offset !== expectedOffset || !validStoredPath(part.path) || !Number.isInteger(part.byteSize) || part.byteSize < 1) {
       throw new Error("The private media upload parts are invalid.");
     }
     expectedOffset += part.byteSize;
   }
   if (expectedOffset !== byteSize) throw new Error("The private media upload size is invalid.");
-  const configuration = supabaseServiceConfiguration();
-  const downloadUrls = await signedArtifactUrls(configuration, ordered.map((part) => part.path));
   return {
     bucket: ARTIFACT_BUCKET,
-    path: `${decodeURIComponent(storageObjectPath(workspaceId, fileName))}.parts`,
+    storage: "hetzner",
+    path: `${storageObjectPath(workspaceId, fileName)}.parts`,
     fileName,
     originalName,
     mimeType: mimeType || "application/octet-stream",
     byteSize,
-    parts: ordered.map((part, index) => ({ ...part, downloadUrl: downloadUrls[index] })),
+    parts: ordered.map((part) => ({ ...part, downloadUrl: privateMediaDownloadUrl(part.path) })),
     expiresAt: new Date(Date.now() + ARTIFACT_URL_TTL_SECONDS * 1000).toISOString(),
   };
 }
 
 export async function deleteSupabaseJobArtifactParts(parts) {
-  const paths = (Array.isArray(parts) ? parts : []).map((part) => part?.path).filter(Boolean);
+  const paths = (Array.isArray(parts) ? parts : []).map((part) => part?.path).filter(validStoredPath);
   if (!paths.length) return;
-  const configuration = supabaseServiceConfiguration();
-  const response = await fetch(`${configuration.supabaseUrl}/storage/v1/object/${ARTIFACT_BUCKET}`, {
-    method: "DELETE",
-    headers: {
-      ...supabaseApiHeaders(configuration.serviceKey),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ prefixes: paths }),
-  });
-  if (!response.ok) throw new Error(await storageErrorMessage(response, "Could not remove the incomplete private media upload."));
+  const configuration = mediaStorage();
+  for (let index = 0; index < paths.length; index += 8) {
+    await Promise.all(paths.slice(index, index + 8).map((key) => deleteObject(configuration, key)));
+  }
 }
 
 export async function storeSupabaseJobArtifact(bytes, { workspaceId, fileName, originalName, mimeType }) {
-  const configuration = supabaseServiceConfiguration();
-  await ensureArtifactBucket(configuration);
-  const objectPath = storageObjectPath(workspaceId, fileName);
-  await uploadArtifactObject(configuration, objectPath, bytes, mimeType);
+  const key = storageObjectPath(workspaceId, fileName);
+  await putObject(mediaStorage(), key, bytes, mimeType);
   return {
     bucket: ARTIFACT_BUCKET,
-    path: decodeURIComponent(objectPath),
+    storage: "hetzner",
+    path: key,
     fileName,
     originalName,
     mimeType: mimeType || "application/octet-stream",
     byteSize: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    downloadUrl: await signedArtifactUrl(configuration, objectPath),
+    downloadUrl: privateMediaDownloadUrl(key),
     expiresAt: new Date(Date.now() + ARTIFACT_URL_TTL_SECONDS * 1000).toISOString(),
   };
 }
 
-export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+function artifactPaths(artifact) {
   if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  const paths = Array.isArray(artifact.parts) && artifact.parts.length
+    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index)).map((part) => part?.path)
+    : [artifact.path];
+  if (!paths.length || paths.some((value) => !validStoredPath(value))) throw new Error("The private publishing artifact path is invalid.");
+  return paths;
+}
+
+export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
+  const paths = artifactPaths(artifact);
   const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, MAX_INLINE_ARTIFACT_BYTES));
   const declaredSize = Number(artifact.byteSize || 0);
   if (!Number.isInteger(declaredSize) || declaredSize < 1 || declaredSize > maximumBytes) {
     throw new Error("This publishing media is too large for an in-browser preview.");
   }
-  const paths = Array.isArray(artifact.parts) && artifact.parts.length
-    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index)).map((part) => part?.path)
-    : [artifact.path];
-  if (!paths.length || paths.some((value) => !value || String(value).startsWith("/") || String(value).includes(".."))) {
-    throw new Error("The private publishing artifact path is invalid.");
-  }
-  const configuration = supabaseServiceConfiguration();
-  const urls = await signedArtifactUrls(configuration, paths);
-  const chunks = await Promise.all(urls.map(async (url) => {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Private publishing media could not be read (${response.status}).`);
-    return Buffer.from(await response.arrayBuffer());
-  }));
+  const configuration = mediaStorage();
+  const chunks = await Promise.all(paths.map((key) => getObject(configuration, key)));
   const receivedSize = chunks.reduce((total, chunk) => total + chunk.length, 0);
   if (receivedSize > maximumBytes) throw new Error("This publishing media is too large for an in-browser preview.");
   if (receivedSize !== declaredSize) throw new Error("The private publishing media is incomplete.");
@@ -526,62 +374,47 @@ export async function readSupabaseJobArtifactBytes(artifact, requestedMaximumByt
 
 /** @param {{ start: number, end: number } | null} [range] */
 export async function readSupabasePublishingMediaObject(workspaceId, fileName, range = null) {
-  const configuration = supabaseServiceConfiguration();
-  const url = await signedArtifactUrl(configuration, storageObjectPath(workspaceId, fileName));
-  const headers = {};
-  if (range) {
-    if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start) throw new Error("Invalid publishing media range.");
-    headers.range = `bytes=${range.start}-${range.end}`;
-  }
-  const response = await fetch(url, { headers, cache: "no-store" });
-  if (!response.ok) throw new Error(`Publishing media could not be read (${response.status}).`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (range && (response.status !== 206 || bytes.length !== range.end - range.start + 1)) throw new Error("The publishing media range is incomplete.");
+  if (range && (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start)) throw new Error("Invalid publishing media range.");
+  const bytes = await getObject(mediaStorage(), storageObjectPath(workspaceId, fileName), range);
+  if (range && bytes.length !== range.end - range.start + 1) throw new Error("The publishing media range is incomplete.");
   return bytes;
 }
 
 export async function deleteSupabasePublishingMediaObject(workspaceId, fileName) {
-  await deleteSupabaseJobArtifactParts([{ path: decodeURIComponent(storageObjectPath(workspaceId, fileName)) }]);
+  await deleteSupabaseJobArtifactParts([{ path: storageObjectPath(workspaceId, fileName) }]);
 }
 
 // Streams a stored artifact part by part, so media of any size can be handed
 // to another service without holding the whole file in memory.
 export async function openSupabaseJobArtifactStream(artifact) {
-  if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  const paths = artifactPaths(artifact);
   const byteSize = Number(artifact.byteSize || 0);
   if (!Number.isInteger(byteSize) || byteSize < 1) throw new Error("The private publishing artifact size is invalid.");
-  const paths = Array.isArray(artifact.parts) && artifact.parts.length
-    ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index)).map((part) => part?.path)
-    : [artifact.path];
-  if (!paths.length || paths.some((value) => !value || String(value).startsWith("/") || String(value).includes(".."))) {
-    throw new Error("The private publishing artifact path is invalid.");
-  }
-  const urls = await signedArtifactUrls(supabaseServiceConfiguration(), paths);
+  const configuration = mediaStorage();
   let index = 0;
   let sent = 0;
   const stream = new ReadableStream({
     async pull(controller) {
-      if (index >= urls.length) {
+      if (index >= paths.length) {
         if (sent !== byteSize) controller.error(new Error("The private publishing media is incomplete."));
         else controller.close();
         return;
       }
-      const response = await fetch(urls[index], { cache: "no-store" });
-      index += 1;
-      if (!response.ok) {
-        controller.error(new Error(`Private publishing media could not be read (${response.status}).`));
-        return;
+      try {
+        const chunk = new Uint8Array(await getObject(configuration, paths[index]));
+        index += 1;
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      } catch (error) {
+        controller.error(error);
       }
-      const chunk = new Uint8Array(await response.arrayBuffer());
-      sent += chunk.length;
-      controller.enqueue(chunk);
     },
   });
   return { stream, byteSize };
 }
 
 export async function readSupabaseJobArtifactRange(artifact, start, end, requestedMaximumBytes = SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES) {
-  if (!artifact || artifact.bucket !== ARTIFACT_BUCKET) throw new Error("The private publishing artifact is invalid.");
+  artifactPaths(artifact);
   const declaredSize = Number(artifact.byteSize || 0);
   const maximumBytes = Math.max(1, Math.min(Number(requestedMaximumBytes) || SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES, SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES));
   if (!Number.isInteger(declaredSize) || declaredSize < 1 || !Number.isInteger(start) || !Number.isInteger(end)
@@ -591,43 +424,30 @@ export async function readSupabaseJobArtifactRange(artifact, start, end, request
   const parts = Array.isArray(artifact.parts) && artifact.parts.length
     ? [...artifact.parts].sort((left, right) => Number(left.index) - Number(right.index))
     : [{ index: 0, offset: 0, byteSize: declaredSize, path: artifact.path }];
-  if (parts.some((part) => !part?.path || String(part.path).startsWith("/") || String(part.path).includes("..")
-    || !Number.isInteger(Number(part.offset)) || !Number.isInteger(Number(part.byteSize)) || Number(part.byteSize) < 1)) {
+  if (parts.some((part) => !validStoredPath(part?.path) || !Number.isInteger(Number(part.offset)) || !Number.isInteger(Number(part.byteSize)) || Number(part.byteSize) < 1)) {
     throw new Error("The private publishing artifact path is invalid.");
   }
   const selected = parts.filter((part) => Number(part.offset) <= end && Number(part.offset) + Number(part.byteSize) - 1 >= start);
   if (!selected.length) throw new Error("The private publishing media range is unavailable.");
-  const configuration = supabaseServiceConfiguration();
-  const urls = await signedArtifactUrls(configuration, selected.map((part) => part.path));
+  const configuration = mediaStorage();
   const chunks = [];
-  for (let index = 0; index < selected.length; index += 1) {
-    const part = selected[index];
+  for (const part of selected) {
     const partOffset = Number(part.offset);
     const partSize = Number(part.byteSize);
     const localStart = Math.max(0, start - partOffset);
     const localEnd = Math.min(partSize - 1, end - partOffset);
-    const response = await fetch(urls[index], {
-      cache: "no-store",
-      headers: { Range: `bytes=${localStart}-${localEnd}` },
-    });
-    if (!response.ok) throw new Error(`Private publishing media could not be read (${response.status}).`);
-    const received = Buffer.from(await response.arrayBuffer());
-    const expectedLength = localEnd - localStart + 1;
-    const chunk = response.status === 200 && received.length === partSize
-      ? received.subarray(localStart, localEnd + 1)
-      : received;
-    if (chunk.length !== expectedLength) throw new Error("The private publishing media range is incomplete.");
+    const chunk = await getObject(configuration, part.path, { start: localStart, end: localEnd });
+    if (chunk.length !== localEnd - localStart + 1) throw new Error("The private publishing media range is incomplete.");
     chunks.push(chunk);
   }
   const expectedSize = end - start + 1;
   const receivedSize = chunks.reduce((total, chunk) => total + chunk.length, 0);
   if (receivedSize !== expectedSize) throw new Error("The private publishing media range is incomplete.");
-  const result = Buffer.concat(chunks, expectedSize);
-  return result;
+  return Buffer.concat(chunks, expectedSize);
 }
 
 export async function createSupabasePairing(principal, input = {}) {
-  const configuration = companionPairingConfiguration(supabasePublicConfiguration());
+  const configuration = companionConnectionConfiguration();
   const sql = await getDatabaseSql();
   const pairingCode = `${randomUUID()}${randomUUID().replaceAll("-", "")}`;
   const challengeId = id("pairing");
@@ -1112,16 +932,11 @@ export async function supabasePublishingWorkspaceSnapshot(workspaceId) {
   };
 }
 
-export const supabaseJobControlTestHelpers = {
-  absoluteSignedArtifactUrl,
-  artifactPartObjectPath,
+export const supabaseJobControlTestHelpers = {  artifactPartObjectPath,
   camelAccount,
   camelJob,
   publicDevice,
   publishingEngineForPlatform,
-  publishingSynchronizationPlan,
-  supabaseApiHeaders,
-  storageResourceAlreadyExists,
-  validateArtifactPartInput,
+  publishingSynchronizationPlan,  validateArtifactPartInput,
   versionAtLeast,
 };

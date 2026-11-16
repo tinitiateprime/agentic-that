@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, Check, CheckCircle2, Copy, Film, ImagePlus, Info, Lightbulb, Loader2, MapPin, Search, Sparkles, Trash2, Upload, XCircle,
+  AlertTriangle, Check, CheckCircle2, Copy, Film, ImagePlus, Info, Lightbulb, Loader2, MapPin, Search, Send, Sparkles, Trash2, Upload, XCircle,
 } from "lucide-react";
 import { probeMediaFile } from "./media-probe";
 import AiResults from "./AiResults";
 import AiStatusBar, { AiLogo } from "./AiStatusBar";
+import PostPanel from "./PostPanel";
 import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow } from "./companion-ai";
 import styles from "./social-seo.module.css";
 
@@ -107,8 +108,9 @@ function StatusIcon({ status }) {
   return <Info size={17} className={styles.info} />;
 }
 
-export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) {
+export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", publishingToken = "", canPost = false }) {
   const [platform, setPlatform] = useState("instagram");
+  const [posting, setPosting] = useState(false);
   const [aiStatus, setAiStatus] = useState(undefined);
   const [aiResult, setAiResult] = useState(null);
   const [aiBusy, setAiBusy] = useState("");
@@ -471,6 +473,11 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
         <section className={styles.results} aria-live="polite">
           <div className={styles.resultsHead}>
             <h2><span className={styles.stepNumber}>2</span> Your SEO posts</h2>
+            {(aiResult || result) && media.length > 0 && (
+              canPost
+                ? <button type="button" className={styles.postButton} onClick={() => setPosting(true)} disabled={loading}><Send size={16} /> Post</button>
+                : <span className={styles.muted}>Posting needs Social posts access in your workspace.</span>
+            )}
             <div className={styles.platformTabs} role="tablist" aria-label="App">
               {PLATFORMS.map((entry) => (
                 <button
@@ -487,6 +494,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "" }) 
               ))}
             </div>
           </div>
+          {posting && canPost && <PostPanel token={publishingToken} media={media} aiResult={aiResult} fallbackText={fullCaption} onClose={() => setPosting(false)} />}
           {aiResult && <AiResults data={aiResult} platform={platform} copied={copied} onCopy={copy} onShow={showCompanionAiWindow} onRerun={rerunAi} busy={loading} draft={platform === "instagram" ? fullCaption : ""} />}
 
           {!aiResult && result && platform !== "instagram" && (

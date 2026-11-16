@@ -2,28 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   companionDownloadUrls, companionPairingConfiguration, handleCompanionMedia,
-  handleCompanionRpc, validateCompanionRpc,
+  handleCompanionRpc, signedCompanionMediaUrl, validateCompanionRpc,
 } from "./companion-database-api.js";
+import { objectStorageConfiguration, verifyMediaToken } from "./object-storage.js";
 
 const environment = {
   COMPANION_RPC_TRANSPORT: "postgres",
   PLATFORM_PUBLIC_URL: "https://www.example.test",
-  NEXT_PUBLIC_SUPABASE_URL: "https://storage.example.test",
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_companion_test",
+  COMPANION_RPC_API_KEY: "companion_identifier_test",
+  MEDIA_S3_ENDPOINT: "https://fsn1.media.example.test",
+  MEDIA_S3_REGION: "fsn1",
+  MEDIA_S3_BUCKET: "agenticthat-media",
+  MEDIA_S3_ACCESS_KEY_ID: "TESTACCESSKEY",
+  MEDIA_S3_SECRET_ACCESS_KEY: "test-secret-access-key",
 };
 const token = "test-token-".repeat(8);
 const instance = "companion-test-installation";
 const request = (body, headers = {}) => new Request("https://spoofed-host.test/rest/v1/rpc/companion_claim_jobs", {
-  method: "POST", headers: { "content-type": "application/json", apikey: environment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, ...headers },
+  method: "POST", headers: { "content-type": "application/json", apikey: environment.COMPANION_RPC_API_KEY, ...headers },
   body: typeof body === "string" ? body : JSON.stringify(body),
 });
 
 test("pairing switches only the Companion endpoint and preserves the public key", () => {
-  const configuration = { supabaseUrl: environment.NEXT_PUBLIC_SUPABASE_URL, supabaseApiKey: environment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY };
+  const configuration = { supabaseUrl: "https://elsewhere.example.test", supabaseApiKey: environment.COMPANION_RPC_API_KEY };
   assert.deepEqual(companionPairingConfiguration(configuration, {}), configuration);
   assert.deepEqual(companionPairingConfiguration(configuration, environment), { ...configuration, supabaseUrl: environment.PLATFORM_PUBLIC_URL });
   assert.throws(() => companionPairingConfiguration(configuration, { ...environment, PLATFORM_PUBLIC_URL: "https://user:password@example.test/" }));
-  assert.throws(() => companionPairingConfiguration(configuration, { ...environment, PLATFORM_PUBLIC_URL: environment.NEXT_PUBLIC_SUPABASE_URL }));
 });
 
 test("public RPC accepts only the four operations and validates before accessing the database", async () => {
@@ -50,7 +54,7 @@ test("public RPC accepts only the four operations and validates before accessing
   assert.equal(databaseCalls, 0);
 });
 
-test("RPC uses parameterized SQL and rewrites only signed media to the configured website", async () => {
+test("RPC uses parameterized SQL and signs every media link again for the configured website", async () => {
   let query;
   const sql = async (strings, ...values) => {
     query = { text: strings.join("?"), values };
@@ -67,9 +71,12 @@ test("RPC uses parameterized SQL and rewrites only signed media to the configure
   assert.deepEqual(query.values, [token, instance, 1]);
   const [job] = await result.json();
   assert.equal(new URL(job.payload.upload.artifact.downloadUrl).origin, environment.PLATFORM_PUBLIC_URL);
-  assert.equal(new URL(job.payload.upload.artifact.parts[0].downloadUrl).origin, environment.PLATFORM_PUBLIC_URL);
-  const foreign = { downloadUrl: "https://foreign.example.test/storage/v1/object/sign/job-artifacts/workspace/file?token=signed" };
-  assert.deepEqual(companionDownloadUrls(foreign, environment), foreign);
+  const part = new URL(job.payload.upload.artifact.parts[0].downloadUrl);
+  assert.equal(part.origin, environment.PLATFORM_PUBLIC_URL);
+  // Old links (from when media was on Supabase) get a fresh AgenticThat token for the same object.
+  assert.equal(verifyMediaToken(objectStorageConfiguration(environment), part.searchParams.get("token"), "workspace_1/file.jpg.parts/0000", environment), "workspace_1/file.jpg.parts/0000");
+  const other = { downloadUrl: "https://foreign.example.test/somewhere/else?token=signed" };
+  assert.deepEqual(companionDownloadUrls(other, environment), other);
 });
 
 test("database authentication and lease failures stay scoped and SQL details remain private", async (context) => {
@@ -104,14 +111,22 @@ test("an omitted job result or error is SQL NULL rather than a JSON null documen
   assert.equal(parameters[8], null);
 });
 
-test("signed media downloads redirect to fixed storage without exposing elevated keys", async () => {
-  const result = await handleCompanionMedia(new Request("https://www.example.test/storage/v1/object/sign/job-artifacts/workspace/file.jpg?token=signed", {
+test("signed media downloads redirect to a short-lived bucket link without exposing keys", async () => {
+  const link = signedCompanionMediaUrl("workspace/file.jpg", environment);
+  const result = await handleCompanionMedia(new Request(link, {
     headers: { range: "bytes=0-2", cookie: "private-cookie", authorization: "private-key", apikey: "private-key" },
   }), { environment });
   assert.equal(result.status, 307);
-  assert.equal(new URL(result.headers.get("location")).origin, environment.NEXT_PUBLIC_SUPABASE_URL);
-  assert.equal(new URL(result.headers.get("location")).pathname, "/storage/v1/object/sign/job-artifacts/workspace/file.jpg");
-  assert.equal(new URL(result.headers.get("location")).searchParams.get("token"), "signed");
+  const location = new URL(result.headers.get("location"));
+  assert.equal(location.origin, environment.MEDIA_S3_ENDPOINT);
+  assert.equal(location.pathname, "/agenticthat-media/workspace/file.jpg");
+  assert.equal(location.searchParams.get("X-Amz-Expires"), "900");
+  assert.match(location.searchParams.get("X-Amz-Signature"), /^[0-9a-f]{64}$/);
+  assert.ok(!location.toString().includes(environment.MEDIA_S3_SECRET_ACCESS_KEY));
+  // A token for one object doesn't open another, and a forged one opens nothing.
+  const other = link.replace("workspace/file.jpg", "workspace/other.jpg");
+  assert.equal((await handleCompanionMedia(new Request(other), { environment })).status, 401);
+  assert.equal((await handleCompanionMedia(new Request(link.replace(/token=[^&]+/, "token=forged.value")), { environment })).status, 401);
   assert.equal(result.headers.get("set-cookie"), null);
   assert.equal(result.headers.get("authorization"), null);
   assert.equal(result.headers.get("apikey"), null);
