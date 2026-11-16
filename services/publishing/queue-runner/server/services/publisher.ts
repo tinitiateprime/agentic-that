@@ -1,3 +1,4 @@
+import { explainPublishingError } from "./publishing-errors.js";
 import type { BrowserContext, Page } from "playwright-core";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -873,11 +874,13 @@ async function runAccountQueue(
           clearSavedAccountSession(account);
           await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);
         }
-        await updateUploadStatus(upload.id, "failed", `Automation ${trigger} run ${automationRunId} failed: ${message}`);
-        if (runPostId) await finishAutomationRunPost(runPostId, "failed", message);
+        // Stored and shown in plain words; the checks above use the original message.
+        const shownMessage = explainPublishingError(account.platform, message);
+        await updateUploadStatus(upload.id, "failed", shownMessage);
+        if (runPostId) await finishAutomationRunPost(runPostId, "failed", shownMessage);
         await browser.update({
           state: signal.aborted ? "stopped" : youtubeStudioReview ? "review" : "failed",
-          detail: message,
+          detail: shownMessage,
           currentItem: upload.title || upload.originalName || "Post",
           currentIndex: uploadIndex + 1,
           totalItems: uploads.length,

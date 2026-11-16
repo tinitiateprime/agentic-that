@@ -937,9 +937,22 @@ async function clickCommunityPostWhenReady(
   await onSubmitted?.();
 }
 
-async function waitForCommunityPostComplete(page: Page) {
-  console.log("Post clicked. Waiting 5 seconds before closing YouTube Community flow...");
-  await page.waitForTimeout(5000);
+/** YouTube answers a created Community post with a successful backstage/create_post request. */
+export function isYouTubeCommunityPostResponse(method: string, url: string, status: number) {
+  return method.toUpperCase() === "POST" && status >= 200 && status < 300 && /\/youtubei\/v1\/backstage\/create_post/i.test(url);
+}
+
+function watchYouTubeCommunityPost(page: Page) {
+  return page.waitForResponse((response) => isYouTubeCommunityPostResponse(response.request().method(), response.url(), response.status()), { timeout: 60_000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function waitForCommunityPostComplete(page: Page, accepted: Promise<boolean>) {
+  // Close as soon as YouTube confirms the post; without its answer, wait up to 20 seconds as before.
+  console.log("Post clicked. Waiting for YouTube to confirm the Community post...");
+  const confirmed = await Promise.race([accepted, page.waitForTimeout(20_000).then(() => false)]);
+  console.log(confirmed ? "YouTube confirmed the Community post." : "YouTube did not send its confirmation; continuing.");
 
   const closeButtons = [
     page.getByRole("button", { name: /^Close$/i }).last(),
@@ -1099,8 +1112,9 @@ async function postCommunityImageToYouTube(page: Page, upload: PlatformUpload, i
       );
     }
     await attachCommunityPostImage(page, prepared.filePath, previewTimeout);
+    const accepted = watchYouTubeCommunityPost(page);
     await clickCommunityPostWhenReady(page, true, accountLogin?.onFinalActionSubmitted);
-    await waitForCommunityPostComplete(page);
+    await waitForCommunityPostComplete(page, accepted);
     console.log("Step completed: YouTube Community image post published.");
     return { success: true };
   } finally {
@@ -1113,8 +1127,9 @@ async function postCommunityTextToYouTube(page: Page, upload: PlatformUpload, ac
   await openYouTubeCreateMenu(page);
   await clickCreateCommunityPost(page);
   await fillCommunityPostDescription(page, upload.caption ?? "");
+  const accepted = watchYouTubeCommunityPost(page);
   await clickCommunityPostWhenReady(page, false, accountLogin?.onFinalActionSubmitted);
-  await waitForCommunityPostComplete(page);
+  await waitForCommunityPostComplete(page, accepted);
   console.log("Step completed: YouTube Community text post published.");
   return { success: true };
 }

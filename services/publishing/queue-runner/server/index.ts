@@ -157,6 +157,8 @@ const videoUploadExtensions = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", 
 const maxUploadFileSize = Number(process.env.UPLOAD_MAX_FILE_BYTES ?? 2 * 1024 * 1024 * 1024);
 const centralPairingFile = path.join(uploadDir, ".workspace-companion", "pairing.json");
 const centralPollIntervalMs = Math.max(5_000, Number(process.env.AGENTICTHAT_COMPANION_POLL_MS ?? 12_000));
+// How many workspace jobs to take at once (the server allows up to 5).
+const centralClaimLimit = Math.min(5, Math.max(1, Number(process.env.AGENTICTHAT_COMPANION_CLAIM_LIMIT ?? 5) || 5));
 const configuredWebOrigins = new Set(
   (process.env.PUBLISH_QUEUE_WEB_ORIGIN ?? process.env.WEB_ORIGIN ?? "")
     .split(",")
@@ -438,7 +440,20 @@ export function centralDeliveryFailure(upload?: PlatformUpload) {
   };
 }
 
-async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob) {
+type PreparedCentralPublishing = {
+  job: CentralPublishingJob;
+  ready: boolean;
+  startPublishingHeartbeat: () => void;
+  finish: (runError: unknown) => Promise<void>;
+};
+
+/**
+ * One post from the workspace: prepared (session check, media download) on its
+ * own, published together with the other posts claimed with it, then finished
+ * with its own result. Its lease is refreshed the whole time, so no other
+ * process can pick up the same post and submit it twice.
+ */
+async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job: CentralPublishingJob): Promise<PreparedCentralPublishing> {
   let leaseHeartbeat: NodeJS.Timeout | null = null;
   let leaseHeartbeatUpdate: Promise<unknown> | null = null;
   let cancellationRequested = false;
@@ -456,72 +471,8 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
     leaseHeartbeat = null;
     if (leaseHeartbeatUpdate) await leaseHeartbeatUpdate;
   };
-  try {
-    const account = await upsertSyncedPlatformAccount({
-      ...remoteAccount,
-      companionId: publishingCompanionId(),
-      // Only a verified local record can assert that a browser session exists.
-      // Central metadata must never create a credential-ready local account.
-      credentialConfigured: false,
-    });
-    if (!account.credentialConfigured) {
-      await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
-      return;
-    }
-    if (upload.fileName) {
-      await updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.");
-      leaseHeartbeat = setInterval(() => {
-        runLeaseHeartbeat(() => updateCentralJobStatus(
-          pairing,
-          job.id,
-          "opening_platform",
-          "Downloading protected publishing media.",
-        ));
-      }, 30_000);
-      await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
-      await stopLeaseHeartbeat();
-    }
-    await upsertSyncedUpload(upload);
-    await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
-    await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");
-    await updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.");
-    // Publishing media can take longer than a single job lease. Refresh the
-    // lease while this Companion owns the browser so another process cannot
-    // pick up the same post and submit it twice.
-    leaseHeartbeat = setInterval(() => {
-      runLeaseHeartbeat(() => listUploads(undefined, remoteAccount.id, pairing.workspaceId)
-        .then((items) => items.find((item) => item.id === upload.id))
-        .then((current) => updateCentralJobStatus(
-          pairing,
-          job.id,
-          "publishing",
-          "Publishing through the saved local session.",
-          false,
-          {},
-          null,
-          null,
-          current?.publishActionState === "submitted" || current?.publishActionState === "uncertain",
-        ))
-        .then(async (remote) => {
-          if (!cancellationRequested && (remote.cancelRequested === true || remote.status === "cancel_requested")) {
-            cancellationRequested = true;
-            await cancelAutomation("Publishing cancellation was requested from the workspace.");
-          }
-        }));
-    }, 1_000);
-    await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: [upload.id] });
-    // Drain any in-flight lease refresh before writing a terminal state. This
-    // prevents a slower publishing heartbeat from arriving after failed or
-    // successful completion and making the workspace look stuck.
-    await stopLeaseHeartbeat();
-    const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId)).find((item) => item.id === upload.id);
-    if (localUpload?.status === "posted") {
-      await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, {}, null, null, true);
-      return;
-    }
-    const failure = centralDeliveryFailure(localUpload);
-    await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry, {}, null, null, failure.state === "uncertain");
-  } catch (error) {
+
+  const fail = async (error: unknown) => {
     await stopLeaseHeartbeat();
     const message = error instanceof Error ? error.message : "The workspace Companion could not complete this job.";
     const reconnect = /login|session|credential|authenticat/i.test(message);
@@ -556,9 +507,116 @@ async function runCentralPublishingJob(pairing: CentralCompanionPairing, job: Ce
       { code: reconnect ? "login_required" : "publish_failed", message },
       failure.state === "uncertain",
     ).catch(() => undefined);
-  } finally {
+  };
+
+  const notReady = (finish: () => Promise<void>): PreparedCentralPublishing => ({
+    job,
+    ready: false,
+    startPublishingHeartbeat: () => undefined,
+    finish: async () => finish(),
+  });
+
+  // Keeps the claim alive while this post waits for the others to be prepared.
+  leaseHeartbeat = setInterval(() => {
+    runLeaseHeartbeat(() => updateCentralJobStatus(pairing, job.id, "opening_platform", "Preparing this post."));
+  }, 30_000);
+
+  try {
+    const account = await upsertSyncedPlatformAccount({
+      ...remoteAccount,
+      companionId: publishingCompanionId(),
+      // Only a verified local record can assert that a browser session exists.
+      // Central metadata must never create a credential-ready local account.
+      credentialConfigured: false,
+    });
+    if (!account.credentialConfigured) {
+      await stopLeaseHeartbeat();
+      await updateCentralJobStatus(pairing, job.id, "reconnect_required", "The saved social media session needs reconnecting.", false);
+      return notReady(async () => undefined);
+    }
+    if (upload.fileName) {
+      await updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.");
+      await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
+    }
+    await upsertSyncedUpload(upload);
+    await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
+    await updateCentralJobStatus(pairing, job.id, "uploading", "Preparing content in the local browser session.");
+    await updateCentralJobStatus(pairing, job.id, "publishing", "Publishing through the saved local session.");
     await stopLeaseHeartbeat();
+  } catch (error) {
+    await fail(error);
+    return notReady(async () => undefined);
   }
+
+  return {
+    job,
+    ready: true,
+    // Publishing media can take longer than a single job lease. Refresh the
+    // lease while this Companion owns the browser so another process cannot
+    // pick up the same post and submit it twice.
+    startPublishingHeartbeat: () => {
+      leaseHeartbeat = setInterval(() => {
+        runLeaseHeartbeat(() => listUploads(undefined, remoteAccount.id, pairing.workspaceId)
+          .then((items) => items.find((item) => item.id === upload.id))
+          .then((current) => updateCentralJobStatus(
+            pairing,
+            job.id,
+            "publishing",
+            "Publishing through the saved local session.",
+            false,
+            {},
+            null,
+            null,
+            current?.publishActionState === "submitted" || current?.publishActionState === "uncertain",
+          ))
+          .then(async (remote) => {
+            if (!cancellationRequested && (remote.cancelRequested === true || remote.status === "cancel_requested")) {
+              cancellationRequested = true;
+              await cancelAutomation("Publishing cancellation was requested from the workspace.");
+            }
+          }));
+      }, 1_000);
+    },
+    finish: async (runError: unknown) => {
+      // Drain any in-flight lease refresh before writing a terminal state. This
+      // prevents a slower publishing heartbeat from arriving after failed or
+      // successful completion and making the workspace look stuck.
+      await stopLeaseHeartbeat();
+      const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId).catch(() => []))
+        .find((item) => item.id === upload.id);
+      // A post that went out is reported as published even if another post in the same run failed.
+      if (localUpload?.status === "posted") {
+        await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, {}, null, null, true).catch(() => undefined);
+        return;
+      }
+      if (runError) {
+        await fail(runError);
+        return;
+      }
+      const failure = centralDeliveryFailure(localUpload);
+      await updateCentralJobStatus(pairing, job.id, failure.state, failure.message, failure.retry, {}, null, null, failure.state === "uncertain").catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * Posts claimed together are prepared at the same time and published in one
+ * run, where different accounts post side by side (each account still posts
+ * one post at a time). Total time is about the slowest post, not the sum.
+ */
+async function runCentralPublishingJobs(pairing: CentralCompanionPairing, jobs: CentralPublishingJob[]) {
+  if (!jobs.length) return;
+  const prepared = await Promise.all(jobs.map((job) => prepareCentralPublishingJob(pairing, job)));
+  const ready = prepared.filter((entry) => entry.ready);
+  if (!ready.length) return;
+  for (const entry of ready) entry.startPublishingHeartbeat();
+  let runError: unknown = null;
+  try {
+    await runAutomation({ trigger: "companion", workspaceId: pairing.workspaceId, uploadIds: ready.map((entry) => entry.job.payload.upload.id) });
+  } catch (error) {
+    runError = error;
+  }
+  await Promise.all(ready.map((entry) => entry.finish(runError)));
 }
 
 async function runCentralScrapingJob(
@@ -657,12 +715,15 @@ async function pollCentralWorkspaceCompanion() {
     const jobs = await supabaseRpc<CentralCompanionJob[]>(pairing, "companion_claim_jobs", {
       p_token: pairing.pairingToken,
       p_instance_id: publishingCompanionId(),
-      p_limit: 1,
+      p_limit: centralClaimLimit,
     });
-    for (const job of jobs || []) {
-      if (job.type === "publish") await runCentralPublishingJob(pairing, job);
-      else await runCentralScrapingJob(pairing, job);
-    }
+    // Posts go out side by side; scraping runs one job at a time alongside them.
+    const publishing = (jobs || []).filter((job): job is CentralPublishingJob => job.type === "publish");
+    const scraping = (jobs || []).filter((job): job is Exclude<CentralCompanionJob, CentralPublishingJob> => job.type !== "publish");
+    await Promise.all([
+      runCentralPublishingJobs(pairing, publishing),
+      (async () => { for (const job of scraping) await runCentralScrapingJob(pairing, job); })(),
+    ]);
   } catch (error) {
     // A network outage is normal while the server is unavailable. The next
     // heartbeat retries automatically without exposing secrets in the UI.

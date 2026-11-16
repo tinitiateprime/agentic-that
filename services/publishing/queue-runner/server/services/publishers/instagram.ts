@@ -6,6 +6,7 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { prepareInstagramMedia } from "./instagram-media.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 import { activateComposerControl } from "./composer-control.js";
+import { clickFinalAction } from "./final-click.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
 const INSTAGRAM_LOGIN_URL = "https://www.instagram.com/accounts/login/";
@@ -557,8 +558,8 @@ async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promis
 
   if (!shareButton) throw new Error("Could not find Instagram Share button.");
 
-  await shareButton.scrollIntoViewIfNeeded();
-  await shareButton.click({ force: true, timeout: 10000 });
+  await shareButton.scrollIntoViewIfNeeded().catch(() => undefined);
+  await clickFinalAction(page, shareButton, "Instagram Share");
   await onSubmitted?.();
   await page.waitForTimeout(300);
 

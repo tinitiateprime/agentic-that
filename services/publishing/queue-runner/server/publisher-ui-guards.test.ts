@@ -61,14 +61,16 @@ test("LinkedIn publishing waits for durable provider acceptance", () => {
   assert.match("Uploading video... 18% Keep the page open to finish uploading", LINKEDIN_UPLOAD_ACTIVE_TEXT);
   assert.match("Processing video", LINKEDIN_UPLOAD_ACTIVE_TEXT);
   assert.match("Posting...", LINKEDIN_UPLOAD_ACTIVE_TEXT);
-  assert.equal(linkedinMediaSettleMs(Number.NaN), 90_000);
-  assert.equal(linkedinMediaSettleMs(5_000), 30_000);
+  assert.equal(linkedinMediaSettleMs(Number.NaN), 20_000, "a video gets a short minimum");
+  assert.equal(linkedinMediaSettleMs(Number.NaN, false), 0, "a photo closes once LinkedIn confirms");
+  assert.equal(linkedinMediaSettleMs(5_000), 5_000);
   assert.equal(linkedinMediaSettleMs(600_000), 300_000);
 });
 
-test("LinkedIn media publishing retains the browser for its upload safety window", async () => {
+test("LinkedIn keeps the browser open while its upload finishes, by media kind", async () => {
   const linkedin = await readFile(new URL("./services/publishers/linkedin.ts", import.meta.url), "utf8");
-  assert.match(linkedin, /waitForPostComplete\(page, submissionEvidence, !isTextOnly\)/);
+  assert.match(linkedin, /waitForPostComplete\(page, submissionEvidence, media\)/);
+  assert.match(linkedin, /const backgroundWork = await linkedInBackgroundWork\(page\)/);
   assert.match(linkedin, /Date\.now\(\) - startedAt >= minimumSettleMs/);
 });
 
@@ -296,8 +298,10 @@ test("central publishing drains its lease heartbeat before a terminal update", a
   const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
   assert.match(source, /let leaseHeartbeatUpdate: Promise<unknown> \| null = null/);
   assert.match(source, /if \(leaseHeartbeatUpdate\) await leaseHeartbeatUpdate/);
-  assert.match(source, /await runAutomation[\s\S]{0,700}await stopLeaseHeartbeat\(\)[\s\S]{0,700}status === "posted"/);
-  assert.match(source, /catch \(error\) \{\s*await stopLeaseHeartbeat\(\)/);
+  // Each post's lease refresh is drained before its terminal state is written.
+  assert.match(source, /finish: async \(runError: unknown\) => \{[\s\S]{0,500}await stopLeaseHeartbeat\(\)[\s\S]{0,500}status === "posted"/);
+  assert.match(source, /const fail = async \(error: unknown\) => \{\s*await stopLeaseHeartbeat\(\)/);
+  assert.match(source, /await runAutomation\([\s\S]{0,300}await Promise\.all\(ready\.map\(\(entry\) => entry\.finish\(runError\)\)\)/);
 });
 
 test("large website media batches gateway authorization and completion requests", async () => {
