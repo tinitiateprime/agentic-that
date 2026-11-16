@@ -9,8 +9,8 @@ test("profile destinations survive intake, schema validation, and submit URL con
     const options = requireRedditOptions("reddit", { reddit: { subreddit: input, title: "Profile post" } })!.reddit;
     assert.equal(options.subreddit, "u_Creative-Alarm-3814");
     assert.equal(redditOptionsSchema.parse({ subreddit: input, title: "Profile post" }).subreddit, options.subreddit);
-    assert.equal(redditSubmitUrl(options.subreddit, "text"), "https://www.reddit.com/r/u_Creative-Alarm-3814/submit/?type=TEXT");
-    assert.equal(redditSubmitUrl(input, "media"), "https://www.reddit.com/r/u_Creative-Alarm-3814/submit/?type=IMAGE");
+    assert.equal(redditSubmitUrl(options.subreddit, "text"), "https://www.reddit.com/user/Creative-Alarm-3814/submit/?type=TEXT");
+    assert.equal(redditSubmitUrl(input, "media"), "https://www.reddit.com/user/Creative-Alarm-3814/submit/?type=IMAGE");
     assert.equal(redditDestinationLabel(options.subreddit), "u/Creative-Alarm-3814");
   }
 });

@@ -6,7 +6,7 @@
 import type { Locator, Page } from "playwright-core";
 import fs from "fs";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { requireRedditOptions, resolveRedditDestination } from "../../../shared/reddit-options.js";
+import { redditDestinationLabel, requireRedditOptions, resolveRedditDestination } from "../../../shared/reddit-options.js";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { clickFinalAction } from "./final-click.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
@@ -26,7 +26,65 @@ export function redditPostIdFromUrl(url: string) {
 /** The community's submit page for this kind of post. */
 export function redditSubmitUrl(subreddit: string, kind: "text" | "media") {
   const name = resolveRedditDestination(subreddit);
-  return `https://www.reddit.com/r/${encodeURIComponent(name)}/submit/?type=${kind === "text" ? "TEXT" : "IMAGE"}`;
+  const path = /^u_/i.test(name) ? `user/${encodeURIComponent(name.slice(2))}` : `r/${encodeURIComponent(name)}`;
+  return `https://www.reddit.com/${path}/submit/?type=${kind === "text" ? "TEXT" : "IMAGE"}`;
+}
+
+/** Verify the destination Reddit selected, including the profile URL used by its picker. */
+export function isRedditComposerDestination(url: string, destination: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || !/^(www\.)?reddit\.com$/i.test(parsed.hostname)) return false;
+    const selected = parsed.pathname.match(/^\/(user|r)\/([^/]+)\/submit\/?$/i);
+    if (!selected) return false;
+    const name = resolveRedditDestination(destination);
+    const selectedName = decodeURIComponent(selected[2]);
+    return (selected[1].toLowerCase() === "user" ? `u_${selectedName}` : selectedName).toLowerCase() === name.toLowerCase();
+  } catch { return false; }
+}
+
+/** Follow Reddit's Create > Select Community picker before touching the post content. */
+export async function openRedditComposer(page: Page, destination: string, timeoutMs = 30_000) {
+  const name = resolveRedditDestination(destination);
+  const label = redditDestinationLabel(name);
+  const create = await firstVisible([
+    page.getByRole("link", { name: /^create(?: a?\s*post)?$/i }),
+    page.getByRole("button", { name: /^create(?: a?\s*post)?$/i }),
+    page.locator('a[href="/submit"], a[href="/submit/"]'),
+  ], timeoutMs);
+  if (!create) throw new Error("Reddit's Create button didn't appear. Open Reddit and check the account's login.");
+  console.log("Opening Reddit Create...");
+  await create.click({ timeout: timeoutMs });
+  const select = await firstVisible([
+    page.getByRole("button", { name: /^select community$/i }),
+    page.getByRole("combobox", { name: /select community/i }),
+    page.getByText(/^select community$/i),
+  ], timeoutMs);
+  if (!select) throw new Error("Reddit's Select Community control didn't appear after Create.");
+  await select.click({ timeout: timeoutMs });
+
+  // Prefer the modal so the site's global Search Reddit box is never filled.
+  const dialog = await firstVisible([
+    page.getByRole("dialog").filter({ hasText: /choose community/i }),
+    page.locator('faceplate-dialog, dialog, [aria-modal="true"]').filter({ hasText: /choose community/i }),
+  ]);
+  const picker = dialog || page.locator("body");
+  const search = await firstVisible([
+    picker.getByPlaceholder(/^search(?: communities| for a community)?$/i),
+    ...(dialog ? [dialog.getByRole("searchbox"), dialog.getByRole("textbox")] : []),
+  ], timeoutMs);
+  if (!search) throw new Error("Reddit's community picker search didn't open.");
+  console.log(`Selecting Reddit destination ${label}...`);
+  await search.fill(label);
+  // Match the entire handle, never the first suggestion or a partial username.
+  const exactLabel = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+  const result = await firstVisible([picker.getByText(exactLabel)], timeoutMs);
+  if (!result) throw new Error(`Reddit didn't offer ${label} in Select Community. Check that this account can post there.`);
+  await result.click({ timeout: timeoutMs });
+  await page.waitForURL(url => isRedditComposerDestination(url.toString(), name), { timeout: timeoutMs }).catch(() => {
+    throw new Error(`Reddit didn't confirm ${label} as the post destination. No post was submitted.`);
+  });
+  await search.waitFor({ state: "hidden", timeout: timeoutMs });
 }
 
 /** Reddit's refusals, in plain words (null when the text isn't one). */
@@ -180,7 +238,7 @@ async function fillBody(page: Page, text: string) {
     page.locator('[name="body"] [contenteditable="true"], div[contenteditable="true"][role="textbox"]'),
     page.getByRole("textbox", { name: /body/i }),
   ], 10_000);
-  if (!body) return;
+  if (!body) throw new Error("Reddit's post body editor didn't appear. No post was submitted.");
   await body.click();
   await page.keyboard.insertText(text);
 }
@@ -312,13 +370,14 @@ export async function postToReddit(page: Page, upload: PlatformUpload, accountLo
   const username = await redditUsername(page);
   if (!username) throw new Error("Couldn't verify the logged-in Reddit account. Reconnect Reddit and try again.");
   const destination = resolveRedditDestination(reddit.subreddit, username);
-  await page.goto(redditSubmitUrl(destination, "text"), { timeout: 60000, waitUntil: "domcontentloaded" });
+  await openRedditComposer(page, destination);
   await page.waitForTimeout(2000);
   await dismissRedditInterruptions(page);
   await fillTitle(page, reddit.title);
   if (!isTextOnly) await attachMedia(page, filePath, upload.postFormat === "video" || /^video\//i.test(upload.mimeType || "") ? "video" : "image");
   await fillBody(page, String(upload.caption || "").trim());
   await setTags(page, reddit.nsfw, reddit.spoiler);
+  if (!isRedditComposerDestination(page.url(), destination)) throw new Error("Reddit's post destination changed while preparing the post. No post was submitted.");
   const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted);
   await assertRedditPostKept(page, redditPostIdFromUrl(posted) || posted);
   return { success: true };
