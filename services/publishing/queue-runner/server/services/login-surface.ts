@@ -12,7 +12,7 @@ type ManualLoginSurfaceInput = {
   embeddedBrowserAvailable: boolean;
 };
 
-const externalBrowserRequiredPlatforms = new Set<Platform>(["facebook", "x", "youtube"]);
+const externalBrowserRequiredPlatforms = new Set<Platform>(["facebook", "x", "youtube", "reddit"]);
 
 export function platformRequiresExternalBrowser(platform: Platform) {
   return externalBrowserRequiredPlatforms.has(platform);

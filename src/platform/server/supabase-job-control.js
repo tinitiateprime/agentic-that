@@ -11,7 +11,8 @@ export const SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const JOB_TYPES = new Set(["publish", "scrape.instagram", "scrape.facebook"]);
 const JOB_PLATFORMS = new Set(["instagram", "facebook", "x", "linkedin", "youtube", "reddit"]);
-const API_ENGINE_PLATFORMS = new Set(["reddit"]);
+// Every app publishes through the Companion (Reddit included, in its external browser).
+const API_ENGINE_PLATFORMS = new Set();
 const ACTIVE_JOB_STATES = new Set([
   "queued", "waiting_for_companion", "claimed", "running", "opening_platform",
   "uploading", "publishing", "reconnect_required", "cancel_requested",
@@ -37,7 +38,7 @@ function safeText(value, maximum = 500) {
 
 function publishingEngineForPlatform(platform, requestedEngine = "companion") {
   if (API_ENGINE_PLATFORMS.has(platform)) return "api";
-  return platform === "facebook" || platform === "x" || platform === "youtube" || requestedEngine === "external_browser"
+  return platform === "facebook" || platform === "x" || platform === "youtube" || platform === "reddit" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }

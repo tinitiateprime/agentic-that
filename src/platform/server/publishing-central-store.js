@@ -39,13 +39,13 @@ const MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const SCHEDULE_FREQUENCIES = new Set(["daily", "weekly", "biweekly", "monthly", "yearly", "custom", "onetime"]);
 const TERMINAL_JOB_STATES = new Set(["published", "failed", "uncertain", "cancelled"]);
 const PLATFORM_CAPTION_LIMITS = { instagram: 2200, x: 280, linkedin: 3000, facebook: 63206, youtube: 5000, reddit: 40000 };
-// Reddit publishes only through Zernio, never the Companion or an external
-// browser, whatever engine an edit or Companion inventory requests.
-const API_ENGINE_PLATFORMS = new Set(["reddit"]);
+// Every app publishes through the Companion. (Reddit used to publish only
+// through Zernio's API; it now uses the Companion's external browser.)
+const API_ENGINE_PLATFORMS = new Set();
 
 function companionPublishingEngine(platformName, requestedEngine = "companion") {
   if (API_ENGINE_PLATFORMS.has(platformName)) return "api";
-  return platformName === "facebook" || platformName === "x" || platformName === "youtube" || requestedEngine === "external_browser"
+  return platformName === "facebook" || platformName === "x" || platformName === "youtube" || platformName === "reddit" || requestedEngine === "external_browser"
     ? "external_browser"
     : "companion";
 }

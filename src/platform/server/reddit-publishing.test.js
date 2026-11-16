@@ -91,43 +91,30 @@ test("Zernio request errors retry only when the post cannot have been duplicated
   assert.equal(redditRequestErrorOutcome(Object.assign(new Error("Connect first"), { status: 409, reconnect: true })).state, "reconnect_required");
 });
 
-test("Reddit always publishes through Zernio and never waits for the Companion", () => {
+test("Reddit publishes through the Companion's external browser, like X, Facebook and YouTube", () => {
   const { accountReadiness, companionPublishingEngine } = centralPublishingTestHelpers;
-  assert.equal(companionPublishingEngine("reddit", "api"), "api");
-  assert.equal(companionPublishingEngine("reddit", "companion"), "api");
-  assert.equal(companionPublishingEngine("reddit", "external_browser"), "api");
+  assert.equal(companionPublishingEngine("reddit", "companion"), "external_browser");
+  assert.equal(companionPublishingEngine("reddit", "api"), "external_browser");
   assert.equal(companionPublishingEngine("instagram", "api"), "companion");
   assert.equal(companionPublishingEngine("x", "api"), "external_browser");
-  assert.equal(accountReadiness({ platform: "reddit", enabled: true, credentialConfigured: true, executionEngine: "api" }, null), "ready");
-  assert.equal(accountReadiness({ platform: "reddit", enabled: true, credentialConfigured: false, executionEngine: "api" }, null), "reconnect_required");
-  assert.equal(accountReadiness({ platform: "instagram", enabled: true, credentialConfigured: true, executionEngine: "companion" }, null), "waiting_for_companion");
+  assert.equal(accountReadiness({ platform: "reddit", enabled: true, credentialConfigured: true, executionEngine: "external_browser" }, null), "waiting_for_companion");
+  assert.equal(accountReadiness({ platform: "reddit", enabled: true, credentialConfigured: false, executionEngine: "external_browser" }, null), "reconnect_required");
 });
 
-test("central intake validates Reddit posts and queues API jobs without a Companion", () => {
+test("central intake validates Reddit posts and queues them for the Companion", () => {
   const document = {
     accounts: [
-      { id: "reddit_api", workspaceId: "workspace_1", platform: "reddit", enabled: true, credentialConfigured: true, executionEngine: "api" },
-      { id: "reddit_unconnected", workspaceId: "workspace_1", platform: "reddit", enabled: true, credentialConfigured: false, executionEngine: "companion" },
+      { id: "reddit_account", workspaceId: "workspace_1", platform: "reddit", enabled: true, credentialConfigured: true, executionEngine: "external_browser" },
     ],
     uploads: [], jobs: [], schedules: [], activityLogs: [], companions: [],
   };
   const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
   const create = (input) => centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
 
-  assert.throws(() => create({ accountId: "reddit_api", postFormat: "text", caption: "Body" }), /subreddit/);
-  const upload = create({ accountId: "reddit_api", postFormat: "text", caption: "Body", platformOptions: redditOptions });
-  assert.deepEqual(document.uploads.find((item) => item.id === upload.id).platformOptions, {
-    reddit: { subreddit: "marketing", title: "Launch notes", nsfw: false, spoiler: false },
-  });
-  assert.equal(document.jobs.find((job) => job.uploadId === upload.id).state, "queued");
-  assert.equal(upload.statusDetail, "queued");
-
-  const videoInput = { postFormat: "video", caption: "Clip", originalName: "clip.mp4", mimeType: "video/mp4", rightsConfirmed: true, platformOptions: redditOptions };
-  const apiVideo = create({ ...videoInput, accountId: "reddit_api" });
-  assert.equal(document.jobs.find((job) => job.uploadId === apiVideo.id).state, "queued");
-  // A Reddit account is never routed to the Companion, even before it connects.
-  const unconnected = create({ ...videoInput, accountId: "reddit_unconnected" });
-  assert.equal(document.jobs.find((job) => job.uploadId === unconnected.id).state, "queued");
-  assert.equal(unconnected.companionStatus, "offline");
-  assert.notEqual(unconnected.statusDetail, "waiting_for_companion");
+  assert.throws(() => create({ accountId: "reddit_account", postFormat: "text", caption: "Body" }), /subreddit/);
+  const upload = create({ accountId: "reddit_account", postFormat: "text", caption: "Body", platformOptions: redditOptions });
+  assert.equal(document.uploads.find((item) => item.id === upload.id).platformOptions.reddit.subreddit, "marketing");
+  // With no Companion online, the post waits for it like every other app.
+  assert.equal(document.jobs.find((job) => job.uploadId === upload.id).state, "waiting_for_companion");
+  assert.equal(upload.statusDetail, "waiting_for_companion");
 });

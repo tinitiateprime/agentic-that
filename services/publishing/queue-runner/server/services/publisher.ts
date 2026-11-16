@@ -34,6 +34,7 @@ import { discoverLinkedInManagedPages, loginToLinkedIn, postToLinkedIn } from ".
 import type { AccountLogin } from "./publishers/manual-login.js";
 import { loginToYouTube, postToYouTube } from "./publishers/youtube.js";
 import { loginToX, postToX } from "./publishers/x.js";
+import { loginToReddit, postToReddit } from "./publishers/reddit.js";
 import {
   publishingDesktopHost,
   type DesktopBrowserPurpose,
@@ -60,13 +61,13 @@ import {
 import { requestCentralWorkspaceSync } from "../central-sync.js";
 
 const SESSION_STATE_ALGORITHM = "aes-256-gcm";
-// Reddit is absent: it publishes only through Zernio on the platform server.
 const platformLoginUrls: Partial<Record<PublishingAccount["platform"], string>> = {
   instagram: "https://www.instagram.com/accounts/login/",
   x: "https://x.com/i/flow/login",
   linkedin: "https://www.linkedin.com/login/",
   facebook: "https://www.facebook.com/login/",
   youtube: "https://www.youtube.com/upload",
+  reddit: "https://www.reddit.com/login/",
 };
 
 type BrowserStorageOrigin = {
@@ -687,7 +688,7 @@ async function publishOne(page: Page, upload: PlatformUpload, options: AccountLo
     case "instagram": return postToInstagram(page, upload, login);
     case "facebook": return postToFacebook(page, upload, login);
     case "x": return postToX(page, upload, login);
-    case "reddit": throw new Error("Reddit posts publish through Zernio, not the Companion.");
+    case "reddit": return postToReddit(page, upload, login);
   }
 }
 
@@ -705,7 +706,7 @@ async function loginOnly(page: Page, account: PublishingAccount, options: Accoun
     case "instagram": return loginToInstagram(page, undefined, false, login);
     case "facebook": return loginToFacebook(page, undefined, false, login);
     case "x": return loginToX(page, undefined, false, login);
-    case "reddit": throw new Error("Reddit accounts connect through Zernio, not the Companion.");
+    case "reddit": return loginToReddit(page, login);
   }
 }
 
