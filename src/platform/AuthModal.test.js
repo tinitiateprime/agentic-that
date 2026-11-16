@@ -38,7 +38,15 @@ async function authModalPage(context, initialMode = "signup") {
   const browser = await chromium.launch({ executablePath, headless: true });
   context.after(() => browser.close());
   const page = await browser.newPage();
+  page.on("pageerror", error => context.diagnostic(`Auth UI error: ${error.message}`));
   return { page, url: `http://127.0.0.1:${server.address().port}/` };
+}
+
+async function openAuthModal(page, url) {
+  await page.goto(url);
+  // The modal focuses its first input after mounting. Wait for that lifecycle
+  // step so it cannot steal focus while Playwright fills or submits the form.
+  await page.waitForFunction(() => document.activeElement === document.querySelector(".auth-form input"));
 }
 
 test("signup keeps verification pending and updates delivery status after resend", async (context) => {
@@ -55,7 +63,7 @@ test("signup keeps verification pending and updates delivery status after resend
       ? {status: 503, json: {error: "Email delivery is temporarily unavailable. Please try again later or contact support."}}
       : {json: {ok: true, message: "If the account needs verification, a new link has been sent."}});
   });
-  await page.goto(url);
+  await openAuthModal(page, url);
   await page.getByLabel("Full name").fill("AWS email test");
   await page.getByLabel("Company", {exact:true}).fill("AWS UI test");
   await page.getByLabel("Work email").fill("test@example.com");
@@ -93,10 +101,15 @@ test("login shows automatic verification delivery and lets a failed send recover
   await page.route("**/api/platform-auth/resend-verification", route => route.fulfill({ json: {
     ok: true, message: "If the account needs verification, a new link has been sent.",
   } }));
-  await page.goto(url);
+  await openAuthModal(page, url);
   await page.getByLabel("Work email").fill("person@example.com");
   await page.getByPlaceholder("Enter your password").fill("test-password-123");
-  await page.getByRole("button", { name: "Continue to AgenticThat" }).click();
+  const [loginResponse] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === "/api/platform-auth/login" && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Continue to AgenticThat" }).click(),
+  ]);
+  assert.deepEqual(loginResponse.request().postDataJSON(), { email: "person@example.com", password: "test-password-123" });
+  assert.equal(loginResponse.status(), 403);
   await page.locator(".auth-notice").filter({ hasText: "A verification link has been sent" }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Resend verification email" }).count(), 1);
   assert.deepEqual(await page.evaluate(() => window.authEvents), []);
