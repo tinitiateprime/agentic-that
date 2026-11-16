@@ -67,6 +67,13 @@ test("Zernio Reddit posts carry the subreddit, title, tags, and media", () => {
   assert.throws(() => buildZernioRedditPost({ postFormat: "text", caption: "x", platformOptions: {} }, { zernioAccountId: "acc_1" }), /subreddit/);
 });
 
+test("legacy API profile posts resolve the connected account for My profile", () => {
+  const upload = { postFormat: "text", caption: "Body", platformOptions: { reddit: { subreddit: "u/me", title: "Profile post" } } };
+  const post = buildZernioRedditPost(upload, { zernioAccountId: "acc_1", username: "Creative-Alarm-3814" });
+  assert.equal(post.platforms[0].platformSpecificData.subreddit, "u_Creative-Alarm-3814");
+  assert.throws(() => buildZernioRedditPost(upload, { zernioAccountId: "acc_1" }), /identify/);
+});
+
 test("Zernio publish results map to queue outcomes", () => {
   assert.deepEqual(redditTargetOutcome({ status: "published", platformPostUrl: "https://reddit.com/r/x/comments/1", platformPostId: "t3_1" }),
     { state: "success", url: "https://reddit.com/r/x/comments/1", id: "t3_1" });
@@ -117,4 +124,9 @@ test("central intake validates Reddit posts and queues them for the Companion", 
   // With no Companion online, the post waits for it like every other app.
   assert.equal(document.jobs.find((job) => job.uploadId === upload.id).state, "waiting_for_companion");
   assert.equal(upload.statusDetail, "waiting_for_companion");
+  for (const [destination, normalized] of [["u/Creative-Alarm-3814", "u_Creative-Alarm-3814"], ["u/me", "u/me"]]) {
+    const profileUpload = create({ accountId: "reddit_account", postFormat: "text", caption: `Body for ${destination}`, platformOptions: { reddit: { subreddit: destination, title: `Post to ${destination}` } } });
+    assert.equal(document.uploads.find((item) => item.id === profileUpload.id).platformOptions.reddit.subreddit, normalized);
+    assert.equal(document.jobs.find((job) => job.uploadId === profileUpload.id).state, "waiting_for_companion");
+  }
 });

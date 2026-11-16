@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidRedditDestination, normalizeSubreddit } from "./reddit-options.js";
 
 export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube", "reddit"] as const;
 export const postFormats = ["image", "video", "text"] as const;
@@ -17,7 +18,7 @@ export const youtubeOptionsSchema = z.object({
   visibility: z.enum(["private", "unlisted", "public"]),
 });
 export const redditOptionsSchema = z.object({
-  subreddit: z.string().trim().regex(/^[A-Za-z0-9_]{2,21}$/, "Use a subreddit name such as r/marketing"),
+  subreddit: z.string().transform(normalizeSubreddit).refine(isValidRedditDestination, "Use a subreddit such as r/marketing or your profile such as u/yourname"),
   title: z.string().trim().min(1, "Reddit posts need a title").max(300),
   nsfw: z.boolean().optional(),
   spoiler: z.boolean().optional(),

@@ -15,6 +15,7 @@ import type { ActivityLog, ContentSubmission, LinkedInManagedPage, Platform, Pla
 import { platformLabels, platformPostRules, platforms, publishingEngineLabels, scheduleFrequencies, scheduleFrequencyLabels, userRoleLabels, userRoles } from "../shared/schema.ts";
 import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
+import { isValidRedditDestination, normalizeSubreddit, redditDestinationLabel, REDDIT_MY_PROFILE } from "../shared/reddit-options.js";
 
 // --- PLATFORM BRAND ICONS ---
 const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number }) => {
@@ -1240,9 +1241,9 @@ function UnifiedComposer({
   const contentReady = Boolean(postFormat && description.trim() && (postFormat === 'text' || file));
   const youtubeDetailsReady = !selectedNeedsTitle || Boolean(title.trim() && youtubeAudience && youtubeVisibility);
   const selectedNeedsReddit = selectedPlatforms.includes('reddit');
-  const redditSubredditName = redditSubreddit.trim().replace(/^\/?r\//i, '').replace(/\/+$/, '');
+  const redditSubredditName = normalizeSubreddit(redditSubreddit);
   const redditDetailsError = !selectedNeedsReddit ? ''
-    : !/^[A-Za-z0-9_]{2,21}$/.test(redditSubredditName) ? 'Enter the subreddit for the Reddit post, such as r/marketing.'
+    : !isValidRedditDestination(redditSubredditName) ? 'Enter a community (r/marketing) or your profile (u/yourname).'
       : !redditTitle.trim() ? 'Enter a Reddit post title.'
         : redditTitle.trim().length > 300 ? 'Reddit titles must be 300 characters or fewer.' : '';
   const destinationsReady = Boolean(selectedDestinations.length && youtubeDetailsReady && !redditDetailsError);
@@ -1568,7 +1569,9 @@ function UnifiedComposer({
                 </fieldset>}
                 {platform === 'reddit' && selectedCount > 0 && <fieldset className='composer-youtube-options'>
                   <legend><span><CustomIcon platform='reddit' size={16} /></span><span><strong>Reddit post details</strong><small>Used for every selected Reddit account. {postFormat === 'text' ? 'The post text becomes the Reddit body.' : 'The description is added as body text where the subreddit allows it.'}</small></span></legend>
-                  <label className='composer-field'><span>Subreddit</span><input value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' maxLength={24} required /></label>
+                  <label className='composer-field'><span>Community or profile</span><input value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community or u/yourname' maxLength={25} required /></label>
+                  <button type='button' onClick={() => setRedditSubreddit(REDDIT_MY_PROFILE)}>My profile</button>
+                  <small>My profile posts to each selected account's own profile, where visitors and followers can see it.</small>
                   <label className='composer-field'><span>Reddit title <small>{redditTitle.length}/300</small></span><input value={redditTitle} onChange={event => setRedditTitle(event.target.value)} placeholder='Enter the post title' maxLength={300} required /></label>
                   <label className='composer-rights-confirmation'><input type='checkbox' checked={redditNsfw} onChange={event => setRedditNsfw(event.target.checked)} /><span><strong>NSFW</strong><small>Mark the post as not safe for work.</small></span></label>
                   <label className='composer-rights-confirmation'><input type='checkbox' checked={redditSpoiler} onChange={event => setRedditSpoiler(event.target.checked)} /><span><strong>Spoiler</strong><small>Blur the post until readers open it.</small></span></label>
@@ -2877,7 +2880,7 @@ function NetworkPostPreview({
       </article>}
 
       {upload.platform === 'reddit' && <article className='network-post linkedin-post'>
-        {profile(upload.platformOptions?.reddit?.subreddit ? `r/${upload.platformOptions.reddit.subreddit}` : 'r/community', `Posted by ${accountHandle} · now`)}
+        {profile(upload.platformOptions?.reddit?.subreddit ? redditDestinationLabel(upload.platformOptions.reddit.subreddit) : 'r/community', `Posted by ${accountHandle} · now`)}
         <p className='linkedin-copy'><strong>{title.trim() || 'Post title'}</strong></p>
         {postFormat === 'text' ? <p className='linkedin-copy'>{postText}</p> : media}
         <div className='linkedin-actions'><span><ThumbsUp size={16} /> Vote</span><span><MessageCircle size={16} /> Comment</span><span><Share2 size={16} /> Share</span></div>
@@ -2935,7 +2938,7 @@ function EditPostModal({
     if (canEditContent && !caption.trim()) return alert(postFormat === "text" ? "Post text is required" : "Caption is required");
     if (canEditContent && isYouTubeVideo && !title.trim()) return alert("Video title is required");
     if (canEditContent && isYouTubeVideo && (!youtubeAudience || !youtubeVisibility)) return alert("Choose the YouTube audience and visibility.");
-    if (canEditContent && isReddit && (!redditSubreddit.trim() || !redditTitle.trim())) return alert("Enter the subreddit and Reddit title.");
+    if (canEditContent && isReddit && (!isValidRedditDestination(redditSubreddit) || !redditTitle.trim())) return alert("Enter a community or profile and Reddit title.");
 
     const scheduledDate = scheduleMode === 'exact' && schedule ? new Date(schedule) : null;
     if (canEditSchedule && scheduleMode === 'exact' && !scheduledDate) return alert("Choose a scheduled date and time.");
@@ -2952,7 +2955,7 @@ function EditPostModal({
         payload.caption = caption.trim();
         payload.accountId = accountId;
         if (isYouTubeVideo) payload.platformOptions = { youtube: { audience: youtubeAudience, visibility: youtubeVisibility } };
-        if (isReddit) payload.platformOptions = { reddit: { ...upload.platformOptions?.reddit, subreddit: redditSubreddit.trim().replace(/^\/?r\//i, ''), title: redditTitle.trim() } };
+        if (isReddit) payload.platformOptions = { reddit: { ...upload.platformOptions?.reddit, subreddit: normalizeSubreddit(redditSubreddit), title: redditTitle.trim() } };
       }
       if (canEditSchedule) {
         payload.scheduledAt = scheduleMode === 'exact' ? scheduledDate?.toISOString() ?? null : null;
@@ -2995,7 +2998,7 @@ if (permissions.canRunAutomation) {
               </div>
               <div className='field'><label>Publish through account</label><select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={!canEditContent}>{accounts.map(account => <option key={account.id} value={account.id}>{account.displayName} ({account.handle}) - {publishingEngineLabels[accountPublishingEngine(account)]}{account.enabled ? '' : ' - paused'}</option>)}</select></div>
               {isReddit && <>
-                <div className='field'><label>Subreddit</label><input type='text' value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community' disabled={!canEditContent} /></div>
+                <div className='field'><label>Community or profile</label><input type='text' value={redditSubreddit} onChange={event => setRedditSubreddit(event.target.value)} placeholder='r/community or u/yourname' disabled={!canEditContent} /><button type='button' disabled={!canEditContent} onClick={() => setRedditSubreddit(REDDIT_MY_PROFILE)}>My profile</button><small>Uses the selected account's own profile.</small></div>
                 <div className='field'><label>Reddit title</label><input type='text' value={redditTitle} onChange={event => setRedditTitle(event.target.value)} maxLength={300} disabled={!canEditContent} /></div>
               </>}
               {isYouTubeVideo && (

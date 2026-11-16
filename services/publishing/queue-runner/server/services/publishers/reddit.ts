@@ -6,7 +6,7 @@
 import type { Locator, Page } from "playwright-core";
 import fs from "fs";
 import type { PlatformUpload } from "../../../shared/schema.js";
-import { requireRedditOptions } from "../../../shared/reddit-options.js";
+import { requireRedditOptions, resolveRedditDestination } from "../../../shared/reddit-options.js";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { clickFinalAction } from "./final-click.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
@@ -25,7 +25,7 @@ export function redditPostIdFromUrl(url: string) {
 
 /** The community's submit page for this kind of post. */
 export function redditSubmitUrl(subreddit: string, kind: "text" | "media") {
-  const name = subreddit.replace(/^\/?r\//i, "").replace(/\/+$/, "");
+  const name = resolveRedditDestination(subreddit);
   return `https://www.reddit.com/r/${encodeURIComponent(name)}/submit/?type=${kind === "text" ? "TEXT" : "IMAGE"}`;
 }
 
@@ -309,13 +309,60 @@ export async function postToReddit(page: Page, upload: PlatformUpload, accountLo
   if (!isTextOnly && !fs.existsSync(filePath)) throw new Error(`Reddit upload file not found: ${filePath}`);
 
   await loginToReddit(page, accountLogin);
-  await page.goto(redditSubmitUrl(reddit.subreddit, "text"), { timeout: 60000, waitUntil: "domcontentloaded" });
+  const username = await redditUsername(page);
+  if (!username) throw new Error("Couldn't verify the logged-in Reddit account. Reconnect Reddit and try again.");
+  const destination = resolveRedditDestination(reddit.subreddit, username);
+  await page.goto(redditSubmitUrl(destination, "text"), { timeout: 60000, waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2000);
   await dismissRedditInterruptions(page);
   await fillTitle(page, reddit.title);
   if (!isTextOnly) await attachMedia(page, filePath, upload.postFormat === "video" || /^video\//i.test(upload.mimeType || "") ? "video" : "image");
   await fillBody(page, String(upload.caption || "").trim());
   await setTags(page, reddit.nsfw, reddit.spoiler);
-  await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted);
+  const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted);
+  await assertRedditPostKept(page, redditPostIdFromUrl(posted) || posted);
   return { success: true };
+}
+
+/** A community's AutoModerator note, cut to its first sentences. */
+export function summarizeRemovalNote(note: string) {
+  const text = note
+    .replace(/\s+/g, " ")
+    .replace(/\*?I am a bot[\s\S]*$/i, "")
+    .replace(/[*_>#`]+/g, "")
+    .replace(/^\s*(hi|hello|hey)\b,?\s*(u\/)?[\w-]*,?\s*/i, "")
+    .trim();
+  return text.split(/(?<=[.!?])\s+/).slice(0, 3).join(" ").slice(0, 400);
+}
+
+/**
+ * Communities often remove new posts automatically (account age, karma, rules)
+ * a few seconds after Reddit accepts them. The post only counts as published if
+ * it is still up shortly after; otherwise the community's own reason is shown.
+ */
+export async function assertRedditPostKept(page: Page, postId: string) {
+  if (!/^[a-z0-9]+$/i.test(postId)) return;
+  const deadline = Date.now() + Number(process.env.REDDIT_REMOVAL_CHECK_MS ?? 25_000);
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(5000);
+    const removal = await page.evaluate(async (id) => {
+      try {
+        // The post page's data (the post, then its comments); /api/info.json is blocked for browsers.
+        const response = await fetch(`https://www.reddit.com/comments/${id}.json?raw_json=1&limit=10`, { credentials: "include", cache: "no-store" });
+        if (!response.ok) return null;
+        const listing = await response.json();
+        const post = listing?.[0]?.data?.children?.[0]?.data;
+        const automod = (listing?.[1]?.data?.children || []).map((child: { data?: Record<string, unknown> }) => child.data || {})
+          .find((comment: Record<string, unknown>) => String(comment.author || "").toLowerCase() === "automoderator" && /removed/i.test(String(comment.body || "")));
+        if (!post?.removed_by_category && !automod) return null;
+        return { category: String(post?.removed_by_category || "automod"), note: String(automod?.body || "") };
+      } catch {
+        return null;
+      }
+    }, postId).catch(() => null);
+    if (removal) {
+      const reason = summarizeRemovalNote(removal.note);
+      throw new Error(`Reddit published the post, but ${removal.note ? "the community's AutoModerator" : "Reddit's filters"} removed it right away.${reason ? ` Their reason: ${reason}` : " Check the community's rules (account age, karma, flair) before posting there again."}`);
+    }
+  }
 }

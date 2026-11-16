@@ -12,6 +12,7 @@ import { api, ContentPreflightApiError, setCentralAuthToken } from "../../../ser
 import { platformPostRules } from "../../../services/publishing/queue-runner/shared/schema";
 import { AiLogo } from "./AiStatusBar";
 import { postTextFor } from "./post-text";
+import { isValidRedditDestination, normalizeSubreddit, REDDIT_MY_PROFILE } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
 import styles from "./social-seo.module.css";
 
 export const POST_PLATFORMS = [
@@ -131,7 +132,7 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
     if (limit && platform !== "x" && String(draft.text || "").length > limit) problems.push(`The ${label} text is longer than ${label} allows (${limit.toLocaleString()} characters).`);
     if (platform === "reddit") {
       if (!String(draft.title || "").trim()) problems.push("Reddit needs a title.");
-      if (!/^[A-Za-z0-9_]{2,21}$/.test(String(draft.subreddit || "").replace(/^\/?r\//i, ""))) problems.push("Reddit needs a community to post in, such as r/marketing.");
+      if (!isValidRedditDestination(draft.subreddit)) problems.push("Choose a Reddit community (r/marketing) or your profile (u/yourname).");
     }
     if (platform === "youtube" && kind === "video" && !String(draft.title || "").trim()) problems.push("YouTube needs a video title.");
   }
@@ -155,7 +156,7 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
         title: youtubeVideo ? String(drafts.youtube?.title || "").trim() : "",
         platformOptions: {
           ...(youtubeVideo ? { youtube: { audience: "not_made_for_kids", visibility: youtubeVisibility } } : {}),
-          ...(reddit ? { reddit: { subreddit: String(reddit.subreddit).replace(/^\/?r\//i, ""), title: String(reddit.title).trim() } } : {}),
+          ...(reddit ? { reddit: { subreddit: normalizeSubreddit(reddit.subreddit), title: String(reddit.title).trim() } } : {}),
         },
         description: textOf(chosenAccounts[0].platform),
         destinations: chosenAccounts.map((account) => ({
@@ -314,7 +315,11 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
                             <label className={styles.postField}>Title<input value={draft.title || ""} onChange={(event) => setDraft(platform.id, { title: event.target.value })} maxLength={platform.id === "youtube" ? 100 : 300} /></label>
                           )}
                           {platform.id === "reddit" && (
-                            <label className={styles.postField}>Community<input value={draft.subreddit || ""} onChange={(event) => setDraft("reddit", { subreddit: event.target.value })} placeholder="r/marketing" /></label>
+                            <>
+                              <label className={styles.postField}>Community or profile<input value={draft.subreddit || ""} onChange={(event) => setDraft("reddit", { subreddit: event.target.value })} placeholder="r/marketing or u/yourname" /></label>
+                              <button type="button" onClick={() => setDraft("reddit", { subreddit: REDDIT_MY_PROFILE })}>My profile</button>
+                              <small className={styles.muted}>My profile uses each selected account's own profile. Profile posts appear on your profile and can reach followers.</small>
+                            </>
                           )}
                           <label className={styles.postField}>
                             {platform.id === "youtube" ? (kind === "video" ? "Description" : "Community post text") : platform.id === "reddit" ? "Post" : "Text"}

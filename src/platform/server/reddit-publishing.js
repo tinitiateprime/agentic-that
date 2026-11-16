@@ -1,6 +1,6 @@
 import { Zernio, ZernioApiError } from "@zernio/node";
 import { getDatabaseSql } from "../../../lib/database-document-store.js";
-import { requireRedditOptions } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
+import { redditDestinationLabel, requireRedditOptions, resolveRedditDestination } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
 import { openSupabaseJobArtifactStream } from "./supabase-job-control.js";
 
 // Reddit publishing through Zernio (https://zernio.com), a hosted social
@@ -130,7 +130,7 @@ export async function disconnectRedditConnection(workspaceId, accountId) {
 
 // --- Publishing ---------------------------------------------------------------
 
-export function buildZernioRedditPost(upload, { zernioAccountId, mediaUrl = "" }) {
+export function buildZernioRedditPost(upload, { zernioAccountId, mediaUrl = "", username = "" }) {
   const { reddit } = requireRedditOptions("reddit", upload?.platformOptions);
   const format = upload.postFormat || "text";
   if (format !== "text" && !mediaUrl) throw redditError("The Reddit media was not uploaded.", 502);
@@ -144,7 +144,7 @@ export function buildZernioRedditPost(upload, { zernioAccountId, mediaUrl = "" }
       platform: "reddit",
       accountId: zernioAccountId,
       platformSpecificData: {
-        subreddit: reddit.subreddit,
+        subreddit: resolveRedditDestination(reddit.subreddit, username),
         title: reddit.title,
         nsfw: reddit.nsfw,
         spoiler: reddit.spoiler,
@@ -215,7 +215,7 @@ async function publishRedditJob(job, idempotencyAttempt) {
   const connection = await connectionRow(job.workspace_id, job.account_id);
   if (!connection) throw redditError("Connect this Reddit account first.", 409, { reconnect: true });
   const mediaUrl = upload.postFormat && upload.postFormat !== "text" ? await uploadMediaToZernio(upload) : "";
-  const body = buildZernioRedditPost(upload, { zernioAccountId: connection.zernio_account_id, mediaUrl });
+  const body = buildZernioRedditPost(upload, { zernioAccountId: connection.zernio_account_id, mediaUrl, username: connection.reddit_username });
   const { data } = await zernio().posts.createPost({
     body: { ...body, metadata: { agenticthatJobId: job.id, agenticthatWorkspaceId: job.workspace_id } },
     headers: { "Idempotency-Key": `agenticthat-${job.id}-${idempotencyAttempt}` },
@@ -310,7 +310,7 @@ async function applyRedditOutcome(sql, job, outcome, result = {}) {
   if (outcome.state === "success") {
     await finishRedditJob(sql, job, {
       status: "success", outcome: "SUCCESS",
-      message: `Posted to r/${subreddit}${outcome.url ? `: ${outcome.url}` : "."}`,
+      message: `Posted to ${redditDestinationLabel(subreddit)}${outcome.url ? `: ${outcome.url}` : "."}`,
       result: { ...result, redditUrl: outcome.url, redditId: outcome.id },
     });
   } else if (outcome.state === "in_flight") {
