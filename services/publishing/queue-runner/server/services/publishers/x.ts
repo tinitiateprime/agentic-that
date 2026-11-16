@@ -341,6 +341,60 @@ async function fillXCaption(page: Page, caption: string) {
   console.log("X caption entered.");
 }
 
+/** X's #hashtag / @mention suggestions: their invisible backdrop covers the Post button. */
+async function closeXSuggestions(page: Page) {
+  const suggestions = await firstVisible([
+    page.locator('[data-testid="typeaheadDropdown"]'),
+    page.locator('[role="dialog"] [role="listbox"]'),
+    page.locator('[role="listbox"][id^="typeaheadDropdown"]'),
+  ]);
+  // Escape closes only the suggestions; without them it would offer to discard the post.
+  if (!suggestions) return false;
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(400);
+  return true;
+}
+
+/** True once the composer has gone (X closes it as soon as the post is submitted). */
+async function xComposerClosed(page: Page, composer: Locator, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await composer.isVisible().catch(() => false))) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
+/**
+ * Submits the post once: a normal click; if something on the page still
+ * covers the button, X's own shortcut (Ctrl+Enter in the composer); and only
+ * if the composer is still open after that, a direct click on the button.
+ */
+export async function submitXPost(page: Page, composer: Locator, postButton: Locator) {
+  await closeXSuggestions(page);
+  try {
+    await postButton.click({ timeout: 4000 });
+    return "click";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/intercepts pointer events|Timeout/i.test(message)) throw error;
+    console.log("Something covered the X Post button; using X's Ctrl+Enter shortcut.");
+  }
+  await closeXSuggestions(page);
+  const editor = await firstVisible([composer.locator('[data-testid="tweetTextarea_0"]'), composer.locator('[contenteditable="true"][role="textbox"]')]);
+  if (editor) {
+    await editor.focus().catch(() => undefined);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
+    if (await xComposerClosed(page, composer, 4000)) return "shortcut";
+  }
+  if (await postButton.isVisible().catch(() => false) && await postButton.isEnabled().catch(() => false)) {
+    console.log("Clicking the X Post button directly.");
+    await postButton.evaluate((button) => (button as HTMLElement).click());
+    return "direct";
+  }
+  return "shortcut";
+}
+
 export async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void) {
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer before publishing.");
@@ -362,7 +416,7 @@ export async function clickXPostWhenReady(page: Page, requireMedia: boolean, onS
 
     if (postButton && mediaReady && await postButton.isEnabled().catch(() => false)) {
       console.log("Clicking X Post button...");
-      await postButton.click({ timeout: 10000 });
+      await submitXPost(page, composer, postButton);
       await onSubmitted?.();
       return composer;
     }
