@@ -198,122 +198,90 @@ async function dismissPostLoginPrompts(page: Page) {
   }
 }
 
-/** Sidebar links that are never Create: they go to a page (in any language). */
-export function isKnownInstagramRailLink(href: string) {
-  const path = href.replace(/^https?:\/\/(www\.)?instagram\.com/i, "");
-  return /^\/(reels|direct|explore|notifications|accounts|stories|threads|meta|about|legal|ai)\b/i.test(path)
-    || path === "/"
-    || /^\/[A-Za-z0-9._]{1,30}\/?$/.test(path);
-}
+/** Labels Instagram gives its Create icon, depending on the account and layout. */
+const INSTAGRAM_CREATE_LABEL = /^(new post|create|create new|create new post|post)$/i;
 
 /**
- * Finds Create by what it does: clicks the sidebar's icons that don't go to a
- * known page until Instagram's composer or its "Create new" menu opens.
+ * Instagram's Create entry, as seen live: a sidebar link (not inside <nav>)
+ * whose icon is labelled "New post", "Create" or, on some accounts, "Post".
  */
-async function openCreateFromRail(page: Page) {
-  const items = page.locator('nav a, nav [role="button"], nav [role="link"], [role="navigation"] a, [role="navigation"] [role="button"], div[role="link"]');
-  const count = Math.min(await items.count().catch(() => 0), 40);
+async function findInstagramCreateTrigger(page: Page) {
+  const icons = page.locator("svg[aria-label]");
+  const count = Math.min(await icons.count().catch(() => 0), 60);
   for (let index = 0; index < count; index += 1) {
-    const item = items.nth(index);
-    if (!(await item.isVisible().catch(() => false))) continue;
-    const href = (await item.getAttribute("href").catch(() => null)) || "";
-    if (href && href !== "#" && isKnownInstagramRailLink(href)) continue;
-    const label = `${(await item.getAttribute("aria-label").catch(() => "")) || ""} ${(await item.innerText().catch(() => "")) || ""}`;
-    if (/home|search|explore|reels|messages|notifications|profile|more|threads|also from meta/i.test(label)) continue;
-    const startUrl = page.url();
-    await item.click({ timeout: 3000 }).catch(() => undefined);
-    await page.waitForTimeout(800);
-    if (page.url().split("#")[0] !== startUrl.split("#")[0]) {
-      // That icon was a page link, not Create: go back and try the next one.
-      await page.goto(startUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
-      await page.waitForTimeout(800);
-      continue;
-    }
-    if (await waitForInstagramComposerReady(page, 1200)) return true;
-    const menu = await firstVisible([
-      page.getByText(/^Create new$/i),
-      page.locator('[role="menu"], [role="dialog"]').filter({ has: page.locator('svg, img') }),
-    ]);
-    if (menu) {
-      // The "Create new" menu: Post is its first choice in any language.
-      const post = await firstVisible([
-        page.getByRole("menuitem", { name: /^post$/i }),
-        page.locator('[role="menu"] [role="button"], [role="menu"] [role="menuitem"], [role="menu"] a').filter({ hasText: /^post$/i }),
-        page.locator('[role="menu"] [role="menuitem"], [role="menu"] [role="button"], [role="menu"] a').first(),
-      ]);
-      if (post) {
-        await activateComposerControl(post);
-        if (await waitForInstagramComposerReady(page, 15_000)) return true;
+    const icon = icons.nth(index);
+    const label = ((await icon.getAttribute("aria-label").catch(() => "")) || "").trim();
+    if (!INSTAGRAM_CREATE_LABEL.test(label)) continue;
+    if (!(await icon.isVisible().catch(() => false))) continue;
+    const clickable = icon.locator('xpath=ancestor::*[self::a or self::button or @role="link" or @role="button"][1]');
+    // Some layouts wrap the icon in a plain clickable <div>.
+    const trigger = (await clickable.count().catch(() => 0)) > 0 ? clickable : icon.locator("xpath=..");
+    const href = (await trigger.getAttribute("href").catch(() => null)) || "";
+    // Create never leaves the page: its link is "#" (or Instagram's /create/ route).
+    if (href && href !== "#" && !/\/create/i.test(href)) continue;
+    return trigger;
+  }
+  // The classic layout names the link itself.
+  return firstVisible([
+    page.getByRole("link", { name: /^(create|new post)$/i }),
+    page.getByRole("button", { name: /^(create|new post)$/i }),
+    page.locator('a[href*="/create"]'),
+  ]);
+}
+
+/** The "Post" choice in the Create new menu: never the sidebar link that opened it. */
+async function findCreateMenuPost(page: Page, trigger: Locator | null, timeout: number, menuOnly = false) {
+  const triggerHandle = trigger ? await trigger.elementHandle().catch(() => null) : null;
+  const items = '[role="menuitem"], [role="button"], [role="link"], a, button, span, div';
+  const isPost = { hasText: /^\s*Post\s*$/i };
+  const scopes = [
+    // Inside the menu titled "Create new" first, then any open menu or dialog.
+    page.getByText(/^Create new$/i).locator("xpath=..").locator(items).filter(isPost),
+    page.locator('[role="menu"], [role="dialog"]').locator(items).filter(isPost),
+    ...(menuOnly ? [] : [page.locator(items).filter(isPost)]),
+  ];
+  const deadline = Date.now() + timeout;
+  do {
+    for (const candidates of scopes) {
+      const count = Math.min(await candidates.count().catch(() => 0), 30);
+      for (let index = count - 1; index >= 0; index -= 1) {
+        const candidate = candidates.nth(index);
+        if (!(await candidate.isVisible().catch(() => false))) continue;
+        const insideTrigger = triggerHandle
+          ? await candidate.evaluate((element, triggerElement) => !!triggerElement && (triggerElement.contains(element) || element.contains(triggerElement as Node)), triggerHandle).catch(() => false)
+          : false;
+        if (!insideTrigger) return candidate;
       }
     }
-    await page.keyboard.press("Escape").catch(() => undefined);
-    await page.waitForTimeout(300);
-  }
-  return false;
+    if (Date.now() < deadline) await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return null;
 }
 
 export async function clickCreateButton(page: Page) {
   console.log("Clicking Instagram create button...");
+  if (await waitForInstagramComposerReady(page, 300)) return;
 
-  const createButton = await firstVisible([
-    page.getByRole("link", { name: /Create|New post/i }),
-    page.getByRole("button", { name: /Create|New post/i }),
-    page.locator('svg[aria-label="New post"]'),
-    page.locator('svg[aria-label="Create"]'),
-    page.locator('a[href*="/create"]'),
-  ]) || await firstVisible([
-    // Some accounts use the combined photo/video Create new icon in the rail.
-    page.locator('svg[aria-label="Create new" i], svg[aria-label="Create new post" i]'),
-    page.locator('[aria-label="Create new" i], [title="Create new" i]'),
-  ]);
+  const trigger = await findInstagramCreateTrigger(page);
+  // A Create new menu may already be open from an earlier click.
+  const alreadyOpenPost = await findCreateMenuPost(page, trigger, 0, true);
+  if (!trigger && !alreadyOpenPost) throw new Error("Could not find Instagram's Create (New post) button in the sidebar.");
 
-  const createMenu = page.getByText(/^Create new$/i).locator("..");
-  const openCreateMenu = await firstVisible([createMenu.getByText(/^Post$/i)]);
-  if (!createButton && !openCreateMenu) {
-    // Icons-only sidebars (and other languages) have no "Create" name to find: try the rail's other icons.
-    if (await openCreateFromRail(page)) {
-      console.log("Instagram post composer opened from the sidebar.");
+  if (trigger && !alreadyOpenPost) {
+    await activateComposerControl(trigger);
+    if (await waitForInstagramComposerReady(page, 2500)) {
+      console.log("Instagram post composer opened directly.");
       return;
     }
-    throw new Error("Could not find Instagram's Create or Create new control.");
-  }
-
-  // If Create new > Post is already open, choose Post without closing the menu.
-  if (createButton && !openCreateMenu) {
-    await activateComposerControl(createButton);
-    await page.waitForTimeout(350);
-  }
-
-  if (await waitForInstagramComposerReady(page, 2500)) {
-    console.log("Instagram post composer opened directly.");
-    return;
   }
 
   console.log("Instagram Create menu opened; choosing Post...");
-  const postOption = await waitForAnyVisible([
-    createMenu.getByRole("menuitem", { name: /^Post$/i }),
-    createMenu.getByRole("link", { name: /^Post$/i }),
-    createMenu.getByRole("button", { name: /^Post$/i }),
-    createMenu.getByText(/^Post$/i),
-    page.getByRole("menuitem", { name: /^Post$/i }),
-    page.getByRole("link", { name: /^Post$/i }),
-    page.getByRole("button", { name: /^Post$/i }),
-    page.locator('[role="menu"] [role="button"]').filter({ hasText: /^Post$/i }),
-    page.locator('[role="dialog"] [role="button"]').filter({ hasText: /^Post$/i }),
-    page.locator('div[role="button"]').filter({ hasText: /^Post$/i }),
-    page.getByText(/^Post$/i),
-  ], 15000);
-
-  if (!postOption) {
-    throw new Error("Instagram Create menu opened, but the Post option was not available.");
-  }
-
+  const postOption = alreadyOpenPost || await findCreateMenuPost(page, trigger, 15_000);
+  if (!postOption) throw new Error("Instagram's Create menu opened, but its Post option was not available.");
   await activateComposerControl(postOption);
-
-  if (!await waitForInstagramComposerReady(page, 20000)) {
+  if (!await waitForInstagramComposerReady(page, 20_000)) {
     throw new Error("Instagram Post was selected, but the Create new post composer did not open.");
   }
-
   console.log("Instagram Post selected and composer ready.");
 }
 
@@ -362,7 +330,7 @@ async function uploadInstagramMedia(page: Page, filePath: string) {
     }
 
     const fileChooserPromise = page.waitForEvent("filechooser", { timeout: 10000 }).catch(() => null);
-    await selectButton.click({ force: true, timeout: 10000 });
+    await activateComposerControl(selectButton);
 
     const fileChooser = await fileChooserPromise;
     if (fileChooser) {
@@ -415,7 +383,7 @@ async function selectOriginalAspectAndClickNext(page: Page) {
 
     await page.mouse.click(dialogBox.x + 42, dialogBox.y + dialogBox.height - 42);
   } else {
-    await cropToggle.click({ force: true, timeout: 10000 });
+    await activateComposerControl(cropToggle);
   }
 
   await page.waitForTimeout(250);
@@ -430,7 +398,7 @@ async function selectOriginalAspectAndClickNext(page: Page) {
     throw new Error("Could not find Instagram Original crop option.");
   }
 
-  await originalOption.click({ force: true, timeout: 10000 });
+  await activateComposerControl(originalOption);
   await page.waitForTimeout(250);
 
   console.log("Clicking Instagram crop Next button...");
@@ -441,7 +409,7 @@ async function selectOriginalAspectAndClickNext(page: Page) {
 
   if (!nextButton) throw new Error("Could not find Instagram Next button.");
 
-  await nextButton.click({ force: true, timeout: 10000 });
+  await activateComposerControl(nextButton);
   await page.waitForTimeout(350);
 }
 
@@ -465,7 +433,7 @@ async function clickInstagramEditNext(page: Page) {
   if (!nextButton) throw new Error("Could not find Instagram edit Next button.");
 
   await nextButton.scrollIntoViewIfNeeded();
-  await nextButton.click({ force: true, timeout: 10000 });
+  await activateComposerControl(nextButton);
 
   const shareReady = await waitForAnyVisible([
     page.getByRole("button", { name: /^Share$/i }),
@@ -531,7 +499,7 @@ async function clickDoneAfterInstagramShared(page: Page) {
 
     if (sharedScreen && doneButton) {
       console.log("Instagram reported the reel as shared. Clicking Done...");
-      await doneButton.click({ force: true, timeout: 10000 });
+      await activateComposerControl(doneButton);
       await page.waitForTimeout(1000);
       return;
     }

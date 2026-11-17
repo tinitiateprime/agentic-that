@@ -9,7 +9,9 @@ export async function activateComposerControl(control: Locator) {
     await control.click({ timeout: 5000 });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!/outside of the viewport/i.test(message)) throw error;
+    // Tiles resize while several accounts post, and overlays can cover a control:
+    // fall back to the element's own click when the pointer can't reach it.
+    if (!/outside of the viewport|intercepts pointer events|not stable|Timeout/i.test(message)) throw error;
     await control.evaluate((element) => {
       const target = element.closest<HTMLElement>('[role="menuitem"], [role="link"], [role="button"], a, button')
         ?? element as HTMLElement;

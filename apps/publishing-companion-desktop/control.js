@@ -93,18 +93,20 @@ function scheduleLayout() {
   layoutFrame = requestAnimationFrame(() => {
     layoutFrame = null;
     const browserElements = [...document.querySelectorAll("[data-browser-session]")];
+    // Managed-Chrome tiles share the grid too, so count every live tile.
+    const liveTiles = document.querySelectorAll(".live-browser-slot").length;
     const browsers = browserElements
       .map(element => {
         const bounds = elementBounds(element);
         if (!bounds) return null;
         // Keep a consistent desktop-sized page inside every tile. Electron's
         // zoom expands the page's CSS viewport as it decreases, so fitting both
-        // dimensions prevents responsive platform UIs from being cropped.
+        // dimensions prevents responsive platform UIs (Instagram's phone layout
+        // below 768px) from replacing the desktop controls. A tile keeps 100%
+        // only when it already holds a desktop-sized page.
         const fitWidth = bounds.width / 1_100;
         const fitHeight = bounds.height / 700;
-        const zoomFactor = browserElements.length <= 1
-          ? 1
-          : Math.max(0.4, Math.min(0.9, fitWidth, fitHeight));
+        const zoomFactor = Math.max(0.4, Math.min(liveTiles <= 1 ? 1 : 0.9, fitWidth, fitHeight));
         return { id: element.dataset.browserSession, bounds, zoomFactor };
       })
       .filter(Boolean)

@@ -1,4 +1,5 @@
 // The ready-to-post text one AI wrote for one app, shaped for posting.
+import { REDDIT_MY_PROFILE } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
 
 const withTags = (text, tags) => [String(text || "").trim(), (tags || []).filter(Boolean).join(" ")].filter(Boolean).join("\n\n");
 
@@ -8,8 +9,8 @@ export function postTextFor(platform, result, kind) {
   if (platform === "instagram") return { text: withTags(result.caption, result.hashtags) };
   if (platform === "youtube") return { text: String(result.description || "").trim(), title: kind === "video" ? String(result.title || "").trim() : "" };
   if (platform === "reddit") {
-    const subreddit = String(result.subreddits?.[0] || "").replace(/^\/?r\//i, "").trim();
-    return { text: String(result.post || "").trim(), title: String(result.title || "").trim(), subreddit };
+    // Reddit posts always go to the account's own profile.
+    return { text: String(result.post || "").trim(), title: String(result.title || "").trim(), subreddit: REDDIT_MY_PROFILE };
   }
   return { text: withTags(result.post, result.hashtags) };
 }

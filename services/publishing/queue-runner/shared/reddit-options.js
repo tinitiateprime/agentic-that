@@ -40,10 +40,9 @@ export function resolveRedditDestination(value, username = "") {
 export function requireRedditOptions(platform, platformOptions) {
   if (platform !== "reddit") return undefined;
   const options = platformOptions?.reddit;
-  const subreddit = normalizeSubreddit(options?.subreddit);
-  if (!isValidRedditDestination(subreddit)) {
-    throw new Error("Choose a subreddit such as r/marketing or your profile such as u/yourname.");
-  }
+  // Reddit posts always go to the posting account's own profile (u/<name>),
+  // whatever an older form or job may have saved as a community.
+  const subreddit = REDDIT_MY_PROFILE;
   const title = String(options?.title || "").replace(/\s+/g, " ").trim();
   if (!title) throw new Error("Reddit posts need a title.");
   if (title.length > REDDIT_TITLE_LIMIT) throw new Error(`Reddit titles must be ${REDDIT_TITLE_LIMIT} characters or fewer.`);

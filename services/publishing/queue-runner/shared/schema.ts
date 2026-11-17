@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isValidRedditDestination, normalizeSubreddit } from "./reddit-options.js";
+import { REDDIT_MY_PROFILE } from "./reddit-options.js";
 
 export const platforms = ["instagram", "x", "linkedin", "facebook", "youtube", "reddit"] as const;
 export const postFormats = ["image", "video", "text"] as const;
@@ -18,7 +18,8 @@ export const youtubeOptionsSchema = z.object({
   visibility: z.enum(["private", "unlisted", "public"]),
 });
 export const redditOptionsSchema = z.object({
-  subreddit: z.string().transform(normalizeSubreddit).refine(isValidRedditDestination, "Use a subreddit such as r/marketing or your profile such as u/yourname"),
+  // Always the account's own profile; any saved community is ignored.
+  subreddit: z.string().optional().transform(() => REDDIT_MY_PROFILE),
   title: z.string().trim().min(1, "Reddit posts need a title").max(300),
   nsfw: z.boolean().optional(),
   spoiler: z.boolean().optional(),

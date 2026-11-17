@@ -77,19 +77,24 @@ test("LinkedIn opens an editor that requires a trusted browser click", { skip: !
   } finally { await browser.close(); }
 });
 
-test("Instagram finds Create on an icons-only sidebar with no Create label", { skip: !executablePath }, async () => {
-  const browser = await chromium.launch({ executablePath: executablePath!, headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent(`<nav>
-        <a href="/" aria-label="Home"><svg></svg></a>
-        <a href="/reels/"><svg></svg></a>
-        <a href="#" onclick="event.preventDefault();document.querySelector('#menu').hidden=false"><svg></svg></a>
-      </nav>
-      <div id="menu" role="menu" hidden><span>Create new</span>
-        <div role="menuitem" onclick="document.querySelector('#composer').hidden=false">Post</div></div>
-      <div id="composer" role="dialog" hidden>Create new post<input type="file"></div>`);
-    await clickCreateButton(page);
-    assert.equal(await page.locator('#composer').isVisible(), true);
-  } finally { await browser.close(); }
-});
+for (const direct of [false, true]) {
+  test(`Instagram's sidebar Create icon labelled "Post" ${direct ? "opens the composer" : "opens Create new and Post is chosen"}`, { skip: !executablePath }, async () => {
+    const browser = await chromium.launch({ executablePath: executablePath!, headless: true });
+    try {
+      const page = await browser.newPage();
+      // The live layout: the sidebar is not a <nav>, and Create is a "#" link whose icon says "Post".
+      await page.setContent(`<div class="rail">
+          <a href="/" role="link"><svg aria-label="Home" width="24" height="24"></svg></a>
+          <a href="/reels/" role="link"><svg aria-label="Reels" width="24" height="24"></svg></a>
+          <a href="#" role="link" id="create" onclick="event.preventDefault();document.querySelector('${direct ? "#composer" : "#menu"}').hidden=false"><svg aria-label="Post" width="24" height="24"></svg><span style="display:none">Post</span></a>
+          <a href="#" role="link"><svg aria-label="Settings" width="24" height="24"></svg></a>
+        </div>
+        <div id="menu" hidden><span>Create new</span>
+          <div role="button" onclick="document.querySelector('#composer').hidden=false">Post</div>
+          <div role="button">AI</div></div>
+        <div id="composer" role="dialog" hidden>Create new post<input type="file"></div>`);
+      await clickCreateButton(page);
+      assert.equal(await page.locator("#composer").isVisible(), true);
+    } finally { await browser.close(); }
+  });
+}

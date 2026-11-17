@@ -43,53 +43,68 @@ export function isRedditComposerDestination(url: string, destination: string) {
   } catch { return false; }
 }
 
-/** Follow Reddit's Create > Select Community picker before touching the post content. */
+/** The picker's menu item for this destination: "u/<name> · Your profile" or "r/<name> · members". */
+export function redditPickerItemPattern(label: string) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // The whole handle only: u/name never matches u/name2.
+  return new RegExp(`^\\s*${escaped}(?![A-Za-z0-9_-])`, "i");
+}
+
+/**
+ * Reddit's own flow, as a person does it (checked live on reddit.com):
+ * Create -> "Select Community" -> the picker's search box (focused, a <textarea>)
+ * -> type "u/" for the account's profile or the community name -> click the
+ * exact menu item -> Reddit opens /user/<name>/submit/ or /r/<name>/submit/.
+ */
 export async function openRedditComposer(page: Page, destination: string, timeoutMs = 30_000) {
   const name = resolveRedditDestination(destination);
   const label = redditDestinationLabel(name);
-  const create = await firstVisible([
-    page.getByRole("link", { name: /^create(?: a?\s*post)?$/i }),
-    page.getByRole("button", { name: /^create(?: a?\s*post)?$/i }),
-    page.locator('a[href="/submit"], a[href="/submit/"]'),
-  ], timeoutMs);
-  if (!create) throw new Error("Reddit's Create button didn't appear. Open Reddit and check the account's login.");
-  console.log("Opening Reddit Create...");
-  await create.click({ timeout: timeoutMs });
-  const select = await firstVisible([
-    page.getByRole("button", { name: /^select community$/i }),
-    page.getByRole("combobox", { name: /select community/i }),
-    page.getByText(/^select community$/i),
-  ], timeoutMs);
-  if (!select) throw new Error("Reddit's Select Community control didn't appear after Create.");
-  await select.click({ timeout: timeoutMs });
+  const isProfile = /^u_/i.test(name);
+  try {
+    const create = await firstVisible([
+      page.locator('a[href="/submit"], a[href="/submit/"], a[href^="/submit?"]'),
+      page.getByRole("link", { name: /^create(?: post)?$/i }),
+      page.getByRole("button", { name: /^create(?: post)?$/i }),
+    ], timeoutMs);
+    if (!create) throw new Error("Reddit's Create button didn't appear.");
+    console.log("Opening Reddit Create...");
+    await create.click({ timeout: timeoutMs });
 
-  // Prefer the modal so the site's global Search Reddit box is never filled.
-  const dialog = await firstVisible([
-    page.getByRole("dialog").filter({ hasText: /choose community/i }),
-    page.locator('faceplate-dialog, dialog, [aria-modal="true"]').filter({ hasText: /choose community/i }),
-  ], Math.min(timeoutMs, 3000));
-  const picker = dialog || page.locator("body");
-  const search = await firstVisible([
-    picker.locator('faceplate-search-input input, faceplate-text-input[placeholder="Search"] input'),
-    picker.getByPlaceholder(/^search(?: communities| for a community)?$/i),
-    ...(dialog ? [dialog.getByRole("searchbox"), dialog.getByRole("textbox")] : []),
-  ], timeoutMs);
-  if (!search) throw new Error("Reddit's community picker search didn't open.");
-  console.log(`Selecting Reddit destination ${label}...`);
-  await search.click({ timeout: timeoutMs });
-  await search.fill("");
-  // Reddit offers the account's own profile when the picker receives `u/`.
-  // Real key events also reach search components that debounce on keyboard input.
-  await search.pressSequentially(/^u_/i.test(name) ? "u/" : label, { delay: 100 });
-  // Match the entire handle, never the first suggestion or a partial username.
-  const exactLabel = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
-  const result = await firstVisible([picker.getByText(exactLabel)], timeoutMs);
-  if (!result) throw new Error(`Reddit didn't offer ${label} in Select Community. Check that this account can post there.`);
-  await result.click({ timeout: timeoutMs });
-  await page.waitForURL(url => isRedditComposerDestination(url.toString(), name), { timeout: timeoutMs }).catch(() => {
-    throw new Error(`Reddit didn't confirm ${label} as the post destination. No post was submitted.`);
-  });
-  await search.waitFor({ state: "hidden", timeout: timeoutMs });
+    const select = await firstVisible([page.getByRole("button", { name: /^select (?:a )?community$/i })], timeoutMs);
+    if (!select) throw new Error("Reddit's Select Community button didn't appear.");
+    await select.click({ timeout: timeoutMs });
+
+    // The picker's own search box has the plain "Search" placeholder (the site
+    // search says "Search Reddit"), so the wrong box is never typed into.
+    const search = await firstVisible([
+      page.locator('faceplate-search-input textarea[placeholder="Search"], faceplate-search-input input[placeholder="Search"]'),
+    ], timeoutMs);
+    if (!search) throw new Error("Reddit's Choose community search didn't open.");
+    console.log(`Selecting Reddit destination ${label}...`);
+    await search.click({ timeout: timeoutMs });
+    await search.fill("");
+    // Real key presses: Reddit searches as the user types.
+    await search.pressSequentially(isProfile ? "u/" : name, { delay: 120 });
+
+    const item = await firstVisible([page.getByRole("menuitem").filter({ hasText: redditPickerItemPattern(label) })], timeoutMs);
+    if (!item) {
+      throw new Error(isProfile
+        ? `Reddit didn't offer ${label} (Your profile) after typing u/.`
+        : `Reddit didn't offer ${label} in Choose community. Check the community name and that this account can post there.`);
+    }
+    await item.click({ timeout: timeoutMs });
+    await page.waitForURL(url => isRedditComposerDestination(url.toString(), name), { timeout: timeoutMs });
+  } catch (error) {
+    // Same destination by its own address when the picker misbehaves.
+    console.warn(`Reddit's picker didn't select ${label} (${error instanceof Error ? error.message : error}); opening its post page directly.`);
+    await page.goto(redditSubmitUrl(name, "text"), { waitUntil: "domcontentloaded" });
+    const problem = await redditPageProblem(page);
+    if (problem) throw new Error(problem);
+  }
+  if (!isRedditComposerDestination(page.url(), name)) {
+    throw new Error(`Reddit didn't open ${label} as the post destination. No post was submitted.`);
+  }
+  console.log(`Reddit destination ${label} selected.`);
 }
 
 /** Reddit's refusals, in plain words (null when the text isn't one). */
@@ -212,7 +227,8 @@ export async function loginToReddit(page: Page, accountLogin?: AccountLogin) {
 
 /** Any refusal Reddit shows on the submit page, in plain words. */
 async function redditPageProblem(page: Page) {
-  const texts = await page.locator('[role="alert"], faceplate-toast, [slot="error"], faceplate-form-helper-text, .error, shreddit-async-loader [role="status"]')
+  // Reddit lists submit errors under the Post button as plain <li> items.
+  const texts = await page.locator('[role="alert"], faceplate-toast, [slot="error"], faceplate-form-helper-text, .error, shreddit-async-loader [role="status"], r-post-form-submit-button ~ ul li, ul li:has-text("doesn\'t exist"), ul li:has-text("try again")')
     .evaluateAll((elements) => elements.filter((element) => (element as HTMLElement).offsetParent !== null || element.getClientRects().length).map((element) => (element.textContent || "").trim()).filter(Boolean))
     .catch(() => [] as string[]);
   for (const text of texts) {
@@ -224,9 +240,8 @@ async function redditPageProblem(page: Page) {
 
 async function fillTitle(page: Page, title: string) {
   const field = await firstVisible([
+    page.locator('post-composer-title textarea[name="title"]'),
     page.locator('textarea[name="title"]'),
-    page.getByRole("textbox", { name: /^title/i }),
-    page.locator('faceplate-textarea-input[name="title"] textarea'),
   ], 30_000);
   if (!field) {
     const problem = await redditPageProblem(page);
@@ -239,9 +254,8 @@ async function fillTitle(page: Page, title: string) {
 async function fillBody(page: Page, text: string) {
   if (!text) return;
   const body = await firstVisible([
-    page.locator('shreddit-composer [contenteditable="true"]'),
-    page.locator('[name="body"] [contenteditable="true"], div[contenteditable="true"][role="textbox"]'),
-    page.getByRole("textbox", { name: /body/i }),
+    page.locator('div[name="body"][contenteditable="true"]'),
+    page.locator('shreddit-composer [contenteditable="true"][role="textbox"]'),
   ], 10_000);
   if (!body) throw new Error("Reddit's post body editor didn't appear. No post was submitted.");
   await body.click();
@@ -262,8 +276,8 @@ async function attachMedia(page: Page, filePath: string, kind: "image" | "video"
     .catch(() => undefined);
   // Reddit's form makes a photo or video post from its own Image / Video button (as a person would).
   const button = await firstVisible([
+    page.locator(kind === "video" ? "post-composer-toolbar-button-video button" : "post-composer-toolbar-button-image button"),
     page.locator("post-composer-standalone-toolbar").getByRole("button", { name: kind === "video" ? /^video$/i : /^image$/i }),
-    page.getByRole("button", { name: kind === "video" ? /^video$/i : /^image$/i }),
   ], 20_000);
   if (button) {
     const chooser = page.waitForEvent("filechooser", { timeout: 15_000 });
@@ -388,7 +402,14 @@ export async function postToReddit(page: Page, upload: PlatformUpload, accountLo
   await fillBody(page, String(upload.caption || "").trim());
   await setTags(page, reddit.nsfw, reddit.spoiler);
   if (!isRedditComposerDestination(page.url(), destination)) throw new Error("Reddit's post destination changed while preparing the post. No post was submitted.");
-  const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted);
+  const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    // Reddit answers PROFILE_SUBREDDIT_NOEXIST ("that community doesn't exist") when it won't take profile posts from this account.
+    if (/^u_/i.test(destination) && /doesn.t exist/i.test(message)) {
+      throw new Error(`Reddit refused to post on u/${username}'s profile (Reddit says the profile "doesn't exist"; new or low-karma accounts often can't post to their profile yet). Nothing was posted. Choose a community, or try again once the account is older.`);
+    }
+    throw error;
+  });
   await assertRedditPostKept(page, redditPostIdFromUrl(posted) || posted);
   return { success: true };
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { detectedExternalBrowserExecutablePath } from "./engines/external-browser/index.js";
-import { isRedditComposerDestination, openRedditComposer, postToReddit, submitAndConfirm } from "./services/publishers/reddit.js";
+import { isRedditComposerDestination, redditPickerItemPattern, openRedditComposer, postToReddit, submitAndConfirm } from "./services/publishers/reddit.js";
 import type { PlatformUpload } from "../shared/schema.js";
 
 const executablePath = detectedExternalBrowserExecutablePath();
@@ -26,11 +26,11 @@ async function fixture(page: Page, destination: string, wrongSelection = false, 
       ${url.pathname === "/submit" ? `
         <button onclick="record('picker');document.querySelector('dialog').showModal()">Select Community</button>
         <dialog aria-label="Choose community"><h2>Choose community</h2>
-          <input placeholder="Search" onfocus="record('search-focused')" oninput="searchProfiles(this)">
-          <div id="results" hidden>
-            <button onclick="record('wrong');location.href='/r/wrong/submit/'">${label}-other</button>
-            <button onclick="selectDestination()">${label}</button>
-          </div>
+          <faceplate-search-input placeholder="Search"><textarea placeholder="Search" onfocus="record('search-focused')" oninput="searchProfiles(this)"></textarea></faceplate-search-input>
+          <ul id="results" role="menu" hidden>
+            <li><div role="menuitem" onclick="record('wrong');location.href='/r/wrong/submit/'">${label}2 Your profile</div></li>
+            <li><div role="menuitem" onclick="selectDestination()">${label} Your profile</div></li>
+          </ul>
         </dialog>` : url.pathname.endsWith("/submit/") ? `
         <button>${label}</button><textarea name="title" oninput="record('title')"></textarea>
         <shreddit-composer><div contenteditable="true" role="textbox" aria-label="Body" oninput="record('body');setTimeout(enablePost,900)"></div></shreddit-composer>
@@ -44,7 +44,7 @@ async function fixture(page: Page, destination: string, wrongSelection = false, 
         function record(step) { const steps=JSON.parse(sessionStorage.getItem('steps') || '[]');steps.push(step);sessionStorage.setItem('steps',JSON.stringify(steps)); }
         function searchProfiles(input) {
           record('search:' + input.value);
-          if (document.activeElement === input && input.value === ${JSON.stringify(destination.startsWith("u_") ? "u/" : label)}) {
+          if (document.activeElement === input && input.value === ${JSON.stringify(destination.startsWith("u_") ? "u/" : destination)}) {
             setTimeout(() => document.querySelector('#results').hidden=false,100);
           }
         }
@@ -81,7 +81,7 @@ test("Create and Select Community choose the exact community through the picker"
   assert.equal(page.url(), "https://www.reddit.com/r/marketing/submit/");
   const steps: string[] = await page.evaluate(() => JSON.parse(sessionStorage.getItem("steps")!));
   assert.deepEqual(steps.filter(step => !step.startsWith("search:")), ["create", "picker", "search-focused", "select:r/marketing"]);
-  assert.ok(steps.includes("search:r/marketing"));
+  assert.ok(steps.includes("search:marketing"));
 });
 
 test("Reddit never clicks or marks submitted while Post remains disabled", { skip: !executablePath }, async context => {
@@ -98,13 +98,14 @@ test("Reddit never clicks or marks submitted while Post remains disabled", { ski
   }
 });
 
-test("a picker opening the wrong destination stops before content entry", { skip: !executablePath }, async context => {
+test("a picker opening the wrong destination falls back to the exact destination page before content entry", { skip: !executablePath }, async context => {
   const browser = await chromium.launch({ executablePath: executablePath!, headless: true });
   context.after(() => browser.close());
   const page = await browser.newPage();
   await fixture(page, `u_${username}`, true);
   await page.goto("https://www.reddit.com/");
-  await assert.rejects(openRedditComposer(page, `u_${username}`, 1000), /No post was submitted/);
+  await openRedditComposer(page, `u_${username}`, 3000);
+  assert.equal(isRedditComposerDestination(page.url(), `u_${username}`), true);
   assert.equal(await page.locator('[name="title"]').inputValue(), "");
 });
 
@@ -143,3 +144,11 @@ for (const format of ["text", "image", "video"] as const) {
     assert.equal(submissions, 1);
   });
 }
+
+test("the picker item must be the whole handle, never a longer name", () => {
+  const pattern = redditPickerItemPattern("u/Creative-Alarm-3814");
+  assert.equal(pattern.test("u/Creative-Alarm-3814 Your profile"), true);
+  assert.equal(pattern.test("u/Creative-Alarm-38145 Your profile"), false);
+  assert.equal(redditPickerItemPattern("r/datascience").test("r/datascience 2.1m members"), true);
+  assert.equal(redditPickerItemPattern("r/datascience").test("r/datasciencejobs"), false);
+});

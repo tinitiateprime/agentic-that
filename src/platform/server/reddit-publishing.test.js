@@ -16,10 +16,11 @@ const redditOptions = { reddit: { subreddit: "r/marketing", title: "  Launch   n
 test("Reddit options require a valid subreddit and title and normalize both", () => {
   assert.equal(normalizeSubreddit("/r/Marketing/"), "Marketing");
   assert.deepEqual(requireRedditOptions("reddit", redditOptions), {
-    reddit: { subreddit: "marketing", title: "Launch notes", nsfw: false, spoiler: false },
+    reddit: { subreddit: "u/me", title: "Launch notes", nsfw: false, spoiler: false },
   });
   assert.equal(requireRedditOptions("x", {}), undefined);
-  assert.throws(() => requireRedditOptions("reddit", { reddit: { subreddit: "a", title: "Title" } }), /subreddit/);
+  // A saved community is ignored: posts always go to the account's own profile.
+  assert.equal(requireRedditOptions("reddit", { reddit: { subreddit: "a", title: "Title" } }).reddit.subreddit, "u/me");
   assert.throws(() => requireRedditOptions("reddit", { reddit: { subreddit: "marketing", title: " " } }), /title/);
   assert.throws(() => requireRedditOptions("reddit", { reddit: { subreddit: "marketing", title: "x".repeat(301) } }), /300/);
 });
@@ -45,26 +46,26 @@ test("Reddit API publishing is enabled only by a Zernio API key", () => {
 });
 
 test("Zernio Reddit posts carry the subreddit, title, tags, and media", () => {
-  const text = buildZernioRedditPost({ postFormat: "text", caption: " Body copy ", platformOptions: redditOptions }, { zernioAccountId: "acc_1" });
+  const text = buildZernioRedditPost({ postFormat: "text", caption: " Body copy ", platformOptions: redditOptions }, { zernioAccountId: "acc_1", username: "Creative-Alarm-3814" });
   assert.equal(text.content, "Body copy");
   assert.equal(text.publishNow, true);
   assert.equal(text.mediaItems, undefined);
   assert.deepEqual(text.platforms, [{
     platform: "reddit",
     accountId: "acc_1",
-    platformSpecificData: { subreddit: "marketing", title: "Launch notes", nsfw: false, spoiler: false, forceSelf: true },
+    platformSpecificData: { subreddit: "u_Creative-Alarm-3814", title: "Launch notes", nsfw: false, spoiler: false, forceSelf: true },
   }]);
 
   const video = buildZernioRedditPost(
     { postFormat: "video", caption: "Clip", originalName: "clip.mp4", mimeType: "video/mp4", platformOptions: { reddit: { ...redditOptions.reddit, nsfw: true } } },
-    { zernioAccountId: "acc_1", mediaUrl: "https://media.zernio.example/clip.mp4" },
+    { zernioAccountId: "acc_1", mediaUrl: "https://media.zernio.example/clip.mp4", username: "Creative-Alarm-3814" },
   );
   assert.deepEqual(video.mediaItems, [{ type: "video", url: "https://media.zernio.example/clip.mp4", mimeType: "video/mp4", filename: "clip.mp4" }]);
   assert.equal(video.platforms[0].platformSpecificData.nsfw, true);
   assert.equal(video.platforms[0].platformSpecificData.forceSelf, undefined);
 
   assert.throws(() => buildZernioRedditPost({ postFormat: "image", platformOptions: redditOptions }, { zernioAccountId: "acc_1" }), /not uploaded/);
-  assert.throws(() => buildZernioRedditPost({ postFormat: "text", caption: "x", platformOptions: {} }, { zernioAccountId: "acc_1" }), /subreddit/);
+  assert.throws(() => buildZernioRedditPost({ postFormat: "text", caption: "x", platformOptions: {} }, { zernioAccountId: "acc_1" }), /title/);
 });
 
 test("legacy API profile posts resolve the connected account for My profile", () => {
@@ -118,13 +119,13 @@ test("central intake validates Reddit posts and queues them for the Companion", 
   const principal = { workspaceId: "workspace_1", userId: "user_1", name: "Manager" };
   const create = (input) => centralPublishingTestHelpers.createUploadInDocument(document, principal, input);
 
-  assert.throws(() => create({ accountId: "reddit_account", postFormat: "text", caption: "Body" }), /subreddit/);
+  assert.throws(() => create({ accountId: "reddit_account", postFormat: "text", caption: "Body" }), /title/);
   const upload = create({ accountId: "reddit_account", postFormat: "text", caption: "Body", platformOptions: redditOptions });
-  assert.equal(document.uploads.find((item) => item.id === upload.id).platformOptions.reddit.subreddit, "marketing");
+  assert.equal(document.uploads.find((item) => item.id === upload.id).platformOptions.reddit.subreddit, "u/me");
   // With no Companion online, the post waits for it like every other app.
   assert.equal(document.jobs.find((job) => job.uploadId === upload.id).state, "waiting_for_companion");
   assert.equal(upload.statusDetail, "waiting_for_companion");
-  for (const [destination, normalized] of [["u/Creative-Alarm-3814", "u_Creative-Alarm-3814"], ["u/me", "u/me"]]) {
+  for (const [destination, normalized] of [["u/Creative-Alarm-3814", "u/me"], ["r/datascience", "u/me"], ["u/me", "u/me"]]) {
     const profileUpload = create({ accountId: "reddit_account", postFormat: "text", caption: `Body for ${destination}`, platformOptions: { reddit: { subreddit: destination, title: `Post to ${destination}` } } });
     assert.equal(document.uploads.find((item) => item.id === profileUpload.id).platformOptions.reddit.subreddit, normalized);
     assert.equal(document.jobs.find((job) => job.uploadId === profileUpload.id).state, "waiting_for_companion");
