@@ -198,6 +198,60 @@ async function dismissPostLoginPrompts(page: Page) {
   }
 }
 
+/** Sidebar links that are never Create: they go to a page (in any language). */
+export function isKnownInstagramRailLink(href: string) {
+  const path = href.replace(/^https?:\/\/(www\.)?instagram\.com/i, "");
+  return /^\/(reels|direct|explore|notifications|accounts|stories|threads|meta|about|legal|ai)\b/i.test(path)
+    || path === "/"
+    || /^\/[A-Za-z0-9._]{1,30}\/?$/.test(path);
+}
+
+/**
+ * Finds Create by what it does: clicks the sidebar's icons that don't go to a
+ * known page until Instagram's composer or its "Create new" menu opens.
+ */
+async function openCreateFromRail(page: Page) {
+  const items = page.locator('nav a, nav [role="button"], nav [role="link"], [role="navigation"] a, [role="navigation"] [role="button"], div[role="link"]');
+  const count = Math.min(await items.count().catch(() => 0), 40);
+  for (let index = 0; index < count; index += 1) {
+    const item = items.nth(index);
+    if (!(await item.isVisible().catch(() => false))) continue;
+    const href = (await item.getAttribute("href").catch(() => null)) || "";
+    if (href && href !== "#" && isKnownInstagramRailLink(href)) continue;
+    const label = `${(await item.getAttribute("aria-label").catch(() => "")) || ""} ${(await item.innerText().catch(() => "")) || ""}`;
+    if (/home|search|explore|reels|messages|notifications|profile|more|threads|also from meta/i.test(label)) continue;
+    const startUrl = page.url();
+    await item.click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(800);
+    if (page.url().split("#")[0] !== startUrl.split("#")[0]) {
+      // That icon was a page link, not Create: go back and try the next one.
+      await page.goto(startUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+      await page.waitForTimeout(800);
+      continue;
+    }
+    if (await waitForInstagramComposerReady(page, 1200)) return true;
+    const menu = await firstVisible([
+      page.getByText(/^Create new$/i),
+      page.locator('[role="menu"], [role="dialog"]').filter({ has: page.locator('svg, img') }),
+    ]);
+    if (menu) {
+      // The "Create new" menu: Post is its first choice in any language.
+      const post = await firstVisible([
+        page.getByRole("menuitem", { name: /^post$/i }),
+        page.locator('[role="menu"] [role="button"], [role="menu"] [role="menuitem"], [role="menu"] a').filter({ hasText: /^post$/i }),
+        page.locator('[role="menu"] [role="menuitem"], [role="menu"] [role="button"], [role="menu"] a').first(),
+      ]);
+      if (post) {
+        await activateComposerControl(post);
+        if (await waitForInstagramComposerReady(page, 15_000)) return true;
+      }
+    }
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(300);
+  }
+  return false;
+}
+
 export async function clickCreateButton(page: Page) {
   console.log("Clicking Instagram create button...");
 
@@ -216,6 +270,11 @@ export async function clickCreateButton(page: Page) {
   const createMenu = page.getByText(/^Create new$/i).locator("..");
   const openCreateMenu = await firstVisible([createMenu.getByText(/^Post$/i)]);
   if (!createButton && !openCreateMenu) {
+    // Icons-only sidebars (and other languages) have no "Create" name to find: try the rail's other icons.
+    if (await openCreateFromRail(page)) {
+      console.log("Instagram post composer opened from the sidebar.");
+      return;
+    }
     throw new Error("Could not find Instagram's Create or Create new control.");
   }
 

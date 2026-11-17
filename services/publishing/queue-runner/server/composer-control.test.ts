@@ -76,3 +76,20 @@ test("LinkedIn opens an editor that requires a trusted browser click", { skip: !
     assert.equal(await page.locator('#composer').isVisible(), true);
   } finally { await browser.close(); }
 });
+
+test("Instagram finds Create on an icons-only sidebar with no Create label", { skip: !executablePath }, async () => {
+  const browser = await chromium.launch({ executablePath: executablePath!, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<nav>
+        <a href="/" aria-label="Home"><svg></svg></a>
+        <a href="/reels/"><svg></svg></a>
+        <a href="#" onclick="event.preventDefault();document.querySelector('#menu').hidden=false"><svg></svg></a>
+      </nav>
+      <div id="menu" role="menu" hidden><span>Create new</span>
+        <div role="menuitem" onclick="document.querySelector('#composer').hidden=false">Post</div></div>
+      <div id="composer" role="dialog" hidden>Create new post<input type="file"></div>`);
+    await clickCreateButton(page);
+    assert.equal(await page.locator('#composer').isVisible(), true);
+  } finally { await browser.close(); }
+});
