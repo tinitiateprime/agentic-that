@@ -207,14 +207,23 @@ export async function clickCreateButton(page: Page) {
     page.locator('svg[aria-label="New post"]'),
     page.locator('svg[aria-label="Create"]'),
     page.locator('a[href*="/create"]'),
+  ]) || await firstVisible([
+    // Some accounts use the combined photo/video Create new icon in the rail.
+    page.locator('svg[aria-label="Create new" i], svg[aria-label="Create new post" i]'),
+    page.locator('[aria-label="Create new" i], [title="Create new" i]'),
   ]);
 
-  if (!createButton) {
-    throw new Error("Could not find Instagram + create button.");
+  const createMenu = page.getByText(/^Create new$/i).locator("..");
+  const openCreateMenu = await firstVisible([createMenu.getByText(/^Post$/i)]);
+  if (!createButton && !openCreateMenu) {
+    throw new Error("Could not find Instagram's Create or Create new control.");
   }
 
-  await activateComposerControl(createButton);
-  await page.waitForTimeout(350);
+  // If Create new > Post is already open, choose Post without closing the menu.
+  if (createButton && !openCreateMenu) {
+    await activateComposerControl(createButton);
+    await page.waitForTimeout(350);
+  }
 
   if (await waitForInstagramComposerReady(page, 2500)) {
     console.log("Instagram post composer opened directly.");
@@ -223,6 +232,10 @@ export async function clickCreateButton(page: Page) {
 
   console.log("Instagram Create menu opened; choosing Post...");
   const postOption = await waitForAnyVisible([
+    createMenu.getByRole("menuitem", { name: /^Post$/i }),
+    createMenu.getByRole("link", { name: /^Post$/i }),
+    createMenu.getByRole("button", { name: /^Post$/i }),
+    createMenu.getByText(/^Post$/i),
     page.getByRole("menuitem", { name: /^Post$/i }),
     page.getByRole("link", { name: /^Post$/i }),
     page.getByRole("button", { name: /^Post$/i }),
@@ -250,14 +263,14 @@ async function waitForInstagramComposerReady(page: Page, timeout: number) {
 
   while (Date.now() < deadline) {
     const composerSignal = await firstVisible([
-      page.getByText(/Create new post/i),
+      page.getByText(/^Create new post$/i),
       page.getByRole("button", { name: /Select from computer/i }),
       page.getByText(/Select from computer/i),
     ]);
     if (composerSignal) return true;
 
-    const composerFileInputs = page.locator('[role="dialog"] input[type="file"]');
-    if ((await composerFileInputs.count().catch(() => 0)) > 0) return true;
+    const composerDialog = await firstVisible([page.getByRole("dialog")]);
+    if (composerDialog && (await composerDialog.locator('input[type="file"]').count().catch(() => 0)) > 0) return true;
 
     await page.waitForTimeout(200);
   }

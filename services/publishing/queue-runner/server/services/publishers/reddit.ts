@@ -67,15 +67,20 @@ export async function openRedditComposer(page: Page, destination: string, timeou
   const dialog = await firstVisible([
     page.getByRole("dialog").filter({ hasText: /choose community/i }),
     page.locator('faceplate-dialog, dialog, [aria-modal="true"]').filter({ hasText: /choose community/i }),
-  ]);
+  ], Math.min(timeoutMs, 3000));
   const picker = dialog || page.locator("body");
   const search = await firstVisible([
+    picker.locator('faceplate-search-input input, faceplate-text-input[placeholder="Search"] input'),
     picker.getByPlaceholder(/^search(?: communities| for a community)?$/i),
     ...(dialog ? [dialog.getByRole("searchbox"), dialog.getByRole("textbox")] : []),
   ], timeoutMs);
   if (!search) throw new Error("Reddit's community picker search didn't open.");
   console.log(`Selecting Reddit destination ${label}...`);
-  await search.fill(label);
+  await search.click({ timeout: timeoutMs });
+  await search.fill("");
+  // Reddit offers the account's own profile when the picker receives `u/`.
+  // Real key events also reach search components that debounce on keyboard input.
+  await search.pressSequentially(/^u_/i.test(name) ? "u/" : label, { delay: 100 });
   // Match the entire handle, never the first suggestion or a partial username.
   const exactLabel = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
   const result = await firstVisible([picker.getByText(exactLabel)], timeoutMs);
@@ -295,21 +300,26 @@ async function setTags(page: Page, nsfw?: boolean, spoiler?: boolean) {
   }
 }
 
-async function submitAndConfirm(page: Page, title: string, onSubmitted?: () => Promise<void> | void) {
-  const deadline = Date.now() + 120_000;
+export async function submitAndConfirm(page: Page, title: string, onSubmitted?: () => Promise<void> | void, timeoutMs = 120_000) {
+  const deadline = Date.now() + timeoutMs;
   let postButton: Locator | null = null;
+  let ready = false;
   while (Date.now() < deadline) {
     postButton = await firstVisible([
       page.locator("#inner-post-submit-button"),
       page.locator('r-post-form-submit-button button, [slot="submit-button"] button'),
       page.getByRole("button", { name: /^post$/i }),
     ]);
-    if (postButton && await postButton.isEnabled().catch(() => false) && (await postButton.getAttribute("aria-disabled")) !== "true") break;
+    if (postButton && await postButton.isEnabled().catch(() => false) && (await postButton.getAttribute("aria-disabled")) !== "true") {
+      ready = true;
+      break;
+    }
     const problem = await redditPageProblem(page);
     if (problem) throw new Error(problem);
     await page.waitForTimeout(500);
   }
   if (!postButton) throw new Error("Reddit's Post button didn't show.");
+  if (!ready) throw new Error("Reddit's Post button stayed disabled. No post was submitted. Check the title, media upload, and required tags.");
   const username = await redditUsername(page);
   const clickedAt = Math.floor(Date.now() / 1000) - 10;
   console.log("Clicking Reddit Post button...");
