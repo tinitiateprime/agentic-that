@@ -296,6 +296,7 @@ function uploadPublic(document, upload) {
       expiresAt: artifact.expiresAt,
     } : null,
     statusDetail,
+    ...(/^Needs you:/.test(job?.message || "") ? { statusMessage: job.message } : {}),
     outcome: statusDetail === "published" || upload.status === "posted"
       ? "SUCCESS"
       : statusDetail === "uncertain" || upload.publishActionState === "uncertain"

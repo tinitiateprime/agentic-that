@@ -116,6 +116,7 @@ import {
   resolvedAccountEngine,
   runAutomation,
   startManualAccountSession,
+  publishingAttentionNotice,
 } from "./services/publisher.js";
 import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
@@ -367,7 +368,10 @@ async function syncCentralWorkspaceAccountInventory() {
   await heartbeatCentralPairing(pairing);
 }
 
-async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string, artifact?: CentralJobArtifact | null) {
+// Posts to several apps share one video: it is downloaded once, and they all wait for that copy.
+const activeMediaDownloads = new Map<string, { result: Promise<string>; listeners: Set<(percent: number) => void> }>();
+
+async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, fileName: string, artifact?: CentralJobArtifact | null, onProgress?: (percent: number) => void) {
   const safeName = path.basename(String(fileName || ""));
   if (!safeName || safeName !== fileName) throw new Error("The publishing media filename is invalid.");
   const localPath = path.join(uploadDir, safeName);
@@ -377,7 +381,21 @@ async function downloadCentralPublishingMedia(pairing: CentralCompanionPairing, 
   } catch {
     // Download only after the local copy is confirmed absent.
   }
-  return downloadCentralArtifact({ artifact, fileName: safeName, localPath, supabaseUrl: pairing.supabaseUrl });
+  const active = activeMediaDownloads.get(safeName);
+  if (active) {
+    if (onProgress) active.listeners.add(onProgress);
+    return active.result;
+  }
+  const listeners = new Set<(percent: number) => void>(onProgress ? [onProgress] : []);
+  const result = downloadCentralArtifact({
+    artifact,
+    fileName: safeName,
+    localPath,
+    supabaseUrl: pairing.supabaseUrl,
+    onProgress: (percent) => listeners.forEach((listener) => listener(percent)),
+  }).finally(() => activeMediaDownloads.delete(safeName));
+  activeMediaDownloads.set(safeName, { result, listeners });
+  return result;
 }
 
 async function updateCentralJobStatus(
@@ -406,6 +424,12 @@ async function updateCentralJobStatus(
 }
 
 export function centralDeliveryFailure(upload?: PlatformUpload) {
+  // The app gave a clear answer: show it, and don't send the same post again.
+  if (upload?.publishActionState === "refused") return {
+    message: upload.failureReason?.trim() || `${upload.platform} refused this post.`,
+    retry: false,
+    state: "failed",
+  };
   const finalActionUncertain = upload?.publishActionState === "submitted" || upload?.publishActionState === "uncertain";
   if (upload?.platform === "youtube" && upload.postFormat === "video" && finalActionUncertain) return {
     message: "YouTube accepted Publish, but the video upload or processing could not be confirmed. Check YouTube Studio before retrying.",
@@ -478,7 +502,8 @@ async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job
     const reconnect = /login|session|credential|authenticat/i.test(message);
     const localUpload = (await listUploads(undefined, remoteAccount.id, pairing.workspaceId).catch(() => []))
       .find((item) => item.id === upload.id);
-    const failure = centralDeliveryFailure(localUpload);
+    // Without a local copy nothing was attempted yet, so the real problem is the useful message.
+    const failure = localUpload ? centralDeliveryFailure(localUpload) : { ...centralDeliveryFailure(undefined), message: `This post couldn't be prepared on this computer: ${message}` };
     if (cancellationRequested) {
       const finalAction = localUpload?.publishActionState === "submitted" || localUpload?.publishActionState === "uncertain";
       await updateCentralJobStatus(
@@ -517,8 +542,9 @@ async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job
   });
 
   // Keeps the claim alive while this post waits for the others to be prepared.
+  let preparingMessage = "Preparing this post.";
   leaseHeartbeat = setInterval(() => {
-    runLeaseHeartbeat(() => updateCentralJobStatus(pairing, job.id, "opening_platform", "Preparing this post."));
+    runLeaseHeartbeat(() => updateCentralJobStatus(pairing, job.id, "opening_platform", preparingMessage));
   }, 30_000);
 
   try {
@@ -535,8 +561,15 @@ async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job
       return notReady(async () => undefined);
     }
     if (upload.fileName) {
-      await updateCentralJobStatus(pairing, job.id, "opening_platform", "Downloading protected publishing media.");
-      await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact);
+      preparingMessage = "Downloading the video to this computer.";
+      await updateCentralJobStatus(pairing, job.id, "opening_platform", preparingMessage);
+      let lastReport = Date.now();
+      await downloadCentralPublishingMedia(pairing, upload.fileName, upload.artifact, (percent) => {
+        preparingMessage = `Downloading the video to this computer: ${percent}%.`;
+        if (Date.now() - lastReport < 5_000) return;
+        lastReport = Date.now();
+        runLeaseHeartbeat(() => updateCentralJobStatus(pairing, job.id, "opening_platform", preparingMessage));
+      });
     }
     await upsertSyncedUpload(upload);
     await updateCentralJobStatus(pairing, job.id, "opening_platform", "Opening the social platform.");
@@ -562,7 +595,7 @@ async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job
             pairing,
             job.id,
             "publishing",
-            "Publishing through the saved local session.",
+            publishingAttentionNotice(upload.id) || "Publishing through the saved local session.",
             false,
             {},
             null,

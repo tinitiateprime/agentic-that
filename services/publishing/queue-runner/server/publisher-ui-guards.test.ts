@@ -20,6 +20,8 @@ import {
   YOUTUBE_VIDEO_UPLOAD_ACTIVE_TEXT,
   YOUTUBE_VIDEO_UPLOAD_COMPLETE_TEXT,
   YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT,
+  youtubeVideoIdFromUrl,
+  youtubeVideoRefusal,
   youtubeVideoDialogState,
   youtubeVideoCompletionTimeout,
   youtubeVideoUploadCanFinish,
@@ -135,6 +137,14 @@ test("YouTube video completion ignores stale failures outside the active upload 
   assert.match(waitSource, /YouTube confirmed the video is processing/);
   assert.match(waitSource, /youtubeVideoUploadCanFinish/);
   assert.match(waitSource, /Keeping Studio open/);
+});
+
+test("YouTube's own refusal of a video is recognised in Studio's content list", () => {
+  assert.match(youtubeVideoRefusal("Python Lists Explained  Processing abandoned  Video is too long. Learn more") || "", /longer than 15 minutes[\s\S]*youtube\.com\/verify/);
+  assert.match(youtubeVideoRefusal("My video Processing abandoned. The file is damaged") || "", /stopped processing this video: The file is damaged/);
+  assert.equal(youtubeVideoRefusal("Python Lists Explained Public Oct 3, 2026 Published 0 0"), null);
+  assert.equal(youtubeVideoIdFromUrl("https://youtu.be/AbC_12-xyz"), "AbC_12-xyz");
+  assert.equal(youtubeVideoIdFromUrl("https://www.youtube.com/watch?v=AbC_12-xyz&t=1"), "AbC_12-xyz");
 });
 
 test("X publishing requires both a selected file and a rendered media preview", () => {

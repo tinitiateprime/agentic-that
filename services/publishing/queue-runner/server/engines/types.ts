@@ -8,6 +8,9 @@ export type PublishingBrowserSession = {
   page: Page;
   desktopSessionId?: string;
   update(activity: DesktopBrowserActivity): Promise<void>;
+  /** Puts this account's window in front of the person, for a verification only they can do. */
+  showForHuman?(): Promise<void>;
+  hideAfterHuman?(): Promise<void>;
   close(): Promise<void>;
 };
 

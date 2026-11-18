@@ -3,15 +3,22 @@
 // "social-seo" token from AgenticThat.
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import express from "express";
 import { z } from "zod";
 import { verifyServiceAccessToken } from "../../../../../../lib/service-access-token.js";
 import { aiStatus, askAi, connectAi, disconnectAi, showAiWindow } from "./chat-ai.js";
 import { SEO_PLATFORMS, masterPrompt, parseAnswer } from "./master-prompt.js";
 import { AI_PROVIDERS, type AiProviderId } from "./providers.js";
+import { transcribeAudioFile } from "./speech.js";
+
+// Three hours of 16 kHz mono 16-bit audio.
+const MAX_SPEECH_AUDIO_BYTES = 3 * 60 * 60 * 16_000 * 2;
+let listening = false;
 
 const IMAGE_DATA_URL = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/;
 
@@ -21,6 +28,7 @@ const generateSchema = z.object({
   images: z.array(z.string().max(4_000_000).regex(IMAGE_DATA_URL, "Images must be JPEG, PNG or WebP data URLs.")).min(1).max(6),
   mediaKind: z.enum(["image", "carousel", "video"]),
   durationSeconds: z.number().min(0).max(36_000).optional(),
+  transcript: z.string().max(45_000).optional(),
   description: z.string().max(2200).optional(),
   brandName: z.string().max(80).optional(),
   location: z.string().max(160).optional(),
@@ -96,6 +104,40 @@ export function registerAiRoutes(app: express.Express) {
     res.json({ ok: true });
   });
 
+  // Listens to a video's audio on this computer. One JSON line per update:
+  // { stage, percent }, then { segments } or { message }.
+  router.post("/transcribe", requireSeoToken, async (req, res) => {
+    const size = Number(req.headers["content-length"] || 0);
+    if (!size || size > MAX_SPEECH_AUDIO_BYTES) {
+      res.status(413).json({ message: "This video is too long to listen to." });
+      return;
+    }
+    if (listening) {
+      res.status(409).json({ message: "The Companion is already listening to another video." });
+      return;
+    }
+    listening = true;
+    const folder = path.join(os.tmpdir(), "agenticthat-social-seo", randomUUID());
+    const stop = new AbortController();
+    res.on("close", () => { if (!res.writableFinished) stop.abort(); });
+    const send = (line: object) => { if (!res.writableEnded) res.write(`${JSON.stringify(line)}\n`); };
+    try {
+      await fsp.mkdir(folder, { recursive: true });
+      const audio = path.join(folder, "audio.pcm");
+      await pipeline(req, fs.createWriteStream(audio));
+      res.status(200).setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      send(await transcribeAudioFile(audio, send, stop.signal).then((segments) => ({ segments })));
+    } catch (error) {
+      if (!res.headersSent) res.status(200).setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      send({ message: error instanceof Error ? error.message : "The video could not be listened to." });
+    } finally {
+      listening = false;
+      res.end();
+      await fsp.rm(folder, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
   // Every connected app writes the posts at the same time. One JSON line per
   // update: { provider, state, detail | live }, then { provider, ok, results },
   // and finally { done: true }.
@@ -134,7 +176,7 @@ export function registerAiRoutes(app: express.Express) {
             }
             send({ provider, ...event });
           });
-          const { results, complete } = parseAnswer(answer, platforms);
+          const { results, complete } = parseAnswer(answer, platforms, { realTimes: Boolean(details.transcript), durationSeconds: details.durationSeconds });
           send({ provider, ok: true, results, complete, raw: answer, ms: Date.now() - started });
         } catch (error) {
           send({ provider, ok: false, limit: (error as { limit?: boolean })?.limit === true, message: error instanceof Error ? error.message : "This AI could not finish." });

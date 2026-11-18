@@ -78,6 +78,7 @@ export async function launchCompanionEngineBrowser({
       page,
       desktopSessionId: managed.id,
       update: activity => Promise.resolve(desktopHost.updateBrowser(managed.id, activity)),
+      showForHuman: () => Promise.resolve(desktopHost.revealBrowser?.(managed.id)),
       close,
     };
   } catch (error) {

@@ -381,6 +381,11 @@ export async function launchExternalBrowserEngine({
       ?? await context.newPage();
     const cdpSession = await context.newCDPSession(page);
     const browserWindow = await cdpSession.send("Browser.getWindowForTarget") as { windowId?: number };
+    const moveWindow = async (bounds: { left: number; top: number; width: number; height: number }) => {
+      if (typeof browserWindow.windowId !== "number") return;
+      await cdpSession.send("Browser.setWindowBounds", { windowId: browserWindow.windowId, bounds: { windowState: "normal" } });
+      await cdpSession.send("Browser.setWindowBounds", { windowId: browserWindow.windowId, bounds });
+    };
     if (typeof browserWindow.windowId === "number" && layoutEntry.visibleWindow) {
       const windowId = browserWindow.windowId;
       layoutEntry.applyBounds = async bounds => {
@@ -442,6 +447,14 @@ export async function launchExternalBrowserEngine({
       update: next => activity
         ? Promise.resolve(desktopHost?.updateBrowser(activity.id, next))
         : Promise.resolve(),
+      // Publishing windows work off-screen; a verification brings the window to the person.
+      showForHuman: async () => {
+        if (!layoutEntry.visibleWindow) await moveWindow({ left: 60, top: 40, width: 1280, height: 900 });
+        await page.bringToFront();
+      },
+      hideAfterHuman: async () => {
+        if (!layoutEntry.visibleWindow) await moveWindow({ left: -10_000, top: -10_000, width: 1280, height: 900 });
+      },
       close: () => close(),
     };
   } catch (error) {

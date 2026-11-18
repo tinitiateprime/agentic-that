@@ -1423,6 +1423,10 @@ function installPublishingDesktopHost() {
     openExternalActivity,
     updateBrowser: updateManagedBrowser,
     closeBrowser: closeManagedBrowser,
+    revealBrowser: () => {
+      showCompanion("activity", true);
+      notifyWorkspaceState({ revealActivity: true });
+    },
     stopPublishingBrowsers,
     clearAccountBrowserData,
     flushAccountBrowserData,

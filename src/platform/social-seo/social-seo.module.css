@@ -310,3 +310,11 @@
   .postOverlay { padding: 0; }
   .postDialog { min-height: 100vh; border-radius: 0; }
 }
+
+.videoFit { display: grid; gap: 8px; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--seo-line-strong); border-radius: 12px; font-size: 13px; }
+.videoFit ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.videoFit li { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; }
+.videoFit img { flex: none; margin-top: 2px; object-fit: contain; }
+.videoFit_fits { color: var(--seo-muted); }
+.videoFit_warning { color: #7a4d00; }
+.videoFit_blocked { color: var(--seo-fail); }

@@ -6,6 +6,7 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { prepareInstagramMedia } from "./instagram-media.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 import { activateComposerControl } from "./composer-control.js";
+import { mediaUploadTimeoutMs } from "./media-upload-tracker.js";
 import { clickFinalAction } from "./final-click.js";
 
 const INSTAGRAM_HOME_URL = "https://www.instagram.com/";
@@ -467,8 +468,10 @@ async function cancelDiscardPromptIfVisible(page: Page) {
   return true;
 }
 
-async function clickDoneAfterInstagramShared(page: Page) {
-  const deadline = Date.now() + 300000;
+async function clickDoneAfterInstagramShared(page: Page, sizeBytes = 0) {
+  // Instagram can take many minutes to send and process a long video.
+  const waitMs = Math.max(300_000, Math.min(30 * 60_000, mediaUploadTimeoutMs(sizeBytes)));
+  const deadline = Date.now() + waitMs;
 
   while (Date.now() < deadline) {
     await cancelDiscardPromptIfVisible(page);
@@ -507,7 +510,7 @@ async function clickDoneAfterInstagramShared(page: Page) {
     await page.waitForTimeout(500);
   }
 
-  throw new Error("Instagram shared confirmation did not appear within 300 seconds.");
+  throw new Error(`Instagram shared confirmation did not appear within ${Math.round(waitMs / 1000)} seconds.`);
 }
 
 async function clickInstagramCaptionArea(page: Page) {
@@ -588,7 +591,7 @@ async function fillInstagramCaption(page: Page, caption: string) {
   console.log("Instagram caption entered.");
 }
 
-async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promise<void> | void) {
+async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promise<void> | void, sizeBytes = 0) {
   console.log("Clicking Instagram Share button...");
 
   const shareButton = await firstVisible([
@@ -603,7 +606,7 @@ async function clickInstagramShareAndWait(page: Page, onSubmitted?: () => Promis
   await onSubmitted?.();
   await page.waitForTimeout(300);
 
-  await clickDoneAfterInstagramShared(page);
+  await clickDoneAfterInstagramShared(page, sizeBytes);
 }
 
 async function waitForLoginResult(page: Page, allowManualLoginFromStart = false, ignoreLoginErrors = false, embeddedLogin = false) {
@@ -678,7 +681,7 @@ export async function postToInstagram(page: Page, upload: PlatformUpload, accoun
     await selectOriginalAspectAndClickNext(page);
     await clickInstagramEditNext(page);
     await fillInstagramCaption(page, upload.caption ?? "");
-    await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted);
+    await clickInstagramShareAndWait(page, accountLogin?.onFinalActionSubmitted, upload.size);
 
     const holdTime = Number(process.env.INSTAGRAM_POST_HOLD_MS ?? 1000);
     console.log(`Instagram post completed. Holding for ${holdTime / 1000} seconds...`);

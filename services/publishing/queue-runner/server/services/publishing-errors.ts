@@ -7,6 +7,19 @@ const APP_NAMES: Record<string, string> = {
   reddit: "Reddit",
 };
 
+/**
+ * The app itself said no (video too long, media refused). The result is known,
+ * so the post is a plain failure: not "uncertain", not a reason to pause the
+ * account, and never retried automatically.
+ */
+export class PlatformRefusedError extends Error {
+  readonly platformRefused = true;
+}
+
+export function isPlatformRefusal(error: unknown) {
+  return (error as { platformRefused?: unknown } | null)?.platformRefused === true;
+}
+
 /** The first meaningful line of a technical error, without terminal colour codes. */
 function firstLine(message: string) {
   return message.replace(/\u001b\[\d+m/g, "").split("\n").map((line) => line.trim()).find(Boolean)?.slice(0, 240) || "";

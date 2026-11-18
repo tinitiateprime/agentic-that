@@ -13,6 +13,7 @@ import { platformPostRules } from "../../../services/publishing/queue-runner/sha
 import { AiLogo } from "./AiStatusBar";
 import { postTextFor } from "./post-text";
 import { REDDIT_MY_PROFILE } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
+import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
 import styles from "./social-seo.module.css";
 
 export const POST_PLATFORMS = [
@@ -26,15 +27,26 @@ export const POST_PLATFORMS = [
 
 const X_LIMIT = 280;
 
+/** A blank the AI left for the user to fill, such as [VIDEO LINK]. */
+export function unfilledPlaceholder(text) {
+  return String(text || "").match(/\[(?:[^\]\n]*\b(?:link|url)\b[^\]\n]*|(?:your|insert|add) [^\]\n]{1,40})\]/i)?.[0] || "";
+}
+
 /** Why an account can't take this post right now ("" when it can). */
-function accountProblem(account, kind) {
+function accountProblem(account, kind, item) {
   if (!account.enabled) return "Turned off in Social posts";
+  if (kind === "video" && item) {
+    const fit = videoFit(account.platform, item);
+    if (fit.status === "blocked") return fit.message;
+  }
   if (!platformPostRules[account.platform]?.formats.includes(kind)) return `${account.platform === "instagram" ? "Instagram" : "This app"} doesn't take ${kind} posts`;
   if (account.readiness === "reconnect_required" || account.sessionStatus === "reconnect_required" || !account.credentialConfigured) return "Reconnect it in Connect";
   return "";
 }
 
-function accountNote(account) {
+function accountNote(account, kind, item) {
+  const fit = kind === "video" && item ? videoFit(account.platform, item) : null;
+  if (fit?.status === "warning") return fit.message;
   if (account.executionEngine !== "api" && (account.readiness === "waiting_for_companion" || account.companionStatus === "offline")) return "Posts when the Companion is open";
   return "";
 }
@@ -48,6 +60,7 @@ const STATUS_TEXT = {
 
 function statusLine(upload) {
   if (upload.status === "failed") return upload.failureReason || "It didn't post.";
+  if (upload.statusMessage) return upload.statusMessage;
   if (upload.status === "posted") return upload.postedAt ? `Posted ${new Date(upload.postedAt).toLocaleString()}` : "Posted";
   if (upload.safetyDeferredUntil) return `Waiting until ${new Date(upload.safetyDeferredUntil).toLocaleString()}`;
   if (upload.statusDetail === "waiting_for_companion") return "Waiting for the Companion to be open on a computer";
@@ -127,6 +140,9 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
     const draft = drafts[platform] || {};
     const label = POST_PLATFORMS.find((entry) => entry.id === platform)?.label;
     if (!String(draft.text || "").trim()) problems.push(`Write the ${label} text.`);
+    const blank = unfilledPlaceholder(draft.text);
+    if (blank) problems.push(`Replace ${blank} in the ${label} text, or remove it.`);
+    if (kind === "video" && item && videoFit(platform, item).status === "blocked") problems.push(videoFit(platform, item).message);
     if (platform === "x" && String(draft.text || "").length > X_LIMIT) problems.push(`The X post is ${draft.text.length} characters; X allows ${X_LIMIT}.`);
     const limit = platformPostRules[platform]?.descriptionLimit;
     if (limit && platform !== "x" && String(draft.text || "").length > limit) problems.push(`The ${label} text is longer than ${label} allows (${limit.toLocaleString()} characters).`);
@@ -266,8 +282,8 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
                         <div className={styles.postPlatformHead}><img src={platform.logo} alt="" width={20} height={20} /> <strong>{platform.label}</strong></div>
                         {!list.length && <Link className={styles.postConnect} href="/config-manager"><PlugZap size={14} /> Connect {platform.label}</Link>}
                         {list.map((account) => {
-                          const problem = accountProblem(account, kind);
-                          const note = accountNote(account);
+                          const problem = accountProblem(account, kind, item);
+                          const note = accountNote(account, kind, item);
                           return (
                             <label key={account.id} className={`${styles.postAccount} ${problem ? styles.postAccountOff : ""}`}>
                               <input type="checkbox" checked={selected.includes(account.id)} disabled={Boolean(problem)} onChange={() => toggle(account)} />

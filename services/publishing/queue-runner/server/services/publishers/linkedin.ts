@@ -6,6 +6,8 @@ import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
 import { activateComposerControl } from "./composer-control.js";
 import { clickFinalAction } from "./final-click.js";
+import { PlatformRefusedError } from "../publishing-errors.js";
+import { mediaUploadState, mediaUploadTimeoutMs, trackMediaUpload, type MediaUploadTracker } from "./media-upload-tracker.js";
 
 const LINKEDIN_FEED_URL = "https://www.linkedin.com/feed/";
 const LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login/";
@@ -36,6 +38,11 @@ function getPostConfirmationTimeoutMs() {
   return Number.isFinite(configured)
     ? Math.max(30_000, Math.min(300_000, configured))
     : 180_000;
+}
+
+/** A video can take minutes to send after Post is clicked, so its wait follows the upload's. */
+function postConfirmationTimeoutMs(media: "none" | "image" | "video") {
+  return media === "video" ? Math.max(getPostConfirmationTimeoutMs(), Math.min(30 * 60_000, getUploadCompletionTimeoutMs())) : getPostConfirmationTimeoutMs();
 }
 
 function getUploadCompletionTimeoutMs() {
@@ -602,6 +609,17 @@ export async function openLinkedInManagedPagePosts(page: Page, target: LinkedInM
   console.log(`Managed LinkedIn Page ${target.name} is ready.`);
 }
 
+export const LINKEDIN_MEDIA_REFUSED_TEXT = /too long|longer than|exceeds?|maximum (?:length|duration|size)|couldn(?:'|\u2019)t (?:upload|process)|upload failed|unsupported (?:file|video|format)/i;
+
+/** LinkedIn's own message when it won't take the attached video or file. */
+async function linkedInMediaRefusal(page: Page) {
+  const notice = await firstVisible([
+    page.locator('[role="alert"], .artdeco-toast-item, [data-test-artdeco-toast-item]').filter({ hasText: LINKEDIN_MEDIA_REFUSED_TEXT }),
+    page.locator('[role="alertdialog"], [role="dialog"] [role="status"], .artdeco-inline-feedback--error').filter({ hasText: LINKEDIN_MEDIA_REFUSED_TEXT }),
+  ]);
+  return (await notice?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || null;
+}
+
 async function typeLinkedInPostText(page: Page, text: string) {
   console.log("Entering LinkedIn post text...");
   const expectedText = text.replace(/\s+/g, " ").trim();
@@ -646,6 +664,8 @@ async function typeLinkedInPostText(page: Page, text: string) {
     }
   }
 
+  const refusal = await linkedInMediaRefusal(page);
+  if (refusal) throw new PlatformRefusedError(`LinkedIn refused this video: ${refusal} Nothing was published.`);
   throw new Error("LinkedIn post text was not entered into the composer.");
 }
 
@@ -709,6 +729,8 @@ async function attachLinkedInMedia(page: Page, filePath: string) {
     }
   }
 
+  const refusal = await linkedInMediaRefusal(page);
+  if (refusal) throw new PlatformRefusedError(`LinkedIn refused this video: ${refusal} Nothing was published.`);
   console.log("LinkedIn media attached.");
 }
 
@@ -716,7 +738,7 @@ type LinkedInSubmissionEvidence = {
   acceptedResponse: Promise<boolean>;
 };
 
-async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void): Promise<LinkedInSubmissionEvidence> {
+async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void, confirmationTimeoutMs = getPostConfirmationTimeoutMs()): Promise<LinkedInSubmissionEvidence> {
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     const postButton = await firstVisible([
@@ -729,7 +751,7 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
         response.request().method(),
         response.url(),
         response.status(),
-      ), { timeout: getPostConfirmationTimeoutMs() }).then(() => true).catch(() => false);
+      ), { timeout: confirmationTimeoutMs }).then(() => true).catch(() => false);
       console.log("Clicking LinkedIn Post button...");
       await postButton.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => undefined);
       await clickFinalAction(page, postButton, "LinkedIn Post");
@@ -743,9 +765,46 @@ async function clickPostWhenReady(page: Page, onSubmitted?: () => Promise<void> 
   throw new Error("LinkedIn Post button did not become enabled.");
 }
 
+/** LinkedIn sends a video's bytes through its /dms-uploads/ service. */
+export function isLinkedInMediaUpload(method: string, url: string) {
+  return /^(?:POST|PUT)$/i.test(method) && /^https:\/\/[a-z0-9.-]*linkedin\.com\/dms-uploads\//i.test(url);
+}
+
+export function isLinkedInUploadFinalized(method: string, url: string, status: number) {
+  return /^POST$/i.test(method) && status >= 200 && status < 300 && /^https:\/\/[a-z0-9.-]*linkedin\.com\/dms-uploads\/finalize/i.test(url);
+}
+
+/** Post goes out only after LinkedIn has the whole video, as when a person waits for the upload bar. */
+async function waitForLinkedInVideoUploaded(page: Page, transfer: MediaUploadTracker, finalized: () => boolean, sizeBytes: number) {
+  const startedAt = Date.now();
+  const deadline = startedAt + mediaUploadTimeoutMs(sizeBytes);
+  console.log("Waiting for LinkedIn to receive the whole video before posting...");
+  while (Date.now() < deadline) {
+    const refusal = await linkedInMediaRefusal(page) || await linkedInPublishError(page);
+    if (refusal) throw new PlatformRefusedError(`LinkedIn couldn't take this video: ${refusal} Nothing was published.`);
+    const state = mediaUploadState(transfer.snapshot(), Date.now(), 10_000);
+    if (finalized() && state !== "sending") {
+      await page.waitForTimeout(3000);
+      console.log("LinkedIn received the whole video.");
+      return;
+    }
+    if (state === "finished") {
+      console.log("LinkedIn received the whole video.");
+      return;
+    }
+    if (state === "failed") throw new Error("LinkedIn's video upload stopped before the whole file was sent. Nothing was published.");
+    if (state === "not_seen" && Date.now() - startedAt >= 20_000) {
+      console.warn("The LinkedIn video transfer could not be observed; continuing.");
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error("LinkedIn did not finish receiving the video in time. Nothing was published.");
+}
+
 async function linkedInPublishError(page: Page) {
   const error = await firstVisible([
-    page.locator('[role="alert"]').filter({ hasText: /couldn(?:'|\u2019)t post|post failed|something went wrong|try again/i }),
+    page.locator('[role="alert"]').filter({ hasText: /encountered a problem|problem sharing|couldn(?:'|\u2019)t post|post failed|something went wrong|try again/i }),
     page.getByText(/We couldn(?:'|\u2019)t publish|We couldn(?:'|\u2019)t post|Your post failed|Post failed/i),
   ]);
   return (await error?.textContent().catch(() => ""))?.replace(/\s+/g, " ").trim() || null;
@@ -767,7 +826,7 @@ async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000, minimumS
   let backgroundWorkSeen = false;
   while (Date.now() < deadline) {
     const error = await linkedInPublishError(page);
-    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
+    if (error) throw new PlatformRefusedError(`LinkedIn couldn't share this post. It said: "${error}" Nothing was published, so you can post it again.`);
 
     const backgroundWork = await linkedInBackgroundWork(page);
     if (backgroundWork) {
@@ -790,13 +849,14 @@ async function waitForLinkedInSettle(page: Page, initialQuietMs = 5000, minimumS
 
 async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvidence, media: "none" | "image" | "video" = "none") {
   console.log("Waiting for LinkedIn post to finish...");
-  const deadline = Date.now() + getPostConfirmationTimeoutMs();
+  const confirmationTimeoutMs = postConfirmationTimeoutMs(media);
+  const deadline = Date.now() + confirmationTimeoutMs;
   let networkAccepted = false;
   void evidence.acceptedResponse.then(accepted => { networkAccepted = accepted; });
 
   while (Date.now() < deadline) {
     const error = await linkedInPublishError(page);
-    if (error) throw new Error(`LinkedIn rejected the post: ${error}`);
+    if (error) throw new PlatformRefusedError(`LinkedIn couldn't share this post. It said: "${error}" Nothing was published, so you can post it again.`);
 
     const success = await firstVisible([
       page.locator('[role="status"], [role="alert"]').filter({ hasText: LINKEDIN_POST_ACCEPTED_TEXT }),
@@ -817,7 +877,7 @@ async function waitForPostComplete(page: Page, evidence: LinkedInSubmissionEvide
     await page.waitForTimeout(250);
   }
 
-  throw new Error(`LinkedIn did not confirm the post within ${Math.round(getPostConfirmationTimeoutMs() / 1000)} seconds.`);
+  throw new Error(`LinkedIn did not confirm the post within ${Math.round(confirmationTimeoutMs / 1000)} seconds.`);
 }
 
 async function loginFormIsVisible(page: Page) {
@@ -917,10 +977,22 @@ export async function postToLinkedIn(page: Page, upload: PlatformUpload, account
   await loginToLinkedIn(page, upload, accountLogin);
   if (upload.linkedinTarget) await openLinkedInManagedPagePosts(page, upload.linkedinTarget);
   await clickStartPost(page, Boolean(upload.linkedinTarget));
-  if (!isTextOnly) await attachLinkedInMedia(page, filePath);
-  await typeLinkedInPostText(page, upload.caption.trim());
-  const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
   const media = isTextOnly ? "none" : upload.postFormat === "video" || /^video\//i.test(upload.mimeType || "") ? "video" : "image";
+  const transfer = trackMediaUpload(page, isLinkedInMediaUpload);
+  let uploadFinalized = false;
+  const onResponse = (response: { request(): { method(): string }; url(): string; status(): number }) => {
+    if (isLinkedInUploadFinalized(response.request().method(), response.url(), response.status())) uploadFinalized = true;
+  };
+  page.on("response", onResponse);
+  try {
+    if (!isTextOnly) await attachLinkedInMedia(page, filePath);
+    await typeLinkedInPostText(page, upload.caption.trim());
+    if (media === "video") await waitForLinkedInVideoUploaded(page, transfer, () => uploadFinalized, upload.size);
+  } finally {
+    transfer.dispose();
+    page.off("response", onResponse);
+  }
+  const submissionEvidence = await clickPostWhenReady(page, accountLogin?.onFinalActionSubmitted, postConfirmationTimeoutMs(media));
   await waitForPostComplete(page, submissionEvidence, media);
 
   const holdTime = getPostHoldMs();

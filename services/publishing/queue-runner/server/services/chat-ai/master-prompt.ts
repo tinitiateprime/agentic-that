@@ -44,6 +44,8 @@ export type PostDetails = {
   mediaKind: "image" | "carousel" | "video";
   imageCount: number;
   durationSeconds?: number;
+  /** What is said in the video, one "[m:ss] words" line per part. */
+  transcript?: string;
   description?: string;
   brandName?: string;
   location?: string;
@@ -54,7 +56,9 @@ function mediaLine(details: PostDetails) {
   if (details.mediaKind === "video") {
     const seconds = Math.round(details.durationSeconds || 0);
     const length = seconds ? ` (${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} long)` : "";
-    return `It is a video${length}; the attached images are frames from it.`;
+    return details.transcript
+      ? `It is a video${length}; the attached images show moments from it, each labelled with its time.`
+      : `It is a video${length}; the attached images are frames from it.`;
   }
   return details.imageCount > 1 ? `It is a carousel of ${details.imageCount} images (attached in order).` : "The post image is attached.";
 }
@@ -81,6 +85,8 @@ export function masterPrompt(details: PostDetails) {
     details.brandName?.trim() && `Brand: ${details.brandName.trim()}`,
     details.location?.trim() && `Location: ${details.location.trim()}`,
     details.businessDetails?.trim() && `About the business: ${details.businessDetails.trim()}`,
+    details.transcript?.trim() && `Everything said in the video, with the time each part starts (an automatic transcript, so names may be misheard):\n"""\n${details.transcript.trim()}\n"""`,
+    details.transcript?.trim() && details.platforms.includes("youtube") && "Put chapters in the YouTube description, using the real times above and starting at 0:00.",
   ].filter(Boolean);
   const markers = details.platforms.flatMap((platform) => SECTIONS[platform].map((section) => `=== ${section.marker} ===`));
   return [
@@ -88,6 +94,7 @@ export function masterPrompt(details: PostDetails) {
     "",
     ...context,
     ...details.platforms.map((platform) => PLATFORM_FACTS[platform]).filter(Boolean),
+    "These posts are published exactly as you write them, so don't leave blanks such as [VIDEO LINK].",
     "",
     SECTIONS_INTRO,
     ...markers,
@@ -127,6 +134,44 @@ export function withoutInventedTimestamps(text: string) {
     .trim();
 }
 
+const CHAPTER_LINE = /^[ \t]*[-*•]?[ \t]*[*_]*\(?((?:\d{1,2}:)?\d{1,2}:\d{2})\)?[*_]*[ \t]*[-–—:|)]?[ \t]+(\S[^\n]*)$/;
+
+function chapterSeconds(time: string) {
+  return time.split(":").reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+/**
+ * With a transcript the chapter times are real. They are kept, in the plain form
+ * YouTube reads, only when YouTube would accept them: at least three, starting at
+ * 0:00, in order, ten seconds apart and inside the video.
+ */
+export function withRealChapters(text: string, durationSeconds = 0) {
+  const lines = text.split("\n");
+  const chapters = lines.flatMap((line, index) => {
+    const match = line.match(CHAPTER_LINE);
+    return match ? [{ index, time: match[1], seconds: chapterSeconds(match[1]), title: match[2].replace(/[*_]+$/g, "").trim() }] : [];
+  });
+  const valid = chapters.length >= 3
+    && chapters[0].seconds === 0
+    && chapters.every((chapter, index) => index === 0 || chapter.seconds >= chapters[index - 1].seconds + 10)
+    && (!durationSeconds || chapters.at(-1)!.seconds < durationSeconds);
+  if (!valid) return withoutInventedTimestamps(text);
+  for (const chapter of chapters) lines[chapter.index] = `${chapter.time} ${chapter.title}`;
+  return lines.join("\n").trim();
+}
+
+/** Removes a blank left for the user, such as [VIDEO LINK], with a call to action that only pointed at it. */
+export function withoutLinkBlanks(text: string) {
+  const blank = /\[[^\]\n]*\b(?:link|url)\b[^\]\n]*\]/gi;
+  return text.split("\n").flatMap((line) => {
+    if (!blank.test(line)) return [line];
+    blank.lastIndex = 0;
+    const rest = line.replace(blank, "").replace(/[ \t]+$/, "").replace(/[:\-–—]+$/, "").trim();
+    const words = rest.replace(/[^\p{L}\p{N} ]/gu, " ").trim().split(/\s+/).filter(Boolean);
+    return words.length <= 6 && /\b(?:watch|link|here|full|video|lesson|click|see)\b/i.test(rest) ? [] : [rest];
+  }).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 const MARKER_LINE = /^[\s>*#_`]*={2,}\s*([A-Z][A-Z ]*[A-Z])\s*={2,}[\s*_`]*$/;
 
 function cleanBlock(text: string) {
@@ -152,12 +197,12 @@ export type ParsedAnswer = {
 };
 
 /** Splits an AI answer into each app's parts by the section markers. */
-export function parseAnswer(answer: string, platforms: SeoPlatform[]): ParsedAnswer {
+export function parseAnswer(answer: string, platforms: SeoPlatform[], options: { realTimes?: boolean; durationSeconds?: number } = {}): ParsedAnswer {
   const blocks = new Map<string, string>();
   let current = "";
   let lines: string[] = [];
   const flush = () => {
-    if (current) blocks.set(current, cleanBlock(lines.join("\n")));
+    if (current) blocks.set(current, withoutLinkBlanks(cleanBlock(lines.join("\n"))));
   };
   for (const line of answer.replace(/\r\n?/g, "\n").split("\n")) {
     const marker = line.match(MARKER_LINE)?.[1]?.replace(/\s+/g, " ");
@@ -198,7 +243,9 @@ export function parseAnswer(answer: string, platforms: SeoPlatform[]): ParsedAns
         entry[field] = (entry[field] as string).replace(/(?:\n[ \t]*(?:#[\p{L}\p{N}_]+[ \t]*)+)+\s*$/u, "").trim();
       }
     }
-    if (platform === "youtube" && typeof entry.description === "string") entry.description = withoutInventedTimestamps(entry.description);
+    if (platform === "youtube" && typeof entry.description === "string") {
+      entry.description = options.realTimes ? withRealChapters(entry.description, options.durationSeconds) : withoutInventedTimestamps(entry.description);
+    }
     // Copy-everything text, ready to paste into the app.
     if (platform === "instagram") entry.fullText = [entry.caption, (entry.hashtags as string[]).join(" ")].filter(Boolean).join("\n\n");
     if (platform === "facebook" || platform === "linkedin" || platform === "x") entry.fullText = [entry.post, (entry.hashtags as string[]).join(" ")].filter(Boolean).join("\n\n");

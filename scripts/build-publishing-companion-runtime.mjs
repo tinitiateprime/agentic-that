@@ -31,4 +31,10 @@ await Promise.all(["media-proxy.html", "media-proxy.js", "media-proxy.css"].map(
   )
 ));
 
+// Listening to a video runs in its own process, from its own file.
+await copyFile(
+  path.join(projectRoot, "services", "publishing", "queue-runner", "server", "services", "chat-ai", "speech-worker.cjs"),
+  path.join(runtimeDirectory, "speech-worker.cjs"),
+);
+
 console.log(`Publishing companion runtime built at ${runtimeDirectory}.`);

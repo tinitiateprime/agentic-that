@@ -1,3 +1,4 @@
+import { uploadPartsInPipeline, type UploadPart } from "./part-upload-pipeline.ts";
 import type {
   ActivityLog,
   AutomationInput,
@@ -404,6 +405,33 @@ async function uploadStagedFile(
   const chunkSize = Math.min(maximumChunkSize, Math.max(64 * 1024, session.chunkSize || maximumChunkSize));
   let offset = session.offset;
   onProgress?.(mediaProgress("uploading", offset, file.size));
+  if (session.uploadStrategy === "signed_parts" && offset < file.size) {
+    const parts: UploadPart[] = [];
+    for (let partOffset = offset; partOffset < file.size; partOffset += chunkSize) {
+      parts.push({ index: Math.floor(partOffset / chunkSize), offset: partOffset, byteSize: Math.min(chunkSize, file.size - partOffset) });
+    }
+    const describe = (batch: UploadPart[]) => JSON.stringify({ parts: batch.map(({ index, offset: partOffset, byteSize }) => ({ index, offset: partOffset, byteSize })) });
+    await uploadPartsInPipeline<SignedUploadPart>({
+      parts,
+      startOffset: offset,
+      chunkSize,
+      authorize: async (batch) => {
+        const authorized = await retryUploadStep(() => request<SignedUploadPart[]>(`/api/staged-uploads/${session.id}/parts/authorize`, { method: "POST", body: describe(batch) }));
+        const byIndex = new Map((Array.isArray(authorized) ? authorized : []).map(part => [part.index, part]));
+        return batch.map((part) => {
+          const signed = byIndex.get(part.index);
+          if (!signed || signed.offset !== part.offset || signed.byteSize !== part.byteSize || !signed.signedUrl) {
+            throw new Error("The server returned an invalid private media upload authorization.");
+          }
+          return signed;
+        });
+      },
+      upload: (part, signed, onLoaded) => retryUploadStep(() => uploadSignedMediaPart(signed.signedUrl, file.slice(part.offset, part.offset + part.byteSize), file.type, onLoaded)),
+      confirm: async (batch) => (await retryUploadStep(() => request<{ offset: number }>(`/api/staged-uploads/${session.id}/parts/complete`, { method: "POST", body: describe(batch) }))).offset,
+      onProgress: (bytes) => onProgress?.(mediaProgress("uploading", bytes, file.size)),
+    });
+    offset = file.size;
+  }
   while (offset < file.size) {
     if (session.uploadStrategy === "signed_parts") {
       const batchStart = offset;

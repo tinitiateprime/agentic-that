@@ -1,6 +1,9 @@
-import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
+
+const PARALLEL_PARTS = 6;
+const PART_ATTEMPTS = 3;
 
 export type CentralJobArtifactPart = {
   index: number;
@@ -53,46 +56,79 @@ async function fetchBytes(downloadUrl: string, supabaseUrl: string, fetchImpleme
   return bytes;
 }
 
+/** One piece of the video, tried again on a passing network or server problem. */
+async function fetchPart(part: CentralJobArtifactPart, supabaseUrl: string, fetchImplementation: typeof fetch, retryDelayMs: number) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const bytes = await fetchBytes(part.downloadUrl, supabaseUrl, fetchImplementation);
+      if (bytes.length !== part.byteSize) throw new Error("A private media part has the wrong size.");
+      if (part.sha256 && createHash("sha256").update(bytes).digest("hex") !== part.sha256) {
+        throw new Error("A private media part failed its integrity check.");
+      }
+      return bytes;
+    } catch (error) {
+      if (attempt >= PART_ATTEMPTS || /download URL is invalid/.test(String(error))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+    }
+  }
+}
+
+async function fileSha256(file: string) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
 export async function downloadCentralArtifact({
   artifact,
   fileName,
   localPath,
   supabaseUrl,
   fetchImplementation = fetch,
+  onProgress,
+  retryDelayMs = 750,
 }: {
   artifact: CentralJobArtifact | null | undefined;
   fileName: string;
   localPath: string;
   supabaseUrl: string;
   fetchImplementation?: typeof fetch;
+  onProgress?: (percent: number) => void;
+  retryDelayMs?: number;
 }) {
   const safeName = path.basename(String(fileName || ""));
   if (!safeName || safeName !== fileName) throw new Error("The publishing media filename is invalid.");
   if (!artifact || artifact.fileName !== safeName) throw new Error("This publishing job has no authorized private media download.");
-  const temporary = `${localPath}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${localPath}.${randomUUID()}.tmp`;
   await fs.mkdir(path.dirname(localPath), { recursive: true });
   try {
     if (artifact.parts?.length) {
       const parts = validateCentralArtifactParts(artifact);
       const output = await fs.open(temporary, "wx", 0o600);
-      const fullHash = createHash("sha256");
+      const expectedBytes = parts.reduce((sum, part) => sum + part.byteSize, 0);
       let totalBytes = 0;
-      try {
-        for (const part of parts) {
-          const bytes = await fetchBytes(part.downloadUrl, supabaseUrl, fetchImplementation);
-          if (bytes.length !== part.byteSize) throw new Error("A private media part has the wrong size.");
-          if (part.sha256 && createHash("sha256").update(bytes).digest("hex") !== part.sha256) {
-            throw new Error("A private media part failed its integrity check.");
-          }
-          await output.writeFile(bytes);
-          fullHash.update(bytes);
+      let nextPart = 0;
+      let stopped = false;
+      const worker = async () => {
+        while (!stopped && nextPart < parts.length) {
+          const part = parts[nextPart];
+          nextPart += 1;
+          const bytes = await fetchPart(part, supabaseUrl, fetchImplementation, retryDelayMs);
+          await output.write(bytes, 0, bytes.length, part.offset);
           totalBytes += bytes.length;
+          onProgress?.(Math.round((totalBytes / expectedBytes) * 100));
         }
+      };
+      try {
+        await Promise.all(Array.from({ length: Math.min(PARALLEL_PARTS, parts.length) }, () => worker().catch((error) => {
+          stopped = true;
+          throw error;
+        })));
       } finally {
         await output.close();
       }
       if (artifact.byteSize && totalBytes !== artifact.byteSize) throw new Error("The publishing media file has the wrong size.");
-      if (artifact.sha256 && fullHash.digest("hex") !== artifact.sha256) throw new Error("The publishing media integrity check failed.");
+      if (artifact.sha256 && await fileSha256(temporary) !== artifact.sha256) throw new Error("The publishing media integrity check failed.");
     } else {
       if (!artifact.downloadUrl) throw new Error("This publishing job has no authorized private media download.");
       const bytes = await fetchBytes(artifact.downloadUrl, supabaseUrl, fetchImplementation);

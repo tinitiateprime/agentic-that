@@ -4,6 +4,8 @@ import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type A
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { setLocalInputFile } from "./local-file-input.js";
+import { PlatformRefusedError } from "../publishing-errors.js";
+import { mediaUploadTimeoutMs } from "./media-upload-tracker.js";
 
 const X_HOME_URL = "https://x.com/home";
 const X_LOGIN_URL = "https://x.com/i/flow/login";
@@ -250,7 +252,13 @@ function xMediaPreviewLocators(page: Page, composer: Locator) {
   ];
 }
 
-async function attachXMedia(page: Page, filePath: string) {
+/** A bigger file gets longer to upload; the wait still ends the moment X is ready. */
+function xUploadTimeoutMs(sizeBytes: number) {
+  const configured = Number(process.env.X_UPLOAD_TIMEOUT_MS);
+  return configured > 0 ? configured : mediaUploadTimeoutMs(sizeBytes);
+}
+
+async function attachXMedia(page: Page, filePath: string, sizeBytes = 0) {
   console.log("Uploading X media...");
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer for media upload.");
@@ -267,7 +275,7 @@ async function attachXMedia(page: Page, filePath: string) {
   await setLocalInputFile(page, fileInput, filePath);
   console.log("X media selected; waiting for it to become ready...");
 
-  await waitForXMediaReady(page, composer);
+  await waitForXMediaReady(page, composer, sizeBytes);
 }
 
 async function xMediaIsReady(page: Page, composer: Locator) {
@@ -284,8 +292,8 @@ async function xMediaIsReady(page: Page, composer: Locator) {
   return hasReadyXMedia(true, true, uploading);
 }
 
-export async function waitForXMediaReady(page: Page, composer: Locator) {
-  const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
+export async function waitForXMediaReady(page: Page, composer: Locator, sizeBytes = 0) {
+  const deadline = Date.now() + xUploadTimeoutMs(sizeBytes);
   let stablePreviewChecks = 0;
   while (Date.now() < deadline) {
     await dismissXInterruptions(page);
@@ -395,11 +403,11 @@ export async function submitXPost(page: Page, composer: Locator, postButton: Loc
   return "shortcut";
 }
 
-export async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void) {
+export async function clickXPostWhenReady(page: Page, requireMedia: boolean, onSubmitted?: () => Promise<void> | void, sizeBytes = 0) {
   const composer = await getPostComposer(page);
   if (!composer) throw new Error("Could not find the X post composer before publishing.");
 
-  const deadline = Date.now() + Number(process.env.X_UPLOAD_TIMEOUT_MS ?? 300000);
+  const deadline = Date.now() + xUploadTimeoutMs(sizeBytes);
 
   while (Date.now() < deadline) {
     await dismissXInterruptions(page);
@@ -442,19 +450,29 @@ export function xAcceptedPostId(body: unknown) {
   return typeof postId === "string" && /^\d+$/.test(postId) ? postId : null;
 }
 
+/** X's own reason for refusing a post, unless it is an account limit that must pause the account. */
+export function xRefusalMessage(body: unknown) {
+  const errors = (body as { errors?: Array<{ message?: unknown }> } | null)?.errors;
+  const message = String(errors?.[0]?.message || "").replace(/^[A-Za-z]+:\s*/, "").trim();
+  if (!message || /rate limit|too many|automated|spam|suspend|locked|restricted/i.test(message)) return null;
+  return message;
+}
+
 export function observeXPostAcceptance(page: Page) {
-  const evidence = { postId: null as string | null };
+  const evidence = { postId: null as string | null, refusal: null as string | null };
   let active = true;
   const responseReceived = async (response: Response) => {
     if (response.request().method() !== "POST" || !/\/CreateTweet(?:\?|$)/.test(response.url()) || !response.ok()) return;
-    const postId = xAcceptedPostId(await response.json().catch(() => null));
+    const body = await response.json().catch(() => null);
+    const postId = xAcceptedPostId(body);
     if (active && postId) evidence.postId = postId;
+    if (active && !postId) evidence.refusal = xRefusalMessage(body);
   };
   page.on("response", responseReceived);
   return { evidence, dispose: () => { active = false; page.off("response", responseReceived); } };
 }
 
-async function waitForXPostComplete(page: Page, evidence: { postId: string | null }) {
+async function waitForXPostComplete(page: Page, evidence: { postId: string | null; refusal?: string | null }) {
   console.log("Waiting for X to confirm the post...");
   const deadline = Date.now() + 90000;
 
@@ -471,6 +489,7 @@ async function waitForXPostComplete(page: Page, evidence: { postId: string | nul
       console.log("X post published.");
       return;
     }
+    if (evidence.refusal) throw new PlatformRefusedError(`X refused this post: ${evidence.refusal} Nothing was published.`);
 
     const error = await firstVisible([
       page.locator('[data-testid="toast"]').filter({ hasText: /failed|error|try again|not sent/i }),
@@ -556,11 +575,11 @@ export async function postToX(page: Page, upload: PlatformUpload, accountLogin?:
 
   await loginToX(page, upload, false, accountLogin);
   await openPostComposer(page);
-  if (!isTextOnly) await attachXMedia(page, filePath);
+  if (!isTextOnly) await attachXMedia(page, filePath, upload.size);
   await fillXCaption(page, caption);
   const acceptance = observeXPostAcceptance(page);
   try {
-    await clickXPostWhenReady(page, !isTextOnly, accountLogin?.onFinalActionSubmitted);
+    await clickXPostWhenReady(page, !isTextOnly, accountLogin?.onFinalActionSubmitted, upload.size);
     await waitForXPostComplete(page, acceptance.evidence);
   } finally { acceptance.dispose(); }
 

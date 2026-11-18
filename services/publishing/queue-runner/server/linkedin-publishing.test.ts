@@ -173,7 +173,7 @@ test("LinkedIn reports a rejected Page submission after one trusted Post click",
     let submitted = 0;
     await assert.rejects(postToLinkedIn(page, textUpload(numericTarget), {
       useSavedSessionOnly: true, onFinalActionSubmitted: () => { submitted += 1; },
-    }), /LinkedIn rejected the post: Your post failed/);
+    }), /LinkedIn couldn't share this post\. It said: "Your post failed"/);
     assert.equal(requests, 1);
     assert.equal(submitted, 1);
   });

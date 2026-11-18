@@ -55,6 +55,7 @@ function stateLabel(session) {
   const labels = {
     opening: "Opening",
     waiting: "Waiting",
+    needs_you: "Needs you",
     publishing: "Publishing",
     posted: "Posted",
     review: "Check Studio",

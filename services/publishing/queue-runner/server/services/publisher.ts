@@ -1,9 +1,14 @@
-import { explainPublishingError } from "./publishing-errors.js";
+import { explainPublishingError, isPlatformRefusal, PlatformRefusedError } from "./publishing-errors.js";
+import { publishingUploadFilePath } from "../runtime-paths.js";
+import { mp4DurationSeconds } from "./video-duration.js";
+import { videoFit } from "../../shared/video-limits.js";
+import { createHumanCheckGuard } from "./publishers/human-check.js";
 import type { BrowserContext, Page } from "playwright-core";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { PlatformUpload, PublishingEngine } from "../../shared/schema.js";
+import { platformLabels } from "../../shared/schema.js";
 import {
   automationInput,
   bindPublishingAccountsToCompanion,
@@ -680,7 +685,25 @@ function accountLogin(options: AccountLoginOptions = {}): AccountLogin {
   };
 }
 
+// What the workspace shows while a post is waiting for the person.
+const attentionNotices = new Map<string, string>();
+
+export function publishingAttentionNotice(uploadId: string) {
+  return attentionNotices.get(uploadId) || "";
+}
+
+/** Stops a video the app is certain to refuse, so it is never uploaded for nothing. */
+function assertVideoFitsPlatform(upload: PlatformUpload) {
+  if (upload.postFormat !== "video" || !upload.fileName) return;
+  const fit = videoFit(upload.platform, {
+    durationSeconds: mp4DurationSeconds(publishingUploadFilePath(upload.fileName)),
+    sizeBytes: upload.size,
+  });
+  if (fit.status === "blocked") throw new PlatformRefusedError(`${fit.message} Nothing was published.`);
+}
+
 async function publishOne(page: Page, upload: PlatformUpload, options: AccountLoginOptions = {}) {
+  assertVideoFitsPlatform(upload);
   const login = accountLogin(options);
   switch (upload.platform) {
     case "youtube": return postToYouTube(page, upload, login);
@@ -836,26 +859,62 @@ async function runAccountQueue(
       let finalActionSubmitted = false;
       try {
         await updateUploadPublishActionState(upload.id, "prepared");
-        await publishOne(page, upload, {
-          ...options,
-          onFinalActionSubmitted: async () => {
-            finalActionSubmitted = true;
-            await updateUploadPublishActionState(upload.id, "submitted");
+        const app = platformLabels[account.platform];
+        const humanCheck = createHumanCheckGuard({
+          page,
+          app,
+          session: browser,
+          signal,
+          onNotice: (notice) => {
+            if (notice) attentionNotices.set(upload.id, notice);
+            else attentionNotices.delete(upload.id);
           },
         });
+        try {
+          for (let attempt = 1; ; attempt += 1) {
+            try {
+              await publishOne(page, upload, {
+                ...options,
+                onFinalActionSubmitted: async () => {
+                  finalActionSubmitted = true;
+                  await updateUploadPublishActionState(upload.id, "submitted");
+                },
+              });
+              break;
+            } catch (publishError) {
+              if (signal.aborted) throw publishError;
+              const outcome = await humanCheck.settle();
+              if (outcome === "none") throw publishError;
+              if (finalActionSubmitted) {
+                throw new Error(`${app} asked for a verification after Post was clicked. Check ${app} before posting this again.`);
+              }
+              if (outcome === "timed_out") {
+                throw new PlatformRefusedError(`${app} asked for a verification that wasn't completed in time. Nothing was posted, so you can post it again.`);
+              }
+              if (attempt >= 3) throw publishError;
+              // Nothing has been published yet, so the post's steps can safely run again.
+              console.log(`${app} verification is done. Continuing this post.`);
+            }
+          }
+        } finally {
+          humanCheck.stop();
+        }
         signal.throwIfAborted();
       } catch (error) {
         hadFailure = true;
         const originalMessage = signal.aborted ? "Publishing was stopped by the user." : errorMessage(error);
+        const refused = !signal.aborted && isPlatformRefusal(error);
+        if (refused) await updateUploadPublishActionState(upload.id, "refused");
         const youtubeStudioReview = !signal.aborted
+          && !refused
           && finalActionSubmitted
           && account.platform === "youtube"
           && upload.postFormat === "video";
         const message = youtubeStudioReview && !/check youtube studio/i.test(originalMessage)
           ? `YouTube accepted Publish, but video completion was not confirmed. Check YouTube Studio before retrying. Detail: ${originalMessage}`
           : originalMessage;
-        const visibleRisk = signal.aborted ? "" : await visiblePublishingRiskSignal(page).catch(() => "");
-        const risk = signal.aborted
+        const visibleRisk = signal.aborted || refused ? "" : await visiblePublishingRiskSignal(page).catch(() => "");
+        const risk = signal.aborted || refused
           ? null
           : classifyPublishingRisk(
             `${message} ${visibleRisk}${finalActionSubmitted ? " final publish result is uncertain" : ""}`,
@@ -870,7 +929,7 @@ async function runAccountQueue(
           if (risk.kind === "uncertain_publish") {
             await updateUploadPublishActionState(upload.id, "uncertain");
           }
-        } else if (isSessionFailure(message)) {
+        } else if (!refused && isSessionFailure(message)) {
           sessionInvalidated = true;
           clearSavedAccountSession(account);
           await updatePlatformAccountCredentialState(account.id, false).catch(() => undefined);

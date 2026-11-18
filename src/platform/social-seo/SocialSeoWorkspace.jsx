@@ -7,7 +7,8 @@ import {
 import { probeMediaFile } from "./media-probe";
 import AiResults from "./AiResults";
 import AiStatusBar, { AiLogo } from "./AiStatusBar";
-import PostPanel from "./PostPanel";
+import PostPanel, { POST_PLATFORMS } from "./PostPanel";
+import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
 import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow } from "./companion-ai";
 import styles from "./social-seo.module.css";
 
@@ -223,12 +224,14 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
       providers: { ...current.providers, [id]: { ...current.providers[id], ...change } },
     }));
     try {
-      const prepared = await prepareMediaForAi(media);
+      const prepared = await prepareMediaForAi(media, (detail) => ids.forEach((id) => update(id, { state: "working", detail })));
+      if (prepared.speechNote) setNotice(prepared.speechNote);
       await generateWithCompanionAis({
         providers: ids,
         images: prepared.images,
         mediaKind: prepared.mediaKind,
         durationSeconds: prepared.durationSeconds,
+        transcript: prepared.transcript,
         platforms: AI_PLATFORMS,
         description: description.trim() || undefined,
         // The brand typed or named in the description. The workspace name is never
@@ -366,6 +369,23 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
                 </li>
               ))}
             </ul>
+          )}
+
+          {media.find((item) => item.kind === "video") && (
+            <section className={styles.videoFit} aria-label="Where this video can be posted">
+              <strong>Where this video can be posted</strong>
+              <ul>
+                {POST_PLATFORMS.map((platform) => {
+                  const fit = videoFit(platform.id, media.find((item) => item.kind === "video"));
+                  return (
+                    <li key={platform.id} className={styles[`videoFit_${fit.status}`]}>
+                      <img src={platform.logo} alt="" width={16} height={16} />
+                      <span><b>{platform.label}</b> {fit.status === "fits" ? "Fits" : fit.message}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           )}
 
           <div

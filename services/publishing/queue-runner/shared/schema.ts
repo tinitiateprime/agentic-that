@@ -11,7 +11,7 @@ export const userRoles = ["operations_manager", "post_uploader", "scheduler", "v
 export const accountSafetyStatuses = ["healthy", "warning", "paused", "restricted"] as const;
 export const accountSafetyModes = ["standard", "protected"] as const;
 export const publishingEngines = ["companion", "external_browser", "api"] as const;
-export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain"] as const;
+export const publishActionStates = ["not_started", "prepared", "submitted", "confirmed", "uncertain", "refused"] as const;
 
 export const youtubeOptionsSchema = z.object({
   audience: z.enum(["made_for_kids", "not_made_for_kids"]),
@@ -300,6 +300,8 @@ export const platformUploadSchema = z.object({
   caption: z.string().min(1, "Caption is required"),
 
   status: uploadStatusSchema,
+  /** Shown while a post is waiting for the person, such as a verification. */
+  statusMessage: z.string().optional(),
   statusDetail: z.enum([
     "queued",
     "waiting_for_companion",

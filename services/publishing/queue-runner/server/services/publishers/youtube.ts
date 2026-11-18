@@ -8,6 +8,9 @@ import { requireYouTubeOptions } from "../../../shared/youtube-options.js";
 import { selectYouTubeOption, youtubeFinalAction } from "./youtube-options.js";
 import type { YouTubeOptions } from "../../../shared/schema.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { PlatformRefusedError } from "../publishing-errors.js";
+import { isYouTubeMediaUpload, trackMediaUpload, waitForMediaUploadFinished } from "./media-upload-tracker.js";
+import { mp4DurationSeconds } from "../video-duration.js";
 import {
   prepareYouTubeCommunityMedia,
   youtubeCommunityImagePreviewTimeout,
@@ -331,7 +334,7 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
         throw new Error(`YouTube Studio needs review: ${detail} Check YouTube Studio before retrying.`);
       }
       if (YOUTUBE_VIDEO_PROCESSING_DIALOG_TEXT.test(dialogText)) {
-        console.log("YouTube Video processing dialog is visible. Publishing is complete; closing the browser.");
+        console.log("YouTube Video processing dialog is visible. Checking the upload and YouTube's result next.");
         return;
       }
       if (dialogState === "uploaded") {
@@ -494,6 +497,57 @@ async function waitForPublishComplete(page: Page, videoTitle: string, sizeBytes:
 
   if (confirmationDialog) console.warn("YouTube publish was confirmed, but the confirmation dialog could not be closed automatically.");
   else console.log("YouTube publish was confirmed without an open dialog. Publish flow completed.");
+}
+
+/** "https://youtu.be/abc" or ".../watch?v=abc" -> "abc". */
+export function youtubeVideoIdFromUrl(url: string) {
+  return url.match(/(?:youtu\.be\/|[?&]v=|\/video\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)?.[1] || "";
+}
+
+/** YouTube's verdict on one video in Studio's content list, in plain words (null when it isn't refused). */
+export function youtubeVideoRefusal(rowText: string) {
+  const text = rowText.replace(/\s+/g, " ");
+  if (/video is too long/i.test(text)) {
+    return "YouTube rejected this video because it is longer than 15 minutes and this channel isn't phone-verified. Nothing was published. Verify the channel at youtube.com/verify, delete the failed video in YouTube Studio, then post again.";
+  }
+  const reason = text.match(/Processing abandoned\.?\s*([^.]{0,80})/i);
+  if (reason) return `YouTube stopped processing this video${reason[1].trim() ? `: ${reason[1].trim()}` : ""}. Nothing was published. Check the video in YouTube Studio.`;
+  return null;
+}
+
+async function currentYouTubeVideoId(page: Page) {
+  const link = await firstVisible([page.locator('ytcp-uploads-dialog a[href*="youtu.be"], ytcp-uploads-dialog a[href*="youtube.com/watch"], a[href*="youtu.be"]')]);
+  return youtubeVideoIdFromUrl((await link?.getAttribute("href").catch(() => "")) || "");
+}
+
+/**
+ * Publish only means YouTube took the request. Studio's content list then shows
+ * whether YouTube kept the video, as with "Processing abandoned: Video is too long".
+ */
+async function assertYouTubeKeptVideo(page: Page, videoId: string, overFifteenMinutes: boolean) {
+  const channelId = page.url().match(/\/channel\/(UC[\w-]+)/)?.[1];
+  if (!videoId || !channelId) {
+    console.warn("Couldn't identify the new video in YouTube Studio, so its final result wasn't checked.");
+    return;
+  }
+  // Only long videos can be refused for their length, so only they get the longer watch.
+  const checkMs = Number(process.env.YOUTUBE_RESULT_CHECK_MS ?? (overFifteenMinutes ? 120_000 : 10_000));
+  const deadline = Date.now() + checkMs;
+  console.log("Checking YouTube Studio's result for the new video...");
+  while (Date.now() < deadline) {
+    await page.goto(`https://studio.youtube.com/channel/${channelId}/videos/upload`, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+    const row = page.locator("ytcp-video-row").filter({ has: page.locator(`a[href*="/video/${videoId}/"]`) }).first();
+    await row.waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined);
+    const refusal = youtubeVideoRefusal((await row.textContent({ timeout: 2000 }).catch(() => "")) || "");
+    if (refusal) throw new PlatformRefusedError(refusal);
+    const visibility = ((await row.locator(".tablecell-visibility").first().textContent({ timeout: 1000 }).catch(() => "")) || "").trim();
+    if (/\b(?:Public|Unlisted|Private|Scheduled)\b/i.test(visibility)) {
+      console.log("YouTube Studio shows the video as published.");
+      return;
+    }
+    await page.waitForTimeout(Math.min(15_000, Math.max(0, deadline - Date.now())));
+  }
+  console.log("YouTube hasn't reported a problem with the video.");
 }
 
 async function openYouTubeCreateMenu(page: Page) {
@@ -1206,39 +1260,46 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
   await loginToYouTube(page, accountLogin);
 
   console.log("Uploading file...");
-  await attachYouTubeVideoFile(page, videoPath);
+  const transfer = trackMediaUpload(page, isYouTubeMediaUpload);
+  try {
+    await attachYouTubeVideoFile(page, videoPath);
 
-  console.log("Waiting for title field...");
-  await page.waitForSelector("#title-textarea", { timeout: 60000 });
-  await page.waitForTimeout(2000);
+    console.log("Waiting for title field...");
+    await page.waitForSelector("#title-textarea", { timeout: 60000 });
+    await page.waitForTimeout(2000);
 
-  console.log("Filling metadata...");
-  const videoTitle = upload.title || upload.caption || upload.originalName;
+    console.log("Filling metadata...");
+    const videoTitle = upload.title || upload.caption || upload.originalName;
 
-  await fillEditable(page, page.locator("#title-textarea"), videoTitle);
-  await fillEditable(page, page.locator("#description-textarea"), upload.caption ?? "");
-  await page.waitForTimeout(1000);
+    await fillEditable(page, page.locator("#title-textarea"), videoTitle);
+    await fillEditable(page, page.locator("#description-textarea"), upload.caption ?? "");
+    await page.waitForTimeout(1000);
 
-  await selectYouTubeOption(page, "audience", options);
-  await waitForVideoPreview(page);
+    await selectYouTubeOption(page, "audience", options);
+    await waitForVideoPreview(page);
+    const videoId = await currentYouTubeVideoId(page);
 
-  console.log("Moving to Video elements...");
-  await clickNextWhenReady(page);
+    console.log("Moving to Video elements...");
+    await clickNextWhenReady(page);
 
-  await waitForUploadDialogText(page, /Use cards and an end screen/i, "Video elements");
-  await clickNextWhenReady(page);
+    await waitForUploadDialogText(page, /Use cards and an end screen/i, "Video elements");
+    await clickNextWhenReady(page);
 
-  await waitForUploadDialogText(page, /check your video for issues/i, "Checks");
-  await clickNextWhenReady(page);
+    await waitForUploadDialogText(page, /check your video for issues/i, "Checks");
+    await clickNextWhenReady(page);
 
-  await waitForUploadDialogText(page, /Choose when to publish|Save or publish|Visibility/i, "Visibility");
-  await selectYouTubeOption(page, "visibility", options);
-  const action = youtubeFinalAction(options.visibility);
-  await clickDialogButtonWhenReady(page, [action], action, accountLogin?.onFinalActionSubmitted);
-  await waitForPublishComplete(page, videoTitle, upload.size);
+    await waitForUploadDialogText(page, /Choose when to publish|Save or publish|Visibility/i, "Visibility");
+    await selectYouTubeOption(page, "visibility", options);
+    const action = youtubeFinalAction(options.visibility);
+    await clickDialogButtonWhenReady(page, [action], action, accountLogin?.onFinalActionSubmitted);
+    await waitForPublishComplete(page, videoTitle, upload.size);
+    // Studio must stay open until the last byte is sent; only then is it safe to leave the page.
+    await waitForMediaUploadFinished(page, transfer, { app: "YouTube", sizeBytes: upload.size });
+    await assertYouTubeKeptVideo(page, videoId, mp4DurationSeconds(videoPath) > 15 * 60);
 
-  console.log("Step completed: video published.");
-  return { success: true };
+    console.log("Step completed: video published.");
+    return { success: true };
+  } finally { transfer.dispose(); }
 }
 
 export async function postToYouTube(page: Page, upload: PlatformUpload, accountLogin?: AccountLogin) {

@@ -4,6 +4,7 @@ import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type A
 import fs from "fs";
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { setLocalInputFile } from "./local-file-input.js";
+import { isFacebookMediaUpload, mediaUploadTimeoutMs, trackMediaUpload, waitForMediaUploadFinished } from "./media-upload-tracker.js";
 
 const FACEBOOK_HOME_URL = "https://www.facebook.com/";
 const FACEBOOK_LOGIN_URL = "https://www.facebook.com/login/";
@@ -505,10 +506,11 @@ async function waitForFacebookSubmissionStart(page: Page, timeout = 3500) {
   return false;
 }
 
-async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void) {
+async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promise<void> | void, videoBytes?: number) {
   const dialog = createPostDialog(page);
   await dialog.waitFor({ state: "visible", timeout: 30000 });
-  const deadline = Date.now() + 120000;
+  const readyTimeout = videoBytes === undefined ? 120_000 : mediaUploadTimeoutMs(videoBytes);
+  const deadline = Date.now() + readyTimeout;
   let readyPostButton: Locator | null = null;
 
   while (Date.now() < deadline) {
@@ -527,7 +529,7 @@ async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promis
     break;
   }
 
-  if (!readyPostButton) throw new Error("Facebook Post button did not become ready within 120 seconds.");
+  if (!readyPostButton) throw new Error(`Facebook Post button did not become ready within ${Math.round(readyTimeout / 1000)} seconds.`);
   console.log("Clicking the Facebook Post button once...");
   await readyPostButton.evaluate((element: HTMLElement) => {
     element.scrollIntoView({ block: "center", inline: "center" });
@@ -544,12 +546,14 @@ async function clickFacebookPostWhenReady(page: Page, onSubmitted?: () => Promis
   );
 }
 
-async function waitForFacebookPostComplete(page: Page) {
+async function waitForFacebookPostComplete(page: Page, videoBytes?: number) {
   console.log("Post clicked. Waiting for Facebook to accept and close the composer...");
   const configuredTimeout = Number(process.env.FACEBOOK_POST_CONFIRMATION_TIMEOUT_MS);
-  const timeout = Number.isFinite(configuredTimeout)
+  const standardTimeout = Number.isFinite(configuredTimeout)
     ? Math.max(30_000, Math.min(300_000, configuredTimeout))
     : 180_000;
+  // A big video can hold the dialog open for much longer; the wait ends as soon as it closes.
+  const timeout = videoBytes === undefined ? standardTimeout : Math.max(standardTimeout, Math.min(30 * 60_000, mediaUploadTimeoutMs(videoBytes)));
   const deadline = Date.now() + timeout;
   let sawPostingProgress = false;
 
@@ -726,9 +730,15 @@ export async function postToFacebook(page: Page, upload: PlatformUpload, account
   await clickWhatsOnYourMind(page);
   await waitForCreatePostComposerReady(page);
   await typeFacebookCaption(page, caption);
-  if (!isTextOnly) await attachFacebookMedia(page, filePath);
-  await clickFacebookPostWhenReady(page, accountLogin?.onFinalActionSubmitted);
-  await waitForFacebookPostComplete(page);
+  const transfer = trackMediaUpload(page, isFacebookMediaUpload);
+  try {
+    if (!isTextOnly) await attachFacebookMedia(page, filePath);
+    const videoBytes = upload.postFormat === "video" ? upload.size : undefined;
+    await clickFacebookPostWhenReady(page, accountLogin?.onFinalActionSubmitted, videoBytes);
+    await waitForFacebookPostComplete(page, videoBytes);
+    // Facebook closes its dialog while a video is still being sent in the background.
+    if (upload.postFormat === "video") await waitForMediaUploadFinished(page, transfer, { app: "Facebook", sizeBytes: upload.size });
+  } finally { transfer.dispose(); }
 
   return { success: true };
 }

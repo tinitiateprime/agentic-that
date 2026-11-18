@@ -41,7 +41,7 @@ export type DesktopExternalBrowserLayout = {
 };
 
 export type DesktopBrowserActivity = {
-  state?: "opening" | "waiting" | "publishing" | "posted" | "review" | "failed" | "stopped";
+  state?: "opening" | "waiting" | "needs_you" | "publishing" | "posted" | "review" | "failed" | "stopped";
   detail?: string;
   currentItem?: string;
   currentIndex?: number;
@@ -58,6 +58,7 @@ export type PublishingDesktopHost = {
   openExternalActivity(request: DesktopBrowserRequest): Promise<DesktopExternalActivitySession>;
   updateBrowser(sessionId: string, activity: DesktopBrowserActivity): Promise<void> | void;
   closeBrowser(sessionId: string): Promise<void> | void;
+  revealBrowser?(sessionId: string): Promise<void> | void;
   stopPublishingBrowsers(reason: string): Promise<void> | void;
   clearAccountBrowserData(accountId: string): Promise<void> | void;
   flushAccountBrowserData?(accountId: string): Promise<void> | void;

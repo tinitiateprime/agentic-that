@@ -16,6 +16,7 @@ import { platformLabels, platformPostRules, platforms, publishingEngineLabels, s
 import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, setCentralAuthToken, type AuthResponse } from "./lib/api.ts";
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 import { REDDIT_MY_PROFILE } from "../shared/reddit-options.js";
+import { videoFit } from "../shared/video-limits.js";
 
 // --- PLATFORM BRAND ICONS ---
 const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number }) => {
@@ -931,7 +932,23 @@ function scheduleCanReceivePosts(schedule: PublishingSchedule) {
   return Boolean(runAt && runAt.getTime() > Date.now());
 }
 
-function getPlatformEligibility(platform: Platform, postFormat: PostFormat | null, file: File | null, title: string, description: string): PlatformEligibility {
+/** The video's length as the browser reads it (0 until known or when it can't be read). */
+function useVideoLength(file: File | null) {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    setSeconds(0);
+    if (!file?.type.startsWith('video/')) return undefined;
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => setSeconds(Number.isFinite(video.duration) ? video.duration : 0);
+    video.src = url;
+    return () => { video.removeAttribute('src'); URL.revokeObjectURL(url); };
+  }, [file]);
+  return seconds;
+}
+
+function getPlatformEligibility(platform: Platform, postFormat: PostFormat | null, file: File | null, title: string, description: string, videoSeconds = 0): PlatformEligibility {
   if (!postFormat) return { allowed: false, mediaCompatible: false, reason: 'Choose a post format first' };
   const rules = platformPostRules[platform];
   if (!rules.formats.includes(postFormat)) {
@@ -944,6 +961,9 @@ function getPlatformEligibility(platform: Platform, postFormat: PostFormat | nul
     const fileFormat = file.type.startsWith('video/') ? 'video' : file.type.startsWith('image/') ? 'image' : null;
     if (fileFormat !== postFormat) return { allowed: false, mediaCompatible: false, reason: `Choose a valid ${postFormat}` };
   }
+  const fit = postFormat === 'video' && file ? videoFit(platform, { durationSeconds: videoSeconds, sizeBytes: file.size }) : null;
+  if (fit?.status === 'blocked') return { allowed: false, mediaCompatible: false, reason: fit.message };
+  if (fit?.status === 'warning' && description.trim()) return { allowed: true, mediaCompatible: true, reason: fit.message };
   const titleRequired = rules.titleRequired || rules.titleRequiredFor?.includes(postFormat);
   if (!description.trim()) return { allowed: false, mediaCompatible: true, reason: postFormat === 'text' ? 'Write your post text' : 'Add a description' };
   if (rules.titleLimit && title.length > rules.titleLimit) {
@@ -1173,6 +1193,7 @@ function UnifiedComposer({
 }) {
   const [postFormat, setPostFormat] = useState<PostFormat | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const videoSeconds = useVideoLength(file);
   const [previewUrl, setPreviewUrl] = useState('');
   const [title, setTitle] = useState('');
   const [youtubeAudience, setYoutubeAudience] = useState<'' | 'made_for_kids' | 'not_made_for_kids'>('');
@@ -1212,8 +1233,8 @@ function UnifiedComposer({
 
   const eligibility = useMemo(() => Object.fromEntries(platforms.map(platform => [
     platform,
-    getPlatformEligibility(platform, postFormat, file, title, description),
-  ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description]);
+    getPlatformEligibility(platform, postFormat, file, title, description, videoSeconds),
+  ])) as Record<Platform, PlatformEligibility>, [postFormat, file, title, description, videoSeconds]);
 
   const enabledAccounts = useMemo(() => accounts.filter(account => account.enabled), [accounts]);
   const availableDestinations = useMemo(() => enabledAccounts.flatMap(composerDestinationChoices), [enabledAccounts]);

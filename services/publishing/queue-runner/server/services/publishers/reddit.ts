@@ -10,6 +10,7 @@ import { redditDestinationLabel, requireRedditOptions, resolveRedditDestination 
 import { publishingUploadFilePath } from "../../runtime-paths.js";
 import { clickFinalAction } from "./final-click.js";
 import { setLocalFileChooserFile, setLocalInputFile } from "./local-file-input.js";
+import { mediaUploadTimeoutMs } from "./media-upload-tracker.js";
 import { waitForLoginWithManualFallback, waitForSavedSessionVerification, type AccountLogin } from "./manual-login.js";
 
 export const REDDIT_HOME_URL = "https://www.reddit.com/";
@@ -267,8 +268,8 @@ export function isRedditMediaUploadResponse(method: string, url: string, status:
   return method.toUpperCase() === "POST" && status >= 200 && status < 300 && /reddit-uploaded-(?:media|video)[^/]*\.amazonaws\.com/i.test(url);
 }
 
-async function attachMedia(page: Page, filePath: string, kind: "image" | "video") {
-  const timeout = Number(process.env.REDDIT_UPLOAD_TIMEOUT_MS ?? 15 * 60_000);
+async function attachMedia(page: Page, filePath: string, kind: "image" | "video", sizeBytes = 0) {
+  const timeout = Number(process.env.REDDIT_UPLOAD_TIMEOUT_MS ?? mediaUploadTimeoutMs(sizeBytes));
   // The preview shows at once from this computer; the post must wait for Reddit's own upload to finish.
   let finished = false;
   const uploaded = page.waitForResponse((response) => isRedditMediaUploadResponse(response.request().method(), response.url(), response.status()), { timeout })
@@ -398,11 +399,13 @@ export async function postToReddit(page: Page, upload: PlatformUpload, accountLo
   await page.waitForTimeout(2000);
   await dismissRedditInterruptions(page);
   await fillTitle(page, reddit.title);
-  if (!isTextOnly) await attachMedia(page, filePath, upload.postFormat === "video" || /^video\//i.test(upload.mimeType || "") ? "video" : "image");
+  const isVideo = !isTextOnly && (upload.postFormat === "video" || /^video\//i.test(upload.mimeType || ""));
+  if (!isTextOnly) await attachMedia(page, filePath, isVideo ? "video" : "image", upload.size);
   await fillBody(page, String(upload.caption || "").trim());
   await setTags(page, reddit.nsfw, reddit.spoiler);
   if (!isRedditComposerDestination(page.url(), destination)) throw new Error("Reddit's post destination changed while preparing the post. No post was submitted.");
-  const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted).catch((error: unknown) => {
+  // Reddit can take minutes to open a new video post; the wait ends as soon as it does.
+  const posted = await submitAndConfirm(page, reddit.title.slice(0, 300), accountLogin?.onFinalActionSubmitted, isVideo ? 10 * 60_000 : undefined).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     // Reddit answers PROFILE_SUBREDDIT_NOEXIST ("that community doesn't exist") when it won't take profile posts from this account.
     if (/^u_/i.test(destination) && /doesn.t exist/i.test(message)) {
