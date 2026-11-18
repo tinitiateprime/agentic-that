@@ -10,6 +10,7 @@ import AiStatusBar, { AiLogo } from "./AiStatusBar";
 import PostPanel, { POST_PLATFORMS } from "./PostPanel";
 import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
 import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow, stageVideoForAi } from "./companion-ai";
+import { runVideoFirst } from "./video-first";
 import styles from "./social-seo.module.css";
 
 const PLATFORMS = [
@@ -242,33 +243,38 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
       else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
     };
     try {
-      // Each AI is offered the whole video first. Only the ones that can't take it
-      // or watch it go on to the speech and pictures.
-      let remaining = ids;
+      // The speech and pictures are prepared once, for every AI that ends up needing them.
+      const usingSpeech = new Set();
+      let preparing = null;
+      const askWithSpeech = async (providers) => {
+        providers.forEach((id) => usingSpeech.add(id));
+        try {
+          preparing ??= prepareMediaForAi(media, (detail) => usingSpeech.forEach((id) => update(id, { state: "working", detail })));
+          const prepared = await preparing;
+          if (prepared.speechNote) setNotice(prepared.speechNote);
+          await generateWithCompanionAis({
+            ...postDetails,
+            providers,
+            images: prepared.images,
+            mediaKind: prepared.mediaKind,
+            durationSeconds: prepared.durationSeconds,
+            transcript: prepared.transcript,
+          }, showEvent);
+        } catch (speechError) {
+          providers.forEach((id) => update(id, { state: "failed", message: speechError.message }));
+        }
+      };
       const videoId = media[0]?.kind === "video" ? await stageVideoForAi(media[0], (detail) => ids.forEach((id) => update(id, { state: "working", detail }))) : null;
       if (videoId) {
-        const finished = new Set();
-        await generateWithCompanionAis({ ...postDetails, providers: ids, images: [], videoId, mediaKind: "video", durationSeconds: media[0].durationSeconds }, (event) => {
-          if (event.videoRefused) {
-            update(event.provider, { state: "working", step: "opening", live: "", detail: `${labels[event.provider] || event.provider} can't watch this whole video, so it will use the speech and pictures instead.` });
-            return;
-          }
-          if (event.ok === true || event.ok === false) finished.add(event.provider);
-          showEvent(event);
-        }, WHOLE_VIDEO_TIMEOUT_MS).catch(() => undefined);
-        remaining = ids.filter((id) => !finished.has(id));
-      }
-      if (remaining.length) {
-        const prepared = await prepareMediaForAi(media, (detail) => remaining.forEach((id) => update(id, { state: "working", detail })));
-        if (prepared.speechNote) setNotice(prepared.speechNote);
-        await generateWithCompanionAis({
-          ...postDetails,
-          providers: remaining,
-          images: prepared.images,
-          mediaKind: prepared.mediaKind,
-          durationSeconds: prepared.durationSeconds,
-          transcript: prepared.transcript,
-        }, showEvent);
+        await runVideoFirst({
+          ids,
+          askWithVideo: (onEvent) => generateWithCompanionAis({ ...postDetails, providers: ids, images: [], videoId, mediaKind: "video", durationSeconds: media[0].durationSeconds }, onEvent, WHOLE_VIDEO_TIMEOUT_MS),
+          askWithSpeech,
+          onRefused: (id) => update(id, { state: "working", step: "opening", live: "", detail: `${labels[id] || id} can't watch this whole video, so it will use the speech and pictures instead.` }),
+          onEvent: showEvent,
+        });
+      } else {
+        await askWithSpeech(ids);
       }
     } catch (runError) {
       // The Companion closed or the connection dropped: mark what was still running.

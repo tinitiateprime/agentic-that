@@ -8,7 +8,7 @@ import express from "express";
 import { chromium, type Page } from "playwright-core";
 import { signServiceAccessToken } from "../../../../../../lib/service-access-token.js";
 import { detectedExternalBrowserExecutablePath } from "../../engines/external-browser/index.js";
-import { attachVideo, VideoNotAcceptedError, waitForVideoUpload } from "./chat-ai.js";
+import { AiLimitError, attachVideo, VideoNotAcceptedError, waitForVideoUpload } from "./chat-ai.js";
 import { cannotWatchVideo, masterPrompt, parseAnswer, splitPrompt } from "./master-prompt.js";
 import { PROVIDERS, videoRefusalNotice, type ProviderSpec } from "./providers.js";
 import { removeStagedVideo, stagedVideo, stagedVideoExtension, stageVideo } from "./staged-video.js";
@@ -95,6 +95,12 @@ test("a video the app accepts is sent only after its upload finishes", { skip: !
     assert.equal(await page.locator("#send").isDisabled(), true);
     await waitForVideoUpload(page, spec, attachment, 1000);
     assert.equal(await page.locator("#send").isEnabled(), true);
+  });
+});
+
+test("an app that says its uploads are used up is recognised while attaching the video", { skip: !executablePath }, async () => {
+  await withApp(`chat.textContent = "Get Plus for more uploads. Or wait 20 hours to upload again";`, async (page) => {
+    await assert.rejects(attachVideo(page, spec, videoFile), (error: Error) => error instanceof AiLimitError && /20 hours/.test(error.message));
   });
 });
 

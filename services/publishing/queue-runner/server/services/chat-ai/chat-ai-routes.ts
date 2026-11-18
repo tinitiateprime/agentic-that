@@ -206,6 +206,7 @@ export function registerAiRoutes(app: express.Express) {
           const { results, complete } = parseAnswer(answer, platforms, { realTimes: Boolean(details.transcript || video), durationSeconds: details.durationSeconds });
           send({ provider, ok: true, results, complete, raw: answer, ms: Date.now() - started, watchedVideo: Boolean(video) });
         } catch (error) {
+          // A used-up plan or upload allowance skips this AI; speech and pictures can't help it.
           const limit = (error as { limit?: boolean })?.limit === true;
           send({ provider, ok: false, limit, videoRefused: Boolean(video) && !limit, message: error instanceof Error ? error.message : "This AI could not finish." });
         }

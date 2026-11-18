@@ -29,9 +29,11 @@ import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProvide
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const NEEDS_YOU_TIMEOUT_MS = 10 * 60 * 1000;
 const ANSWER_TIMEOUT_MS = 8 * 60 * 1000;
-// An AI app can spend many minutes watching a long video before it answers.
-const VIDEO_ANSWER_TIMEOUT_MS = 20 * 60 * 1000;
-const VIDEO_START_TIMEOUT_MS = 15 * 60 * 1000;
+// An AI that can really watch the video starts writing within minutes. One that is
+// still struggling by then moves on to the speech and pictures.
+const VIDEO_ANSWER_TIMEOUT_MS = 10 * 60 * 1000;
+const VIDEO_WATCH_TIMEOUT_MS = 5 * 60 * 1000;
+const REAL_ANSWER_CHARS = 500;
 const VISIBLE_BOUNDS = { left: 80, top: 50, width: 1200, height: 860 };
 const HIDDEN_BOUNDS = { left: -10_000, top: -10_000, width: 1280, height: 900 };
 
@@ -694,7 +696,10 @@ export async function attachVideo(page: Page, spec: ProviderSpec, file: string, 
   const landed = async () => {
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      const refusal = videoRefusalNotice(await pageText(page), baseline);
+      const text = await pageText(page);
+      const uploadsUsedUp = uploadLimitNotice(baseline) ? null : uploadLimitNotice(text);
+      if (uploadsUsedUp) throw new AiLimitError(`${spec.label} won't take more uploads on your plan right now. It says: "${uploadsUsedUp[0].toUpperCase()}${uploadsUsedUp.slice(1)}."`);
+      const refusal = videoRefusalNotice(text, baseline);
       if (refusal) throw new VideoNotAcceptedError(`${spec.label} refused the video: "${refusal}"`);
       const now = await videoMarks(page, name);
       if (now.named || now.players > before.players || now.pictures > before.pictures) return { baseline, name, named: now.named };
@@ -890,7 +895,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
           // Thinking ("Extra thorough") can take minutes before the answer shows:
           // keep waiting while the app's stop button says it is working.
           const waited = Date.now() - started;
-          if (waited > 120_000 && (waited > (video ? VIDEO_START_TIMEOUT_MS : 360_000) || !(await firstVisible(page, spec.stop)))) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
+          if (waited > 120_000 && (waited > (video ? VIDEO_WATCH_TIMEOUT_MS : 360_000) || !(await firstVisible(page, spec.stop)))) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
           continue;
         }
         if (now.text !== text) {
@@ -905,6 +910,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
         } else {
           stableFor += 1;
         }
+        if (video && Date.now() - started > VIDEO_WATCH_TIMEOUT_MS && text.length < REAL_ANSWER_CHARS) throw new VideoNotAcceptedError(`${spec.label} was taking too long to watch the video.`);
         // Done only when the real answer is there. While an app thinks (Gemini on
         // "Extra thorough") it shows a short status line that stays still for a
         // while, so the answer must have the sections the prompt asks for. Gemini's
@@ -919,6 +925,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
         if (video && stableFor >= 4 && cannotWatchVideo(text)) break;
       }
       if (!text) throw new Error(`${spec.label} took too long to answer.`);
+      if (video && markerCount(text) * 2 < wanted) throw new VideoNotAcceptedError(`${spec.label} didn't finish writing from the video.`);
       log(provider, `answer read (${text.length} characters) in ${Math.round((Date.now() - started) / 1000)}s`);
       return text;
     };
