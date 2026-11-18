@@ -20,13 +20,18 @@ import {
 } from "../../engines/external-browser/index.js";
 import { publishingBrowserDataDirectory } from "../../runtime-paths.js";
 import { publishingDesktopHost } from "../desktop-host.js";
-import { markerCount, splitPrompt } from "./master-prompt.js";
+import { setLocalFileChooserFile, setLocalInputFile } from "../publishers/local-file-input.js";
+import { mediaUploadTimeoutMs } from "../publishers/media-upload-tracker.js";
+import { cannotWatchVideo, markerCount, splitPrompt } from "./master-prompt.js";
 import { setWindowPresence } from "./native-window.js";
-import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec, appErrorReply, uploadLimitNotice, usageLimitNotice } from "./providers.js";
+import { AI_PROVIDERS, PROVIDERS, looksLikeHumanCheck, onAppPage, type AiProviderId, type ProviderSpec, appErrorReply, uploadLimitNotice, usageLimitNotice, videoRefusalNotice } from "./providers.js";
 
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
 const NEEDS_YOU_TIMEOUT_MS = 10 * 60 * 1000;
 const ANSWER_TIMEOUT_MS = 8 * 60 * 1000;
+// An AI app can spend many minutes watching a long video before it answers.
+const VIDEO_ANSWER_TIMEOUT_MS = 20 * 60 * 1000;
+const VIDEO_START_TIMEOUT_MS = 15 * 60 * 1000;
 const VISIBLE_BOUNDS = { left: 80, top: 50, width: 1200, height: 860 };
 const HIDDEN_BOUNDS = { left: -10_000, top: -10_000, width: 1280, height: 900 };
 
@@ -664,6 +669,106 @@ async function attachImages(page: Page, spec: ProviderSpec, box: Locator, files:
   }
 }
 
+/** This AI app can't take or watch the video, so it should use the speech and pictures instead. */
+export class VideoNotAcceptedError extends Error {}
+
+const pageText = (page: Page) => page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+
+/** Signs on the page that the video is attached: its name, a player or a new thumbnail. */
+function videoMarks(page: Page, name: string): Promise<{ named: boolean; players: number; pictures: number }> {
+  const label = JSON.stringify(name);
+  return page.evaluate(`({
+    named: document.body.innerText.includes(${label}) || [...document.querySelectorAll("[aria-label],[title]")].some((element) => ((element.getAttribute("aria-label") || "") + " " + (element.getAttribute("title") || "")).includes(${label})),
+    players: document.querySelectorAll("video").length,
+    pictures: [...document.querySelectorAll("img")].filter((image) => image.getBoundingClientRect().width >= 24 && /^(blob:|data:image)/.test(image.currentSrc || image.src)).length,
+  })`) as Promise<{ named: boolean; players: number; pictures: number }>;
+}
+
+export type VideoAttachment = { baseline: string; name: string; named: boolean };
+
+/** Offers the video file to the app, and stops at the app's own refusal. */
+export async function attachVideo(page: Page, spec: ProviderSpec, file: string, waitMs = 15_000): Promise<VideoAttachment> {
+  const name = path.parse(file).name;
+  const baseline = await pageText(page);
+  const before = await videoMarks(page, name);
+  const landed = async () => {
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      const refusal = videoRefusalNotice(await pageText(page), baseline);
+      if (refusal) throw new VideoNotAcceptedError(`${spec.label} refused the video: "${refusal}"`);
+      const now = await videoMarks(page, name);
+      if (now.named || now.players > before.players || now.pictures > before.pictures) return { baseline, name, named: now.named };
+      await sleep(500);
+    }
+    return null;
+  };
+
+  const inputsReady = Date.now() + (spec.fileInput.length ? 10_000 : 0);
+  const tried = new Set<string>();
+  do {
+    for (const selector of spec.fileInput) {
+      const inputs = page.locator(selector);
+      for (let index = 0; index < await inputs.count().catch(() => 0); index += 1) {
+        const input = inputs.nth(index);
+        const accept = (await input.getAttribute("accept", { timeout: 2000 }).catch(() => "")) || "";
+        const key = await input.evaluate((element) => element.id || element.outerHTML.slice(0, 120), undefined, { timeout: 2000 }).catch(() => `${selector}-${index}`);
+        if (tried.has(key) || (accept && !/video|\*\/\*|\.mp4/i.test(accept))) continue;
+        tried.add(key);
+        await setLocalInputFile(page, input, file).catch((error: unknown) => log(spec.id, `video input failed: ${error instanceof Error ? error.message.slice(0, 120) : error}`));
+        const attachment = await landed();
+        if (attachment) return attachment;
+      }
+    }
+    if (!tried.size) await sleep(500);
+  } while (!tried.size && Date.now() < inputsReady);
+
+  const attach = await firstVisible(page, spec.attachButtons);
+  if (attach) {
+    const opensPicker = async (target: Locator, timeout = 5000) => {
+      const chooser = page.waitForEvent("filechooser", { timeout }).catch(() => null);
+      await press(target).catch(() => undefined);
+      return chooser;
+    };
+    let picker = await opensPicker(attach, spec.attachMenuItems.length ? 2500 : 5000);
+    const limit = picker ? null : await uploadLimitReached(page);
+    if (limit) throw new AiLimitError(`${spec.label} won't take more uploads on your plan right now. It says: "${limit[0].toUpperCase()}${limit.slice(1)}."`);
+    if (!picker) {
+      const item = await waitVisible(page, spec.attachMenuItems, 4000);
+      if (item) picker = await opensPicker(item);
+    }
+    if (!picker) {
+      const agree = await firstVisible(page, ["button:has-text('Agree')", "button:has-text('Accept')", "button:has-text('Got it')", "button:has-text('Continue')"]);
+      if (agree) picker = await opensPicker(agree);
+    }
+    if (picker) {
+      await setLocalFileChooserFile(picker, file);
+      const attachment = await landed();
+      if (attachment) return attachment;
+    }
+    await page.keyboard.press("Escape").catch(() => undefined);
+  }
+  throw new VideoNotAcceptedError(`${spec.label} didn't take the video file.`);
+}
+
+/** Waits for the whole file to reach the app: its Send button turns on and stays on. */
+export async function waitForVideoUpload(page: Page, spec: ProviderSpec, attachment: VideoAttachment, sizeBytes: number, whileWaiting?: () => Promise<void>, timeoutMs = Math.min(30 * 60_000, mediaUploadTimeoutMs(sizeBytes))) {
+  const deadline = Date.now() + timeoutMs;
+  let readyChecks = 0;
+  let missingChecks = 0;
+  while (Date.now() < deadline) {
+    await whileWaiting?.();
+    const refusal = videoRefusalNotice(await pageText(page), attachment.baseline);
+    if (refusal) throw new VideoNotAcceptedError(`${spec.label} refused the video: "${refusal}"`);
+    missingChecks = attachment.named && !(await videoMarks(page, attachment.name)).named ? missingChecks + 1 : 0;
+    if (missingChecks >= 3) throw new VideoNotAcceptedError(`${spec.label} removed the video after it was attached.`);
+    const uploading = await firstVisible(page, ["[role='progressbar']"]);
+    readyChecks = !uploading && await sendButtonReady(page, spec) ? readyChecks + 1 : 0;
+    if (readyChecks >= 4) return;
+    await sleep(1000);
+  }
+  throw new VideoNotAcceptedError(`${spec.label} didn't finish receiving the video in time.`);
+}
+
 async function sendButtonReady(page: Page, spec: ProviderSpec) {
   const button = await firstVisible(page, spec.send);
   if (!button) return null;
@@ -685,14 +790,14 @@ const queues = new Map<AiProviderId, Promise<unknown>>();
 const pendingAsks = new Map<AiProviderId, number>();
 
 /** Sends the prompt and images to one app and returns its full answer. One request per app at a time. */
-export function askAi(provider: AiProviderId, prompt: string, images: string[], onEvent: (event: AskEvent) => void): Promise<string> {
+export function askAi(provider: AiProviderId, prompt: string, images: string[], onEvent: (event: AskEvent) => void, video?: { file: string; sizeBytes: number }): Promise<string> {
   pendingAsks.set(provider, (pendingAsks.get(provider) || 0) + 1);
-  const job = (queues.get(provider) || Promise.resolve()).then(() => ask(provider, prompt, images, onEvent));
+  const job = (queues.get(provider) || Promise.resolve()).then(() => ask(provider, prompt, images, onEvent, video));
   queues.set(provider, job.catch(() => undefined));
   return job.finally(() => pendingAsks.set(provider, Math.max(0, (pendingAsks.get(provider) || 1) - 1)));
 }
 
-async function ask(provider: AiProviderId, prompt: string, images: string[], onEvent: (event: AskEvent) => void) {
+async function ask(provider: AiProviderId, prompt: string, images: string[], onEvent: (event: AskEvent) => void, video?: { file: string; sizeBytes: number }) {
   const spec = PROVIDERS[provider];
   const startedAt = Date.now();
   const step = (name: AiStep, detail: string) => {
@@ -713,12 +818,21 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
     if (!box) throw new Error(`Couldn't find the message box in ${spec.label}. Its page may have changed; please try again.`);
 
     log(provider, `ready at ${new URL(page.url()).pathname}`);
-    step(images.length ? "uploading" : "sending", images.length ? `Uploading your post to ${spec.label}…` : `Sending to ${spec.label}…`);
+    step(images.length || video ? "uploading" : "sending", video ? `Uploading your whole video to ${spec.label}…` : images.length ? `Uploading your post to ${spec.label}…` : `Sending to ${spec.label}…`);
     const plainly = spec.askPlainlyFirst ? splitPrompt(prompt) : null;
     await typePrompt(page, await freshBox(page, spec, box), plainly ? plainly.ask : prompt);
     log(provider, plainly ? "prompt typed (asked plainly first)" : "prompt typed");
     await attachImages(page, spec, await freshBox(page, spec, box), images);
     log(provider, `${images.length} image(s) attached`);
+    if (video) {
+      const attachment = await attachVideo(page, spec, video.file);
+      log(provider, "video attached, waiting for the upload");
+      const open = window;
+      await waitForVideoUpload(page, spec, attachment, video.sizeBytes, async () => {
+        if (await humanCheck(page)) await readyToChat(open, spec, onEvent);
+      });
+      log(provider, "video uploaded");
+    }
 
     // Let the upload finish: the send button turns on when it is ready, and
     // uploads take a moment more on slow connections.
@@ -761,7 +875,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
       let stableFor = 0;
       let answering = false;
       let limitCheckedAt = 0;
-      while (Date.now() - started < ANSWER_TIMEOUT_MS) {
+      while (Date.now() - started < (video ? VIDEO_ANSWER_TIMEOUT_MS : ANSWER_TIMEOUT_MS)) {
         await sleep(1000);
         if (live.closed) throw new Error(`The ${spec.label} window was closed.`);
         if (await humanCheck(page)) await readyToChat(live, spec, onEvent);
@@ -776,7 +890,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
           // Thinking ("Extra thorough") can take minutes before the answer shows:
           // keep waiting while the app's stop button says it is working.
           const waited = Date.now() - started;
-          if (waited > 120_000 && (waited > 360_000 || !(await firstVisible(page, spec.stop)))) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
+          if (waited > 120_000 && (waited > (video ? VIDEO_START_TIMEOUT_MS : 360_000) || !(await firstVisible(page, spec.stop)))) throw new Error(`${spec.label} didn't start answering. Check its window (it may need you, or your plan's limit may be reached).`);
           continue;
         }
         if (now.text !== text) {
@@ -802,6 +916,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
         if (text && stableFor >= 90 && (!streaming || stableFor >= 150)) break;
         // The app's own error reply ("Could you try again?"): no need to wait.
         if (stableFor >= 4 && appErrorReply(text)) break;
+        if (video && stableFor >= 4 && cannotWatchVideo(text)) break;
       }
       if (!text) throw new Error(`${spec.label} took too long to answer.`);
       log(provider, `answer read (${text.length} characters) in ${Math.round((Date.now() - started) / 1000)}s`);
@@ -823,6 +938,7 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
     };
 
     let text = await answer(`${spec.label} is writing your posts…`, !plainly);
+    if (video && cannotWatchVideo(text)) throw new VideoNotAcceptedError(`${spec.label} took the file but can't watch the video.`);
     if (plainly) {
       // Its full answer, then the same posts arranged into the sections.
       await typePrompt(page, await freshBox(page, spec, box), plainly.arrange);

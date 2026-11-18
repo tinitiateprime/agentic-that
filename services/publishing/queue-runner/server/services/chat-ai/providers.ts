@@ -149,6 +149,21 @@ export function uploadLimitNotice(text: string) {
   return /for more uploads|upload limit (reached|exceeded)|reached (your|the) (upload|file) limit/i.test(flat) ? "upload again later" : null;
 }
 
+const VIDEO_REFUSED = /[^.!?\n]*(?:\b(?:file|video|upload|attachment)s?\b[^.!?\n]{0,60}\b(?:too (?:large|big|long)|exceeds?|not supported|unsupported|isn(?:'|’)t supported|failed|can(?:'|’|no)t be (?:uploaded|processed)|couldn(?:'|’)t be (?:uploaded|processed))\b|\b(?:can(?:'|’)t|cannot|couldn(?:'|’)t|unable to|failed to) (?:upload|attach|process|read)\b[^.!?\n]{0,40}\b(?:file|video|attachment)s?\b|\b(?:video|file)s?\b[^.!?\n]{0,30}\b(?:longer than|limit of) \d)[^.!?\n]*/gi;
+
+/**
+ * The app's message that it won't take this video: too big, too long or the wrong
+ * type. Anything already on the page before the upload (baseline) doesn't count.
+ */
+export function videoRefusalNotice(text: string, baseline = "") {
+  const before = baseline.replace(/\s+/g, " ");
+  for (const match of text.replace(/[ \t]+/g, " ").matchAll(VIDEO_REFUSED)) {
+    const notice = match[0].trim();
+    if (notice.length <= 200 && !before.includes(notice)) return notice;
+  }
+  return null;
+}
+
 /**
  * The app's own "you've used up your plan for now" notice (messages, not uploads):
  * the sentence it shows, or null. Covers ChatGPT ("You've hit the Free plan limit"),

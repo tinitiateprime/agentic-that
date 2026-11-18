@@ -15,6 +15,7 @@ import { aiStatus, askAi, connectAi, disconnectAi, showAiWindow } from "./chat-a
 import { SEO_PLATFORMS, masterPrompt, parseAnswer } from "./master-prompt.js";
 import { AI_PROVIDERS, type AiProviderId } from "./providers.js";
 import { transcribeAudioFile } from "./speech.js";
+import { MAX_STAGED_VIDEO_BYTES, removeStagedVideo, stageVideo, stagedVideo, stagedVideoExtension } from "./staged-video.js";
 
 // Three hours of 16 kHz mono 16-bit audio.
 const MAX_SPEECH_AUDIO_BYTES = 3 * 60 * 60 * 16_000 * 2;
@@ -25,7 +26,9 @@ const IMAGE_DATA_URL = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/;
 const generateSchema = z.object({
   platforms: z.array(z.enum(SEO_PLATFORMS)).min(1).max(SEO_PLATFORMS.length),
   providers: z.array(z.enum(AI_PROVIDERS)).max(AI_PROVIDERS.length).optional(),
-  images: z.array(z.string().max(4_000_000).regex(IMAGE_DATA_URL, "Images must be JPEG, PNG or WebP data URLs.")).min(1).max(6),
+  images: z.array(z.string().max(4_000_000).regex(IMAGE_DATA_URL, "Images must be JPEG, PNG or WebP data URLs.")).max(6),
+  /** A video already saved through /video, offered to each AI as the whole file. */
+  videoId: z.string().uuid().optional(),
   mediaKind: z.enum(["image", "carousel", "video"]),
   durationSeconds: z.number().min(0).max(36_000).optional(),
   transcript: z.string().max(45_000).optional(),
@@ -33,7 +36,7 @@ const generateSchema = z.object({
   brandName: z.string().max(80).optional(),
   location: z.string().max(160).optional(),
   businessDetails: z.string().max(400).optional(),
-});
+}).refine((post) => post.images.length > 0 || Boolean(post.videoId), { message: "Add a photo or video first." });
 
 const providerSchema = z.object({ provider: z.enum(AI_PROVIDERS) });
 
@@ -138,9 +141,28 @@ export function registerAiRoutes(app: express.Express) {
     }
   });
 
+  // Saves the whole video on this computer so each AI app can be offered the file.
+  router.post("/video", requireSeoToken, async (req, res) => {
+    const size = Number(req.headers["content-length"] || 0);
+    const extension = stagedVideoExtension(req.headers["content-type"]);
+    if (!size || size > MAX_STAGED_VIDEO_BYTES || !extension) {
+      res.status(413).json({ message: "This video can't be offered to the AI apps as a file." });
+      return;
+    }
+    const stop = new AbortController();
+    res.on("close", () => { if (!res.writableFinished) stop.abort(); });
+    try {
+      const video = await stageVideo(req, extension, stop.signal);
+      res.json({ ok: true, videoId: video.id });
+    } catch {
+      if (!res.headersSent) res.status(500).json({ message: "The video could not be saved for the AI apps." });
+    }
+  });
+
   // Every connected app writes the posts at the same time. One JSON line per
   // update: { provider, state, detail | live }, then { provider, ok, results },
-  // and finally { done: true }.
+  // and finally { done: true }. With a video file, an app that can't take it answers
+  // { provider, ok: false, videoRefused: true } so it can use speech and pictures.
   router.post("/generate", requireSeoToken, async (req, res) => {
     const parsed = generateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -153,8 +175,13 @@ export function registerAiRoutes(app: express.Express) {
       res.status(409).json({ message: "Connect ChatGPT, Claude or Gemini in the Companion first." });
       return;
     }
-    const { images, platforms, ...details } = parsed.data;
-    const prompt = masterPrompt({ ...details, platforms, imageCount: images.length });
+    const { images, platforms, videoId, ...details } = parsed.data;
+    const video = videoId ? stagedVideo(videoId) : null;
+    if (videoId && !video) {
+      res.status(409).json({ message: "The video is no longer saved on this computer." });
+      return;
+    }
+    const prompt = masterPrompt({ ...details, platforms, imageCount: images.length, videoAttached: Boolean(video) });
     const { folder, files } = await writeImages(images);
 
     res.status(200).setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
@@ -175,17 +202,19 @@ export function registerAiRoutes(app: express.Express) {
               lastLive = Date.now();
             }
             send({ provider, ...event });
-          });
-          const { results, complete } = parseAnswer(answer, platforms, { realTimes: Boolean(details.transcript), durationSeconds: details.durationSeconds });
-          send({ provider, ok: true, results, complete, raw: answer, ms: Date.now() - started });
+          }, video ?? undefined);
+          const { results, complete } = parseAnswer(answer, platforms, { realTimes: Boolean(details.transcript || video), durationSeconds: details.durationSeconds });
+          send({ provider, ok: true, results, complete, raw: answer, ms: Date.now() - started, watchedVideo: Boolean(video) });
         } catch (error) {
-          send({ provider, ok: false, limit: (error as { limit?: boolean })?.limit === true, message: error instanceof Error ? error.message : "This AI could not finish." });
+          const limit = (error as { limit?: boolean })?.limit === true;
+          send({ provider, ok: false, limit, videoRefused: Boolean(video) && !limit, message: error instanceof Error ? error.message : "This AI could not finish." });
         }
       }));
     } finally {
       send({ done: true });
       res.end();
       await fsp.rm(folder, { recursive: true, force: true }).catch(() => undefined);
+      if (videoId) await removeStagedVideo(videoId);
     }
   });
 

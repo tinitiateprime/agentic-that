@@ -46,16 +46,28 @@ export type PostDetails = {
   durationSeconds?: number;
   /** What is said in the video, one "[m:ss] words" line per part. */
   transcript?: string;
+  /** The video file itself is attached, for an AI that can watch it. */
+  videoAttached?: boolean;
   description?: string;
   brandName?: string;
   location?: string;
   businessDetails?: string;
 };
 
+const CANNOT_WATCH_VIDEO = "CANNOT_WATCH_VIDEO";
+
+/** The AI took the file but says it can't actually watch it. Only its opening words count. */
+export function cannotWatchVideo(answer: string) {
+  const opening = answer.slice(0, 500);
+  return opening.includes(CANNOT_WATCH_VIDEO)
+    || /\b(?:can(?:'|’)t|cannot|can not|unable to|not able to|don(?:'|’)t have the ability to)\s+(?:directly\s+|actually\s+)?(?:watch|view|play|see|hear|listen to|access|open|process|analy[sz]e)\b[^.!?\n]{0,40}\b(?:video|footage|audio|attachment|file)\b/i.test(opening);
+}
+
 function mediaLine(details: PostDetails) {
   if (details.mediaKind === "video") {
     const seconds = Math.round(details.durationSeconds || 0);
     const length = seconds ? ` (${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} long)` : "";
+    if (details.videoAttached) return `It is a video${length}, attached to this message. Watch and listen to all of it, and base everything on what is really in it. If you can't watch the attached video itself, reply with only ${CANNOT_WATCH_VIDEO}.`;
     return details.transcript
       ? `It is a video${length}; the attached images show moments from it, each labelled with its time.`
       : `It is a video${length}; the attached images are frames from it.`;
@@ -87,6 +99,7 @@ export function masterPrompt(details: PostDetails) {
     details.businessDetails?.trim() && `About the business: ${details.businessDetails.trim()}`,
     details.transcript?.trim() && `Everything said in the video, with the time each part starts (an automatic transcript, so names may be misheard):\n"""\n${details.transcript.trim()}\n"""`,
     details.transcript?.trim() && details.platforms.includes("youtube") && "Put chapters in the YouTube description, using the real times above and starting at 0:00.",
+    details.videoAttached && details.platforms.includes("youtube") && "Put chapters in the YouTube description, using the real times in the video and starting at 0:00.",
   ].filter(Boolean);
   const markers = details.platforms.flatMap((platform) => SECTIONS[platform].map((section) => `=== ${section.marker} ===`));
   return [

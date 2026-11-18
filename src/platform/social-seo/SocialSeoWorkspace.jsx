@@ -9,7 +9,7 @@ import AiResults from "./AiResults";
 import AiStatusBar, { AiLogo } from "./AiStatusBar";
 import PostPanel, { POST_PLATFORMS } from "./PostPanel";
 import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
-import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow } from "./companion-ai";
+import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow, stageVideoForAi } from "./companion-ai";
 import styles from "./social-seo.module.css";
 
 const PLATFORMS = [
@@ -21,6 +21,8 @@ const PLATFORMS = [
   { id: "reddit", label: "Reddit", logo: "/reddit-logo.svg" },
 ];
 const AI_PLATFORMS = PLATFORMS.map((entry) => entry.id);
+// Uploading a long video to an AI app and having it watched can take a long time.
+const WHOLE_VIDEO_TIMEOUT_MS = 70 * 60 * 1000;
 const MAX_HASHTAGS = 5;
 const BRAND_KEY = "agenticthat-social-seo-brand";
 const BRAND_SOURCES = {
@@ -223,29 +225,51 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
       ...current,
       providers: { ...current.providers, [id]: { ...current.providers[id], ...change } },
     }));
+    const postDetails = {
+      platforms: AI_PLATFORMS,
+      description: description.trim() || undefined,
+      // The brand typed or named in the description. The workspace name is never
+      // used here: the AI reads the real brand from the media instead.
+      brandName: brandName.trim() || (quick?.brand?.source !== "workspace" ? quick?.brand?.name : "") || undefined,
+      // A city the business saved wins; otherwise the photo's location.
+      location: business.city.trim() || quick?.locationTag || undefined,
+      businessDetails: business.details.trim() || undefined,
+    };
+    const showEvent = (event) => {
+      if (!event.provider) return;
+      if (event.ok === true) update(event.provider, { state: "done", results: event.results, complete: event.complete, raw: event.raw, ms: event.ms, live: "", watchedVideo: Boolean(event.watchedVideo) });
+      else if (event.ok === false) update(event.provider, { state: event.limit ? "limit" : "failed", message: event.message });
+      else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
+    };
     try {
-      const prepared = await prepareMediaForAi(media, (detail) => ids.forEach((id) => update(id, { state: "working", detail })));
-      if (prepared.speechNote) setNotice(prepared.speechNote);
-      await generateWithCompanionAis({
-        providers: ids,
-        images: prepared.images,
-        mediaKind: prepared.mediaKind,
-        durationSeconds: prepared.durationSeconds,
-        transcript: prepared.transcript,
-        platforms: AI_PLATFORMS,
-        description: description.trim() || undefined,
-        // The brand typed or named in the description. The workspace name is never
-        // used here: the AI reads the real brand from the media instead.
-        brandName: brandName.trim() || (quick?.brand?.source !== "workspace" ? quick?.brand?.name : "") || undefined,
-        // A city the business saved wins; otherwise the photo's location.
-        location: business.city.trim() || quick?.locationTag || undefined,
-        businessDetails: business.details.trim() || undefined,
-      }, (event) => {
-        if (!event.provider) return;
-        if (event.ok === true) update(event.provider, { state: "done", results: event.results, complete: event.complete, raw: event.raw, ms: event.ms, live: "" });
-        else if (event.ok === false) update(event.provider, { state: event.limit ? "limit" : "failed", message: event.message });
-        else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
-      });
+      // Each AI is offered the whole video first. Only the ones that can't take it
+      // or watch it go on to the speech and pictures.
+      let remaining = ids;
+      const videoId = media[0]?.kind === "video" ? await stageVideoForAi(media[0], (detail) => ids.forEach((id) => update(id, { state: "working", detail }))) : null;
+      if (videoId) {
+        const finished = new Set();
+        await generateWithCompanionAis({ ...postDetails, providers: ids, images: [], videoId, mediaKind: "video", durationSeconds: media[0].durationSeconds }, (event) => {
+          if (event.videoRefused) {
+            update(event.provider, { state: "working", step: "opening", live: "", detail: `${labels[event.provider] || event.provider} can't watch this whole video, so it will use the speech and pictures instead.` });
+            return;
+          }
+          if (event.ok === true || event.ok === false) finished.add(event.provider);
+          showEvent(event);
+        }, WHOLE_VIDEO_TIMEOUT_MS).catch(() => undefined);
+        remaining = ids.filter((id) => !finished.has(id));
+      }
+      if (remaining.length) {
+        const prepared = await prepareMediaForAi(media, (detail) => remaining.forEach((id) => update(id, { state: "working", detail })));
+        if (prepared.speechNote) setNotice(prepared.speechNote);
+        await generateWithCompanionAis({
+          ...postDetails,
+          providers: remaining,
+          images: prepared.images,
+          mediaKind: prepared.mediaKind,
+          durationSeconds: prepared.durationSeconds,
+          transcript: prepared.transcript,
+        }, showEvent);
+      }
     } catch (runError) {
       // The Companion closed or the connection dropped: mark what was still running.
       setAiResult((current) => current && ({

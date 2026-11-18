@@ -115,7 +115,7 @@ function ProviderCard({ entry, platform, copied, onCopy, onShow, onRerun, busy }
         <AiLogo id={entry.id} size={30} />
         <div>
           <h3>{entry.label}</h3>
-          <span className={styles.aiCardStatus}>{STATUS[entry.state] || entry.state}{entry.state === "done" && seconds ? ` · ${seconds}s` : ""}</span>
+          <span className={styles.aiCardStatus}>{STATUS[entry.state] || entry.state}{entry.state === "done" && seconds ? ` · ${seconds}s` : ""}{entry.state === "done" && entry.watchedVideo ? " · Watched the whole video" : ""}</span>
         </div>
         <div className={styles.cardActions}>
           {(entry.state === "done" || entry.state === "failed" || entry.state === "limit") && (

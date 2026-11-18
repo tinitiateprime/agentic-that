@@ -14,6 +14,8 @@ const MAX_TRANSCRIPT_CHARS = 40_000;
 const MAX_LISTEN_BYTES = 1.5 * 1024 * 1024 * 1024;
 const MAX_LISTEN_SECONDS = 3 * 60 * 60;
 const SPEECH_RATE = 16_000;
+// The largest video any connected AI app accepts (Gemini: 2 GB).
+const MAX_AI_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 
 let cachedToken = null;
 
@@ -69,9 +71,9 @@ export function showCompanionAiWindow(provider) {
  * { provider, state: "working" | "needs-you", detail }, { provider, state: "writing", live },
  * { provider, ok: true, results, complete, raw } or { provider, ok: false, message }.
  */
-export async function generateWithCompanionAis(payload, onEvent) {
+export async function generateWithCompanionAis(payload, onEvent, timeoutMs = 20 * 60 * 1000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20 * 60 * 1000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${COMPANION_AI}/generate`, {
       method: "POST",
@@ -105,6 +107,27 @@ export async function generateWithCompanionAis(payload, onEvent) {
     if (!completed) throw new Error("The Companion connection ended before every AI finished. Please try again.");
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Saves the whole video in the Companion so each AI app can be offered the file.
+ * Null when that isn't possible, and the AI apps then use speech and pictures.
+ */
+export async function stageVideoForAi(item, onProgress) {
+  if (item?.kind !== "video" || !item.sizeBytes || item.sizeBytes > MAX_AI_VIDEO_BYTES) return null;
+  onProgress?.("Getting your whole video ready for the AI…");
+  try {
+    const blob = await (await fetch(item.previewUrl)).blob();
+    const response = await fetch(`${COMPANION_AI}/video`, {
+      method: "POST",
+      headers: { "Content-Type": item.mimeType || blob.type || "video/mp4", Authorization: `Bearer ${await companionToken()}` },
+      body: blob,
+    });
+    if (!response.ok) return null;
+    return (await response.json()).videoId || null;
+  } catch {
+    return null;
   }
 }
 
