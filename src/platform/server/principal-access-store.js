@@ -7,9 +7,21 @@ export async function readPrincipalAccessState(sql, userId) {
       SELECT u.id, u.name, u.email, u.business_name, u.status, u.is_global_admin,
              coalesce((to_jsonb(u)->>'mfa_enabled')::boolean, false) AS mfa_enabled,
              u.billing_status, u.trial_starts_at, u.trial_ends_at,
-             m.workspace_id
+             m.workspace_id, w.name AS workspace_name
         FROM platform_users u
-        LEFT JOIN workspace_memberships m ON m.user_id = u.id AND m.status = 'active'
+        -- An account may belong to several workspaces. Use the selected one
+        -- (platform_users.workspace_id) while it is still an active membership,
+        -- otherwise fall back to the earliest remaining active membership.
+        LEFT JOIN LATERAL (
+          SELECT membership.workspace_id
+            FROM workspace_memberships membership
+            JOIN platform_workspaces candidate ON candidate.id = membership.workspace_id AND candidate.status = 'active'
+           WHERE membership.user_id = u.id AND membership.status = 'active'
+           ORDER BY (membership.workspace_id = u.workspace_id) DESC NULLS LAST,
+                    membership.approved_at NULLS LAST, membership.created_at
+           LIMIT 1
+        ) m ON true
+        LEFT JOIN platform_workspaces w ON w.id = m.workspace_id
        WHERE u.id = ${String(userId)}
        LIMIT 1
     ), workspace_owner AS (
@@ -18,6 +30,7 @@ export async function readPrincipalAccessState(sql, userId) {
         JOIN workspace_memberships membership ON membership.workspace_id = selected.workspace_id
         JOIN user_role_assignments assignment
           ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
+         AND assignment.workspace_id = membership.workspace_id
         JOIN platform_users owner ON owner.id = membership.user_id
        WHERE membership.status = 'active' AND owner.status = 'active'
        ORDER BY membership.approved_at NULLS LAST, membership.created_at
@@ -67,6 +80,7 @@ export async function readPrincipalAccessState(sql, userId) {
                FROM user_role_assignments assignment
                JOIN rbac_role_grants role_grant ON role_grant.role_id = assignment.role_id
               WHERE assignment.user_id = selected.id
+                AND (assignment.workspace_id = selected.workspace_id OR assignment.workspace_id IS NULL)
            ), '[]'::jsonb) AS "operationalRoleGrants"
       FROM selected_user selected
   `;

@@ -5,6 +5,7 @@ import {
   createPlatformSessionForUser,
   getPlatformSql,
   hashPlatformPassword,
+  verifyPlatformPassword,
 } from "./auth-store.js";
 
 const INVITATIONS_DOCUMENT_KEY = "platform.workspace-invitations.v1";
@@ -93,6 +94,55 @@ async function workspaceMember(tx, workspaceId, userId) {
   return member || null;
 }
 
+async function isWorkspaceOwner(tx, workspaceId, userId) {
+  const [row] = await tx`
+    SELECT 1 FROM user_role_assignments
+     WHERE user_id = ${userId} AND workspace_id = ${workspaceId}
+       AND role_id = 'role_workspace_owner'
+     LIMIT 1`;
+  return Boolean(row);
+}
+
+async function hasOtherActiveMembership(tx, userId, workspaceId) {
+  const [row] = await tx`
+    SELECT 1 FROM workspace_memberships membership
+      JOIN platform_workspaces workspace ON workspace.id = membership.workspace_id AND workspace.status = 'active'
+     WHERE membership.user_id = ${userId} AND membership.workspace_id <> ${workspaceId}
+       AND membership.status = 'active'
+     LIMIT 1`;
+  return Boolean(row);
+}
+
+// Roles are per company: replacing them never touches the member's roles in
+// any other company they belong to.
+async function replaceWorkspaceRoles(tx, workspaceId, userId, roleIds, assignedBy) {
+  await tx`
+    DELETE FROM user_role_assignments
+     WHERE user_id = ${userId} AND workspace_id = ${workspaceId}
+       AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;
+  for (const roleId of roleIds) {
+    await tx`
+      INSERT INTO user_role_assignments (user_id, role_id, assigned_by, workspace_id)
+      VALUES (${userId}, ${roleId}, ${assignedBy}, ${workspaceId})
+      ON CONFLICT DO NOTHING`;
+  }
+}
+
+async function selectRemainingWorkspace(tx, userId) {
+  await tx`
+    UPDATE platform_users account
+       SET workspace_id = next.workspace_id, business_name = next.name
+      FROM (
+        SELECT membership.workspace_id, workspace.name
+          FROM workspace_memberships membership
+          JOIN platform_workspaces workspace ON workspace.id = membership.workspace_id AND workspace.status = 'active'
+         WHERE membership.user_id = ${userId} AND membership.status = 'active'
+         ORDER BY membership.approved_at NULLS LAST, membership.created_at
+         LIMIT 1
+      ) next
+     WHERE account.id = ${userId}`;
+}
+
 async function activeOwnerCount(tx, workspaceId, exceptUserId = "") {
   const [row] = await tx`
     SELECT COUNT(*)::int AS count
@@ -100,6 +150,7 @@ async function activeOwnerCount(tx, workspaceId, exceptUserId = "") {
       JOIN platform_users owner ON owner.id = membership.user_id
       JOIN user_role_assignments assignment
         ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
+       AND assignment.workspace_id = membership.workspace_id
      WHERE membership.workspace_id = ${workspaceId}
        AND membership.status = 'active'
        AND owner.status = 'active'
@@ -114,6 +165,7 @@ async function preserveWorkspaceEntitlements(tx, workspaceId, fromUserId) {
       JOIN platform_users owner ON owner.id = membership.user_id
       JOIN user_role_assignments assignment
         ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
+       AND assignment.workspace_id = membership.workspace_id
      WHERE membership.workspace_id = ${workspaceId}
        AND membership.user_id <> ${fromUserId}
        AND membership.status = 'active'
@@ -164,8 +216,7 @@ export async function workspaceTeamSnapshot(principal) {
     sql`
       SELECT assignment.user_id, assignment.role_id
         FROM user_role_assignments assignment
-        JOIN workspace_memberships membership ON membership.user_id = assignment.user_id
-       WHERE membership.workspace_id = ${principal.workspaceId}
+       WHERE assignment.workspace_id = ${principal.workspaceId}
          AND assignment.role_id = ANY(${OPERATIONAL_ROLE_IDS})`,
     sql`
       SELECT id, name, description
@@ -313,75 +364,103 @@ export async function cancelWorkspaceInvitation(principal, invitationId) {
   });
 }
 
+async function findInvitation(tx, token) {
+  const normalizedToken = String(token || "").trim();
+  if (normalizedToken.length < 32) throw new Error("This invitation is invalid.");
+  const document = await lockInvitations(tx);
+  const hash = tokenHash(normalizedToken);
+  const index = document.invitations.findIndex((invite) => invite.tokenHash === hash);
+  if (index < 0) throw new Error("This invitation is invalid.");
+  const invitation = document.invitations[index];
+  if (invitation.status !== "pending") throw new Error("This invitation has already been used or canceled.");
+  if (Date.parse(invitation.expiresAt) <= Date.now()) {
+    document.invitations[index] = { ...invitation, status: "expired", updatedAt: new Date().toISOString() };
+    await saveInvitations(tx, document);
+    throw new Error("This invitation has expired. Ask the workspace owner to resend it.");
+  }
+  return { document, index, invitation };
+}
+
+// What the join page shows before accepting: which company, for which email,
+// and whether that email already has an AgenticThat account (sign in with the
+// existing password) or needs a new one (choose a name and password).
+export async function previewWorkspaceInvitation(token) {
+  await initializeInvitations();
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const { invitation } = await findInvitation(tx, token);
+    const [workspace] = await tx`SELECT name FROM platform_workspaces WHERE id = ${invitation.workspaceId} AND status = 'active'`;
+    if (!workspace) throw new Error("This workspace is unavailable.");
+    const [existing] = await tx`SELECT id FROM platform_users WHERE LOWER(email) = ${invitation.email} LIMIT 1`;
+    return { email: invitation.email, workspaceName: workspace.name, existingAccount: Boolean(existing) };
+  });
+}
+
 export async function acceptWorkspaceInvitation({ token, name, password }) {
   await initializeInvitations();
-  const normalizedToken = String(token || "").trim();
   const normalizedName = String(name || "").trim();
   const normalizedPassword = String(password || "");
-  if (normalizedToken.length < 32) throw new Error("This invitation is invalid.");
-  if (normalizedName.length < 2 || normalizedName.length > 80) throw new Error("Enter your full name.");
-  if (normalizedPassword.length < 8 || normalizedPassword.length > 128) {
-    throw new Error("Password must contain 8 to 128 characters.");
+  if (normalizedPassword.length < 1 || normalizedPassword.length > 128) {
+    throw new Error("Enter your password.");
   }
   const sql = await getPlatformSql();
   return sql.begin(async (tx) => {
-    const document = await lockInvitations(tx);
-    const hash = tokenHash(normalizedToken);
-    const index = document.invitations.findIndex((invite) => invite.tokenHash === hash);
-    if (index < 0) throw new Error("This invitation is invalid.");
-    const invitation = document.invitations[index];
-    if (invitation.status !== "pending") throw new Error("This invitation has already been used or canceled.");
-    if (Date.parse(invitation.expiresAt) <= Date.now()) {
-      document.invitations[index] = { ...invitation, status: "expired", updatedAt: new Date().toISOString() };
-      await saveInvitations(tx, document);
-      throw new Error("This invitation has expired. Ask the workspace owner to resend it.");
-    }
-    const [existing] = await tx`
-      SELECT user_account.id, user_account.is_global_admin,
-             user_account.workspace_id,
-             EXISTS (SELECT 1 FROM platform_billing_events WHERE user_id = user_account.id) AS has_billing_history,
-             EXISTS (SELECT 1 FROM workspace_memberships WHERE user_id = user_account.id) AS has_membership
-        FROM platform_users user_account
-       WHERE LOWER(user_account.email) = ${invitation.email}
-       LIMIT 1`;
-    if (existing?.has_membership) throw new Error("This account already belongs to a workspace.");
-    if (existing?.is_global_admin) throw new Error("A platform administrator account cannot be joined through an employee invitation.");
+    const { document, index, invitation } = await findInvitation(tx, token);
     const [workspace] = await tx`SELECT id, name FROM platform_workspaces WHERE id = ${invitation.workspaceId} AND status = 'active'`;
     if (!workspace) throw new Error("This workspace is unavailable.");
-    if (existing?.has_billing_history && existing.workspace_id && existing.workspace_id !== workspace.id) {
-      throw new Error("This billing account remains linked to its previous workspace and cannot join a different one.");
-    }
     await assertRolesExist(tx, invitation.roleIds);
-    const userId = existing?.id || crypto.randomUUID();
-    const [user] = existing
-      ? await tx`
-          UPDATE platform_users
-             SET workspace_id = ${workspace.id}, name = ${normalizedName}, business_name = ${workspace.name},
-                 password_hash = ${hashPlatformPassword(normalizedPassword)}, status = 'active',
-                 billing_status = 'exempt', trial_starts_at = NULL, trial_ends_at = NULL
-           WHERE id = ${userId}
-          RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
-                    billing_status, trial_starts_at, trial_ends_at`
-      : await tx`
-          INSERT INTO platform_users
-            (id, workspace_id, publishing_workspace_key, name, business_name,
-             email, password_hash, status, billing_status)
-          VALUES
-            (${userId}, ${workspace.id}, ${crypto.randomBytes(32).toString("base64url")},
-             ${normalizedName}, ${workspace.name}, ${invitation.email},
-             ${hashPlatformPassword(normalizedPassword)}, 'active', 'exempt')
-          RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
-                    billing_status, trial_starts_at, trial_ends_at`;
+    const [existing] = await tx`
+      SELECT id, password_hash, is_global_admin
+        FROM platform_users
+       WHERE LOWER(email) = ${invitation.email}
+       LIMIT 1`;
+    let user;
+    if (existing) {
+      // An existing account joins this company in addition to the ones it
+      // already belongs to. Its password, name and billing stay as they are;
+      // the current password proves the person owns the account.
+      if (existing.is_global_admin) throw new Error("A platform administrator account cannot be joined through an employee invitation.");
+      if (!verifyPlatformPassword(normalizedPassword, existing.password_hash)) {
+        throw new Error("That password is incorrect. Use your current AgenticThat password.");
+      }
+      const [membership] = await tx`
+        SELECT status FROM workspace_memberships
+         WHERE user_id = ${existing.id} AND workspace_id = ${workspace.id}`;
+      if (membership?.status === "active") throw new Error("You are already a member of this workspace.");
+      [user] = await tx`
+        UPDATE platform_users
+           SET workspace_id = ${workspace.id}, business_name = ${workspace.name}
+         WHERE id = ${existing.id}
+        RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
+                  billing_status, trial_starts_at, trial_ends_at`;
+    } else {
+      if (normalizedName.length < 2 || normalizedName.length > 80) throw new Error("Enter your full name.");
+      if (normalizedPassword.length < 8) throw new Error("Password must contain 8 to 128 characters.");
+      [user] = await tx`
+        INSERT INTO platform_users
+          (id, workspace_id, publishing_workspace_key, name, business_name,
+           email, password_hash, status, billing_status)
+        VALUES
+          (${crypto.randomUUID()}, ${workspace.id}, ${crypto.randomBytes(32).toString("base64url")},
+           ${normalizedName}, ${workspace.name}, ${invitation.email},
+           ${hashPlatformPassword(normalizedPassword)}, 'active', 'exempt')
+        RETURNING id, workspace_id, name, business_name, email, status, is_global_admin,
+                  billing_status, trial_starts_at, trial_ends_at`;
+    }
+    const userId = String(user.id);
+    // The invitation link reached this inbox, which proves the address.
+    const [verification] = await tx`
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'platform_users' AND column_name = 'email_verified_at'`;
+    if (verification) {
+      await tx`UPDATE platform_users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = ${userId}`;
+    }
     await tx`
       INSERT INTO workspace_memberships (user_id, workspace_id, status, approved_at, approved_by)
-      VALUES (${userId}, ${workspace.id}, 'active', now(), ${invitation.createdByUserId})`;
-    await tx`DELETE FROM user_role_assignments WHERE user_id = ${userId} AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;
-    for (const roleId of invitation.roleIds) {
-      await tx`
-        INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
-        VALUES (${userId}, ${roleId}, ${invitation.createdByUserId})
-        ON CONFLICT DO NOTHING`;
-    }
+      VALUES (${userId}, ${workspace.id}, 'active', now(), ${invitation.createdByUserId})
+      ON CONFLICT (user_id, workspace_id) DO UPDATE SET
+        status = 'active', approved_at = now(), approved_by = EXCLUDED.approved_by`;
+    await replaceWorkspaceRoles(tx, workspace.id, userId, invitation.roleIds, invitation.createdByUserId);
     const accepted = {
       ...invitation,
       status: "accepted",
@@ -404,9 +483,7 @@ export async function updateWorkspaceMember(principal, userId, input) {
     const member = await workspaceMember(tx, principal.workspaceId, userId);
     if (!member) throw new Error("Workspace member not found.");
     await assertRolesExist(tx, roleIds);
-    const wasOwner = Boolean((await tx`
-      SELECT 1 FROM user_role_assignments
-       WHERE user_id = ${userId} AND role_id = 'role_workspace_owner' LIMIT 1`)[0]);
+    const wasOwner = await isWorkspaceOwner(tx, principal.workspaceId, userId);
     const remainsOwner = roleIds.includes("role_workspace_owner") && status === "active";
     if (wasOwner && !remainsOwner && await activeOwnerCount(tx, principal.workspaceId, userId) === 0) {
       throw new Error("The final Workspace Owner cannot be suspended or demoted.");
@@ -421,15 +498,8 @@ export async function updateWorkspaceMember(principal, userId, input) {
          WHERE id = ${userId}
            AND billing_status IN ('trialing', 'payment_pending', 'past_due', 'canceled', 'expired')`;
     }
-    await tx`
-      DELETE FROM user_role_assignments
-       WHERE user_id = ${userId} AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;
-    for (const roleId of roleIds) {
-      await tx`
-        INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
-        VALUES (${userId}, ${roleId}, ${principal.userId})`;
-    }
-    if (status === "suspended") {
+    await replaceWorkspaceRoles(tx, principal.workspaceId, userId, roleIds, principal.userId);
+    if (status === "suspended" && !(await hasOtherActiveMembership(tx, userId, principal.workspaceId))) {
       await preserveWorkspaceEntitlements(tx, principal.workspaceId, userId);
       await tx`DELETE FROM platform_sessions WHERE user_id = ${userId}`;
     }
@@ -444,20 +514,78 @@ export async function removeWorkspaceMember(principal, userId) {
   return sql.begin(async (tx) => {
     const member = await workspaceMember(tx, principal.workspaceId, userId);
     if (!member) throw new Error("Workspace member not found.");
-    const isOwner = Boolean((await tx`
-      SELECT 1 FROM user_role_assignments
-       WHERE user_id = ${userId} AND role_id = 'role_workspace_owner' LIMIT 1`)[0]);
+    const isOwner = await isWorkspaceOwner(tx, principal.workspaceId, userId);
     if (isOwner && await activeOwnerCount(tx, principal.workspaceId, userId) === 0) {
       throw new Error("The final Workspace Owner cannot be removed.");
     }
-    await preserveWorkspaceEntitlements(tx, principal.workspaceId, userId);
-    await tx`DELETE FROM platform_sessions WHERE user_id = ${userId}`;
-    await tx`DELETE FROM user_role_assignments WHERE user_id = ${userId} AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;
+    const keepsOtherCompany = await hasOtherActiveMembership(tx, userId, principal.workspaceId);
+    await tx`
+      DELETE FROM user_role_assignments
+       WHERE user_id = ${userId} AND workspace_id = ${principal.workspaceId}
+         AND role_id = ANY(${OPERATIONAL_ROLE_IDS})`;
     await tx`DELETE FROM workspace_memberships WHERE user_id = ${userId} AND workspace_id = ${principal.workspaceId}`;
-    // Keep the historical workspace pointer so later billing-provider events
-    // still resolve to this workspace. Active access is determined solely by
-    // workspace_memberships, which was removed above.
+    if (keepsOtherCompany) {
+      // The account still belongs to another company: move its selection
+      // there and keep its own sessions and billing untouched.
+      await selectRemainingWorkspace(tx, userId);
+    } else {
+      // Keep the historical workspace pointer so later billing-provider events
+      // still resolve to this workspace. Active access is determined solely by
+      // workspace_memberships, which was removed above.
+      await preserveWorkspaceEntitlements(tx, principal.workspaceId, userId);
+      await tx`DELETE FROM platform_sessions WHERE user_id = ${userId}`;
+    }
     await audit(tx, principal.userId, "workspace_member", userId, "member.removed", member, null);
     return { ok: true };
+  });
+}
+
+// Companies this account belongs to, for the workspace switcher.
+export async function listAccountWorkspaces(principal) {
+  const sql = await getPlatformSql();
+  const rows = await sql`
+    SELECT workspace.id, workspace.name,
+           EXISTS (
+             SELECT 1 FROM user_role_assignments assignment
+              WHERE assignment.user_id = membership.user_id
+                AND assignment.workspace_id = membership.workspace_id
+                AND assignment.role_id = 'role_workspace_owner'
+           ) AS is_owner
+      FROM workspace_memberships membership
+      JOIN platform_workspaces workspace ON workspace.id = membership.workspace_id AND workspace.status = 'active'
+     WHERE membership.user_id = ${principal.userId} AND membership.status = 'active'
+     ORDER BY workspace.name`;
+  return {
+    currentWorkspaceId: principal.workspaceId,
+    workspaces: rows.map((row) => ({
+      id: String(row.id),
+      name: row.name,
+      isOwner: Boolean(row.is_owner),
+      current: String(row.id) === principal.workspaceId,
+    })),
+  };
+}
+
+// Select another company the account is an active member of. Every product
+// reads the current company from platform_users.workspace_id.
+export async function switchAccountWorkspace(principal, workspaceIdInput) {
+  const workspaceId = String(workspaceIdInput || "").trim();
+  if (!workspaceId) throw new Error("Choose a workspace.");
+  const sql = await getPlatformSql();
+  return sql.begin(async (tx) => {
+    const [target] = await tx`
+      SELECT workspace.id, workspace.name
+        FROM workspace_memberships membership
+        JOIN platform_workspaces workspace ON workspace.id = membership.workspace_id AND workspace.status = 'active'
+       WHERE membership.user_id = ${principal.userId} AND membership.workspace_id = ${workspaceId}
+         AND membership.status = 'active'
+       LIMIT 1`;
+    if (!target) throw new Error("You are not a member of that workspace.");
+    await tx`
+      UPDATE platform_users SET workspace_id = ${target.id}, business_name = ${target.name}
+       WHERE id = ${principal.userId}`;
+    await audit(tx, principal.userId, "workspace", target.id, "workspace.switched",
+      { workspaceId: principal.workspaceId }, { workspaceId: target.id });
+    return { id: String(target.id), name: target.name };
   });
 }

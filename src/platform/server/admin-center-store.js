@@ -31,7 +31,7 @@ export async function adminCenterSnapshot() {
              u.status, u.is_global_admin, u.billing_status, u.trial_starts_at, u.trial_ends_at, u.created_at,
              m.workspace_id, m.status AS membership_status, w.name AS workspace_name
         FROM platform_users u
-        LEFT JOIN workspace_memberships m ON m.user_id = u.id
+        LEFT JOIN workspace_memberships m ON m.user_id = u.id AND m.workspace_id = u.workspace_id
         LEFT JOIN platform_workspaces w ON w.id = m.workspace_id
        ORDER BY CASE u.status WHEN 'pending' THEN 0 ELSE 1 END, u.created_at DESC`;
   const workspaces = await sql`SELECT id, name, status, created_at, updated_at FROM platform_workspaces ORDER BY name`;
@@ -40,6 +40,7 @@ export async function adminCenterSnapshot() {
         FROM workspace_memberships membership
         JOIN user_role_assignments assignment
           ON assignment.user_id = membership.user_id AND assignment.role_id = 'role_workspace_owner'
+         AND assignment.workspace_id = membership.workspace_id
         JOIN platform_users owner_user ON owner_user.id = membership.user_id
        WHERE membership.status = 'active' AND owner_user.status = 'active'`;
   const fullAccessWorkspaceIds = new Set(ownerWorkspaces.map((row) => String(row.workspace_id)));
@@ -190,7 +191,7 @@ export async function updateAdminUser(actor, userIdInput, input) {
       SELECT u.id, u.name, u.email, u.business_name, u.requested_business_name,
              u.status, u.is_global_admin, u.created_at, m.workspace_id
         FROM platform_users u
-        LEFT JOIN workspace_memberships m ON m.user_id = u.id
+        LEFT JOIN workspace_memberships m ON m.user_id = u.id AND m.workspace_id = u.workspace_id
        WHERE u.id = ${userId} LIMIT 1`;
     if (!before) throw new Error("User not found.");
     if (before.is_global_admin && input.status && input.status !== "active") {
@@ -214,8 +215,7 @@ export async function updateAdminUser(actor, userIdInput, input) {
       await tx`
         INSERT INTO workspace_memberships (user_id, workspace_id, status, approved_at, approved_by)
         VALUES (${userId}, ${workspaceId}, 'active', now(), ${actor.userId})
-        ON CONFLICT (user_id) DO UPDATE SET
-          workspace_id = EXCLUDED.workspace_id,
+        ON CONFLICT (user_id, workspace_id) DO UPDATE SET
           status = 'active',
           approved_at = now(),
          approved_by = EXCLUDED.approved_by`;

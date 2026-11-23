@@ -114,6 +114,10 @@ function verifyPassword(password, storedHash) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+export function verifyPlatformPassword(password, storedHash) {
+  return verifyPassword(String(password || ""), storedHash || DUMMY_PASSWORD_HASH);
+}
+
 // Equalize the expensive password check for unknown and known emails.
 const DUMMY_PASSWORD_HASH = hashPlatformPassword("not-a-real-platform-password");
 
@@ -775,10 +779,10 @@ export async function registerPlatformUser({ name, businessName, email, password
         await tx`
           INSERT INTO workspace_memberships (user_id, workspace_id, status, approved_at)
           VALUES (${user.id}, ${workspaceId}, 'active', now())
-          ON CONFLICT (user_id) DO NOTHING`;
+          ON CONFLICT DO NOTHING`;
         await tx`
-          INSERT INTO user_role_assignments (user_id, role_id, assigned_by)
-          VALUES (${user.id}, 'role_workspace_owner', ${user.id})
+          INSERT INTO user_role_assignments (user_id, role_id, assigned_by, workspace_id)
+          VALUES (${user.id}, 'role_workspace_owner', ${user.id}, ${workspaceId})
           ON CONFLICT DO NOTHING`;
         if (!isGlobalAdmin) {
           await tx`
@@ -946,6 +950,7 @@ async function expireTrials(userId = "") {
                AND owner_member.status = 'active'
              JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
                AND owner_role.role_id = 'role_workspace_owner'
+               AND owner_role.workspace_id = owner_member.workspace_id
              JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
                AND owner_user.status = 'active'
              WHERE member.user_id = user_role_entitlements.user_id AND member.status = 'active'
@@ -962,6 +967,7 @@ async function expireTrials(userId = "") {
                AND owner_member.status = 'active'
              JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
                AND owner_role.role_id = 'role_workspace_owner'
+               AND owner_role.workspace_id = owner_member.workspace_id
              JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
                AND owner_user.status = 'active'
              WHERE member.user_id = user_role_entitlements.user_id AND member.status = 'active'
@@ -985,6 +991,7 @@ async function expireTrials(userId = "") {
                  AND owner_member.status = 'active'
                JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
                  AND owner_role.role_id = 'role_workspace_owner'
+               AND owner_role.workspace_id = owner_member.workspace_id
                JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
                  AND owner_user.status = 'active'
                WHERE member.user_id = platform_users.id AND member.status = 'active'
@@ -1006,6 +1013,7 @@ async function expireTrials(userId = "") {
                  AND owner_member.status = 'active'
                JOIN user_role_assignments owner_role ON owner_role.user_id = owner_member.user_id
                  AND owner_role.role_id = 'role_workspace_owner'
+               AND owner_role.workspace_id = owner_member.workspace_id
                JOIN platform_users owner_user ON owner_user.id = owner_member.user_id
                  AND owner_user.status = 'active'
                WHERE member.user_id = platform_users.id AND member.status = 'active'
@@ -1073,6 +1081,7 @@ export async function applyPlatformPaymentEvent({
         JOIN user_role_assignments owner_assignment
           ON owner_assignment.user_id = owner_membership.user_id
          AND owner_assignment.role_id = 'role_workspace_owner'
+         AND owner_assignment.workspace_id = owner_membership.workspace_id
         JOIN platform_users owner ON owner.id = owner_membership.user_id
        WHERE owner_membership.workspace_id = ${requestedUser.workspace_id}
          AND owner_membership.status = 'active'

@@ -307,6 +307,79 @@
   color: var(--ai-text);
 }
 
+/* Company switcher, shown when an account belongs to several companies. */
+.workspaceSwitcher {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--ai-border);
+}
+
+.workspaceSwitcher h3 {
+  margin: 0 6px 4px;
+  color: var(--ai-text-faint);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workspaceOption {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ai-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workspaceOption span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.workspaceOption strong {
+  overflow: hidden;
+  color: var(--ai-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceOption small {
+  color: var(--ai-text-faint);
+  font-size: 11px;
+}
+
+.workspaceOption:hover:not(:disabled) {
+  background: #fff;
+}
+
+.workspaceOption:disabled {
+  cursor: progress;
+}
+
+.workspaceCurrent {
+  border-color: var(--ai-border-strong);
+  background: var(--ai-surface);
+  cursor: default;
+}
+
+.workspaceSwitcher p {
+  margin: 4px 6px 0;
+  color: #b42318;
+  font-size: 12px;
+}
+
 /* Sub-pages show inline under their section only on phones, where there is no second panel. */
 .inlineChildren {
   display: none;

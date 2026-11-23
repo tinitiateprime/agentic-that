@@ -164,7 +164,7 @@ export async function getPrincipalForUser(inputUser) {
     workspaceId: user.workspace_id ? String(user.workspace_id) : null,
     name: String(user.name || "Workspace user"),
     email: String(user.email || ""),
-    businessName: String(user.business_name || user.name || "Workspace"),
+    businessName: String(user.workspace_name || user.business_name || user.name || "Workspace"),
     status,
     isGlobalAdmin,
     mfaEnabled: Boolean(user.mfa_enabled),

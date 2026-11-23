@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
 import { BrandSymbol } from "./BrandMark";
+import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
 // Two levels. The slim rail on the left lists everything you can do; sections with
 // sub-pages (Messages, More) open a second panel beside it. Everything else is one click.
@@ -199,6 +200,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
                     {billingLabel(user) && <small>{billingLabel(user)}</small>}
                   </span>
                 </section>
+                <WorkspaceSwitcher />
                 <button className={styles.signOut} type="button" onClick={signOut}><LogOut size={17} /><span>Sign out</span></button>
               </>
             )}
