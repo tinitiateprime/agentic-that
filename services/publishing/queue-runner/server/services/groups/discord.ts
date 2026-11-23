@@ -168,6 +168,14 @@ export class DiscordAdapter implements GroupAppAdapter {
     }
   }
 
+  /** Once an invited person has joined the server, let them see the group channel. */
+  async checkJoined(ref: Record<string, string>, identity: string) {
+    const userId = await this.userId(ref.guildId, identity);
+    if (!userId || !(await this.inServer(ref.guildId, userId))) return false;
+    await this.call("PUT", `/channels/${ref.channelId}/permissions/${userId}`, { type: 1, allow: MEMBER_ACCESS.toString(), deny: "0" });
+    return true;
+  }
+
   async addMember(ref: Record<string, string>, identity: string, context: { groupName: string; contactName: string; link?: string }): Promise<AddResult> {
     const userId = await this.userId(ref.guildId, identity);
     if (userId) {
@@ -178,13 +186,13 @@ export class DiscordAdapter implements GroupAppAdapter {
     }
     const link = context.link;
     if (!link) return { state: "failed", detail: "They aren't in the Discord server, and the group has no invite link." };
-    const note = userId ? "" : " Save their Discord user ID in Contact Master so they're added to the channel when they join.";
+    const note = " They're added to the group automatically once they join.";
     if (userId) {
       // Bots can only message people who share a server with them.
       const sent = await this.call<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId })
         .then((dm) => this.call("POST", `/channels/${dm.id}/messages`, { content: `Hi ${context.contactName}! You're invited to join "${context.groupName}" on Discord: ${link}` }))
         .then(() => true).catch(() => false);
-      if (sent) return { state: "invited", detail: "They aren't in the server yet, so they were sent the invite link.", link };
+      if (sent) return { state: "invited", detail: `They aren't in the server yet, so they were sent the invite link.${note}`, link };
     }
     return { state: "invited", detail: `They aren't in the server yet. Share this invite link with them.${note}`, link };
   }

@@ -345,6 +345,60 @@ test("Discord: a private channel is created, server members are added, others ge
   assert.equal(outside.link, "https://discord.gg/abc123");
 });
 
+test("Discord: invited people are added automatically once they join the server", async () => {
+  const { store, adapters, engine } = setup();
+  const hello = contact("hello", { name: "Hello", discord: "helloufgh_000" });
+  adapters.discord.outcomes.set("helloufgh_000", { state: "invited", detail: "They aren't in the server yet.", link: "https://discord.gg/abc" });
+  engine.run({ group: snapshot(["discord"], ["hello"]), contacts: [hello] });
+  await until(() => store.group("group-1").members[0].apps.discord?.state === "invited");
+
+  // Not joined yet: nothing changes and nothing new is sent to them.
+  let joined = false;
+  const checks: string[] = [];
+  (adapters.discord as unknown as GroupAppAdapter).checkJoined = async (_ref, identity) => { checks.push(identity); return joined; };
+  engine.checkInvited();
+  await until(() => checks.length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(store.group("group-1").members[0].apps.discord?.state, "invited");
+  assert.equal(adapters.discord.calls.filter((call) => call.startsWith("add:")).length, 1, "no repeated invite");
+
+  // Joined: marked added on the next check.
+  joined = true;
+  engine.checkInvited();
+  await until(() => store.group("group-1").members[0].apps.discord?.state === "added");
+  assert.match(store.group("group-1").members[0].apps.discord?.detail || "", /Joined the server/);
+
+  // Disconnected apps are not checked at all.
+  adapters.discord.outcomes.clear();
+  adapters.discord.connected = false;
+  engine.checkInvited();
+  assert.equal(checks.length, 2);
+});
+
+test("Discord adapter: checkJoined gives a member channel access only once they are in the server", async () => {
+  let inServer = false;
+  const puts: string[] = [];
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    const route = url.replace("https://discord.com/api/v10", "");
+    const json = (status: number, body: unknown) => new Response(status === 204 ? null : JSON.stringify(body), { status });
+    if (route === "/users/@me") return json(200, { id: "111111111111111111", username: "Bot" });
+    if (route === "/oauth2/applications/@me") return json(200, { id: "222222222222222222" });
+    if (route === "/users/@me/guilds") return json(200, [{ id: "333333333333333333", name: "Server" }]);
+    if (route.startsWith("/guilds/333333333333333333/members/search")) return json(200, inServer ? [{ user: { id: "777777777777777777", username: "helloufgh_000" } }] : []);
+    if (route === "/guilds/333333333333333333/members/777777777777777777") return inServer ? json(200, { user: { id: "777777777777777777" } }) : json(404, { message: "Unknown Member" });
+    if (route.includes("/permissions/") && init.method === "PUT") { puts.push(route); return json(204, null); }
+    return json(404, { message: "Unknown" });
+  }) as typeof fetch;
+  const discord = new DiscordAdapter(tempDirectory(), fakeFetch);
+  await discord.connect("abcdefghijklmnopqrstuvwxyz0123456789");
+  const ref = { guildId: "333333333333333333", channelId: "444444444444444444" };
+  assert.equal(await discord.checkJoined(ref, "helloufgh_000"), false);
+  assert.equal(puts.length, 0);
+  inServer = true;
+  assert.equal(await discord.checkJoined(ref, "helloufgh_000"), true);
+  assert.deepEqual(puts, ["/channels/444444444444444444/permissions/777777777777777777"]);
+});
+
 test("Discord: a missing server permission is explained in plain words", async () => {
   const fakeFetch = (async (url: string, init: RequestInit) => {
     const route = url.replace("https://discord.com/api/v10", "");

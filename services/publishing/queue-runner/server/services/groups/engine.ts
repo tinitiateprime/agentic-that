@@ -42,6 +42,11 @@ export interface GroupAppAdapter {
   addMember(ref: Record<string, string>, identity: string, context: { groupName: string; contactName: string; link?: string }): Promise<AddResult>;
   removeMember(ref: Record<string, string>, identity: string): Promise<void>;
   sendMessage(ref: Record<string, string>, text: string): Promise<void>;
+  /**
+   * Apps where an invited person joins later on their own (Discord): true once
+   * they have joined and were given access. Must not message them again.
+   */
+  checkJoined?(ref: Record<string, string>, identity: string): Promise<boolean>;
 }
 
 /** A piece of work from the website: the group as saved, and the contacts it needs. */
@@ -57,6 +62,8 @@ export type ActivityEntry = { at: string; app: GroupApp; group: string; text: st
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => new Date().toISOString();
 const REMOVING = "Removing…";
+/** How often invited people are checked to see whether they have joined. */
+const JOIN_CHECK_MS = 60_000;
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -75,6 +82,45 @@ export class GroupEngine {
       setTimeout(() => {
         for (const group of this.store.groups()) this.processPending(group.id);
       }, resumeAfterMs).unref?.();
+      // People invited by link (Discord) join whenever they like: add them then.
+      setInterval(() => this.checkInvited(), JOIN_CHECK_MS).unref?.();
+    }
+  }
+
+  /**
+   * Checks everyone still "invited" in apps that support it, and marks them
+   * added once they have joined. Quiet: nothing changes or is reported while
+   * they haven't joined yet, or while the app is disconnected.
+   */
+  checkInvited() {
+    for (const app of GROUP_APPS) {
+      const adapter = this.adapters[app];
+      if (!adapter.checkJoined || adapter.connection().state !== "connected") continue;
+      for (const group of this.store.groups()) {
+        const status = group.apps[app];
+        if (status?.state !== "ready" || !status.ref) continue;
+        for (const member of group.members) {
+          if (member.apps[app]?.state !== "invited") continue;
+          const key = `${group.id}|${app}|joined|${member.contactId}`;
+          if (this.inFlight.has(key)) continue;
+          this.inFlight.add(key);
+          const job = (this.queues.get(app) || Promise.resolve())
+            .then(async () => {
+              const current = this.store.has(group.id) ? this.store.group(group.id) : null;
+              const entry = current?.members.find((candidate) => candidate.contactId === member.contactId);
+              const ref = current?.apps[app]?.ref;
+              const contact = this.store.contact(member.contactId);
+              if (!current || !ref || entry?.apps[app]?.state !== "invited" || !contact) return;
+              const identity = contactIdentity(contact, app);
+              if (!identity || !(await adapter.checkJoined!(ref, identity))) return;
+              this.setMember(group.id, member.contactId, app, { state: "added", detail: "Joined the server and was added to the group." });
+              this.note(app, group.id, `${contact.name}: joined and added`);
+            })
+            .catch(() => undefined)
+            .finally(() => this.inFlight.delete(key));
+          this.queues.set(app, job);
+        }
+      }
     }
   }
 
