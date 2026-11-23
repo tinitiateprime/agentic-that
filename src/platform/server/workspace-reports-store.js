@@ -1,15 +1,32 @@
 import { OPERATIONAL_ROLE_CATALOG } from "../access-catalog.js";
+import { principalHasAccess } from "./access-control.js";
 import { getPlatformSql } from "./auth-store.js";
 import { publishingWorkspaceSnapshot } from "./publishing-central-store.js";
 
 const RANGE_DAYS = new Set([7, 30, 90]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FEED_LIMIT = 200;
+const LIST_LIMIT = 500;
+const SCAN_MODES = {
+  profile_url: "Profile link", post_url: "Post link", hashtag: "Hashtag", keyword: "Keyword",
+  username: "Profile", profile: "Profile", page: "Page", search: "Search", location: "Location",
+};
+const scanModeLabel = (mode) => SCAN_MODES[String(mode || "").toLowerCase()]
+  || String(mode || "Search").replace(/[_-]+/g, " ").replace(/^./, (letter) => letter.toUpperCase());
+
+/** Where a post stands now, in the words the report uses. */
+function postState(upload, nowMs) {
+  if (upload.status === "posted" || upload.statusDetail === "published") return "published";
+  if (upload.status === "failed") return "failed";
+  if (upload.scheduledAt && Date.parse(upload.scheduledAt) > nowMs) return "scheduled";
+  return "waiting";
+}
 const roleNames = new Map(OPERATIONAL_ROLE_CATALOG.map((role) => [role.id, role.name]));
 
 const PLATFORM_LABELS = {
   instagram: "Instagram", facebook: "Facebook", youtube: "YouTube", linkedin: "LinkedIn",
   x: "X", twitter: "X", reddit: "Reddit", tiktok: "TikTok", telegram: "Telegram", threads: "Threads",
+  discord: "Discord", whatsapp: "WhatsApp", messenger: "Messenger",
 };
 const platformLabel = (value) => PLATFORM_LABELS[String(value || "").toLowerCase()] || String(value || "social");
 // "an Instagram post", "an X post", "a YouTube post".
@@ -31,9 +48,58 @@ function emptyCounts() {
   return { postsCreated: 0, postsPublished: 0, postsFailed: 0, submissions: 0, scrapingRuns: 0, groupMessages: 0 };
 }
 
+/**
+ * The report's post list and per-platform counts: posts created, published or
+ * failed in the period, plus any still scheduled ahead, newest first.
+ */
+export function summarizePosts({ uploads = [], accounts = [], principal, sinceMs, nowMs, nameFor }) {
+  const accountNames = new Map((accounts || []).map((account) => [account.id, account.displayName || account.username || account.name || ""]));
+  const posts = (uploads || [])
+    .map((upload) => {
+      const state = postState(upload, nowMs);
+      const when = state === "published" ? upload.postedAt : state === "scheduled" ? upload.scheduledAt : state === "failed" ? (upload.updatedAt || upload.uploadedAt) : upload.uploadedAt;
+      const mimeType = String(upload.mimeType || "");
+      const format = upload.postFormat || (mimeType.startsWith("video/") ? "video" : mimeType.startsWith("image/") ? "image" : "text");
+      // Pictures are shown only to people whose role can open that platform's
+      // media; the media address checks this again when it is loaded.
+      const preview = format === "image" && upload.fileName && principalHasAccess(principal, `publishing.${upload.platform}`, "view")
+        ? `/api/publishing/media/${encodeURIComponent(upload.fileName)}` : null;
+      return {
+        id: String(upload.id),
+        platform: String(upload.platform || ""),
+        platformLabel: platformLabel(upload.platform),
+        account: accountNames.get(upload.accountId) || "",
+        format,
+        title: String(upload.title || "").slice(0, 200),
+        caption: String(upload.caption || "").slice(0, 600),
+        preview,
+        userId: upload.createdByUserId ? String(upload.createdByUserId) : null,
+        createdBy: nameFor(upload.createdByUserId, upload.createdByName),
+        state,
+        createdAt: iso(upload.uploadedAt),
+        scheduledAt: iso(upload.scheduledAt),
+        publishedAt: iso(upload.postedAt),
+        at: iso(when) || iso(upload.uploadedAt),
+        failureReason: state === "failed" ? String(upload.failureReason || "").slice(0, 240) || null : null,
+      };
+    })
+    // In the period: created, published or failed in it, or still scheduled ahead.
+    .filter((post) => [post.createdAt, post.publishedAt, post.at].some((value) => value && Date.parse(value) >= sinceMs) || post.state === "scheduled")
+    .sort((left, right) => String(right.at).localeCompare(String(left.at)))
+    .slice(0, LIST_LIMIT);
+  const postPlatforms = [...posts.reduce((map, post) => {
+    const entry = map.get(post.platform) || { platform: post.platform, label: post.platformLabel, published: 0, failed: 0, scheduled: 0, waiting: 0, total: 0 };
+    entry[post.state] += 1;
+    entry.total += 1;
+    return map.set(post.platform, entry);
+  }, new Map()).values()].sort((left, right) => right.total - left.total);
+  return { posts, postPlatforms };
+}
+
 // Activity report for one company workspace. Every member of the company may
-// read it. It names who did what, but never includes post captions, message
-// text, credentials or media.
+// read it: who did what, the posts with their captions, research scans and
+// group messages. It never includes credentials; post pictures load only for
+// people whose role can open that platform's media.
 export async function workspaceActivityReport(principal, { days } = {}) {
   const rangeDays = RANGE_DAYS.has(Number(days)) ? Number(days) : 30;
   const until = new Date();
@@ -54,13 +120,16 @@ export async function workspaceActivityReport(principal, { days } = {}) {
   const roles = await sql`
     SELECT user_id, role_id FROM user_role_assignments WHERE workspace_id = ${workspaceId}`;
   const jobs = await sql`
-    SELECT id, job_type, platform, status, requested_by_user_id, created_at, completed_at
-      FROM jobs
-     WHERE workspace_id = ${workspaceId} AND job_type <> 'publish' AND created_at >= ${since.toISOString()}
-     ORDER BY created_at DESC
+    SELECT job.id, job.job_type, job.platform, job.status, job.requested_by_user_id, job.created_at, job.completed_at,
+           job.error, job.payload->>'mode' AS mode, job.payload->>'keyword' AS keyword,
+           CASE WHEN jsonb_typeof(result.result->'results') = 'array' THEN jsonb_array_length(result.result->'results') END AS result_count
+      FROM jobs job
+      LEFT JOIN job_results result ON result.job_id = job.id
+     WHERE job.workspace_id = ${workspaceId} AND job.job_type <> 'publish' AND job.created_at >= ${since.toISOString()}
+     ORDER BY job.created_at DESC
      LIMIT 2000`;
   const messages = await sql`
-    SELECT message.id, message.sent_by, message.sent_at, grp.name AS group_name
+    SELECT message.id, message.sent_by, message.sent_at, message.text, message.results, grp.name AS group_name
       FROM group_manager_messages message
       LEFT JOIN group_manager_groups grp ON grp.id = message.group_id
      WHERE message.workspace_id = ${workspaceId} AND message.sent_at >= ${since.toISOString()}
@@ -120,6 +189,43 @@ export async function workspaceActivityReport(principal, { days } = {}) {
   }
   events.sort((left, right) => right.at.localeCompare(left.at));
 
+  // ---- Per-service detail ------------------------------------------------------------------
+  const nowMs = until.getTime();
+  const { posts, postPlatforms } = summarizePosts({ uploads: publishing.uploads, accounts: publishing.accounts, principal, sinceMs, nowMs, nameFor });
+
+  const scans = jobs.slice(0, LIST_LIMIT).map((job) => ({
+    id: String(job.id),
+    platform: String(job.platform || String(job.job_type).split(".")[1] || ""),
+    platformLabel: platformLabel(job.platform || String(job.job_type).split(".")[1]),
+    mode: scanModeLabel(job.mode),
+    query: String(job.keyword || "").slice(0, 200),
+    results: job.result_count === null || job.result_count === undefined ? null : Number(job.result_count),
+    userId: job.requested_by_user_id ? String(job.requested_by_user_id) : null,
+    createdBy: nameFor(job.requested_by_user_id),
+    state: jobOutcome(job.status),
+    at: iso(job.created_at),
+    finishedAt: iso(job.completed_at),
+    error: jobOutcome(job.status) === "failed" ? String(job.error || "").slice(0, 240) || null : null,
+  }));
+
+  const groupMessages = messages.slice(0, LIST_LIMIT).map((message) => {
+    const results = message.results && typeof message.results === "object" ? message.results : {};
+    return {
+      id: String(message.id),
+      group: message.group_name || "Deleted group",
+      text: String(message.text || "").slice(0, 1000),
+      userId: message.sent_by ? String(message.sent_by) : null,
+      createdBy: nameFor(message.sent_by),
+      at: iso(message.sent_at),
+      apps: Object.entries(results).map(([app, result]) => ({
+        app,
+        label: platformLabel(app),
+        state: result?.state === "sent" ? "sent" : result?.state === "failed" ? "failed" : "sending",
+        error: result?.state === "failed" ? String(result.error || "").slice(0, 200) || null : null,
+      })).sort((left, right) => left.label.localeCompare(right.label)),
+    };
+  });
+
   // Per-person totals.
   const people = new Map(members.map((member) => [String(member.id), {
     id: String(member.id),
@@ -174,6 +280,10 @@ export async function workspaceActivityReport(principal, { days } = {}) {
     daily,
     people: peopleList,
     events: events.slice(0, FEED_LIMIT),
+    posts,
+    postPlatforms,
+    scans,
+    groupMessages,
     eventCount: events.length,
     publishingUnavailable,
   };

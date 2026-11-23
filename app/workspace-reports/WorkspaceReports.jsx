@@ -1,9 +1,16 @@
 "use client";
 
 import { BarChart3, CheckCircle2, Clock3, Download, MessagesSquare, Search, SquarePen, TriangleAlert, Users } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { MessagesReport, PostsReport, ScansReport, downloadCsv, messageCsv, postCsv, scanCsv } from "./ServiceReports";
 
 const RANGES = [7, 30, 90];
+const TABS = [
+  { id: "overview", label: "Overview", icon: BarChart3 },
+  { id: "posts", label: "Social posts", icon: SquarePen, count: (report) => report.posts.length },
+  { id: "research", label: "Research", icon: Search, count: (report) => report.scans.length },
+  { id: "groups", label: "Group messages", icon: MessagesSquare, count: (report) => report.groupMessages.length },
+];
 const PRODUCTS = [
   { id: "all", label: "Everything" },
   { id: "publishing", label: "Social posts" },
@@ -121,6 +128,8 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
   const [error, setError] = useState("");
   const [person, setPerson] = useState("all");
   const [product, setProduct] = useState("all");
+  const [tab, setTab] = useState("overview");
+  const filteredRef = useRef(null);
 
   async function changeRange(days) {
     if (days === report.rangeDays || loading) return;
@@ -137,13 +146,14 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
     }
   }
 
+  // Downloads what the open tab shows, with its filters applied.
   function download() {
-    const blob = new Blob([`﻿${csv(report)}`], { type: "text/csv;charset=utf-8" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `${(report.workspaceName || "company").replace(/[^\w-]+/g, "-")}-activity-${report.rangeDays}-days.csv`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+    const base = `${(report.workspaceName || "company").replace(/[^\w-]+/g, "-")}-${report.rangeDays}-days`;
+    const rows = filteredRef.current;
+    if (tab === "posts") downloadCsv(`${base}-social-posts.csv`, postCsv(rows || report.posts));
+    else if (tab === "research") downloadCsv(`${base}-research.csv`, scanCsv(rows || report.scans));
+    else if (tab === "groups") downloadCsv(`${base}-group-messages.csv`, messageCsv(rows || report.groupMessages));
+    else downloadCsv(`${base}-people.csv`, csv(report));
   }
 
   const events = useMemo(() => report.events.filter((event) =>
@@ -157,7 +167,7 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
         <div>
           <p>Company reports</p>
           <h1>{report.workspaceName || "Your company"}</h1>
-          <span>What everyone in this company did over the last {report.rangeDays} days. Everyone in the company can see this page.</span>
+          <span>What everyone in this company did over the last {report.rangeDays} days: the posts, research and group messages, and who did them. Everyone in the company can see this page.</span>
         </div>
         <div className="report-controls">
           <div className="report-range" role="group" aria-label="Time range">
@@ -171,6 +181,23 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
 
       {error && <p className="report-error" role="alert">{error}</p>}
       {report.publishingUnavailable && <p className="report-note" role="status">Social post activity could not be loaded right now, so those numbers may be missing. Try again in a minute.</p>}
+
+      <nav className="report-tabs" role="tablist" aria-label="Report sections">
+        {TABS.map((entry) => {
+          const Icon = entry.icon;
+          return (
+            <button type="button" role="tab" key={entry.id} aria-selected={tab === entry.id} onClick={() => { filteredRef.current = null; setTab(entry.id); }}>
+              <Icon size={16} />{entry.label}{entry.count && <span>{number.format(entry.count(report))}</span>}
+            </button>
+          );
+        })}
+      </nav>
+
+      {tab === "posts" && <PostsReport key={`posts-${report.rangeDays}`} posts={report.posts} platforms={report.postPlatforms} filteredRef={filteredRef} />}
+      {tab === "research" && <ScansReport key={`scans-${report.rangeDays}`} scans={report.scans} filteredRef={filteredRef} />}
+      {tab === "groups" && <MessagesReport key={`messages-${report.rangeDays}`} messages={report.groupMessages} filteredRef={filteredRef} />}
+
+      {tab === "overview" && <>
 
       <section className={`report-tiles ${loading ? "loading" : ""}`} aria-label="Summary">
         <Tile icon={CheckCircle2} label="Posts published" value={number.format(totals.postsPublished)} />
@@ -256,6 +283,7 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
           <div className="report-empty"><BarChart3 size={20} /><span><strong>No activity yet</strong><small>Nothing matches this person and area in the selected period.</small></span></div>
         )}
       </section>
+      </>}
     </main>
   );
 }
