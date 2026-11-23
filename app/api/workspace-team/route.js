@@ -1,6 +1,6 @@
 import { accessErrorResponse, authorizeApiCapability } from "@platform/server/access-control";
 import { inviteWorkspaceMember, workspaceTeamSnapshot } from "@platform/server/workspace-team-store";
-import { platformAuthLink } from "@platform/server/auth-email";
+import { withInvitationEmail } from "./invitation-email";
 
 function failure(error) {
   try {
@@ -23,12 +23,7 @@ export async function POST(request) {
   try {
     const principal = await authorizeApiCapability("workspace.team.manage");
     const invitation = await inviteWorkspaceMember(principal, await request.json());
-    return Response.json({
-      invitation: {
-        ...invitation,
-        acceptUrl: platformAuthLink("/join-workspace", invitation.token),
-      },
-    }, { status: 201 });
+    return Response.json({ invitation: await withInvitationEmail(principal, invitation) }, { status: 201 });
   } catch (error) {
     return failure(error);
   }

@@ -1,6 +1,6 @@
 import { accessErrorResponse, authorizeApiCapability } from "@platform/server/access-control";
 import { cancelWorkspaceInvitation, resendWorkspaceInvitation } from "@platform/server/workspace-team-store";
-import { platformAuthLink } from "@platform/server/auth-email";
+import { withInvitationEmail } from "../../invitation-email";
 
 export async function PATCH(request, { params }) {
   try {
@@ -15,7 +15,7 @@ export async function PATCH(request, { params }) {
     if (!invitation) return Response.json({ error: "Choose resend or cancel." }, { status: 400 });
     return Response.json({
       invitation: invitation.token
-        ? { ...invitation, acceptUrl: platformAuthLink("/join-workspace", invitation.token) }
+        ? await withInvitationEmail(principal, invitation)
         : invitation,
     });
   } catch (error) {

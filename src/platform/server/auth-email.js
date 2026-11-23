@@ -423,6 +423,30 @@ export async function sendVerificationEmail(email, token) {
   });
 }
 
+export async function sendWorkspaceInvitationEmail(email, token, { workspaceName, inviterName, roleNames, idempotencyKey }) {
+  const link = platformAuthLink("/join-workspace", token);
+  const company = String(workspaceName || "your company").trim();
+  const inviter = String(inviterName || "Your workspace owner").trim();
+  const roles = String(roleNames || "").trim();
+  const introduction = `${inviter} invited you to join ${company} on AgenticThat.${roles ? ` Your role: ${roles}.` : ""}\nAccept the invitation to join the team. If you already use AgenticThat, sign in with your current password and this company is added to your account.`;
+  return sendPlatformAuthEmail({
+    to: email,
+    idempotencyKey,
+    subject: `${inviter} invited you to join ${company} on AgenticThat`,
+    text: `AgenticThat\n\nYou're invited to join ${company}\n\n${introduction}\n\nAccept invitation: ${link}\n\nThis secure link expires in 7 days and works once.\n\nIf you were not expecting this invitation, you can safely ignore this email.`,
+    html: platformAuthEmailTemplate({
+      preheader: `${inviter} invited you to join ${company} on AgenticThat.`,
+      eyebrow: "Workspace invitation",
+      title: `Join ${company}`,
+      introduction,
+      actionLabel: "Accept invitation",
+      actionUrl: link,
+      expiry: "This secure link expires in 7 days",
+      securityNote: "If you were not expecting this invitation, you can safely ignore this email. No account will be created.",
+    }),
+  });
+}
+
 export async function sendPasswordResetEmail(email, token) {
   const link = platformAuthLink("/reset-password", token);
   return sendPlatformAuthEmail({

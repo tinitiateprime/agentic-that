@@ -80,25 +80,32 @@ export default function WorkspaceTeam({ initialData, currentUserId }) {
   const [email, setEmail] = useState("");
   const [roleIds, setRoleIds] = useState([]);
   const [inviteLink, setInviteLink] = useState("");
+  const [inviteNotice, setInviteNotice] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [guideOpen, setGuideOpen] = useState(initialData.members.length <= 1 && initialData.invitations.length === 0);
   const refresh = async () => setData(await request("/api/workspace-team"));
 
+  // Emailed invitations only need a confirmation; the copyable link is the fallback.
+  const showInvitation = (invitation) => {
+    setInviteNotice({ email: invitation.email, sent: Boolean(invitation.emailSent), error: invitation.emailError || "" });
+    if (!invitation.emailSent) setInviteLink(invitation.acceptUrl);
+  };
+
   const invite = async () => {
-    setBusy(true); setError(""); setInviteLink(""); setCopied(false);
+    setBusy(true); setError(""); setInviteLink(""); setInviteNotice(null); setCopied(false);
     try {
       const result = await request("/api/workspace-team", { method: "POST", body: JSON.stringify({ email, roleIds }) });
-      setInviteLink(result.invitation.acceptUrl); setEmail(""); setRoleIds([]); setGuideOpen(false); await refresh();
+      showInvitation(result.invitation); setEmail(""); setRoleIds([]); setGuideOpen(false); await refresh();
     } catch (inviteError) { setError(inviteError.message); } finally { setBusy(false); }
   };
 
   const invitationAction = async (id, action) => {
-    setError(""); setInviteLink(""); setCopied(false);
+    setError(""); setInviteLink(""); setInviteNotice(null); setCopied(false);
     try {
       const result = await request(`/api/workspace-team/invitations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ action }) });
-      if (result.invitation?.acceptUrl) setInviteLink(result.invitation.acceptUrl);
+      if (result.invitation?.acceptUrl) showInvitation(result.invitation);
       await refresh();
     } catch (actionError) { setError(actionError.message); }
   };
@@ -133,7 +140,8 @@ export default function WorkspaceTeam({ initialData, currentUserId }) {
             <RoleChecks roles={data.roles} selected={roleIds} onChange={setRoleIds} />
             {error && <p className="team-error">{error}</p>}
             <button className="team-primary" disabled={busy || !email.trim() || roleIds.length === 0} onClick={invite}>{busy ? "Creating invitation…" : <>Create invitation<ArrowRight size={15} /></>}</button>
-            {inviteLink && <div className="invite-link"><span><strong>Invitation ready</strong><small>Copy and send this secure link to the employee.</small></span><div><input readOnly value={inviteLink} onFocus={(event) => event.target.select()} /><button onClick={copyInvitation}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? "Copied" : "Copy link"}</button></div></div>}
+            {inviteNotice?.sent && <div className="invite-link"><span><strong>Invitation email sent</strong><small>We emailed {inviteNotice.email} a secure link to join. It expires in 7 days.</small></span></div>}
+            {inviteLink && <div className="invite-link"><span><strong>Email could not be sent</strong><small>{inviteNotice?.error ? `${inviteNotice.error} ` : ""}Copy and send this secure link to {inviteNotice?.email || "the employee"} instead.</small></span><div><input readOnly value={inviteLink} onFocus={(event) => event.target.select()} /><button onClick={copyInvitation}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? "Copied" : "Copy link"}</button></div></div>}
           </section>
           <section className="team-panel team-invitations-panel"><div className="team-panel-heading compact"><span><Mail size={17} /></span><div><h2>Pending invitations</h2><p>{data.invitations.length} total</p></div></div>{data.invitations.length ? data.invitations.map((invitation) => <article className="invite-row" key={invitation.id}><span><strong>{invitation.email}</strong><small>{invitation.status} · expires {new Date(invitation.expiresAt).toLocaleString()}</small></span>{invitation.status === "pending" && <span className="team-actions"><button onClick={() => invitationAction(invitation.id, "resend")}>Resend</button><button className="danger" onClick={() => invitationAction(invitation.id, "cancel")}>Cancel</button></span>}</article>) : <div className="team-empty"><Mail size={19} /><span><strong>No pending invitations</strong><small>New invitation links will appear here.</small></span></div>}</section>
         </div>

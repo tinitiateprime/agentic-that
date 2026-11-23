@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { initializeDatabaseDocument } from "../../../lib/database-document-store.js";
-import { OPERATIONAL_ROLE_IDS } from "../access-catalog.js";
+import { OPERATIONAL_ROLE_CATALOG, OPERATIONAL_ROLE_IDS } from "../access-catalog.js";
 import {
   createPlatformSessionForUser,
   getPlatformSql,
@@ -258,6 +258,18 @@ export async function inviteWorkspaceMember(principal, input) {
     await audit(tx, principal.userId, "workspace_invitation", invitation.id, "invitation.created", null, publicInvitation(invitation));
     return publicInvitation({ ...invitation, token: rawToken }, { includeToken: true });
   });
+}
+
+// Details shown in the invitation email: company name, inviter and role names.
+export async function workspaceInvitationEmailDetails(principal, roleIds) {
+  const sql = await getPlatformSql();
+  const [workspace] = await sql`SELECT name FROM platform_workspaces WHERE id = ${principal.workspaceId} LIMIT 1`;
+  const [inviter] = await sql`SELECT name FROM platform_users WHERE id = ${principal.userId} LIMIT 1`;
+  const roleNames = (roleIds || [])
+    .map((roleId) => OPERATIONAL_ROLE_CATALOG.find((role) => role.id === roleId)?.name)
+    .filter(Boolean)
+    .join(", ");
+  return { workspaceName: workspace?.name || "", inviterName: inviter?.name || principal.name || "", roleNames };
 }
 
 export async function resendWorkspaceInvitation(principal, invitationId) {
