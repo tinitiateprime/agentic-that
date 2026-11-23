@@ -18,12 +18,25 @@ const SEND_MESSAGES = 2048n;
 const READ_HISTORY = 65536n;
 const MANAGE_ROLES = 268435456n;
 const MEMBER_ACCESS = VIEW_CHANNEL | SEND_MESSAGES | READ_HISTORY;
+/** What the bot gives itself on a group channel it creates. */
+export const BOT_CHANNEL_ACCESS = MEMBER_ACCESS | CREATE_INVITE;
 /** What the bot needs in a server, asked for when it is added. */
 export const BOT_PERMISSIONS = (CREATE_INVITE | MANAGE_CHANNELS | VIEW_CHANNEL | SEND_MESSAGES | READ_HISTORY | MANAGE_ROLES).toString();
 const MESSAGE_LIMIT = 2000;
 
 type Saved = { token: string; botId: string; botName: string; applicationId: string };
 type Guild = { id: string; name: string };
+
+/** Plain-language reason for a Discord 403, by Discord's error code. */
+export function discordPermissionMessage(code?: number) {
+  if (code === 50013) {
+    return "The bot is missing a permission in this server. In Discord, open Server Settings → Roles → the bot's role and turn on Manage Channels, Manage Roles, Create Invite, View Channels, Send Messages and Read Message History, or add the bot again with the link on this page.";
+  }
+  if (code === 50001) {
+    return "The bot can't see this server or channel. Add the bot to the server again with the link on this page.";
+  }
+  return "The bot doesn't have permission for this. Add it to the server again with the link on this page.";
+}
 
 export class DiscordError extends Error {
   constructor(message: string, readonly status: number, readonly code?: number) {
@@ -78,7 +91,7 @@ export class DiscordAdapter implements GroupAppAdapter {
       const data = await response.json().catch(() => ({})) as { message?: string; code?: number };
       if (!response.ok) {
         const reason = response.status === 401 ? "The Discord bot token isn't valid (it may have been reset)." :
-          response.status === 403 ? "The bot doesn't have permission for this. Add it to the server again with the link on this page." :
+          response.status === 403 ? discordPermissionMessage(data.code) :
           data.message || `Discord answered ${response.status}.`;
         throw new DiscordError(reason, response.status, data.code);
       }
@@ -125,9 +138,13 @@ export class DiscordAdapter implements GroupAppAdapter {
       type: 0,
       topic: input.description || input.name,
       // Private: only the bot and the members added to the group can see it.
+      // The bot's own overwrite must not include MANAGE_ROLES ("Manage
+      // Permissions" on a channel): Discord only lets server administrators set
+      // that in an overwrite and rejects the whole request with 403 otherwise.
+      // The bot's server-wide Manage Roles already lets it add members later.
       permission_overwrites: [
         { id: input.guildId, type: 0, deny: VIEW_CHANNEL.toString(), allow: "0" },
-        { id: saved.botId, type: 1, allow: (MEMBER_ACCESS | CREATE_INVITE | MANAGE_ROLES).toString(), deny: "0" },
+        { id: saved.botId, type: 1, allow: BOT_CHANNEL_ACCESS.toString(), deny: "0" },
       ],
     });
     const invite = await this.call<{ code: string }>("POST", `/channels/${channel.id}/invites`, { max_age: 0, max_uses: 0, unique: false }).catch(() => null);

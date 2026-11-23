@@ -333,12 +333,30 @@ test("Discord: a private channel is created, server members are added, others ge
   const channelRequest = requests.find((request) => request.url === "/guilds/333333333333333333/channels");
   assert.equal(channelRequest?.body?.name, "batch-5");
   assert.deepEqual((channelRequest?.body?.permission_overwrites as { id: string; deny: string }[])[0], { id: "333333333333333333", type: 0, deny: "1024", allow: "0" }, "hidden from everyone else");
+  const botOverwrite = (channelRequest?.body?.permission_overwrites as { id: string; allow: string }[])[1];
+  assert.equal(botOverwrite.id, "111111111111111111");
+  assert.equal(BigInt(botOverwrite.allow) & 268435456n, 0n, "Discord rejects Manage Permissions in a non-admin bot's channel overwrite");
+  assert.equal(BigInt(botOverwrite.allow) & 3072n, 3072n, "the bot can still see and post in the channel");
 
   const context = { groupName: "Batch 5", contactName: "Asha", link: created.link };
   assert.deepEqual(await discord.addMember(created.ref, "555555555555555555", context), { state: "added" });
   const outside = await discord.addMember(created.ref, "666666666666666666", context);
   assert.equal(outside.state, "invited");
   assert.equal(outside.link, "https://discord.gg/abc123");
+});
+
+test("Discord: a missing server permission is explained in plain words", async () => {
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    const route = url.replace("https://discord.com/api/v10", "");
+    if (route === "/users/@me") return new Response(JSON.stringify({ id: "111111111111111111", username: "Bot" }), { status: 200 });
+    if (route === "/oauth2/applications/@me") return new Response(JSON.stringify({ id: "222222222222222222" }), { status: 200 });
+    if (route === "/users/@me/guilds") return new Response(JSON.stringify([{ id: "333333333333333333", name: "Server" }]), { status: 200 });
+    if (route.endsWith("/channels") && init.method === "POST") return new Response(JSON.stringify({ message: "Missing Permissions", code: 50013 }), { status: 403 });
+    return new Response(JSON.stringify({ message: "Unknown" }), { status: 404 });
+  }) as typeof fetch;
+  const discord = new DiscordAdapter(tempDirectory(), fakeFetch);
+  await discord.connect("abcdefghijklmnopqrstuvwxyz0123456789");
+  await assert.rejects(discord.createGroup({ name: "Team", description: "", guildId: "333333333333333333" }), /Manage Channels, Manage Roles/);
 });
 
 // ---- Routes ----------------------------------------------------------------------------------
