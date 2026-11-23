@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
+import { BarChart3, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
@@ -31,6 +31,8 @@ const sections = [
   { id: "groups", label: "Groups", icon: Users, href: "/group-manager" },
   { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk", hidden: true },
   { id: "content", label: "Activity", icon: ClipboardList, href: "/content-manager", anyCapability: ["publishing.view", "messaging.view"] },
+  // Every member of a company can read its reports.
+  { id: "reports", label: "Reports", icon: BarChart3, href: "/workspace-reports" },
 ];
 
 const moreChildren = [
