@@ -2,6 +2,7 @@ import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth"
 import { getSql } from "@whatsapp/lib/db";
 import { updateMetaAccount, syncNumbers } from "@whatsapp/lib/tenant";
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
+import { backfillSharedWabaHistorySafely } from "@whatsapp/lib/shared-waba";
 
 // Settings -> "WhatsApp connection" -> Meta panel. Point an already-onboarded
 // business at a different WABA/token (new Meta app, rotated credentials,
@@ -59,6 +60,8 @@ export async function PATCH(req) {
   } catch (err) {
     return Response.json({ error: err.message || "Could not save these phone numbers" }, { status: 400 });
   }
+  // If another workspace already holds this WABA, start from its history.
+  const sharedHistoryCopied = await backfillSharedWabaHistorySafely(account.id);
   const sql = await getSql();
   await sql`
     UPDATE businesses
@@ -70,5 +73,5 @@ export async function PATCH(req) {
            onboarded_at = COALESCE(onboarded_at, now())
      WHERE id = ${user.business_id}`;
 
-  return Response.json({ ok: true, numbers });
+  return Response.json({ ok: true, numbers, sharedHistoryCopied });
 }

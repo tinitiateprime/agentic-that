@@ -272,7 +272,7 @@ export async function lastInboundProvider(contactId) {
 
 // --- Calls (WhatsApp Business Calling API) ---------------------------------
 // Meta sends several events per call (call_created → connect → terminate), all
-// carrying the same call id, so we upsert on call_id and let later events
+// carrying the same call id, so we upsert on (business_id, call_id) and let later events
 // refine status/duration. Derived status:
 //   ringing    — call_created / connect seen, not yet terminated
 //   completed  — terminate with meta status COMPLETED
@@ -296,28 +296,43 @@ export async function recordCallEvent({
   duration = 0,
 }) {
   const sql = await getSql();
-  if (callId) {
-    const [claimed] = await sql`SELECT business_id FROM calls WHERE call_id = ${callId}`;
-    if (claimed && Number(claimed.business_id) !== Number(businessId)) {
-      throw new Error("Call id is already associated with another workspace.");
+  const status = deriveCallStatus(event, metaStatus, duration);
+  // A call on a shared WABA is recorded once per workspace, so the row is keyed
+  // by (business_id, call_id). Update-then-insert rather than ON CONFLICT keeps
+  // this working whether or not the per-workspace unique index exists yet.
+  const updateExisting = async () => {
+    if (!callId) return null;
+    const [updated] = await sql`
+      UPDATE calls SET
+        status      = ${status},
+        event       = ${event},
+        meta_status = COALESCE(${metaStatus || null}, meta_status),
+        start_time  = COALESCE(${startTime || null}, start_time),
+        end_time    = COALESCE(${endTime || null}, end_time),
+        duration    = GREATEST(${duration || 0}, duration),
+        updated_at  = now()
+      WHERE business_id = ${businessId} AND call_id = ${callId}
+      RETURNING *`;
+    return updated || null;
+  };
+
+  let row = await updateExisting();
+  if (!row) {
+    try {
+      [row] = await sql`
+        INSERT INTO calls (business_id, contact_id, call_id, direction, status, event,
+                           meta_status, phone_number_id, start_time, end_time, duration)
+        VALUES (${businessId}, ${contactId}, ${callId}, ${direction}, ${status}, ${event},
+                ${metaStatus || null}, ${phoneNumberId || null}, ${startTime || null},
+                ${endTime || null}, ${duration || 0})
+        RETURNING *`;
+    } catch (err) {
+      // Another delivery of the same event inserted it first.
+      if (err?.code !== "23505") throw err;
+      row = await updateExisting();
+      if (!row) throw err;
     }
   }
-  const status = deriveCallStatus(event, metaStatus, duration);
-  const [row] = await sql`
-    INSERT INTO calls (business_id, contact_id, call_id, direction, status, event,
-                       meta_status, phone_number_id, start_time, end_time, duration)
-    VALUES (${businessId}, ${contactId}, ${callId}, ${direction}, ${status}, ${event},
-            ${metaStatus || null}, ${phoneNumberId || null}, ${startTime || null},
-            ${endTime || null}, ${duration || 0})
-    ON CONFLICT (call_id) DO UPDATE SET
-      status     = EXCLUDED.status,
-      event      = EXCLUDED.event,
-      meta_status = COALESCE(EXCLUDED.meta_status, calls.meta_status),
-      start_time = COALESCE(EXCLUDED.start_time, calls.start_time),
-      end_time   = COALESCE(EXCLUDED.end_time, calls.end_time),
-      duration   = GREATEST(EXCLUDED.duration, calls.duration),
-      updated_at = now()
-    RETURNING *`;
   await sql`UPDATE contacts SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ${contactId}`;
   return row;
 }

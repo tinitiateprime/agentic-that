@@ -3,6 +3,7 @@ import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth"
 import { getAccountForBusiness, listTenantNumbers, upsertAccount, syncNumbers } from "@whatsapp/lib/tenant";
 import { metaListPhoneNumbers, watiGetContacts } from "@whatsapp/lib/wa/provider";
 import { hasEncryptionKey } from "@whatsapp/lib/crypto";
+import { backfillSharedWabaHistorySafely } from "@whatsapp/lib/shared-waba";
 
 // Self-serve onboarding for a new workspace.
 //   GET                      -> current setup state (drives the wizard)
@@ -102,8 +103,9 @@ export async function POST(req) {
     // A WABA may be connected to more than one workspace; upsertAccount keeps
     // one row per (workspace, WABA) and webhooks fan out to all of them.
     let saved;
+    let account;
     try {
-      const account = await upsertAccount({
+      account = await upsertAccount({
         businessId: user.business_id,
         wabaId,
         accessToken,
@@ -120,11 +122,13 @@ export async function POST(req) {
     } catch (err) {
       return Response.json({ error: err.message || "Could not save this WhatsApp account" }, { status: 400 });
     }
+    // If another workspace already holds this WABA, start from its history.
+    const sharedHistoryCopied = await backfillSharedWabaHistorySafely(account.id);
     await sql`
       UPDATE businesses
          SET provider = 'meta', active_wa_provider = 'meta'
        WHERE id = ${user.business_id}`;
-    return Response.json({ ok: true, provider: "meta", numbers: saved });
+    return Response.json({ ok: true, provider: "meta", numbers: saved, sharedHistoryCopied });
   }
 
   if (body.step === "wati") {

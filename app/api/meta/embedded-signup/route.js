@@ -1,6 +1,7 @@
 import { getCurrentUser, whatsappAccessErrorResponse } from "@whatsapp/lib/auth";
 import { getSql } from "@whatsapp/lib/db";
 import { updateMetaAccount, upsertAccount, syncNumbers, credsForProvider, setAppSubscribed } from "@whatsapp/lib/tenant";
+import { backfillSharedWabaHistorySafely } from "@whatsapp/lib/shared-waba";
 import { metaListPhoneNumbers, metaSubscribeApp } from "@whatsapp/lib/wa/provider";
 
 // Settings -> "Connect via Meta" button (Embedded Signup). The browser never
@@ -93,6 +94,9 @@ export async function POST(req) {
     return Response.json({ error: err.message || "Could not save these phone numbers" }, { status: 400 });
   }
 
+  // If another workspace already holds this WABA, start from its history.
+  const sharedHistoryCopied = await backfillSharedWabaHistorySafely(account.id);
+
   // Subscribe our app to this WABA's webhooks — without it Meta delivers no
   // inbound messages/reactions/statuses, so the number would connect but stay
   // silent. Non-fatal: the connection is already saved, so on failure we keep
@@ -118,5 +122,5 @@ export async function POST(req) {
            END
      WHERE id = ${user.business_id}`;
 
-  return Response.json({ ok: true, numbers, appSubscribed, warning });
+  return Response.json({ ok: true, numbers, appSubscribed, warning, sharedHistoryCopied });
 }

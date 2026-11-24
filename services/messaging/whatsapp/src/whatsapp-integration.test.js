@@ -45,7 +45,7 @@ test("schema migration is versioned and creates the reaction cursor columns", as
   const database = await source("services/messaging/whatsapp/src/lib/db.js");
   // The key gates the whole DDL block, so it has to move whenever statements
   // are added or an already-migrated database never sees them.
-  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v4-shared-waba"/);
+  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v5-shared-waba-calls"/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction TEXT/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ/);
   assert.match(database, /export async function migrateWhatsAppSchema/);
@@ -69,6 +69,36 @@ test("a WABA can be connected to more than one workspace", async () => {
   const webhook = await source("app/api/webhooks/meta/route.js");
   assert.match(webhook, /resolveTenantsByWabaId/);
   assert.match(webhook, /for \(const business of await businessesForEntry\(sql, entry\)\)/);
+});
+
+test("workspaces sharing a WABA keep identical conversations", async () => {
+  const messaging = await source("services/messaging/whatsapp/src/lib/wa/messaging.js");
+  // Every outbound row goes through insertOutbound, which mirrors it.
+  assert.match(messaging, /await mirrorOutbound\(\{ business, contact, row \}\)/);
+  assert.match(messaging, /await mirrorReaction\(\{ business, targetMessage/);
+  // Inbound is recorded once per workspace, so only one may send the welcome.
+  assert.match(messaging, /if \(!\(await isWelcomeSender\(business\.id, phoneNumberId\)\)\) return null;/);
+
+  const shared = await source("services/messaging/whatsapp/src/lib/shared-waba.js");
+  assert.match(shared, /export async function mirrorOutbound/);
+  assert.match(shared, /row\.provider !== "meta"/);
+  assert.match(shared, /export async function backfillSharedWabaHistory/);
+
+  for (const path of [
+    "app/api/whatsapp/onboarding/route.js",
+    "app/api/meta/account/route.js",
+    "app/api/meta/embedded-signup/route.js",
+  ]) {
+    assert.match(await source(path), /backfillSharedWabaHistorySafely\(account\.id\)/);
+  }
+
+  // Calls are logged per workspace instead of being locked to the first one.
+  const database = await source("services/messaging/whatsapp/src/lib/db.js");
+  assert.match(database, /DROP CONSTRAINT IF EXISTS calls_call_id_key/);
+  assert.match(database, /uq_calls_business_call ON calls\(business_id, call_id\)/);
+  const data = await source("services/messaging/whatsapp/src/lib/data.js");
+  assert.doesNotMatch(data, /already associated with another workspace/);
+  assert.match(data, /WHERE business_id = \$\{businessId\} AND call_id = \$\{callId\}/);
 });
 
 test("login sessions are mapped to a business and backfilled", async () => {

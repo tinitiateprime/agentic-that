@@ -2,6 +2,7 @@ import { getSql } from "../db.js";
 import { getProvider, normalizeWaNumber } from "./provider.js";
 import { credsForBusiness, credsForProvider } from "../tenant.js";
 import { lastInboundProvider, setReactionById } from "../data.js";
+import { isWelcomeSender, mirrorOutbound, mirrorReaction } from "../shared-waba.js";
 
 // Contacts created before we knew their real name (e.g. via Quick Send, or a
 // cold broadcast) are stored with name = their own phone number as a
@@ -58,6 +59,8 @@ async function insertOutbound({ business, contact, body, kind, templateName, but
             ${buttons ? JSON.stringify(buttons) : null}, ${status}, ${providerId}, ${phoneNumberId || null}, ${provider || null})
     RETURNING *`;
   await sql`UPDATE contacts SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ${contact.id}`;
+  // Keep other workspaces on the same WABA in sync (Meta never echoes sends).
+  await mirrorOutbound({ business, contact, row });
   return row;
 }
 
@@ -214,11 +217,13 @@ export async function reactToMessage({ business, contact, targetMessage, emoji }
     emoji: reaction,
     phoneNumberId: targetMessage.phone_number_id || undefined,
   });
-  return setReactionById({
+  const updated = await setReactionById({
     businessId: business.id,
     messageId: targetMessage.id,
     emoji: reaction || null,
   });
+  await mirrorReaction({ business, targetMessage, emoji: reaction || null });
+  return updated;
 }
 
 // --- Automated welcome -----------------------------------------------------
@@ -252,6 +257,10 @@ function fillPlaceholders(body, values) {
 export async function maybeSendWelcome({ business, contact, phoneNumberId = null }) {
   const templateName = (business?.welcome_template_name || "").trim();
   if (!business?.welcome_enabled || !templateName) return null;
+
+  // On a WABA shared by several workspaces each one records this inbound
+  // message; only one of them greets, and the others receive a mirrored copy.
+  if (!(await isWelcomeSender(business.id, phoneNumberId))) return null;
 
   const sql = await getSql();
 

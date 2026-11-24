@@ -58,7 +58,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v4-shared-waba";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v5-shared-waba-calls";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -432,7 +432,7 @@ async function migrate(sql) {
       id              SERIAL PRIMARY KEY,
       business_id     INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
       contact_id      INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-      call_id         TEXT UNIQUE,
+      call_id         TEXT,
       direction       TEXT NOT NULL DEFAULT 'in',
       status          TEXT NOT NULL DEFAULT 'ringing',
       event           TEXT,
@@ -512,6 +512,10 @@ async function migrate(sql) {
     `ALTER TABLE whatsapp_numbers DROP CONSTRAINT IF EXISTS whatsapp_numbers_phone_number_id_key`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_wa_numbers_account_phone ON whatsapp_numbers(whatsapp_account_id, phone_number_id)`,
     `CREATE INDEX IF NOT EXISTS idx_wa_numbers_phone ON whatsapp_numbers(phone_number_id)`,
+    // A call on a shared WABA is logged in every workspace that holds it, so
+    // Meta's call id is unique per workspace rather than globally.
+    `ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_call_id_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_calls_business_call ON calls(business_id, call_id)`,
   ];
   for (const ddl of statements) await sql.unsafe(ddl);
 }
