@@ -7,13 +7,13 @@ import { MessagesReport, PostsReport, ScansReport, downloadCsv, messageCsv, post
 const RANGES = [7, 30, 90];
 const TABS = [
   { id: "overview", label: "Overview", icon: BarChart3 },
-  { id: "posts", label: "Social posts", icon: SquarePen, count: (report) => report.posts.length },
+  { id: "posts", label: "Publishing", icon: SquarePen, count: (report) => report.posts.length },
   { id: "research", label: "Research", icon: Search, count: (report) => report.scans.length },
   { id: "groups", label: "Group messages", icon: MessagesSquare, count: (report) => report.groupMessages.length },
 ];
 const PRODUCTS = [
   { id: "all", label: "Everything" },
-  { id: "publishing", label: "Social posts" },
+  { id: "publishing", label: "Publishing" },
   { id: "scraping", label: "Research" },
   { id: "groups", label: "Groups" },
   { id: "team", label: "Team" },

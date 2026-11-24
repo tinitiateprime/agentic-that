@@ -34,7 +34,7 @@ export function unfilledPlaceholder(text) {
 
 /** Why an account can't take this post right now ("" when it can). */
 function accountProblem(account, kind, item) {
-  if (!account.enabled) return "Turned off in Social posts";
+  if (!account.enabled) return "Turned off in Publishing";
   if (kind === "video" && item) {
     const fit = videoFit(account.platform, item);
     if (fit.status === "blocked") return fit.message;
@@ -246,9 +246,9 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
                 );
               })}
             </ul>
-            <p className={styles.muted}>Failed posts can be fixed and retried in <Link href="/publishing">Social posts</Link>, where every post is kept.</p>
+            <p className={styles.muted}>Failed posts can be fixed and retried in <Link href="/publishing#operations">Publishing → Review</Link>, where every post is kept.</p>
             <div className={styles.postActions}>
-              <Link className={styles.secondaryButton} href="/publishing"><ExternalLink size={15} /> Open Social posts</Link>
+              <Link className={styles.secondaryButton} href="/publishing#operations"><ExternalLink size={15} /> Open Review</Link>
               <button type="button" className={styles.primaryButtonSmall} onClick={onClose}>Done</button>
             </div>
           </div>

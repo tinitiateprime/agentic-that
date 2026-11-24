@@ -1,0 +1,23 @@
+/* The Publishing menu: light, with the AgenticThat gold accent. */
+.menu { position: sticky; top: 0; z-index: 30; display: flex; box-sizing: border-box; height: 100vh; flex-direction: column; padding: 18px 12px; border-right: 1px solid #E3E8EB; background: #FFFFFF; font-family: inherit; }
+.brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 18px; color: #111827; text-decoration: none; }
+.brand > span { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 10px 4px 10px 4px; background: linear-gradient(135deg, #fde68a 0%, #facc15 52%, #d99a0b 100%); color: #171203; font-size: 12px; font-weight: 850; }
+.brand strong { display: block; font-size: 15px; font-weight: 740; }
+.brand small { display: block; margin-top: 2px; color: #7c8796; font-size: 11.5px; }
+.menu nav { display: grid; gap: 3px; }
+.item { display: flex; box-sizing: border-box; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 12px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: #5b6574; cursor: pointer; font: inherit; font-size: 14px; font-weight: 620; text-align: left; text-decoration: none; }
+.item:hover { background: #F8FAFC; color: #111827; }
+.active { border-color: rgba(190, 139, 14, 0.28); background: linear-gradient(135deg, rgba(250, 204, 21, 0.16), rgba(245, 158, 11, 0.055)); color: #111827; font-weight: 760; }
+.active svg { color: #a56f05; }
+.item small { margin-left: auto; min-width: 20px; padding: 2px 7px; border-radius: 999px; background: rgba(15, 23, 42, 0.07); color: #475569; font-size: 11px; font-weight: 700; text-align: center; }
+.home { display: flex; align-items: center; gap: 11px; margin-top: auto; padding: 11px 12px; border-top: 1px solid #EEF2F4; color: #5b6574; font-size: 14px; font-weight: 620; text-decoration: none; }
+.home:hover { color: #111827; }
+
+@media (max-width: 960px) {
+  .menu { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; border-right: 0; border-bottom: 1px solid #E3E8EB; }
+  .brand { padding: 0; }
+  .brand small { display: none; }
+  .menu nav { display: flex; flex-wrap: wrap; }
+  .item { width: auto; min-height: 38px; }
+  .home { margin: 0 0 0 auto; padding: 8px; border-top: 0; }
+}

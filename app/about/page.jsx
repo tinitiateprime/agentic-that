@@ -36,7 +36,7 @@ const principles = [
 ];
 
 const products = [
-  { name: "Social SEO", detail: "Ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini.", status: "Live" },
+  { name: "Publishing", detail: "Write posts yourself or with AI, then publish and schedule them. Create with AI gives ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini.", status: "Live" },
   { name: "Messaging automation", detail: "WhatsApp and Telegram: contacts, campaigns, templates and inbox replies.", status: "Live" },
   { name: "Scheduled publishing", detail: "Instagram, Facebook, X, LinkedIn, YouTube and Reddit from one publish queue.", status: "Live" },
   { name: "Public-data research", detail: "Public Instagram and Facebook data, exported as JSON or CSV.", status: "Live" },

@@ -367,8 +367,8 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
     <div className={styles.page}>
       <header className={styles.top}>
         <div>
-          <span className={styles.eyebrow}><Search size={14} /> Get found online</span>
-          <h1>Social SEO</h1>
+          <span className={styles.eyebrow}><Search size={14} /> Publishing</span>
+          <h1>Create with AI</h1>
           <p>Upload a post. {aiReady ? `${connectedAis.map((provider) => provider.label).join(", ").replace(/, ([^,]*)$/, " and $1")} write` : "Your ChatGPT, Claude or Gemini write"} ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube.</p>
         </div>
       </header>
@@ -517,7 +517,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
               <span>for Instagram, Facebook, LinkedIn and YouTube</span>
             </p>
           )}
-          {!canGenerate && <p className={styles.muted}>Your role can view Social SEO but not generate suggestions.</p>}
+          {!canGenerate && <p className={styles.muted}>Your role can view Create with AI but not generate suggestions.</p>}
         </form>
 
         <section className={styles.results} aria-live="polite">
@@ -526,7 +526,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
             {(aiResult || result) && media.length > 0 && (
               canPost
                 ? <button type="button" className={styles.postButton} onClick={() => setPosting(true)} disabled={loading}><Send size={16} /> Post</button>
-                : <span className={styles.muted}>Posting needs Social posts access in your workspace.</span>
+                : <span className={styles.muted}>Posting needs Publishing access in your workspace.</span>
             )}
             <div className={styles.platformTabs} role="tablist" aria-label="App">
               {PLATFORMS.map((entry) => (

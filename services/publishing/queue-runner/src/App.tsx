@@ -7,7 +7,7 @@ import {
   CalendarDays, ChevronLeft, ChevronRight, CircleAlert, CircleCheckBig,
   CircleDashed, FolderOpen, LayoutDashboard, ListFilter, Send, TimerReset,
   Bookmark, Check, Clock3, Download, ExternalLink, Eye, Heart, Image as ImageIcon, MessageCircle, MonitorCheck, MoreHorizontal,
-  Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, ThumbsUp, Video
+  Puzzle, Repeat2, Settings2, Share2, SlidersHorizontal, Sparkles, ThumbsUp, Video
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FaFacebook, FaInstagram, FaLinkedin, FaReddit, FaXTwitter, FaYoutube } from "react-icons/fa6";
@@ -17,6 +17,7 @@ import { api, ContentPreflightApiError, PublishingSafetyApiError, setAuthToken, 
 import { detectPublishingExtension } from "../../../../lib/publishing-extension-bridge.ts";
 import { REDDIT_MY_PROFILE } from "../shared/reddit-options.js";
 import { videoFit } from "../shared/video-limits.js";
+import PublishingMenu, { type PublishingView } from "./PublishingMenu.tsx";
 
 // --- PLATFORM BRAND ICONS ---
 const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number }) => {
@@ -1811,22 +1812,26 @@ function Workboard({
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Arriving from another Publishing page (e.g. /publishing#schedule): open that part.
+  useEffect(() => {
+    const target = window.location.hash.replace('#', '');
+    if (!['overview', 'channels', 'operations', 'schedule'].includes(target)) return;
+    setActiveView(target);
+    const timer = window.setTimeout(() => document.getElementById(target)?.scrollIntoView({ block: 'start' }), 150);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   return (
     <main className='workboard-app'>
-      <aside className='pq-menu' aria-label='Social posting menu'>
-        <a className='pq-menu-brand' href='/apps' title='Back to Home'><span>AT</span><div><strong>Social posting</strong><small>Your posting workspace</small></div></a>
-        <nav aria-label='Publishing workspace'>
-          <button className={activeView === 'overview' ? 'active' : ''} onClick={() => navigateWorkboard('overview')}><Upload size={17} />Create</button>
-          <button className={activeView === 'channels' ? 'active' : ''} onClick={() => navigateWorkboard('channels')}><FolderOpen size={17} />Channels</button>
-          <button className={activeView === 'operations' ? 'active' : ''} onClick={() => navigateWorkboard('operations')}><ListFilter size={17} />Review <small>{reviewQueue.length + awaitingSubmissions.length}</small></button>
-          {PUBLISHING_SCHEDULING_ENABLED && <button className={activeView === 'schedule' ? 'active' : ''} onClick={() => navigateWorkboard('schedule')}><CalendarDays size={17} />Schedule</button>}
-          <button onClick={() => { window.location.href = '/config-manager?service=publishing'; }}><Settings2 size={17} />Connect accounts</button>
-        </nav>
-        <a className='pq-menu-home' href='/apps'><ArrowLeft size={17} />Back to Home</a>
-      </aside>
+      <PublishingMenu
+        active={activeView as PublishingView}
+        onNavigate={navigateWorkboard}
+        reviewCount={reviewQueue.length + awaitingSubmissions.length}
+        schedulingEnabled={PUBLISHING_SCHEDULING_ENABLED}
+      />
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <h1 className='workboard-page-title'>{({ overview: 'Create a post', channels: 'Channels', operations: 'Review', schedule: 'Schedule' } as Record<string, string>)[activeView] ?? 'Social posting'}</h1>
+        <h1 className='workboard-page-title'>{({ overview: 'Create a post', channels: 'Channels', operations: 'Review', schedule: 'Schedule' } as Record<string, string>)[activeView] ?? 'Publishing'}</h1>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
           <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
@@ -1913,6 +1918,11 @@ function Workboard({
 
       <section className='dashboard-workflow' id='overview' aria-label='Create posts and review priority work'>
         <div className='dashboard-create-panel'>
+          <a className='publishing-ai-shortcut' href='/publishing/ai'>
+            <span aria-hidden='true'><Sparkles size={18} /></span>
+            <span><strong>Let AI write it</strong><small>Upload your picture or video and get a caption, hashtags and alt text written for each app. You can still edit everything before posting.</small></span>
+            <em>Create with AI</em>
+          </a>
           {permissions.canEditContent ? <UnifiedComposer accounts={accounts} schedules={schedules} canSchedule={permissions.canSchedulePosts} handoffOnly={!permissions.canRunAutomation} canManageAccounts={permissions.canManageAccounts} canPublishNow={permissions.canRunAutomation} onOpenAccounts={onOpenAccounts} onCreated={onCreated} /> : <section className='composer-readonly'><div><p className='section-kicker'>Universal post</p><h1>One post, every compatible destination.</h1><span>Your role can review this workspace. Content creation is available to Publishing Managers and Content Uploaders.</span></div><LockKeyhole size={28} /></section>}
         </div>
       </section>

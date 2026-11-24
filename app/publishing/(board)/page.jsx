@@ -1,10 +1,10 @@
-import PublishQueueRunner from "../../services/publishing/queue-runner/src/App";
+import PublishQueueRunner from "../../../services/publishing/queue-runner/src/App";
 import { createPublishingIdentityToken } from "@platform/server/auth-store";
 import { requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
 
 export const metadata = {
-  title: "Publish Queue Runner - AgenticThat",
-  description: "Prepare, queue, and publish content across connected social channels.",
+  title: "Publishing - AgenticThat",
+  description: "Write posts yourself or with AI, then publish and schedule them across your connected social accounts.",
 };
 
 export default async function PublishingPage({ searchParams }) {

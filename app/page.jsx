@@ -60,7 +60,7 @@ const structuredData = {
       description: SITE_DESCRIPTION,
       publisher: { "@id": `${SITE_URL}/#organization` },
       featureList: [
-        "Social SEO: ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini",
+        "Publishing with AI: ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube, written with your ChatGPT, Claude or Gemini",
         "Chat workflow automation for WhatsApp and Telegram: contacts, campaigns, templates and inbox replies",
         "Instagram and Facebook public-data research: profiles, Pages, posts, reels and comments to JSON or CSV",
         "Scheduled publishing to Instagram, Facebook, X, LinkedIn, YouTube and Reddit",

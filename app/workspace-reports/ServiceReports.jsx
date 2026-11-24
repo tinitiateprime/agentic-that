@@ -137,7 +137,7 @@ export function PostsReport({ posts, platforms, filteredRef }) {
 
       <section className="report-panel">
         <header className="report-panel-head">
-          <div><h2>Social posts</h2><p>{number.format(filtered.length)} of {number.format(posts.length)} posts</p></div>
+          <div><h2>Published and scheduled posts</h2><p>{number.format(filtered.length)} of {number.format(posts.length)} posts</p></div>
           <div className="report-filters">
             <label className="report-search">Search
               <span><Search size={15} /><input value={query} onChange={(event) => { setQuery(event.target.value); setShown(PAGE); }} placeholder="Caption, title or account" /></span>

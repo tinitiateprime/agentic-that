@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, BookUser, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
+import { BarChart3, BookUser, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
@@ -24,10 +24,10 @@ const sections = [
       { id: "telegram", label: "Telegram", description: "Chats, groups, channels", href: "/console", icon: MessageCircle },
     ],
   },
-  { id: "publishing", label: "Social posts", icon: SquarePen, href: "/publishing", capability: "publishing.view" },
+  // Publishing: writing posts (yourself or with AI), posting and scheduling.
+  { id: "publishing", label: "Publishing", icon: SquarePen, href: "/publishing" },
   // Websites and Phone AI are hidden for now: remove "hidden" to show them again.
   { id: "website", label: "Websites", icon: Globe2, href: "/website-studio", hidden: true },
-  { id: "social-seo", label: "Social SEO", icon: Search, href: "/social-seo" },
   // Contact Master on its own page; the same contacts are inside Groups too.
   { id: "contacts", label: "Contacts", icon: BookUser, href: "/contact-master" },
   { id: "groups", label: "Groups", icon: Users, href: "/group-manager" },
@@ -71,6 +71,8 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
     if (item.id === "connections") return capabilities.includes("messaging.configure")
       ? "/config-manager?service=messaging"
       : "/config-manager?service=publishing";
+    // Without posting access, Publishing opens Create with AI.
+    if (item.id === "publishing") return capabilities.includes("publishing.view") ? "/publishing" : "/publishing/ai";
     if (item.id === "content") return capabilities.includes("messaging.view")
       ? "/content-manager?service=messaging"
       : "/content-manager?service=publishing";
