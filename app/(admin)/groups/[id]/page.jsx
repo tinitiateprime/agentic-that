@@ -11,6 +11,7 @@ import {
 import { metaListPhoneNumbers, metaTemplatesConfigured } from "@whatsapp/lib/wa/provider";
 import GroupDetail from "./GroupDetail";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
+import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export async function generateMetadata({ params }) {
   const { id } = await params;
@@ -49,6 +50,7 @@ export default async function GroupDetailPage({ params }) {
         available={available}
         templates={templates}
         phoneNumbers={phoneNumbers}
+        superAdmins={await listSuperAdminUsernames()}
       />
     </div>
   );

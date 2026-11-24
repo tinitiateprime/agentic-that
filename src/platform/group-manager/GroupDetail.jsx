@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, Check, Info, Link2, Loader2, RotateCcw, Send, Trash2, UserMinus, UserPlus, X } from "lucide-react";
 import AppLogo, { APPS, MESSAGING_APPS, SOCIAL_APPS } from "./AppLogo";
+import AuditStamp from "../AuditStamp";
 import { ContactPicker } from "./NewGroupForm";
 import styles from "./group-manager.module.css";
 
@@ -82,7 +83,7 @@ function AppGroupCard({ app, status, members, contactsById, onRemove, busy }) {
   );
 }
 
-export default function GroupDetail({ group, contacts, actions, onChanged, onDeleted }) {
+export default function GroupDetail({ group, contacts, actions, onChanged, onDeleted, superAdmins = [] }) {
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState([]);
   const [text, setText] = useState("");
@@ -138,6 +139,7 @@ export default function GroupDetail({ group, contacts, actions, onChanged, onDel
           <p className={styles.eyebrowSmall}>Group name</p>
           <h2 id="group-title">{group.name}</h2>
           {group.description && <p className={styles.muted}>{group.description}</p>}
+          <AuditStamp audit={group.audit} variant="detail" superAdmins={superAdmins} style={{ marginTop: 8 }} />
         </div>
         <div className={styles.groupActions}>
           {needsRetry && <button type="button" className={styles.secondary} disabled={Boolean(busy)} onClick={() => run("retry", () => actions.retry(group))}>{busy === "retry" ? <Loader2 size={15} className={styles.spin} /> : <RotateCcw size={15} />} Try again</button>}

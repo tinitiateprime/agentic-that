@@ -43,6 +43,7 @@ import { TelegramPostScheduler } from "./post-scheduler.ts";
 import { verifyServiceAccessToken } from "../../../../lib/service-access-token.js";
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
+import { runWithAuditScope, setAuditUsername } from "../../../../lib/audit-context.js";
 import { TELEGRAM_MEDIA_CHUNK_BYTES, TelegramMediaStore } from "./media-store.ts";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -560,6 +561,8 @@ async function requireUser(request: IncomingMessage): Promise<AuthenticatedAppUs
       }
       const levels = ["view", "operate", "configure"] as const;
       const accessLevel = levels[Math.min(levels.indexOf(grantedLevel as typeof levels[number]), levels.indexOf(capabilityLevel))];
+      // Audit columns: this request's writes are made by the token's user.
+      setAuditUsername(identity.email ? String(identity.email) : null);
       const platformUser = await store.findOrCreatePlatformWorkspaceUser(
         String(identity.workspaceId),
         String(identity.sub),
@@ -1570,7 +1573,8 @@ export async function handleRequestWithErrors(request: IncomingMessage, response
 export async function createTelegramHttpServer(_options: ServerStartupOptions = {}) {
   await initializeTelegramApp();
   return createServer((request, response) => {
-    void handleRequestWithErrors(request, response);
+    // Per-request audit scope; requireUser() fills in the user once verified.
+    void runWithAuditScope(() => handleRequestWithErrors(request, response));
   });
 }
 

@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { encryptSecret, hasEncryptionKey } from "./crypto.js";
 import { hashPassword, verifyPassword } from "./password.js";
+import { withAudit } from "../../../../../lib/audit-context.js";
 
 // Single data backend: Supabase (Postgres). Every query in the app goes through
 // the `sql` tagged-template client exported here (postgres.js). There is no
@@ -133,10 +134,12 @@ export async function migrateWhatsAppSchema() {
 }
 
 // Acquire the Supabase client, guaranteeing migrations have run. Use this in
-// every data-access function.
+// every data-access function. Writes made through it during a signed-in
+// request record that user in the audit columns (lib/audit-context.js);
+// schema setup above uses the raw client so it never waits on that lookup.
 export async function getSql() {
   await ensureReady();
-  return client();
+  return (globalForDb.__tinitiateAuditedSql ||= withAudit(client()));
 }
 
 async function bootstrapAdmin(sql) {
@@ -516,6 +519,13 @@ async function migrate(sql) {
     // Meta's call id is unique per workspace rather than globally.
     `ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_call_id_key`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_calls_business_call ON calls(business_id, call_id)`,
+    // Audit columns: once the platform migration that defines them has run,
+    // cover any WhatsApp table created after it.
+    `DO $$ BEGIN
+       IF to_regprocedure('agentic_that.enable_audit_everywhere()') IS NOT NULL THEN
+         PERFORM agentic_that.enable_audit_everywhere();
+       END IF;
+     END $$`,
   ];
   for (const ddl of statements) await sql.unsafe(ddl);
 }

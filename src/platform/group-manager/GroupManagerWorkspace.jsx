@@ -37,7 +37,7 @@ function differs(reported, saved) {
   return false;
 }
 
-export default function GroupManagerWorkspace({ workspaceName = "" }) {
+export default function GroupManagerWorkspace({ workspaceName = "", superAdmins = [] }) {
   const [data, setData] = useState(null); // { contacts, groups } from AgenticThat
   const [loadError, setLoadError] = useState("");
   const [companionStatus, setCompanionStatus] = useState({ checking: true, running: false, supported: false });
@@ -278,11 +278,11 @@ export default function GroupManagerWorkspace({ workspaceName = "" }) {
                   onCreated={async (group) => { await refresh(); setCreating(false); setSelectedId(group.id); }}
                 />
               ) : selected ? (
-                <GroupDetail key={selected.id} group={selected} contacts={contacts} actions={actions} onChanged={refresh} onDeleted={() => { setSelectedId(""); void refresh(); }} />
+                <GroupDetail key={selected.id} group={selected} contacts={contacts} actions={actions} onChanged={refresh} onDeleted={() => { setSelectedId(""); void refresh(); }} superAdmins={superAdmins} />
               ) : null}
             </div>
 
-            <ContactMaster contacts={contacts} workspaceName={workspaceName} onChanged={loadData} />
+            <ContactMaster contacts={contacts} workspaceName={workspaceName} onChanged={loadData} superAdmins={superAdmins} />
           </div>
         </>
       )}

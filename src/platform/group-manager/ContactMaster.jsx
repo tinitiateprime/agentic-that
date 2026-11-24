@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Loader2, Pencil, Plus, Search, Trash2, UserRound, X } from "lucide-react";
 import AppLogo from "./AppLogo";
+import AuditStamp from "../AuditStamp";
 import { website } from "./companion-groups";
 import styles from "./group-manager.module.css";
 
@@ -83,7 +84,7 @@ export function ContactApps({ contact, size = 15 }) {
 
 // Used beside the groups (compact) and as the full Contacts page (standalone),
 // where it also shows which groups each person is in.
-export default function ContactMaster({ contacts, workspaceName, onChanged, disabled, standalone = false, groups = [] }) {
+export default function ContactMaster({ contacts, workspaceName, onChanged, disabled, standalone = false, groups = [], superAdmins = [] }) {
   const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -148,6 +149,7 @@ export default function ContactMaster({ contacts, workspaceName, onChanged, disa
                 const inGroups = groups.filter((group) => (group.members || []).some((member) => member.contactId === contact.id)).map((group) => group.name);
                 return <span className={styles.contactGroups}>{inGroups.length ? `In ${inGroups.join(", ")}` : "Not in any group yet"}</span>;
               })()}
+              <AuditStamp audit={contact.audit} superAdmins={superAdmins} />
             </div>
             <ContactApps contact={contact} />
             <div className={styles.rowActions}>

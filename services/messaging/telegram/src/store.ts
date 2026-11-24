@@ -4,6 +4,7 @@ import { access, chmod, mkdir, open, readFile, rename, stat, unlink, writeFile, 
 import path from "node:path";
 import postgres from "postgres";
 import { SecretCipher } from "./crypto.ts";
+import { withAudit } from "../../../../lib/audit-context.js";
 
 export type AppUser = {
   id: string;
@@ -315,6 +316,7 @@ const shouldUsePostgres = () => (
 
 const globalForTelegram = globalThis as typeof globalThis & {
   __agenticThatTelegramSql?: ReturnType<typeof postgres>;
+  __agenticThatTelegramAuditedSql?: ReturnType<typeof postgres>;
 };
 
 function telegramSql() {
@@ -329,7 +331,10 @@ function telegramSql() {
     connect_timeout: 15,
     onnotice: () => undefined,
   });
-  return globalForTelegram.__agenticThatTelegramSql;
+  // Writes made for an authenticated request record that user in the audit
+  // columns (see runWithAuditScope in server.ts).
+  globalForTelegram.__agenticThatTelegramAuditedSql ??= withAudit(globalForTelegram.__agenticThatTelegramSql) as ReturnType<typeof postgres>;
+  return globalForTelegram.__agenticThatTelegramAuditedSql;
 }
 
 export function getTelegramDatabaseClient() {

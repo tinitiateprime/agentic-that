@@ -1,6 +1,7 @@
 import ProductShell from "@platform/ProductShell";
 import ContactsWorkspace from "@platform/group-manager/ContactsWorkspace";
 import { requireOpenServicePrincipal } from "@platform/server/access-control";
+import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export const metadata = {
   title: "Contacts — AgenticThat",
@@ -15,7 +16,7 @@ export default async function ContactsPage() {
   return (
     <ProductShell user={principal} active="contacts" companionBridge={false}>
       <main>
-        <ContactsWorkspace workspaceName={principal.businessName || ""} />
+        <ContactsWorkspace workspaceName={principal.businessName || ""} superAdmins={await listSuperAdminUsernames()} />
       </main>
     </ProductShell>
   );

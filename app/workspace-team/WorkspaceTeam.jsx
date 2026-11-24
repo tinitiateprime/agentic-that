@@ -2,6 +2,7 @@
 
 import { ArrowRight, Check, ChevronDown, CircleHelp, Copy, Link2, ListChecks, Mail, ShieldCheck, UserRoundPlus, UsersRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import AuditStamp from "@platform/AuditStamp";
 
 async function request(path, init) {
   const response = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(init?.headers || {}) } });
@@ -41,7 +42,7 @@ function RoleChecks({ roles, selected, onChange, disabled = false }) {
   );
 }
 
-function MemberCard({ member, roles, currentUserId, onSaved }) {
+function MemberCard({ member, roles, currentUserId, onSaved, superAdmins = [] }) {
   const [roleIds, setRoleIds] = useState(member.roleIds);
   const [status, setStatus] = useState(member.status);
   const [open, setOpen] = useState(false);
@@ -70,12 +71,12 @@ function MemberCard({ member, roles, currentUserId, onSaved }) {
         <span><strong>{member.name}</strong><small>{member.email} · {member.roleIds.length} {member.roleIds.length === 1 ? "role" : "roles"}</small></span>
         <span className={`team-status ${member.status}`}>{member.status}</span><ChevronDown size={16} />
       </button>
-      {open && <div className="team-card-editor"><RoleChecks roles={roles} selected={roleIds} onChange={setRoleIds} /><label className="team-status-control"><span>Member status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="active">Active</option><option value="suspended">Suspended</option></select></label>{error && <p className="team-error">{error}</p>}<div className="team-actions"><button disabled={busy || roleIds.length === 0} onClick={save}>{busy ? "Saving…" : "Save roles"}</button>{member.id !== currentUserId && <button className="danger" disabled={busy} onClick={remove}>Remove member</button>}</div></div>}
+      {open && <div className="team-card-editor"><AuditStamp audit={member.audit} variant="detail" superAdmins={superAdmins} style={{ marginBottom: 12 }} /><RoleChecks roles={roles} selected={roleIds} onChange={setRoleIds} /><label className="team-status-control"><span>Member status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="active">Active</option><option value="suspended">Suspended</option></select></label>{error && <p className="team-error">{error}</p>}<div className="team-actions"><button disabled={busy || roleIds.length === 0} onClick={save}>{busy ? "Saving…" : "Save roles"}</button>{member.id !== currentUserId && <button className="danger" disabled={busy} onClick={remove}>Remove member</button>}</div></div>}
     </article>
   );
 }
 
-export default function WorkspaceTeam({ initialData, currentUserId }) {
+export default function WorkspaceTeam({ initialData, currentUserId, superAdmins = [] }) {
   const [data, setData] = useState(initialData);
   const [email, setEmail] = useState("");
   const [roleIds, setRoleIds] = useState([]);
@@ -145,7 +146,7 @@ export default function WorkspaceTeam({ initialData, currentUserId }) {
           </section>
           <section className="team-panel team-invitations-panel"><div className="team-panel-heading compact"><span><Mail size={17} /></span><div><h2>Pending invitations</h2><p>{data.invitations.length} total</p></div></div>{data.invitations.length ? data.invitations.map((invitation) => <article className="invite-row" key={invitation.id}><span><strong>{invitation.email}</strong><small>{invitation.status} · expires {new Date(invitation.expiresAt).toLocaleString()}</small></span>{invitation.status === "pending" && <span className="team-actions"><button onClick={() => invitationAction(invitation.id, "resend")}>Resend</button><button className="danger" onClick={() => invitationAction(invitation.id, "cancel")}>Cancel</button></span>}</article>) : <div className="team-empty"><Mail size={19} /><span><strong>No pending invitations</strong><small>New invitation links will appear here.</small></span></div>}</section>
         </div>
-        <section className="team-members-section"><div className="team-section-heading"><span><UsersRound size={18} /></span><div><h2>Workspace members</h2><p>{data.members.length} {data.members.length === 1 ? "person" : "people"} in this workspace</p></div></div><div className="team-members">{data.members.map((member) => <MemberCard member={member} roles={data.roles} currentUserId={currentUserId} onSaved={refresh} key={member.id} />)}</div></section>
+        <section className="team-members-section"><div className="team-section-heading"><span><UsersRound size={18} /></span><div><h2>Workspace members</h2><p>{data.members.length} {data.members.length === 1 ? "person" : "people"} in this workspace</p></div></div><div className="team-members">{data.members.map((member) => <MemberCard member={member} roles={data.roles} currentUserId={currentUserId} onSaved={refresh} superAdmins={superAdmins} key={member.id} />)}</div></section>
       </section>
     </main>
   );

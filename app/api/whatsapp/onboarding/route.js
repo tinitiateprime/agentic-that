@@ -4,6 +4,7 @@ import { getAccountForBusiness, listTenantNumbers, upsertAccount, syncNumbers } 
 import { metaListPhoneNumbers, watiGetContacts } from "@whatsapp/lib/wa/provider";
 import { hasEncryptionKey } from "@whatsapp/lib/crypto";
 import { backfillSharedWabaHistorySafely } from "@whatsapp/lib/shared-waba";
+import { auditFromRow } from "../../../../lib/audit-format.js";
 
 // Self-serve onboarding for a new workspace.
 //   GET                      -> current setup state (drives the wizard)
@@ -39,6 +40,7 @@ export async function GET() {
           service_url: account.service_url,
           onboarding_source: account.onboarding_source,
           has_token: Boolean(account.access_token),
+          audit: auditFromRow(account),
         }
       : null,
     numbers,

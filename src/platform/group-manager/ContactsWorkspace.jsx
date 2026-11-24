@@ -9,7 +9,7 @@ import styles from "./group-manager.module.css";
 
 // The Contacts page: the same Contact Master as in Groups, on its own. Saved
 // on AgenticThat, so it works without the Companion running.
-export default function ContactsWorkspace({ workspaceName = "" }) {
+export default function ContactsWorkspace({ workspaceName = "", superAdmins = [] }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -39,7 +39,7 @@ export default function ContactsWorkspace({ workspaceName = "" }) {
       {!data && !error && <p className={styles.muted}><Loader2 size={16} className={styles.spin} /> Loading your contacts…</p>}
       {data && (
         <div className={styles.contactsPage}>
-          <ContactMaster contacts={data.contacts} groups={data.groups} workspaceName={workspaceName} onChanged={load} standalone />
+          <ContactMaster contacts={data.contacts} groups={data.groups} workspaceName={workspaceName} onChanged={load} standalone superAdmins={superAdmins} />
         </div>
       )}
     </div>

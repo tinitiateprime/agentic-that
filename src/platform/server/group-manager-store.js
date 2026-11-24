@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getPlatformSql } from "./auth-store.js";
+import { auditFromRow } from "../../../lib/audit-format.js";
 import {
   GROUP_APPS,
   MAX_MESSAGES_KEPT,
@@ -47,6 +48,7 @@ function contactFromRow(row) {
     note: row.note || "",
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+    audit: auditFromRow(row),
   };
 }
 
@@ -58,9 +60,10 @@ function groupFromRows(row, members, messages) {
     discordGuildId: row.discord_guild_id || undefined,
     apps: row.apps || {},
     members: members.map((member) => ({ contactId: member.contact_id, addedAt: iso(member.added_at), apps: member.apps || {} })),
-    messages: messages.map((message) => ({ id: message.id, text: message.text, sentAt: iso(message.sent_at), results: message.results || {} })),
+    messages: messages.map((message) => ({ id: message.id, text: message.text, sentAt: iso(message.sent_at), results: message.results || {}, audit: auditFromRow(message) })),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+    audit: auditFromRow(row),
   };
 }
 

@@ -5,6 +5,8 @@ import { listGroupRules } from "@whatsapp/lib/group-rules";
 import { timeUntil } from "@whatsapp/lib/format";
 import CreateGroup from "./CreateGroup";
 import GroupRules from "./GroupRules";
+import AuditStamp from "@platform/AuditStamp";
+import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export const metadata = { title: "Groups — Tinitiate WA" };
 
@@ -16,6 +18,7 @@ export default async function GroupsPage() {
   const tempGroups = await listTempGroups(user.business_id);
   // Keyword rules that fill groups from incoming messages on their own.
   const rules = await listGroupRules(user.business_id);
+  const superAdmins = await listSuperAdminUsernames();
 
   return (
     <div className="space-y-5">
@@ -41,11 +44,12 @@ export default async function GroupsPage() {
                 href={`/groups/${g.id}`}
                 className="flex items-center justify-between rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200 hover:ring-[var(--brand)]"
               >
-                <div>
+                <div className="min-w-0">
                   <p className="font-medium">{g.name}</p>
                   <p className="text-xs text-slate-400">
                     {g.member_count} member{g.member_count !== 1 ? "s" : ""}
                   </p>
+                  <AuditStamp record={g} superAdmins={superAdmins} style={{ marginTop: 4 }} />
                 </div>
                 <span className="text-slate-400">→</span>
               </Link>

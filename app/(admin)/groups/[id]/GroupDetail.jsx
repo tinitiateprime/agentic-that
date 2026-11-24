@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SenderSelect from "@whatsapp/components/SenderSelect";
 import { timeUntil } from "@whatsapp/lib/format";
+import AuditStamp from "@platform/AuditStamp";
 
 export default function GroupDetail({
   group,
@@ -13,6 +14,7 @@ export default function GroupDetail({
   templates,
   phoneNumbers = [],
   newMemberCount = 0,
+  superAdmins = [],
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -178,6 +180,7 @@ export default function GroupDetail({
               Auto-deletes {timeUntil(group.expires_at)} — members stay in your CRM.
             </p>
           )}
+          <AuditStamp record={group} variant="detail" superAdmins={superAdmins} style={{ marginTop: 8 }} />
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           {newMemberCount > 0 && (

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { initializeDatabaseDocument } from "../../../lib/database-document-store.js";
+import { auditFromRow } from "../../../lib/audit-format.js";
 import { OPERATIONAL_ROLE_CATALOG, OPERATIONAL_ROLE_IDS } from "../access-catalog.js";
 import {
   createPlatformSessionForUser,
@@ -208,7 +209,9 @@ export async function workspaceTeamSnapshot(principal) {
   const [members, assignments, roles, invitationRow] = await Promise.all([
     sql`
       SELECT u.id, u.name, u.email, u.status, membership.status AS membership_status,
-             membership.created_at, membership.approved_at
+             membership.created_at, membership.approved_at,
+             membership.created_by_username, membership.created_datetime,
+             membership.updated_by_username, membership.updated_datetime
         FROM workspace_memberships membership
         JOIN platform_users u ON u.id = membership.user_id
        WHERE membership.workspace_id = ${principal.workspaceId}
@@ -244,6 +247,7 @@ export async function workspaceTeamSnapshot(principal) {
       status: member.membership_status === "active" && member.status === "active" ? "active" : "suspended",
       roleIds: assignments.filter((row) => row.user_id === member.id).map((row) => String(row.role_id)),
       joinedAt: member.approved_at || member.created_at,
+      audit: auditFromRow(member),
     })),
     roles: roles.map((role) => ({ id: String(role.id), name: role.name, description: role.description })),
     invitations: document.invitations

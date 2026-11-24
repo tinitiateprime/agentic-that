@@ -61,6 +61,11 @@ try {
     process.stdout.write(`Applied ${name}.\n`);
   }
 
+  // Audit columns (202611250001_audit_columns.sql): cover any table created
+  // since, by a later migration or by a service's own schema setup.
+  const [{ enabled }] = await sql`SELECT agentic_that.enable_audit_everywhere() AS enabled`;
+  if (enabled > 0) process.stdout.write(`Added audit columns to ${enabled} new table(s).\n`);
+
   const [status] = await sql`
     SELECT
       to_regclass('public.platform_users') IS NOT NULL AS platform_users_ready,

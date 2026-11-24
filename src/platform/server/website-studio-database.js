@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { withAudit } from "../../../lib/audit-context.js";
 
 const globalForWebsiteStudio = globalThis;
 
@@ -34,5 +35,6 @@ export async function getWebsiteStudioSql() {
     onnotice: () => {},
     types: { timestamp: timestampAsIso },
   });
-  return globalForWebsiteStudio.__websiteStudioSql;
+  // Writes during a signed-in request record the user in the audit columns.
+  return (globalForWebsiteStudio.__websiteStudioAuditedSql ||= withAudit(globalForWebsiteStudio.__websiteStudioSql));
 }

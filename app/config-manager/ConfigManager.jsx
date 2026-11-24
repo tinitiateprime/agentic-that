@@ -36,6 +36,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getClientServiceToken } from "@platform/client-service-token";
 import MetaEmbeddedSignupButton from "@whatsapp/components/MetaEmbeddedSignupButton";
+import AuditStamp from "@platform/AuditStamp";
 import ProductShell from "@platform/ProductShell";
 import { useCompanionStatus } from "@platform/use-companion-status";
 import { rememberPublishingAccounts } from "@platform/use-product-status";
@@ -1057,6 +1058,7 @@ function WhatsAppManager({ status, state, session, dashboardUrl, metaAppId, meta
           <small>{connected
             ? (savedProvider === "wati" ? `WATI · ${account.service_url || "endpoint saved"}` : `Meta Cloud API · WABA ${account.waba_id}`)
             : `Signed in as ${signedInAs}`}</small>
+          {connected && <AuditStamp audit={account?.audit} style={{ marginTop: 2 }} />}
         </span>
       </div>
       <div className="config-integration-actions">

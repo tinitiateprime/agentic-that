@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { timeAgo } from "@whatsapp/lib/format";
+import AuditStamp from "@platform/AuditStamp";
 
 // Full contact directory, searchable — the "CRM" view: every contact in one
 // place regardless of recent activity, unlike the windowed Eagle Eye feed.
@@ -45,6 +46,7 @@ export default function AllContactsCRM({ contacts }) {
                       <ProviderBadge contact={c} />
                     </div>
                     <p className="text-xs text-slate-400">{c.phone}</p>
+                    <AuditStamp record={c} style={{ marginTop: 2 }} />
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-0.5">
                     <span className="text-xs text-slate-400">

@@ -5,6 +5,8 @@ import { getBusiness, getContact, listMessages, listTemplates } from "@whatsapp/
 import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import Chat from "./Chat";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
+import AuditStamp from "@platform/AuditStamp";
+import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export async function generateMetadata({ params }) {
   const { id } = await params;
@@ -25,6 +27,7 @@ export default async function ContactChatPage({ params }) {
   const provider = creds.provider;
   const phoneNumbers =
     provider === "meta" ? await metaListPhoneNumbers(creds).catch(() => []) : [];
+  const superAdmins = await listSuperAdminUsernames();
 
   return (
     <div className="space-y-3">
@@ -37,6 +40,7 @@ export default async function ContactChatPage({ params }) {
           {contact.phone}
           {!contact.opted_in && " · ⚠️ not opted in"}
         </p>
+        <AuditStamp record={contact} variant="detail" superAdmins={superAdmins} style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #f1f5f9" }} />
       </div>
 
       <Chat

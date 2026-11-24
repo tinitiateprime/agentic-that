@@ -1,6 +1,7 @@
 import ProductShell from "@platform/ProductShell";
 import GroupManagerWorkspace from "@platform/group-manager/GroupManagerWorkspace";
 import { requireOpenServicePrincipal } from "@platform/server/access-control";
+import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export const metadata = {
   title: "Group Manager — AgenticThat",
@@ -29,7 +30,7 @@ export default async function GroupManagerPage() {
   return (
     <ProductShell user={user} active="groups" companionBridge={false}>
       <main>
-        <GroupManagerWorkspace workspaceName={principal.businessName || ""} />
+        <GroupManagerWorkspace workspaceName={principal.businessName || ""} superAdmins={await listSuperAdminUsernames()} />
       </main>
     </ProductShell>
   );
