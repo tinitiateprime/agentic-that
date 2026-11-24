@@ -1,10 +1,11 @@
-import { ArrowLeft, CalendarDays, FolderOpen, ListFilter, Settings2, Sparkles, Upload } from 'lucide-react';
+import { ArrowLeft, CalendarDays, ListFilter, Settings2, Sparkles, Upload } from 'lucide-react';
 import styles from './publishing-menu.module.css';
 
 // One menu for the whole Publishing service: writing a post with AI and the
-// posting workboard (create, channels, review, schedule). The workboard lives
+// posting workboard (create, review, schedule). Social accounts and their
+// health are managed on Accounts. The workboard lives
 // on /publishing as one long page; from elsewhere its items open it at that part.
-export type PublishingView = 'ai' | 'overview' | 'channels' | 'operations' | 'schedule';
+export type PublishingView = 'ai' | 'overview' | 'operations' | 'schedule';
 
 type Props = {
   active: PublishingView;
@@ -32,7 +33,6 @@ export default function PublishingMenu({ active, onNavigate, reviewCount = 0, sc
         <a className={item('ai')} href='/publishing/ai' aria-current={active === 'ai' ? 'page' : undefined}><Sparkles size={17} />Create with AI</a>
         {showWorkboard && <>
           <button type='button' className={item('overview')} onClick={() => go('overview')}><Upload size={17} />Create</button>
-          <button type='button' className={item('channels')} onClick={() => go('channels')}><FolderOpen size={17} />Channels</button>
           <button type='button' className={item('operations')} onClick={() => go('operations')}><ListFilter size={17} />Review {reviewCount > 0 && <small>{reviewCount}</small>}</button>
           {schedulingEnabled && <button type='button' className={item('schedule')} onClick={() => go('schedule')}><CalendarDays size={17} />Schedule</button>}
         </>}

@@ -59,12 +59,6 @@ function accountPublishingEngine(account: PlatformAccount) {
 }
 
 
-const accountHealthLabels = {
-  healthy: 'Green',
-  warning: 'Warning',
-  paused: 'Paused',
-  restricted: 'Restricted',
-} as const;
 
 const platformColor: Record<Platform, string> = {
   youtube: '#FF0000',
@@ -1807,7 +1801,6 @@ function Workboard({
       return segment;
     });
   }, [broadcastMix, deliveredTotal]);
-  const trackingSummary = `${metrics.total} tracked ${metrics.total === 1 ? 'post' : 'posts'} across ${accounts.length} publishing ${accounts.length === 1 ? 'account' : 'accounts'}`;
   const canEditPosts = permissions.canRunAutomation || permissions.canSchedulePosts;
   const awaitingSubmissions = submissions.filter(submission => submission.status === 'awaiting_schedule');
   const enabledAccountsCount = accounts.filter(account => account.enabled).length;
@@ -1819,7 +1812,7 @@ function Workboard({
     { id: 'queue', label: 'Queue', value: metrics.queued, detail: `${metrics.scheduled} scheduled`, icon: <TimerReset size={18} />, tone: 'queue' },
     { id: 'attention', label: 'Needs action', value: attentionCount, detail: `${accountAttentionCount} account alerts`, icon: <CircleAlert size={18} />, tone: 'attention' },
     { id: 'delivered', label: 'Delivered', value: metrics.posted, detail: `${metrics.failed} failed`, icon: <CircleCheckBig size={18} />, tone: 'success' },
-    { id: 'channels', label: 'Channels', value: healthyChannelCount, detail: `${enabledAccountsCount} enabled accounts`, icon: <UsersRound size={18} />, tone: 'channels' },
+    { id: 'channels', label: 'Accounts', value: healthyChannelCount, detail: `${enabledAccountsCount} enabled accounts`, icon: <UsersRound size={18} />, tone: 'channels' },
   ];
 
   const shiftCalendarMonth = (amount: number) => {
@@ -1836,7 +1829,7 @@ function Workboard({
   // Arriving from another Publishing page (e.g. /publishing#schedule): open that part.
   useEffect(() => {
     const target = window.location.hash.replace('#', '');
-    if (!['overview', 'channels', 'operations', 'schedule'].includes(target)) return;
+    if (!['overview', 'operations', 'schedule'].includes(target)) return;
     setActiveView(target);
     const timer = window.setTimeout(() => document.getElementById(target)?.scrollIntoView({ block: 'start' }), 150);
     return () => window.clearTimeout(timer);
@@ -1852,7 +1845,7 @@ function Workboard({
       />
       <section className='workboard-shell'>
       <header className='workboard-topbar'>
-        <h1 className='workboard-page-title'>{({ overview: 'Create a post', channels: 'Channels', operations: 'Review', schedule: 'Schedule' } as Record<string, string>)[activeView] ?? 'Publishing'}</h1>
+        <h1 className='workboard-page-title'>{({ overview: 'Create a post', operations: 'Review', schedule: 'Schedule' } as Record<string, string>)[activeView] ?? 'Publishing'}</h1>
         <div className='workboard-actions'>
           <a className='workboard-global-link' href='/config-manager?service=publishing'><Settings2 size={14} />Connections</a>
           <span className='workboard-status' title={connectionMode === 'central' ? 'Shared workspace queue; publishing runs through the paired Companion' : connectionMode === 'desktop' ? 'Running inside the AgenticThat Companion app' : connectionMode === 'extension' ? 'Connected through the AgenticThat Chrome extension' : 'Connected directly to the local companion'}><CircleDashed size={14} className={loading ? 'spin' : ''} />{connectionMode === 'central' ? 'Workspace queue' : connectionMode === 'desktop' ? 'Companion workspace' : connectionMode === 'extension' ? 'Extension ready' : connectionMode === 'direct' ? 'Companion ready' : 'Checking'}</span>
@@ -1997,39 +1990,6 @@ function Workboard({
         </div>
       </section>}
 
-      <section className='platform-metrics' id='channels' aria-labelledby='post-metrics-heading'>
-        <header className='workboard-section-head'><div><p className='section-kicker'>Channel control</p><h2 id='post-metrics-heading'>Publishing channels</h2></div><span>{trackingSummary}</span></header>
-        <div className='platform-metric-grid'>
-          {platforms.map(platform => {
-            const platformPosts = uploads.filter(upload => upload.platform === platform);
-            const platformAccounts = accounts.filter(account => account.platform === platform);
-            return (
-              <article key={platform} className={`platform-metric-card platform-${platform}`}>
-                <div className='platform-metric-card-top'><CustomIcon platform={platform} size={34} /><span>{platformLabels[platform]}</span><ChevronRight size={16} /></div>
-                <div className='platform-metric-number'><strong>{platformPosts.length}</strong><span>posts</span></div>
-                <div className='platform-account-summary'><UsersRound size={13} /><span>{platformAccounts.length} {platformAccounts.length === 1 ? 'account' : 'accounts'} · {platformPosts.filter(post => post.status === 'queued').length} queued</span></div>
-                <div className='platform-card-actions'>
-                  {permissions.canSchedulePosts && <button type='button' onClick={() => setSchedulePlatform(platform)}><CalendarClock size={14} />Schedule</button>}
-                  {permissions.canManageAccounts && <button type='button' onClick={() => onOpenAccounts(platform)}><Settings2 size={14} />Config Manager</button>}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        <div className='account-health-dashboard' aria-label='Publishing account health'>
-          <div className='account-health-heading'><ShieldCheck size={17} /><span><strong>Account health</strong><small>Live safety state for every connected account</small></span></div>
-          <div className='account-health-list'>{accounts.length === 0 ? <span className='account-health-empty'>No publishing accounts connected.</span> : accounts.map(account => {
-            const health = accountHealthStatus(account);
-            return <article key={account.id} className={`account-health-row ${health}`}>
-              <CustomIcon platform={account.platform} size={18} />
-              <span><strong>{account.displayName}</strong><small>{account.handle} · {accountConnectionLabel(account)} · {publishingEngineLabels[accountPublishingEngine(account)]} · {account.safetyMode === 'protected' ? 'Protected pace' : 'Standard pace'}{account.twoFactorEnabled ? ' · 2FA' : ' · 2FA recommended'}</small></span>
-              <em>{accountHealthLabels[health]}</em>
-              {account.safetyReason && <small title={account.safetyReason}>{account.safetyReason}</small>}
-            </article>;
-          })}</div>
-        </div>
-      </section>
-
       {permissions.canManageUsers && (
         <section className='workboard-user-manager' aria-labelledby='user-manager-heading'>
           <header className='workboard-section-head'>
@@ -2121,6 +2081,17 @@ function Workboard({
       </section>
 
       {PUBLISHING_SCHEDULING_ENABLED && <section className='workboard-calendar-section' id='schedule'>
+        {permissions.canSchedulePosts && accounts.length > 0 && (
+          <div className='schedule-by-app' aria-label='Schedule by app'>
+            <span>Schedule by app</span>
+            {platforms.filter(platform => accounts.some(account => account.platform === platform)).map(platform => (
+              <button type='button' key={platform} onClick={() => setSchedulePlatform(platform)}>
+                <CustomIcon platform={platform} size={16} />{platformLabels[platform]}
+                <small>{uploads.filter(upload => upload.platform === platform && upload.status === 'queued').length} queued</small>
+              </button>
+            ))}
+          </div>
+        )}
         <article className='calendar-board'>
           <header className='workboard-section-head'><div><p className='section-kicker'>Schedule map</p><h2>{monthLabel}</h2></div><div className='calendar-navigation'><button className='workboard-tool' title='Previous month' onClick={() => shiftCalendarMonth(-1)}><ChevronLeft size={18} /></button><button className='workboard-tool' title='Next month' onClick={() => shiftCalendarMonth(1)}><ChevronRight size={18} /></button></div></header>
           <div className='workboard-calendar'>

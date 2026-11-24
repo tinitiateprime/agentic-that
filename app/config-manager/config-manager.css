@@ -1779,3 +1779,12 @@
     overflow-x: auto;
   }
 }
+
+/* Publishing account health (moved here from Publishing's Channels view) */
+.config-account-health { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: #5b6574; font-size: 12px; }
+.config-health-chip { padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-style: normal; font-weight: 750; }
+.config-health-chip.healthy { color: #0f7a4f; background: #e6f6ee; }
+.config-health-chip.warning { color: #8a5a00; background: #fff5e0; }
+.config-health-chip.restricted { color: #b42318; background: #fdecea; }
+.config-health-chip.paused { color: #475569; background: #eef0f4; }
+.config-health-reason { flex-basis: 100%; overflow: hidden; color: #8a5a00; text-overflow: ellipsis; white-space: nowrap; }

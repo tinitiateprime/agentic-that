@@ -5414,3 +5414,10 @@
   .publish-queue-runner .publishing-ai-shortcut { grid-template-columns: 38px minmax(0, 1fr); }
   .publish-queue-runner .publishing-ai-shortcut em { grid-column: 2; justify-self: start; }
 }
+
+/* Publishing → Schedule: open one app's schedule (moved from the old Channels cards) */
+.publish-queue-runner .schedule-by-app { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.publish-queue-runner .schedule-by-app > span { margin-right: 4px; color: #5b6574; font-size: 13px; font-weight: 700; }
+.publish-queue-runner .schedule-by-app button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid #E3E8EB; border-radius: 999px; background: #fff; color: #111827; cursor: pointer; font: inherit; font-size: 13px; font-weight: 650; }
+.publish-queue-runner .schedule-by-app button:hover { border-color: #d99a0b; }
+.publish-queue-runner .schedule-by-app small { color: #7c8796; font-size: 12px; font-weight: 600; }

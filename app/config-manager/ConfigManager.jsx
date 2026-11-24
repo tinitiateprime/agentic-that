@@ -61,6 +61,9 @@ const platformLogos = {
   linkedin: "/linkedin-logo.png",
   reddit: "/reddit-logo.svg"
 };
+// Each publishing account's live safety state, as shown on Accounts.
+const ACCOUNT_HEALTH_LABELS = { healthy: "Green", warning: "Warning", paused: "Paused", restricted: "Restricted" };
+
 const publishingEngineLabels = {
   companion: "Companion",
   external_browser: "External browser",
@@ -1801,7 +1804,7 @@ function PublishingManager({
       </div>
 
       <div className="config-publishing-toolbar" id="publishing-account-connections">
-        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in composers, queues, and channel views.</p></div>
+        <div><h3>{platformLabels[selectedPlatform]} accounts</h3><p>Accounts added here appear immediately in Publishing. Each one shows its health: Green is ready, Warning means posting is slowed to keep the account safe, Restricted needs your attention.</p></div>
         {!editing && <button className="config-primary" type="button" onClick={() => setEditing({ platform: selectedPlatform, enabled: true })}><Plus size={16} />Add account</button>}
       </div>
 
@@ -1827,7 +1830,21 @@ function PublishingManager({
           {platformAccounts.map(account => (
             <article className="config-account-row publishing" key={account.id}>
               <span className="config-account-logo"><img src={platformLogos[account.platform]} alt="" /></span>
-              <span className="config-account-main"><strong>{account.displayName}</strong><small>{account.handle}</small></span>
+              <span className="config-account-main">
+                <strong>{account.displayName}</strong>
+                <small>{account.handle}</small>
+                {(() => {
+                  // Account health (moved here from Publishing's Channels view).
+                  const health = !account.enabled ? (account.safetyStatus === "restricted" ? "restricted" : "paused") : account.safetyStatus || "healthy";
+                  return (
+                    <span className="config-account-health">
+                      <em className={"config-health-chip " + health}>{ACCOUNT_HEALTH_LABELS[health] || "Green"}</em>
+                      <span>{account.safetyMode === "protected" ? "Protected pace" : "Standard pace"} · {account.twoFactorEnabled ? "2FA on" : "2FA recommended"}</span>
+                      {account.safetyReason && <span className="config-health-reason" title={account.safetyReason}>{account.safetyReason}</span>}
+                    </span>
+                  );
+                })()}
+              </span>
               <span className={"config-account-state " + (!account.enabled ? "paused" : account.credentialConfigured ? "" : "attention")}><i />{!account.enabled ? "Paused" : account.credentialConfigured ? account.executionEngine === "api" || account.companionStatus === "online" ? "Ready" : "Waiting for Companion" : "Reconnect required"}</span>
               <span className="config-account-meta config-account-engine">{account.executionEngine === "api" ? <Plug size={14} /> : (account.executionEngine || "companion") === "external_browser" ? <ExternalLink size={14} /> : <MonitorCheck size={14} />}<span>{publishingEngineLabels[account.executionEngine || "companion"]}</span></span>
               <div className="config-account-actions">
