@@ -539,6 +539,9 @@ async function focusBox(box: Locator) {
   }
 }
 
+/** With no send button to be found, Enter is tried after this long instead of waiting for uploads. */
+const MISSING_SEND_BUTTON_MS = 10_000;
+
 /** An app's own plan limit (uploads or messages): not something a retry now can fix. */
 export class AiLimitError extends Error {
   readonly limit = true;
@@ -558,12 +561,32 @@ async function uploadLimitReached(page: Page) {
   return uploadLimitNotice(await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
 }
 
-/** Picture thumbnails on the page: a new one proves an attachment worked. */
-function thumbnails(page: Page): Promise<number> {
-  return page.evaluate(`[...document.querySelectorAll("img")].filter((image) => {
-    const box = image.getBoundingClientRect();
-    return box.width >= 24 && box.width <= 600 && box.height >= 24 && /^(blob:|data:image|https?:)/.test(image.currentSrc || image.src) && !/avatar|profile|logo|icon|emoji/i.test(image.className + " " + image.alt + " " + image.src);
-  }).length`).then(Number).catch(() => 0);
+// Signs that a picture is attached, counted in the page. Apps show the
+// attachment differently: an <img> thumbnail, a tile painted with the picture as
+// its background (ChatGPT, 2026-11), or a "Remove file" button beside it.
+const ATTACHMENT_SIGNS_SCRIPT = `(() => {
+  const sized = (element) => { const box = element.getBoundingClientRect(); return box.width >= 24 && box.width <= 600 && box.height >= 24; };
+  const picture = /^(blob:|data:image|https?:)/;
+  const decoration = /avatar|profile|logo|icon|emoji/i;
+  const images = [...document.querySelectorAll("img")].filter((image) => sized(image) && picture.test(image.currentSrc || image.src) && !decoration.test(image.className + " " + image.alt + " " + image.src)).length;
+  const tiles = [...document.querySelectorAll("[style*='background-image']")].filter((element) => {
+    const match = /url\\(["']?([^"')]+)/.exec(element.style.backgroundImage || "");
+    return Boolean(match) && sized(element) && picture.test(match[1]) && !decoration.test(String(element.className));
+  }).length;
+  const removers = [...document.querySelectorAll("button[aria-label]")].filter((button) => /^remove( (file|image|attachment|photo|upload))?/i.test(button.getAttribute("aria-label") || "")).length;
+  return { images, tiles, removers };
+})()`;
+
+type AttachmentSigns = { images: number; tiles: number; removers: number };
+
+async function attachmentSigns(page: Page): Promise<AttachmentSigns> {
+  return page.evaluate(ATTACHMENT_SIGNS_SCRIPT).then((value) => value as AttachmentSigns).catch(() => ({ images: 0, tiles: 0, removers: 0 }));
+}
+
+/** How many attachment signs the page shows: more than before proves an attachment worked. */
+export async function thumbnails(page: Page): Promise<number> {
+  const signs = await attachmentSigns(page);
+  return Math.max(signs.images, signs.tiles, signs.removers);
 }
 
 async function attached(page: Page, before: number) {
@@ -605,7 +628,7 @@ async function attachImages(page: Page, spec: ProviderSpec, box: Locator, files:
           log(spec.id, `attached with file input ${selector} #${index}`);
           return;
         }
-        log(spec.id, `file input ${key.slice(0, 40)}: no thumbnail (now ${await thumbnails(page)})`);
+        log(spec.id, `file input ${key.slice(0, 40)}: no thumbnail (now ${JSON.stringify(await attachmentSigns(page))})`);
       } catch (error) {
         log(spec.id, `file input ${key.slice(0, 40)} failed: ${error instanceof Error ? error.message.slice(0, 120) : error}`);
       }
@@ -775,10 +798,15 @@ export async function waitForVideoUpload(page: Page, spec: ProviderSpec, attachm
 }
 
 async function sendButtonReady(page: Page, spec: ProviderSpec) {
+  return (await sendButtonState(page, spec)).button;
+}
+
+/** The send button and whether it can be pressed: missing, disabled (an upload is finishing) or ready. */
+async function sendButtonState(page: Page, spec: ProviderSpec): Promise<{ state: "missing" | "disabled" | "ready"; button: Locator | null }> {
   const button = await firstVisible(page, spec.send);
-  if (!button) return null;
+  if (!button) return { state: "missing", button: null };
   const disabled = await button.evaluate((element) => (element as HTMLButtonElement).disabled || element.getAttribute("aria-disabled") === "true", undefined, { timeout: 3000 }).catch(() => true);
-  return disabled ? null : button;
+  return disabled ? { state: "disabled", button: null } : { state: "ready", button };
 }
 
 async function lastAnswer(page: Page, spec: ProviderSpec) {
@@ -841,12 +869,26 @@ async function ask(provider: AiProviderId, prompt: string, images: string[], onE
 
     // Let the upload finish: the send button turns on when it is ready, and
     // uploads take a moment more on slow connections.
+    // A greyed-out button means an upload is still going: wait for it. No send
+    // button at all (the app changed it) is not worth waiting on: after a short
+    // moment Enter sends instead.
     const uploadDeadline = Date.now() + 120_000;
+    const waitStarted = Date.now();
     await sleep(images.length ? 2500 + images.length * 1000 : 300);
-    while (Date.now() < uploadDeadline && !(await sendButtonReady(page, spec))) {
+    let missingSince = 0;
+    let sendState = await sendButtonState(page, spec);
+    while (Date.now() < uploadDeadline && sendState.state !== "ready") {
+      if (sendState.state === "missing") {
+        missingSince ||= Date.now();
+        if (Date.now() - missingSince > MISSING_SEND_BUTTON_MS) break;
+      } else {
+        missingSince = 0;
+      }
       if (await humanCheck(page)) await readyToChat(window, spec, onEvent);
       await sleep(700);
+      sendState = await sendButtonState(page, spec);
     }
+    log(provider, `send button ${sendState.state} after ${Math.round((Date.now() - waitStarted) / 1000)}s`);
     const live = window;
     // Sends what is in the box and reads the reply until it stops changing. With
     // sections, a finished answer has the sections the prompt asks for.
