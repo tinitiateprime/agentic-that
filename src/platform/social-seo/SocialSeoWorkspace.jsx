@@ -9,8 +9,8 @@ import AiResults from "./AiResults";
 import AiStatusBar, { AiLogo } from "./AiStatusBar";
 import PostPanel, { POST_PLATFORMS } from "./PostPanel";
 import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
-import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, generateWithCompanionAis, prepareMediaForAi, showCompanionAiWindow, stageVideoForAi } from "./companion-ai";
-import { runVideoFirst } from "./video-first";
+import { companionAiStatus, connectCompanionAi, disconnectCompanionAi, showCompanionAiWindow } from "./companion-ai";
+import { askCompanionAis } from "./ai-writer";
 import styles from "./social-seo.module.css";
 
 const PLATFORMS = [
@@ -22,8 +22,6 @@ const PLATFORMS = [
   { id: "reddit", label: "Reddit", logo: "/reddit-logo.svg" },
 ];
 const AI_PLATFORMS = PLATFORMS.map((entry) => entry.id);
-// Uploading a long video to an AI app and having it watched can take a long time.
-const WHOLE_VIDEO_TIMEOUT_MS = 70 * 60 * 1000;
 const MAX_HASHTAGS = 5;
 const BRAND_KEY = "agenticthat-social-seo-brand";
 const BRAND_SOURCES = {
@@ -236,46 +234,8 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
       location: business.city.trim() || quick?.locationTag || undefined,
       businessDetails: business.details.trim() || undefined,
     };
-    const showEvent = (event) => {
-      if (!event.provider) return;
-      if (event.ok === true) update(event.provider, { state: "done", results: event.results, complete: event.complete, raw: event.raw, ms: event.ms, live: "", watchedVideo: Boolean(event.watchedVideo) });
-      else if (event.ok === false) update(event.provider, { state: event.limit ? "limit" : "failed", message: event.message });
-      else update(event.provider, { state: event.state, step: event.step, detail: event.detail || "", live: event.live || "" });
-    };
     try {
-      // The speech and pictures are prepared once, for every AI that ends up needing them.
-      const usingSpeech = new Set();
-      let preparing = null;
-      const askWithSpeech = async (providers) => {
-        providers.forEach((id) => usingSpeech.add(id));
-        try {
-          preparing ??= prepareMediaForAi(media, (detail) => usingSpeech.forEach((id) => update(id, { state: "working", detail })));
-          const prepared = await preparing;
-          if (prepared.speechNote) setNotice(prepared.speechNote);
-          await generateWithCompanionAis({
-            ...postDetails,
-            providers,
-            images: prepared.images,
-            mediaKind: prepared.mediaKind,
-            durationSeconds: prepared.durationSeconds,
-            transcript: prepared.transcript,
-          }, showEvent);
-        } catch (speechError) {
-          providers.forEach((id) => update(id, { state: "failed", message: speechError.message }));
-        }
-      };
-      const videoId = media[0]?.kind === "video" ? await stageVideoForAi(media[0], (detail) => ids.forEach((id) => update(id, { state: "working", detail }))) : null;
-      if (videoId) {
-        await runVideoFirst({
-          ids,
-          askWithVideo: (onEvent) => generateWithCompanionAis({ ...postDetails, providers: ids, images: [], videoId, mediaKind: "video", durationSeconds: media[0].durationSeconds }, onEvent, WHOLE_VIDEO_TIMEOUT_MS),
-          askWithSpeech,
-          onRefused: (id) => update(id, { state: "working", step: "opening", live: "", detail: `${labels[id] || id} can't watch this whole video, so it will use the speech and pictures instead.` }),
-          onEvent: showEvent,
-        });
-      } else {
-        await askWithSpeech(ids);
-      }
+      await askCompanionAis({ media, ids, postDetails, labels, update, onNotice: setNotice });
     } catch (runError) {
       // The Companion closed or the connection dropped: mark what was still running.
       setAiResult((current) => current && ({

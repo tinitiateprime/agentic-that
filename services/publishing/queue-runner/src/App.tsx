@@ -18,6 +18,7 @@ import { detectPublishingExtension } from "../../../../lib/publishing-extension-
 import { REDDIT_MY_PROFILE } from "../shared/reddit-options.js";
 import { videoFit } from "../shared/video-limits.js";
 import PublishingMenu, { type PublishingView } from "./PublishingMenu.tsx";
+import ComposerAiWriter from "../../../../src/platform/social-seo/ComposerAiWriter.jsx";
 
 // --- PLATFORM BRAND ICONS ---
 const CustomIcon = ({ platform, size = 28 }: { platform: Platform; size?: number }) => {
@@ -1254,6 +1255,25 @@ function UnifiedComposer({
     .filter((destination): destination is ComposerDestinationChoice => Boolean(destination)), [availableDestinations, selectedDestinationKeys]);
   const selectedAccounts = useMemo(() => selectedDestinations.map(destination => destination.account), [selectedDestinations]);
   const selectedPlatforms = useMemo(() => [...new Set(selectedAccounts.map(account => account.platform))], [selectedAccounts]);
+
+  // "Write with AI": the chosen AI's text becomes each app's own text. The
+  // shared caption and titles are only filled when they are still empty.
+  const applyAiWriting = (writing: Record<string, { text: string; title?: string }>) => {
+    setPlatformDescriptions(current => {
+      const next = { ...current };
+      for (const [platform, entry] of Object.entries(writing)) {
+        if (entry?.text && (platforms as readonly string[]).includes(platform)) next[platform as Platform] = entry.text;
+      }
+      return next;
+    });
+    if (!description.trim()) {
+      const first = writing.instagram || writing.facebook || writing.linkedin || Object.values(writing)[0];
+      if (first?.text) setDescription(first.text);
+    }
+    if (writing.youtube?.title && !title.trim()) setTitle(writing.youtube.title.slice(0, 100));
+    if (writing.reddit?.title && !redditTitle.trim()) setRedditTitle(writing.reddit.title.slice(0, 300));
+    setCopyMode('preview');
+  };
   const descriptionForDestination = (destination: ComposerDestinationChoice) => (
     destinationDescriptions[destination.key]?.trim()
     || effectivePlatformDescription(destination.account.platform, description, platformDescriptions)
@@ -1544,6 +1564,7 @@ function UnifiedComposer({
               {postFormat === 'text' && <small className='composer-text-support'><CircleCheckBig size={13} />Available for X, Facebook, LinkedIn, and YouTube Community. Instagram is excluded.</small>}
             </label>
             <DescriptionLimitGuide characterCount={description.length} postFormat={postFormat} />
+            {postFormat !== 'text' && <ComposerAiWriter file={file} description={description} platforms={selectedPlatforms} onApply={applyAiWriting} disabled={submitting} />}
             {postFormat !== 'text' && <label className='composer-rights-confirmation'><input type='checkbox' checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)} /><ShieldCheck size={16} /><span><strong>Media rights confirmed</strong><small>I own this media or have permission to publish it.</small></span></label>}
           </div>}
 
