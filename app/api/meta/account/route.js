@@ -45,18 +45,19 @@ export async function PATCH(req) {
       apiVersion: apiVersion?.trim(),
     });
   } catch (err) {
-    const claimed = /already connected|unique|duplicate/i.test(String(err?.message));
+    // Only a duplicate within this workspace can conflict now — the same WABA
+    // may be connected to other workspaces.
+    const duplicate = /unique|duplicate/i.test(String(err?.message));
     return Response.json(
-      { error: claimed ? "This WhatsApp Business Account is already connected to another workspace." : err.message },
-      { status: claimed ? 409 : 400 }
+      { error: duplicate ? "This WhatsApp Business Account is already connected to this workspace." : err.message },
+      { status: duplicate ? 409 : 400 }
     );
   }
   let numbers;
   try {
     numbers = await syncNumbers(account.id, liveNumbers, { defaultPhoneNumberId: liveNumbers[0].id });
   } catch (err) {
-    const conflict = /already connected/i.test(String(err?.message));
-    return Response.json({ error: err.message || "Could not save these phone numbers" }, { status: conflict ? 409 : 400 });
+    return Response.json({ error: err.message || "Could not save these phone numbers" }, { status: 400 });
   }
   const sql = await getSql();
   await sql`

@@ -58,7 +58,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v3-session-business";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v4-shared-waba";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -227,7 +227,7 @@ async function migrateLegacyEnvAccount(sql) {
        ${process.env.META_API_VERSION || "v21.0"},
        ${encryptSecret((process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim() || null)},
        'env-import', 'active')
-    ON CONFLICT (waba_id) DO UPDATE SET
+    ON CONFLICT (business_id, waba_id) DO UPDATE SET
       access_token = EXCLUDED.access_token,
       app_id = COALESCE(EXCLUDED.app_id, whatsapp_accounts.app_id),
       app_secret = COALESCE(EXCLUDED.app_secret, whatsapp_accounts.app_secret),
@@ -239,12 +239,11 @@ async function migrateLegacyEnvAccount(sql) {
       onboarding_source = 'env-import',
       status = 'active',
       updated_at = now()
-    -- A WABA is globally unique. Refresh only the deployment owner's existing
-    -- row; never let environment credentials take an account from another
-    -- tenant. Besides keeping env changes current, this re-encrypts legacy
+    -- Refreshes only the deployment owner's own row (the conflict key includes
+    -- business_id), so other workspaces sharing this WABA are untouched.
+    -- Besides keeping env changes current, this re-encrypts legacy
     -- credentials after an encryption-key rotation instead of crashing every
     -- authenticated page while trying to decrypt stale ciphertext.
-    WHERE whatsapp_accounts.business_id = EXCLUDED.business_id
     RETURNING id`;
 
   const [storedAccount] = account
@@ -261,12 +260,10 @@ async function migrateLegacyEnvAccount(sql) {
         (whatsapp_account_id, phone_number_id, display_number, is_default, status)
       VALUES
         (${storedAccount.id}, ${phoneNumberId}, ${(process.env.WA_FROM || "").trim() || null}, true, 'CONNECTED')
-      ON CONFLICT (phone_number_id) DO UPDATE SET
-        whatsapp_account_id = EXCLUDED.whatsapp_account_id,
+      ON CONFLICT (whatsapp_account_id, phone_number_id) DO UPDATE SET
         display_number = COALESCE(EXCLUDED.display_number, whatsapp_numbers.display_number),
         is_default = true,
-        updated_at = now()
-      WHERE whatsapp_numbers.whatsapp_account_id = EXCLUDED.whatsapp_account_id`;
+        updated_at = now()`;
   }
 
   if (storedAccount) {
@@ -327,15 +324,16 @@ async function migrate(sql) {
        FROM users u
       WHERE u.id = s.user_id AND s.business_id IS NULL`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_business ON sessions(business_id)`,
-    // One onboarded WhatsApp Business Account per tenant. waba_id is UNIQUE
-    // because it's the webhook routing key: Meta puts the WABA id in
-    // entry[].id, which is how we tell whose event just arrived.
+    // A tenant's onboarded WhatsApp Business Accounts. The same WABA may be
+    // connected to several workspaces, so waba_id is unique per business
+    // (see the shared-WABA statements at the end), not globally. Meta puts the
+    // WABA id in entry[].id; the webhook delivers to every workspace holding it.
     // Secrets are encrypted at rest (lib/crypto.js) — never plaintext.
     `CREATE TABLE IF NOT EXISTS whatsapp_accounts (
       id                   SERIAL PRIMARY KEY,
       business_id          INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
       provider             TEXT NOT NULL DEFAULT 'meta',
-      waba_id              TEXT NOT NULL UNIQUE,
+      waba_id              TEXT NOT NULL,
       access_token         TEXT,
       token_expires_at     TIMESTAMPTZ,
       app_id               TEXT,
@@ -357,12 +355,12 @@ async function migrate(sql) {
     // lib/tenant.js. Lets a business hold both a Meta and a Baileys account
     // and switch between them instead of one overwriting the other.
     `ALTER TABLE businesses ADD COLUMN IF NOT EXISTS active_wa_provider TEXT`,
-    // Sender numbers under a WABA. phone_number_id is UNIQUE so inbound events
-    // and per-message "via <number>" tags resolve unambiguously.
+    // Sender numbers under a WABA. phone_number_id is unique per account (a
+    // shared WABA lists the same numbers in each workspace that holds it).
     `CREATE TABLE IF NOT EXISTS whatsapp_numbers (
       id                  SERIAL PRIMARY KEY,
       whatsapp_account_id INTEGER NOT NULL REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
-      phone_number_id     TEXT NOT NULL UNIQUE,
+      phone_number_id     TEXT NOT NULL,
       display_number      TEXT,
       verified_name       TEXT,
       is_default          BOOLEAN NOT NULL DEFAULT false,
@@ -504,6 +502,16 @@ async function migrate(sql) {
     `UPDATE businesses SET onboarded_at = now()
       WHERE onboarded_at IS NULL
         AND EXISTS (SELECT 1 FROM whatsapp_accounts a WHERE a.business_id = businesses.id)`,
+    // Shared WABAs: one WhatsApp Business Account (and its numbers) may be
+    // connected to more than one workspace. Replace the old global UNIQUE
+    // constraints with per-workspace / per-account ones, keeping plain
+    // indexes for webhook lookups by waba_id and phone_number_id.
+    `ALTER TABLE whatsapp_accounts DROP CONSTRAINT IF EXISTS whatsapp_accounts_waba_id_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_wa_accounts_business_waba ON whatsapp_accounts(business_id, waba_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_wa_accounts_waba ON whatsapp_accounts(waba_id)`,
+    `ALTER TABLE whatsapp_numbers DROP CONSTRAINT IF EXISTS whatsapp_numbers_phone_number_id_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_wa_numbers_account_phone ON whatsapp_numbers(whatsapp_account_id, phone_number_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_wa_numbers_phone ON whatsapp_numbers(phone_number_id)`,
   ];
   for (const ddl of statements) await sql.unsafe(ddl);
 }

@@ -45,10 +45,30 @@ test("schema migration is versioned and creates the reaction cursor columns", as
   const database = await source("services/messaging/whatsapp/src/lib/db.js");
   // The key gates the whole DDL block, so it has to move whenever statements
   // are added or an already-migrated database never sees them.
-  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v3-session-business"/);
+  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v4-shared-waba"/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction TEXT/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ/);
   assert.match(database, /export async function migrateWhatsAppSchema/);
+});
+
+test("a WABA can be connected to more than one workspace", async () => {
+  const database = await source("services/messaging/whatsapp/src/lib/db.js");
+  // Global uniqueness is dropped and replaced with per-workspace / per-account keys.
+  assert.match(database, /DROP CONSTRAINT IF EXISTS whatsapp_accounts_waba_id_key/);
+  assert.match(database, /uq_wa_accounts_business_waba ON whatsapp_accounts\(business_id, waba_id\)/);
+  assert.match(database, /DROP CONSTRAINT IF EXISTS whatsapp_numbers_phone_number_id_key/);
+  assert.match(database, /uq_wa_numbers_account_phone ON whatsapp_numbers\(whatsapp_account_id, phone_number_id\)/);
+  assert.doesNotMatch(database, /waba_id\s+TEXT NOT NULL UNIQUE/);
+
+  const tenant = await source("services/messaging/whatsapp/src/lib/tenant.js");
+  assert.match(tenant, /ON CONFLICT \(business_id, waba_id\)/);
+  assert.match(tenant, /ON CONFLICT \(whatsapp_account_id, phone_number_id\)/);
+  assert.doesNotMatch(tenant, /already connected to another workspace/);
+
+  // Inbound Meta events are delivered to every workspace holding the WABA.
+  const webhook = await source("app/api/webhooks/meta/route.js");
+  assert.match(webhook, /resolveTenantsByWabaId/);
+  assert.match(webhook, /for \(const business of await businessesForEntry\(sql, entry\)\)/);
 });
 
 test("login sessions are mapped to a business and backfilled", async () => {
