@@ -1,3 +1,5 @@
+'use client';
+
 import { ArrowLeft, CalendarDays, ListFilter, Settings2, Sparkles, Upload } from 'lucide-react';
 import styles from './publishing-menu.module.css';
 
