@@ -11,7 +11,7 @@ import { AlertTriangle, CalendarClock, CheckCircle2, ExternalLink, Loader2, Plug
 import { api, ContentPreflightApiError, setCentralAuthToken } from "../../../services/publishing/queue-runner/src/lib/api";
 import { platformPostRules } from "../../../services/publishing/queue-runner/shared/schema";
 import { AiLogo } from "./AiStatusBar";
-import { postTextFor } from "./post-text";
+import { postTextFor, xLength } from "./post-text";
 import { REDDIT_MY_PROFILE } from "../../../services/publishing/queue-runner/shared/reddit-options.js";
 import { videoFit } from "../../../services/publishing/queue-runner/shared/video-limits.js";
 import styles from "./social-seo.module.css";
@@ -126,7 +126,8 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
   const chosenPlatforms = [...new Set(chosenAccounts.map((account) => account.platform))];
 
   const toggle = (account) => setSelected((current) => (current.includes(account.id) ? current.filter((id) => id !== account.id) : [...current, account.id]));
-  const setDraft = (platform, change) => setDrafts((current) => ({ ...current, [platform]: { ...current[platform], ...change } }));
+  // Editing the text yourself clears the "shortened to fit" note.
+  const setDraft = (platform, change) => setDrafts((current) => ({ ...current, [platform]: { ...current[platform], ...change, ...("text" in change ? { note: undefined } : {}) } }));
   const pickAi = (platform, providerId) => {
     setAiFor((current) => ({ ...current, [platform]: providerId }));
     setDrafts((current) => ({ ...current, [platform]: draftFrom(platform, providerId) }));
@@ -143,7 +144,7 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
     const blank = unfilledPlaceholder(draft.text);
     if (blank) problems.push(`Replace ${blank} in the ${label} text, or remove it.`);
     if (kind === "video" && item && videoFit(platform, item).status === "blocked") problems.push(videoFit(platform, item).message);
-    if (platform === "x" && String(draft.text || "").length > X_LIMIT) problems.push(`The X post is ${draft.text.length} characters; X allows ${X_LIMIT}.`);
+    if (platform === "x" && xLength(draft.text) > X_LIMIT) problems.push(`The X post is ${xLength(draft.text)} characters as X counts them (emoji count 2, links 23); X allows ${X_LIMIT}.`);
     const limit = platformPostRules[platform]?.descriptionLimit;
     if (limit && platform !== "x" && String(draft.text || "").length > limit) problems.push(`The ${label} text is longer than ${label} allows (${limit.toLocaleString()} characters).`);
     if (platform === "reddit") {
@@ -338,7 +339,8 @@ export default function PostPanel({ token, media, aiResult, fallbackText, onClos
                             {platform.id === "youtube" ? (kind === "video" ? "Description" : "Community post text") : platform.id === "reddit" ? "Post" : "Text"}
                             <textarea rows={platform.id === "x" ? 3 : 5} value={draft.text || ""} onChange={(event) => setDraft(platform.id, { text: event.target.value })} />
                           </label>
-                          {platform.id === "x" && <small className={String(draft.text || "").length > X_LIMIT ? styles.fail : styles.muted}>{String(draft.text || "").length} of {X_LIMIT} characters</small>}
+                          {platform.id === "x" && <small className={xLength(draft.text) > X_LIMIT ? styles.fail : styles.muted}>{xLength(draft.text)} of {X_LIMIT} characters, as X counts them</small>}
+                          {draft.note && <small className={styles.muted}>{draft.note}</small>}
                           {platform.id === "youtube" && kind === "image" && <small className={styles.muted}>A photo goes to YouTube as a Community post.</small>}
                           {platform.id === "youtube" && kind === "video" && (
                             <label className={styles.postField}>Who can watch<select value={youtubeVisibility} onChange={(event) => setYoutubeVisibility(event.target.value)}><option value="public">Everyone (public)</option><option value="unlisted">Anyone with the link</option><option value="private">Only you</option></select></label>

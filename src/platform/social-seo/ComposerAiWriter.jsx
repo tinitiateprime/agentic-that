@@ -178,6 +178,7 @@ export default function ComposerAiWriter({ file, description = "", platforms = [
               <li key={platform}>
                 <strong>{LABELS[platform]}{writing[platform]?.title ? ` · ${writing[platform].title}` : ""}</strong>
                 <p>{writing[platform]?.text || <em>{run.providers[pick].label} didn&apos;t write for {LABELS[platform]}.</em>}</p>
+                {writing[platform]?.note && <small className={styles.fitNote}>{writing[platform].note}</small>}
               </li>
             ))}
           </ul>

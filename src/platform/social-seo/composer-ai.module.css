@@ -30,3 +30,4 @@
 .previews em { color: #7c8796; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.fitNote { display: block; margin-top: 6px; color: #8a5a00; font-size: 12px; line-height: 1.45; }
