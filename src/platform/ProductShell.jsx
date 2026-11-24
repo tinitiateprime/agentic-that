@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, BookUser, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
+import { BarChart3, BookUser, TrendingUp, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
@@ -33,6 +33,8 @@ const sections = [
   { id: "groups", label: "Groups", icon: Users, href: "/group-manager" },
   { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk", hidden: true },
   { id: "content", label: "Activity", icon: ClipboardList, href: "/content-manager", anyCapability: ["publishing.view", "messaging.view"] },
+  // Social Manager: post analytics across platforms (and, next, the inbox).
+  { id: "social-manager", label: "Social Manager", icon: TrendingUp, href: "/social-manager" },
   // Every member of a company can read its reports.
   { id: "reports", label: "Reports", icon: BarChart3, href: "/workspace-reports" },
 ];
