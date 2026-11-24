@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
+import { BarChart3, BookUser, ClipboardList, Globe2, Home, LogOut, Menu, MessageCircle, MessageCircleMore, MonitorDown, PhoneCall, PlugZap, Search, Send, Settings2, SquarePen, Users, UsersRound, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
@@ -12,7 +12,7 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher";
 // sub-pages (Messages, More) open a second panel beside it. Everything else is one click.
 const sections = [
   { id: "apps", label: "Home", icon: Home, href: "/apps" },
-  { id: "connections", label: "Connect", icon: PlugZap, href: "/config-manager", anyCapability: ["publishing.accounts.configure", "messaging.configure"] },
+  { id: "connections", label: "Accounts", icon: PlugZap, href: "/config-manager", anyCapability: ["publishing.accounts.configure", "messaging.configure"] },
   {
     id: "messages",
     label: "Messages",
@@ -28,6 +28,8 @@ const sections = [
   // Websites and Phone AI are hidden for now: remove "hidden" to show them again.
   { id: "website", label: "Websites", icon: Globe2, href: "/website-studio", hidden: true },
   { id: "social-seo", label: "Social SEO", icon: Search, href: "/social-seo" },
+  // Contact Master on its own page; the same contacts are inside Groups too.
+  { id: "contacts", label: "Contacts", icon: BookUser, href: "/contact-master" },
   { id: "groups", label: "Groups", icon: Users, href: "/group-manager" },
   { id: "phone", label: "Phone AI", icon: PhoneCall, href: "/phone-front-desk", hidden: true },
   { id: "content", label: "Activity", icon: ClipboardList, href: "/content-manager", anyCapability: ["publishing.view", "messaging.view"] },

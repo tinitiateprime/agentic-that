@@ -81,7 +81,9 @@ export function ContactApps({ contact, size = 15 }) {
   return <span className={styles.contactApps}>{apps.map((app) => <AppLogo key={app} app={app} size={size} />)}</span>;
 }
 
-export default function ContactMaster({ contacts, workspaceName, onChanged, disabled }) {
+// Used beside the groups (compact) and as the full Contacts page (standalone),
+// where it also shows which groups each person is in.
+export default function ContactMaster({ contacts, workspaceName, onChanged, disabled, standalone = false, groups = [] }) {
   const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -108,7 +110,7 @@ export default function ContactMaster({ contacts, workspaceName, onChanged, disa
   };
 
   return (
-    <aside className={styles.contactMaster} aria-labelledby="contact-master-title">
+    <aside className={`${styles.contactMaster} ${standalone ? styles.contactMasterPage : ""}`} aria-labelledby="contact-master-title">
       <header className={styles.contactHead}>
         <div>
           <h2 id="contact-master-title">Contact Master</h2>
@@ -121,9 +123,11 @@ export default function ContactMaster({ contacts, workspaceName, onChanged, disa
       {editing && <ContactForm initial={editing.id ? editing : null} onSaved={saved} onCancel={() => setEditing(null)} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
 
-      {contacts.length > 6 && (
+      {(standalone ? contacts.length > 0 : contacts.length > 6) && (
         <label className={styles.search}><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search contacts" aria-label="Search contacts" /></label>
       )}
+
+      {standalone && contacts.length > 0 && query && !shown.length && <p className={styles.muted}>No contacts match “{query}”.</p>}
 
       {!contacts.length && !editing && (
         <div className={styles.emptyContacts}>
@@ -140,6 +144,10 @@ export default function ContactMaster({ contacts, workspaceName, onChanged, disa
             <div>
               <strong>{contact.name}</strong>
               <span>{contact.whatsapp || contact.telegram || contact.discord || contact.instagram || contact.facebook || contact.note || ""}</span>
+              {standalone && (() => {
+                const inGroups = groups.filter((group) => (group.members || []).some((member) => member.contactId === contact.id)).map((group) => group.name);
+                return <span className={styles.contactGroups}>{inGroups.length ? `In ${inGroups.join(", ")}` : "Not in any group yet"}</span>;
+              })()}
             </div>
             <ContactApps contact={contact} />
             <div className={styles.rowActions}>

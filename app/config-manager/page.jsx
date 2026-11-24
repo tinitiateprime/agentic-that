@@ -4,7 +4,7 @@ import { serviceEndpoints } from "@platform/service-catalog";
 import ConfigManager from "./ConfigManager";
 
 export const metadata = {
-  title: "Config Manager - AgenticThat",
+  title: "Accounts - AgenticThat",
   description: "Connect and manage service accounts from one secure workspace.",
 };
 
