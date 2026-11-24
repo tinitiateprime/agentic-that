@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { getSql } from "@whatsapp/lib/db";
 import { recordInbound } from "@whatsapp/lib/wa/messaging";
 import { applyReaction, recordCallEvent, resolveOrCreateContact } from "@whatsapp/lib/data";
-import { resolveTenantByWabaId } from "@whatsapp/lib/tenant";
+import { resolveTenantsByWabaId } from "@whatsapp/lib/tenant";
 
 // Meta WhatsApp Cloud API posts events here. Configure in Meta for Developers >
 // WhatsApp > Configuration > Webhook:
@@ -45,12 +45,12 @@ export async function POST(req) {
 
   // Multi-tenant routing: one app = one callback URL, so every customer's
   // events arrive here. Meta puts the WABA id in entry[].id — that's the only
-  // reliable tenant key. Unknown WABA ids are ACKed and dropped (never fanned
-  // out to another tenant).
+  // reliable tenant key. A WABA connected to several workspaces is delivered
+  // to each of them; unknown WABA ids are ACKed and dropped.
   for (const entry of payload.entry || []) {
-    const business = await businessForEntry(sql, entry);
-    if (!business) continue;
-    await processEntry(sql, business, entry);
+    for (const business of await businessesForEntry(sql, entry)) {
+      await processEntry(sql, business, entry);
+    }
   }
 
   return Response.json({ ok: true });
@@ -67,20 +67,20 @@ function validMetaSignature(rawBody, signature) {
   return receivedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
 }
 
-// entry[].id -> the tenant that owns that WhatsApp Business Account.
+// entry[].id -> every tenant that has that WhatsApp Business Account connected.
 // Falls back to the single-tenant deployment (first business) only while no
 // WABA has been onboarded into whatsapp_accounts yet, so the pre-SaaS install
 // keeps working until its env account is imported.
-async function businessForEntry(sql, entry) {
-  const tenant = await resolveTenantByWabaId(entry?.id);
-  if (tenant) return tenant.business;
+async function businessesForEntry(sql, entry) {
+  const tenants = await resolveTenantsByWabaId(entry?.id);
+  if (tenants.length) return tenants.map((tenant) => tenant.business);
 
-  if (process.env.NODE_ENV === "production" || process.env.NETLIFY === "true") return null;
+  if (process.env.NODE_ENV === "production" || process.env.NETLIFY === "true") return [];
   const [{ n }] = await sql`SELECT COUNT(*)::int AS n FROM whatsapp_accounts`;
-  if (n > 0) return null; // onboarded SaaS: an unknown WABA is not ours
+  if (n > 0) return []; // onboarded SaaS: an unknown WABA is not ours
 
   const [business] = await sql`SELECT * FROM businesses ORDER BY id LIMIT 1`;
-  return business || null;
+  return business ? [business] : [];
 }
 
 async function processEntry(sql, business, entry) {

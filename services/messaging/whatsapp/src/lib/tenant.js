@@ -259,28 +259,32 @@ export async function credsForProvider(businessId, provider) {
   return null;
 }
 
-// Webhook routing: Meta puts the WABA id in entry[].id. Map it back to the
-// tenant that owns it. Returns { business, creds } or null when unknown.
-export async function resolveTenantByWabaId(wabaId) {
-  if (!wabaId) return null;
+// Webhook routing: Meta puts the WABA id in entry[].id. A WABA can be
+// connected to several workspaces, so map it back to every tenant holding it.
+// Returns [{ business, creds, account }] — empty when the WABA is unknown.
+export async function resolveTenantsByWabaId(wabaId) {
+  if (!wabaId) return [];
   const sql = await getSql();
-  const [row] = await sql`
+  const rows = await sql`
     SELECT a.*,
            (SELECT n.phone_number_id FROM whatsapp_numbers n
              WHERE n.whatsapp_account_id = a.id
              ORDER BY n.is_default DESC, n.id ASC LIMIT 1) AS default_phone_number_id
       FROM whatsapp_accounts a
      WHERE a.waba_id = ${String(wabaId)}
-     LIMIT 1`;
-  if (!row) return null;
-  const [business] = await sql`SELECT * FROM businesses WHERE id = ${row.business_id}`;
-  if (!business) return null;
-  let creds = readableCredsFrom(row);
-  if (!creds && (await isLegacyEnvBusiness(row.business_id))) {
-    const fallback = envCredsForProvider(row.provider);
-    if (fallback) creds = { ...fallback, businessId: row.business_id };
+     ORDER BY a.id ASC`;
+  const tenants = [];
+  for (const row of rows) {
+    const [business] = await sql`SELECT * FROM businesses WHERE id = ${row.business_id}`;
+    if (!business) continue;
+    let creds = readableCredsFrom(row);
+    if (!creds && (await isLegacyEnvBusiness(row.business_id))) {
+      const fallback = envCredsForProvider(row.provider);
+      if (fallback) creds = { ...fallback, businessId: row.business_id };
+    }
+    if (creds) tenants.push({ business, creds, account: row });
   }
-  return creds ? { business, creds, account: row } : null;
+  return tenants;
 }
 
 // Numbers belonging to a tenant (drives the "Send from" pickers without an API
@@ -312,12 +316,7 @@ export async function upsertAccount({
 }) {
   const sql = await getSql();
   const normalizedWabaId = String(wabaId);
-  const [claimed] = await sql`
-    SELECT business_id FROM whatsapp_accounts WHERE waba_id = ${normalizedWabaId}`;
-  if (claimed && Number(claimed.business_id) !== Number(businessId)) {
-    throw new Error("This WhatsApp account is already connected to another workspace.");
-  }
-
+  // A WABA may be connected to several workspaces; each gets its own row.
   const [row] = await sql`
     INSERT INTO whatsapp_accounts
       (business_id, provider, waba_id, access_token, token_expires_at, app_id, app_secret,
@@ -326,7 +325,7 @@ export async function upsertAccount({
             ${tokenExpiresAt}, ${appId || null}, ${encryptSecret(appSecret)},
             ${apiVersion}, ${encryptSecret(webhookVerifyToken)}, ${onboardingSource}, ${status},
             ${serviceUrl || null})
-    ON CONFLICT (waba_id) DO UPDATE SET
+    ON CONFLICT (business_id, waba_id) DO UPDATE SET
       provider             = EXCLUDED.provider,
       access_token         = COALESCE(EXCLUDED.access_token, whatsapp_accounts.access_token),
       token_expires_at     = COALESCE(EXCLUDED.token_expires_at, whatsapp_accounts.token_expires_at),
@@ -337,11 +336,7 @@ export async function upsertAccount({
       status               = EXCLUDED.status,
       service_url          = COALESCE(EXCLUDED.service_url, whatsapp_accounts.service_url),
       updated_at           = now()
-    WHERE whatsapp_accounts.business_id = EXCLUDED.business_id
     RETURNING *`;
-  if (!row) {
-    throw new Error("This WhatsApp account is already connected to another workspace.");
-  }
   return row;
 }
 
@@ -352,40 +347,23 @@ export async function syncNumbers(accountId, numbers, { defaultPhoneNumberId } =
     SELECT business_id FROM whatsapp_accounts WHERE id = ${accountId}`;
   if (!targetAccount) throw new Error("WhatsApp account not found.");
 
+  // Numbers are unique per account, so a shared WABA's numbers are listed
+  // independently in every workspace that holds it.
   for (const n of numbers) {
     const phoneNumberId = String(n.id);
-    const [claimed] = await sql`
-      SELECT a.business_id
-        FROM whatsapp_numbers wn
-        JOIN whatsapp_accounts a ON a.id = wn.whatsapp_account_id
-       WHERE wn.phone_number_id = ${phoneNumberId}`;
-    if (claimed && Number(claimed.business_id) !== Number(targetAccount.business_id)) {
-      throw new Error("This WhatsApp phone number is already connected to another workspace.");
-    }
-
-    const [savedNumber] = await sql`
+    await sql`
       INSERT INTO whatsapp_numbers
         (whatsapp_account_id, phone_number_id, display_number, verified_name, is_default, quality_rating, status)
       VALUES (${accountId}, ${phoneNumberId}, ${n.number || null}, ${n.name || null},
               ${defaultPhoneNumberId ? String(n.id) === String(defaultPhoneNumberId) : Boolean(n.isDefault)},
               ${n.quality_rating || null}, ${n.status || null})
-      ON CONFLICT (phone_number_id) DO UPDATE SET
-        whatsapp_account_id = EXCLUDED.whatsapp_account_id,
+      ON CONFLICT (whatsapp_account_id, phone_number_id) DO UPDATE SET
         display_number = COALESCE(EXCLUDED.display_number, whatsapp_numbers.display_number),
         verified_name  = COALESCE(EXCLUDED.verified_name, whatsapp_numbers.verified_name),
         is_default     = EXCLUDED.is_default,
         quality_rating = COALESCE(EXCLUDED.quality_rating, whatsapp_numbers.quality_rating),
         status         = COALESCE(EXCLUDED.status, whatsapp_numbers.status),
-        updated_at     = now()
-      WHERE EXISTS (
-        SELECT 1 FROM whatsapp_accounts owner
-         WHERE owner.id = whatsapp_numbers.whatsapp_account_id
-           AND owner.business_id = ${targetAccount.business_id}
-      )
-      RETURNING id`;
-    if (!savedNumber) {
-      throw new Error("This WhatsApp phone number is already connected to another workspace.");
-    }
+        updated_at     = now()`;
   }
   return listAccountNumbers(accountId);
 }

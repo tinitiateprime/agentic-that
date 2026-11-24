@@ -99,16 +99,8 @@ export async function POST(req) {
       );
     }
 
-    // waba_id is globally UNIQUE — block connecting a WABA already claimed by
-    // another workspace (would otherwise hijack that tenant's webhooks).
-    const [claimed] = await sql`SELECT business_id FROM whatsapp_accounts WHERE waba_id = ${wabaId}`;
-    if (claimed && Number(claimed.business_id) !== Number(user.business_id)) {
-      return Response.json(
-        { error: "This WhatsApp Business Account is already connected to another workspace." },
-        { status: 409 }
-      );
-    }
-
+    // A WABA may be connected to more than one workspace; upsertAccount keeps
+    // one row per (workspace, WABA) and webhooks fan out to all of them.
     let saved;
     try {
       const account = await upsertAccount({
@@ -126,8 +118,7 @@ export async function POST(req) {
         defaultPhoneNumberId: numbers[0]?.id,
       });
     } catch (err) {
-      const conflict = /already connected/i.test(String(err?.message));
-      return Response.json({ error: err.message || "Could not save this WhatsApp account" }, { status: conflict ? 409 : 400 });
+      return Response.json({ error: err.message || "Could not save this WhatsApp account" }, { status: 400 });
     }
     await sql`
       UPDATE businesses
