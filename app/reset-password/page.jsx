@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const card = { maxWidth: 520, margin: "12vh auto", padding: 32, border: "1px solid #dbe2ea", borderRadius: 18, background: "white", fontFamily: "Arial, sans-serif" };
 const input = { width: "100%", padding: 12, margin: "8px 0 16px", border: "1px solid #bcc7d5", borderRadius: 8 };
@@ -11,6 +11,15 @@ export default function ResetPasswordPage() {
   const [confirmation, setConfirmation] = useState("");
   const [message, setMessage] = useState("");
   const [complete, setComplete] = useState(false);
+  const [invitation, setInvitation] = useState("");
+  // Started from a workspace invitation in this browser: offer the way back.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("agenticthat.pendingInvitation") || "";
+      const url = new URL(saved, window.location.origin);
+      if (url.origin === window.location.origin && url.pathname === "/join-workspace") setInvitation(url.pathname + url.search);
+    } catch {}
+  }, []);
   async function submit(event) {
     event.preventDefault(); setMessage("");
     if (password !== confirmation) { setMessage("Passwords do not match."); return; }
@@ -20,7 +29,9 @@ export default function ResetPasswordPage() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) { setMessage(data.error || "Password reset failed."); return; }
-    setComplete(true); setMessage("Your password has been changed. You can sign in now.");
+    setComplete(true); setMessage(invitation ? "Your password has been changed. Go back to your invitation and sign in with it." : "Your password has been changed. You can sign in now.");
   }
-  return <main style={card}><h1>Choose a new password</h1>{!complete && <form onSubmit={submit}><label>New password<input style={input} type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label><label>Confirm password<input style={input} type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required /></label><button style={button}>Change password</button></form>}{message && <p role="status">{message}</p>}{complete && <a href="/?auth=login">Sign in</a>}</main>;
+  return <main style={card}><h1>Choose a new password</h1>{!complete && <form onSubmit={submit}><label>New password<input style={input} type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} required /></label><label>Confirm password<input style={input} type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required /></label><button style={button}>Change password</button></form>}{message && <p role="status">{message}</p>}{complete && (invitation
+    ? <a style={{ ...button, display: "inline-block", textDecoration: "none" }} href={invitation} onClick={() => { try { window.localStorage.removeItem("agenticthat.pendingInvitation"); } catch {} }}>Back to your invitation</a>
+    : <a href="/?auth=login">Sign in</a>)}</main>;
 }
