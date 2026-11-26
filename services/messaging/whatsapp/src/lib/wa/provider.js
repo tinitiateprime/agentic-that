@@ -564,8 +564,11 @@ export async function metaGetTemplates({ approvedOnly = true, creds = null } = {
     };
   });
 
+  // Meta's built-in sample "hello_world" shows as APPROVED but can only be sent
+  // from Meta's public test numbers (error 131058), and sample templates can't
+  // be deleted, so keep it out of every list of templates a user can send.
   return approvedOnly
-    ? mapped.filter((t) => String(t.status).toUpperCase() === "APPROVED")
+    ? mapped.filter((t) => String(t.status).toUpperCase() === "APPROVED" && t.name !== "hello_world")
     : mapped;
 }
 
