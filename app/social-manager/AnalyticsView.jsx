@@ -235,7 +235,13 @@ export default function AnalyticsView({ initialReport }) {
         <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} />
       </section>
 
-      {totals.posts === 0 && <p className="sm-message">No posts were published in this period. Choose a longer range, or upload a newer export.</p>}
+      {report.hiddenByRange > 0 && (
+        <p className="sm-message sm-hidden-note">
+          {number.format(report.hiddenByRange)} {report.hiddenByRange === 1 ? "post was" : "posts were"} published before this range, so {report.hiddenByRange === 1 ? "it isn't" : "they aren't"} shown.
+          <button type="button" className="sm-secondary" onClick={() => { setDays("all"); void load("all", platform); }}>Show all time</button>
+        </p>
+      )}
+      {totals.posts === 0 && !report.hiddenByRange && <p className="sm-message">No posts were published in this period. Choose a longer range, or upload a newer export.</p>}
 
       <Bars title="Engagement per day" subtitle="Likes, comments, shares and saves on posts published each day" valueLabel="engagements"
         data={report.daily.map((day) => ({ key: day.date, label: dayLabel(day.date), value: day.engagement, note: `${day.posts} ${day.posts === 1 ? "post" : "posts"}` }))} />

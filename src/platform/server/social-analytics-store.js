@@ -112,6 +112,14 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
   const [counts] = await sql`
     SELECT count(*)::int AS total, min(published_at) AS first_post, max(updated_at) AS last_update
       FROM social_analytics_posts WHERE workspace_id = ${principal.workspaceId}`;
+  // Posts of the chosen platform left out only because they were published
+  // before the range (or have no date), so the page can offer "Show all time".
+  const [outside] = since ? await sql`
+    SELECT count(*)::int AS hidden
+      FROM social_analytics_posts
+     WHERE workspace_id = ${principal.workspaceId}
+       AND (${chosen} = 'all' OR platform = ${chosen})
+       AND (published_at IS NULL OR published_at < ${since.toISOString()}::timestamptz)` : [{ hidden: 0 }];
 
   const posts = rows.map((row) => {
     const metrics = row.metrics || {};
@@ -207,5 +215,6 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
       fileName: entry.file_name, posts: entry.post_count, importedBy: entry.imported_by || "", at: iso(entry.created_at),
     })),
     library: { totalPosts: counts?.total || 0, firstPost: iso(counts?.first_post), lastUpdate: iso(counts?.last_update) },
+    hiddenByRange: outside?.hidden || 0,
   };
 }

@@ -18,20 +18,23 @@ const COLUMNS = {
   published: ["publish time", "published", "video publish time", "created date", "date", "time", "posted", "post date", "publish date", "created"],
   type: ["post type", "content type", "type", "media type"],
   account: ["account username", "account name", "page name", "account", "channel"],
-  views: ["views", "video views", "plays", "video plays", "total plays"],
-  reach: ["reach", "accounts reached", "unique impressions"],
-  impressions: ["impressions", "impressions (total)"],
-  likes: ["likes", "reactions", "like", "total reactions"],
+  views: ["views", "video views", "plays", "video plays", "total plays", "reels plays", "3-second video views", "video views (3-second)", "engaged views"],
+  reach: ["reach", "accounts reached", "unique impressions", "post reach", "people reached", "lifetime post total reach"],
+  impressions: ["impressions", "thumbnail impressions", "post impressions", "lifetime post total impressions"],
+  likes: ["likes", "reactions", "like", "total reactions", "likes and reactions", "post reactions"],
   comments: ["comments", "replies", "comment"],
   shares: ["shares", "reposts", "retweets", "repost", "share"],
   saves: ["saves", "bookmarks", "save"],
-  clicks: ["clicks", "link clicks", "url clicks", "total clicks"],
-  follows: ["follows", "new follows", "subscribers", "subscribers gained", "follows gained"],
+  clicks: ["clicks", "link clicks", "url clicks", "total clicks", "post clicks"],
+  follows: ["follows", "new follows", "subscribers", "subscribers gained", "follows gained", "page follows", "profile follows", "followers gained"],
   watchHours: ["watch time (hours)", "watch time hours"],
 };
 
 const clean = (value) => String(value ?? "").replace(/^﻿/, "").trim();
-const normal = (value) => clean(value).toLowerCase().replace(/\s+/g, " ");
+// "Impressions (organic)", "Clicks (total)" → "impressions", "clicks": LinkedIn
+// and Meta label the same number with these suffixes. Units such as
+// "(hours)" stay, since they change what the number means.
+const normal = (value) => clean(value).toLowerCase().replace(/\s+/g, " ").replace(/\s*\((organic|total|lifetime)\)$/, "");
 
 /** Splits CSV text into rows, handling quotes, commas and line breaks inside quotes. */
 export function parseCsv(text) {
@@ -199,14 +202,21 @@ function postsFromTable(rows, table, platform) {
     // "Total" rows (YouTube), blank rows and second header rows are not posts.
     if (/^total$/i.test(id) || /^total$/i.test(text) || /^total$/i.test(clean(row[0]))) continue;
     const metrics = {};
+    let describesColumns = false;
     for (const metric of METRICS) {
-      const value = toNumber(get(row, metric));
+      const raw = get(row, metric);
+      const value = toNumber(raw);
       if (value !== null) metrics[metric] = value;
+      // Words where a number belongs: a second header line describing the columns.
+      else if (/[a-z]{3,}/i.test(raw) && !/^n\/?a$/i.test(raw)) describesColumns = true;
     }
-    if (!Object.keys(metrics).length) continue;
+    if (describesColumns) continue;
     const permalink = get(row, "permalink");
     const publishedAt = toDate(get(row, "published"));
-    if (!id && !permalink && !text && !publishedAt) continue;
+    // A row is a post when it names one: an id, a link, or text with a date or
+    // numbers. Its numbers may all be blank (no views in the exported period):
+    // that is 0, not "skip".
+    if (!id && !permalink && !(text && (publishedAt || Object.keys(metrics).length))) continue;
     posts.push({
       platform,
       postKey: id || permalink || `fp:${fingerprint(`${text}|${publishedAt || ""}`)}`,

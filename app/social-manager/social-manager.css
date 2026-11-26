@@ -147,3 +147,4 @@
   .sm-best-row { grid-template-columns: 80px minmax(0, 1fr) 104px; }
   .sm-search { min-width: 0; width: 100%; }
 }
+.sm-hidden-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
