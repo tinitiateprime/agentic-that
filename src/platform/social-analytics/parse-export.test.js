@@ -93,7 +93,7 @@ test("X export: detected by its status links", async () => {
 
 test("clear errors for files that aren't post analytics", async () => {
   await assert.rejects(readAnalyticsExport({ fileName: "photo.png", bytes: bytes("x") }), AnalyticsImportError);
-  await assert.rejects(readAnalyticsExport({ fileName: "old.xls", bytes: bytes("x") }), /save it as \.xlsx or \.csv/);
+  await assert.rejects(readAnalyticsExport({ fileName: "old.xls", bytes: bytes("x") }), AnalyticsImportError);
   await assert.rejects(readAnalyticsExport({ fileName: "contacts.csv", bytes: bytes("Name,Phone\nAsha,123\n") }), /doesn't look like a social analytics export/);
   await assert.rejects(readAnalyticsExport({ fileName: "data.csv", bytes: bytes("Title,Views\nHello,10\n") }), /Couldn't tell which platform/);
   const chosen = await readAnalyticsExport({ fileName: "data.csv", bytes: bytes("Title,Views\nHello,10\n"), platform: "facebook" });

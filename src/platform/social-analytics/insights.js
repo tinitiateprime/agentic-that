@@ -40,14 +40,17 @@ function bestVersusWorst(posts, keyOf) {
 const times = (ratio) => (ratio === null ? "far more" : ratio >= 2 ? `${round1(ratio)}× the` : `${Math.round((ratio - 1) * 100)}% more`);
 
 /**
- * @param {{ posts: any[], totals: any, previous: any|null, bestSlots: any[] }} report
+ * @param {{ posts: any[], totals: any, previous: any|null, bestSlots: any[], available?: any }} report
  * @returns {{ id: string, tone: "good"|"bad"|"tip", text: string }[]}
  */
-export function buildInsights({ posts = [], totals, previous = null, bestSlots = [] }) {
+export function buildInsights({ posts = [], totals, previous = null, bestSlots = [], available = null }) {
   const insights = [];
   if (!posts.length) return insights;
+  if (available && !available.engagement) {
+    return [{ id: "no-engagement", tone: "tip", text: "These exports have no likes, comments, shares or saves, so there is nothing to compare yet. Export again with those columns included (in YouTube Studio, add Likes and Comments to the table before downloading)." }];
+  }
   if (!totals.engagement) {
-    return [{ id: "no-engagement", tone: "tip", text: "None of these posts show likes, comments, shares or saves, so there is nothing to compare yet. If that looks wrong, export again with those columns included (in YouTube Studio, add Likes and Comments to the table before downloading)." }];
+    return [{ id: "no-engagement", tone: "bad", text: "None of these posts got a like, comment, share or save in this period. Try a question or a clear call to action in your next posts." }];
   }
 
   // 1. Better or worse than the period before?

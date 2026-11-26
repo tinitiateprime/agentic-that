@@ -8,7 +8,7 @@ const PLATFORMS = [["all", "All platforms"], ["instagram", "Instagram"], ["faceb
 const GUIDES = [
   { id: "instagram", label: "Instagram & Facebook", steps: ["Open Meta Business Suite (business.facebook.com) and choose your account.", "Go to Insights → Content.", "Pick the date range, then Export data → CSV.", "Upload the file here. Do the same for Facebook if you post there."] },
   { id: "youtube", label: "YouTube", steps: ["Open YouTube Studio → Analytics → Advanced mode.", "Stay on the Content tab and pick the date range.", "Click the download arrow (top right) → Comma-separated values.", "Upload the .zip file it gives you, as it is."] },
-  { id: "linkedin", label: "LinkedIn", steps: ["Open your company Page → Analytics → Content.", "Click Export and pick the date range.", "Upload the .xlsx file. If you get an old .xls file, save it as .xlsx first."] },
+  { id: "linkedin", label: "LinkedIn", steps: ["Open your company Page → Analytics → Content.", "Click Export and pick the date range.", "Upload the file it gives you (.xls or .xlsx) as it is."] },
   { id: "x", label: "X", steps: ["Open X → More → Analytics (or analytics.x.com).", "Go to Content and pick the date range.", "Click Export data, then upload the CSV here."] },
 ];
 
@@ -17,6 +17,9 @@ const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumF
 const date = (value) => (value ? new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "—");
 const dayLabel = (value) => new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
 const rateText = (value) => (value === null || value === undefined ? "—" : `${value}%`);
+const UNAVAILABLE = "Not in the uploaded export";
+// A number the export didn't have shows a dash, not a 0 that looks real.
+const metricCell = (value) => (value === null || value === undefined ? <span className="sm-na" title={UNAVAILABLE}>—</span> : number.format(value));
 
 function toCsv(posts) {
   const header = ["Published", "Platform", "Account", "Post", "Link", "Views", "Reach", "Impressions", "Likes", "Comments", "Shares", "Saves", "Clicks", "New followers", "Engagement", "Engagement rate %"];
@@ -37,7 +40,10 @@ function changeOf(now, before, { points = false } = {}) {
   return { up: diff > 0, flat: diff === 0, text: `${diff > 0 ? "+" : ""}${diff}%` };
 }
 
-function Tile({ icon: Icon, label, value, note, change }) {
+function Tile({ icon: Icon, label, value, note, change, unavailable = false }) {
+  if (unavailable) {
+    return <article className="sm-tile sm-tile-na" title={UNAVAILABLE}><span><Icon size={17} /></span><div><small>{label}</small><strong>Unavailable</strong><em>not in your exports</em></div></article>;
+  }
   return (
     <article className="sm-tile"><span><Icon size={17} /></span><div><small>{label}</small><strong>{value}</strong>
       {change && (
@@ -234,6 +240,8 @@ export default function AnalyticsView({ initialReport }) {
   // Compare only when the period before had posts; "All time" has nothing before it.
   const previous = report.previous?.posts ? report.previous : null;
   const change = (key, options) => (previous ? changeOf(totals[key], previous[key], options) : null);
+  // Older reports (and empty ranges) have no "available": treat every number as present.
+  const has = (key) => !report.available || totals.posts === 0 || report.available[key] !== false;
   return (
     <>
       <div className="sm-controls">
@@ -252,11 +260,11 @@ export default function AnalyticsView({ initialReport }) {
 
       <section className={`sm-tiles ${loading ? "loading" : ""}`} aria-label="Summary">
         <Tile icon={CalendarClock} label="Posts" value={number.format(totals.posts)} change={change("posts")} />
-        <Tile icon={Eye} label="Views" value={compact.format(totals.views)} change={change("views")} />
-        <Tile icon={Users} label={audienceLabel} value={compact.format(totals[audienceKey])} change={change(audienceKey)} />
-        <Tile icon={Heart} label="Engagement" value={compact.format(totals.engagement)} note="likes, comments, shares, saves" change={change("engagement")} />
-        <Tile icon={TrendingUp} label="Engagement rate" value={rateText(totals.engagementRate)} note={`of ${audienceKey}`} change={change("engagementRate", { points: true })} />
-        <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} change={change("follows")} />
+        <Tile icon={Eye} label="Views" value={compact.format(totals.views)} change={change("views")} unavailable={!has("views")} />
+        <Tile icon={Users} label={audienceLabel} value={compact.format(totals[audienceKey])} change={change(audienceKey)} unavailable={!has("audience")} />
+        <Tile icon={Heart} label="Engagement" value={compact.format(totals.engagement)} note="likes, comments, shares, saves" change={change("engagement")} unavailable={!has("engagement")} />
+        <Tile icon={TrendingUp} label="Engagement rate" value={rateText(totals.engagementRate)} note={`of ${audienceKey}`} change={change("engagementRate", { points: true })} unavailable={!has("engagement") || !has("audience")} />
+        <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} change={change("follows")} unavailable={!has("follows")} />
       </section>
 
       {report.insights?.length > 0 && (
@@ -283,9 +291,13 @@ export default function AnalyticsView({ initialReport }) {
           <div className="sm-table-wrap">
             <table className="sm-table">
               <thead><tr><th scope="col">Platform</th><th scope="col" className="num">Posts</th><th scope="col" className="num">Views</th><th scope="col" className="num">Reach / impressions</th><th scope="col" className="num">Engagement</th><th scope="col" className="num">Engagement rate</th><th scope="col" className="num">New followers</th></tr></thead>
-              <tbody>{report.platforms.map((entry) => (
-                <tr key={entry.platform}><th scope="row">{entry.label}</th><td className="num">{number.format(entry.posts)}</td><td className="num">{number.format(entry.views)}</td><td className="num">{number.format(entry.reach || entry.impressions)}</td><td className="num">{number.format(entry.engagement)}</td><td className="num">{rateText(entry.engagementRate)}</td><td className="num">{number.format(entry.follows)}</td></tr>
-              ))}</tbody>
+              <tbody>{report.platforms.map((entry) => {
+                const shows = (key) => !entry.available || entry.available[key] !== false;
+                const cell = (key, value) => (shows(key) ? number.format(value) : metricCell(null));
+                return (
+                  <tr key={entry.platform}><th scope="row">{entry.label}</th><td className="num">{number.format(entry.posts)}</td><td className="num">{cell("views", entry.views)}</td><td className="num">{cell("audience", entry.reach || entry.impressions)}</td><td className="num">{cell("engagement", entry.engagement)}</td><td className="num">{rateText(entry.engagementRate)}</td><td className="num">{cell("follows", entry.follows)}</td></tr>
+                );
+              })}</tbody>
             </table>
           </div>
         </section>
@@ -342,11 +354,11 @@ export default function AnalyticsView({ initialReport }) {
                     </span>
                   </th>
                   <td>{date(post.publishedAt)}</td>
-                  <td className="num">{number.format(post.metrics.views ?? post.audience)}</td>
-                  <td className="num">{number.format(post.metrics.likes ?? 0)}</td>
-                  <td className="num">{number.format(post.metrics.comments ?? 0)}</td>
-                  <td className="num">{number.format(post.metrics.shares ?? 0)}</td>
-                  <td className="num">{number.format(post.metrics.saves ?? 0)}</td>
+                  <td className="num">{metricCell(post.metrics.views ?? post.metrics.reach ?? post.metrics.impressions)}</td>
+                  <td className="num">{metricCell(post.metrics.likes)}</td>
+                  <td className="num">{metricCell(post.metrics.comments)}</td>
+                  <td className="num">{metricCell(post.metrics.shares)}</td>
+                  <td className="num">{metricCell(post.metrics.saves)}</td>
                   <td className="num">{rateText(post.engagementRate)}</td>
                 </tr>
               );

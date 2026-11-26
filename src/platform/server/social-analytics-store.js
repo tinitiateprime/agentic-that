@@ -15,9 +15,30 @@ const DAYPARTS = [
 ];
 export const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
+const ENGAGEMENT_METRICS = ["likes", "comments", "shares", "saves"];
+
 /** Likes, comments, shares and saves: what people did with the post. */
 export function engagementOf(metrics = {}) {
-  return ["likes", "comments", "shares", "saves"].reduce((sum, key) => sum + (Number(metrics[key]) || 0), 0);
+  return ENGAGEMENT_METRICS.reduce((sum, key) => sum + (Number(metrics[key]) || 0), 0);
+}
+
+/** Whether the export had any engagement number for this post (a blank is not a zero). */
+export function hasEngagement(metrics = {}) {
+  return ENGAGEMENT_METRICS.some((key) => metrics[key] !== undefined && metrics[key] !== null);
+}
+
+/**
+ * Which numbers the posts' exports actually contained. A metric no export
+ * gave is "Unavailable" on the page, not 0.
+ */
+export function availableMetrics(posts) {
+  const available = Object.fromEntries(METRICS.map((metric) => [metric, false]));
+  for (const post of posts) {
+    for (const metric of METRICS) if (post.metrics[metric] !== undefined && post.metrics[metric] !== null) available[metric] = true;
+  }
+  available.engagement = ENGAGEMENT_METRICS.some((metric) => available[metric]);
+  available.audience = available.reach || available.impressions || available.views;
+  return available;
 }
 
 /** Who saw it: reach, else impressions, else views. */
@@ -141,6 +162,7 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
     const metrics = row.metrics || {};
     const engagement = engagementOf(metrics);
     const audience = audienceOf(metrics);
+    const rated = audience && hasEngagement(metrics);
     return {
       id: String(row.id),
       platform: row.platform,
@@ -153,7 +175,7 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
       metrics,
       engagement,
       audience,
-      engagementRate: audience ? Math.round((engagement / audience) * 1000) / 10 : null,
+      engagementRate: rated ? Math.round((engagement / audience) * 1000) / 10 : null,
     };
   });
 
@@ -161,9 +183,12 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
   const byPlatform = new Map();
   for (const post of posts) {
     addTo(totals, post);
-    if (!byPlatform.has(post.platform)) byPlatform.set(post.platform, { platform: post.platform, label: post.platformLabel, ...emptyTotals() });
-    addTo(byPlatform.get(post.platform), post);
+    if (!byPlatform.has(post.platform)) byPlatform.set(post.platform, { platform: post.platform, label: post.platformLabel, ...emptyTotals(), list: [] });
+    const entry = byPlatform.get(post.platform);
+    addTo(entry, post);
+    entry.list.push(post);
   }
+  const available = availableMetrics(posts);
 
   // Engagement per day, oldest first (only days inside the range).
   const daily = [];
@@ -216,7 +241,7 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
     .sort((left, right) => right.averageRate - left.averageRate)
     .slice(0, 3);
 
-  const totalsWithRate = { ...totals, engagementRate: rate(totals) };
+  const totalsWithRate = { ...totals, engagementRate: available.engagement ? rate(totals) : null };
   return {
     rangeDays,
     platform: chosen,
@@ -224,8 +249,12 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
     until: until.toISOString(),
     totals: totalsWithRate,
     previous,
-    insights: buildInsights({ posts, totals: totalsWithRate, previous, bestSlots }),
-    platforms: [...byPlatform.values()].map((entry) => ({ ...entry, engagementRate: rate(entry) })).sort((a, b) => b.engagement - a.engagement),
+    available,
+    insights: buildInsights({ posts, totals: totalsWithRate, previous, bestSlots, available }),
+    platforms: [...byPlatform.values()].map(({ list, ...entry }) => {
+      const has = availableMetrics(list);
+      return { ...entry, available: has, engagementRate: has.engagement ? rate(entry) : null };
+    }).sort((a, b) => b.engagement - a.engagement),
     daily,
     bestTimes: { weekdays: weekdays.map(finish), dayparts: dayparts.map(finish), bestSlots },
     topPosts: [...posts].sort((a, b) => b.engagement - a.engagement).slice(0, 10),

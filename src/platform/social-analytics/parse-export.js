@@ -2,11 +2,12 @@
 // them into one shape: a post with its text, link, time and numbers.
 //   Instagram / Facebook: Meta Business Suite → Insights → Content → Export (CSV)
 //   YouTube: YouTube Studio → Analytics → Advanced mode → Export (CSV, or the zip)
-//   LinkedIn: Page → Analytics → Content → Export (XLSX)
+//   LinkedIn: Page → Analytics → Content → Export (XLS or XLSX)
 //   X: Analytics → Content → Export data (CSV)
 // Column names differ between platforms and change over time, so each value is
 // found by a list of known names.
 import JSZip from "jszip";
+import { decodeText, parseXls, sniffSpreadsheet, XlsReadError } from "./parse-xls.js";
 
 export const ANALYTICS_PLATFORMS = ["instagram", "facebook", "youtube", "linkedin", "x"];
 export const METRICS = ["views", "reach", "impressions", "likes", "comments", "shares", "saves", "clicks", "follows", "watchHours"];
@@ -246,17 +247,22 @@ export async function readAnalyticsExport({ fileName, bytes, platform: chosen = 
     const csvFiles = Object.keys(zip.files).filter((entry) => entry.toLowerCase().endsWith(".csv"))
       .sort((a, b) => Number(/table data/i.test(b)) - Number(/table data/i.test(a)));
     for (const entry of csvFiles) tables.push(parseCsv(await zip.file(entry).async("string")));
-  } else if (name.endsWith(".xlsx")) {
-    tables = await parseXlsx(bytes);
-  } else if (name.endsWith(".xls")) {
-    throw new AnalyticsImportError("This is an old Excel (.xls) file. Open it in Excel or Google Sheets and save it as .xlsx or .csv, then upload that.");
+  } else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+    // An .xls may really be an .xlsx, an HTML table or tab-separated text.
+    const kind = sniffSpreadsheet(bytes);
+    try {
+      if (kind === "zip") tables = await parseXlsx(bytes);
+      else if (kind === "text") tables = [parseCsv(decodeText(bytes))];
+      else tables = parseXls(bytes);
+    } catch (error) {
+      if (error instanceof XlsReadError) throw new AnalyticsImportError(error.message);
+      throw new AnalyticsImportError("This spreadsheet couldn't be read. Open it in Excel or Google Sheets, save it as .xlsx or .csv, and upload that.");
+    }
   } else if (name.endsWith(".csv") || name.endsWith(".txt") || name.endsWith(".tsv")) {
-    let text = new TextDecoder("utf-8").decode(bytes);
-    // Some exports are UTF-16.
-    if (text.includes("\u0000")) text = new TextDecoder("utf-16le").decode(bytes);
-    tables = [parseCsv(text)];
+    // decodeText also reads the UTF-16 files some platforms export.
+    tables = [parseCsv(decodeText(bytes))];
   } else {
-    throw new AnalyticsImportError("Upload the analytics file as .csv, .xlsx or the .zip YouTube Studio gives you.");
+    throw new AnalyticsImportError("Upload the analytics file as .csv, .xlsx, .xls or the .zip YouTube Studio gives you.");
   }
 
   // The sheet that lists posts: most known columns, and one row per post.

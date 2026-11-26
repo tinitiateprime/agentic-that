@@ -42,7 +42,10 @@ test("does not recommend a time nobody engaged with", () => {
   assert.equal(insights.find((entry) => entry.id === "time"), undefined);
 });
 
-test("explains an export with no engagement at all", () => {
-  const insights = buildInsights({ posts: [post({ engagement: 0 })], totals: { posts: 1, engagement: 0 } });
-  assert.deepEqual(insights.map((entry) => entry.id), ["no-engagement"]);
+test("tells a missing engagement column apart from real zero engagement", () => {
+  const missing = buildInsights({ posts: [post({ engagement: 0 })], totals: { posts: 1, engagement: 0 }, available: { engagement: false } });
+  assert.deepEqual(missing.map((entry) => entry.id), ["no-engagement"]);
+  assert.match(missing[0].text, /Export again/);
+  const zero = buildInsights({ posts: [post({ engagement: 0 })], totals: { posts: 1, engagement: 0 }, available: { engagement: true } });
+  assert.match(zero[0].text, /None of these posts got a like/);
 });
