@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ANALYTICS_PLATFORMS, METRICS, readAnalyticsExport } from "../social-analytics/parse-export.js";
+import { buildInsights } from "../social-analytics/insights.js";
 import { getPlatformSql } from "./auth-store.js";
 
 const RANGES = new Set([7, 30, 90, 365]);
@@ -121,6 +122,21 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
        AND (${chosen} = 'all' OR platform = ${chosen})
        AND (published_at IS NULL OR published_at < ${since.toISOString()}::timestamptz)` : [{ hidden: 0 }];
 
+  // The same length of time just before the range, for "vs the period before".
+  const previousRows = since ? await sql`
+    SELECT metrics
+      FROM social_analytics_posts
+     WHERE workspace_id = ${principal.workspaceId}
+       AND (${chosen} = 'all' OR platform = ${chosen})
+       AND published_at >= ${new Date(since.getTime() - rangeDays * DAY_MS).toISOString()}::timestamptz
+       AND published_at < ${since.toISOString()}::timestamptz` : [];
+  const previousTotals = emptyTotals();
+  for (const row of previousRows) {
+    const metrics = row.metrics || {};
+    addTo(previousTotals, { metrics, engagement: engagementOf(metrics), audience: audienceOf(metrics) });
+  }
+  const previous = since ? { ...previousTotals, engagementRate: rate(previousTotals) } : null;
+
   const posts = rows.map((row) => {
     const metrics = row.metrics || {};
     const engagement = engagementOf(metrics);
@@ -196,15 +212,19 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
   const bestSlots = [...grid.values()]
     .filter((cell) => cell.rated >= 2)
     .map((cell) => ({ weekday: cell.weekday, daypart: cell.daypart, posts: cell.posts, averageRate: average(cell) }))
+    .filter((cell) => cell.averageRate > 0) // a slot nobody engaged with is not a "best" time
     .sort((left, right) => right.averageRate - left.averageRate)
     .slice(0, 3);
 
+  const totalsWithRate = { ...totals, engagementRate: rate(totals) };
   return {
     rangeDays,
     platform: chosen,
     since: since ? since.toISOString() : null,
     until: until.toISOString(),
-    totals: { ...totals, engagementRate: rate(totals) },
+    totals: totalsWithRate,
+    previous,
+    insights: buildInsights({ posts, totals: totalsWithRate, previous, bestSlots }),
     platforms: [...byPlatform.values()].map((entry) => ({ ...entry, engagementRate: rate(entry) })).sort((a, b) => b.engagement - a.engagement),
     daily,
     bestTimes: { weekdays: weekdays.map(finish), dayparts: dayparts.map(finish), bestSlots },

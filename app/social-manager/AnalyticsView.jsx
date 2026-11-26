@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, ChevronDown, Download, ExternalLink, Eye, FileUp, Heart, Loader2, Search, Trash2, TrendingUp, UserPlus, Users } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, CalendarClock, ChevronDown, Lightbulb, Download, ExternalLink, Eye, FileUp, Heart, Loader2, Search, Trash2, TrendingUp, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 const RANGES = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"], ["all", "All time"]];
@@ -25,8 +25,28 @@ function toCsv(posts) {
   return [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll("\"", "\"\"")}"`).join(",")).join("\r\n");
 }
 
-function Tile({ icon: Icon, label, value, note }) {
-  return <article className="sm-tile"><span><Icon size={17} /></span><div><small>{label}</small><strong>{value}</strong>{note && <em>{note}</em>}</div></article>;
+// "vs the period before": a percent change, or points for a rate.
+function changeOf(now, before, { points = false } = {}) {
+  if (before === null || before === undefined || now === null || now === undefined) return null;
+  if (points) {
+    const diff = Math.round((now - before) * 10) / 10;
+    return { up: diff > 0, flat: diff === 0, text: `${diff > 0 ? "+" : ""}${diff} pts` };
+  }
+  if (!before) return null;
+  const diff = Math.round(((now - before) / before) * 100);
+  return { up: diff > 0, flat: diff === 0, text: `${diff > 0 ? "+" : ""}${diff}%` };
+}
+
+function Tile({ icon: Icon, label, value, note, change }) {
+  return (
+    <article className="sm-tile"><span><Icon size={17} /></span><div><small>{label}</small><strong>{value}</strong>
+      {change && (
+        <b className={`sm-change ${change.flat ? "flat" : change.up ? "up" : "down"}`} title="Compared with the same length of time just before">
+          {!change.flat && (change.up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}{change.text}<span> vs before</span>
+        </b>
+      )}
+      {note && <em>{note}</em>}</div></article>
+  );
 }
 
 /** One series of bars with a hover tooltip and a table view. */
@@ -209,7 +229,11 @@ export default function AnalyticsView({ initialReport }) {
   }
 
   const audienceLabel = totals.reach ? "Reach" : totals.impressions ? "Impressions" : "Views";
+  const audienceKey = audienceLabel.toLowerCase();
   const best = report.bestTimes.bestSlots[0];
+  // Compare only when the period before had posts; "All time" has nothing before it.
+  const previous = report.previous?.posts ? report.previous : null;
+  const change = (key, options) => (previous ? changeOf(totals[key], previous[key], options) : null);
   return (
     <>
       <div className="sm-controls">
@@ -227,13 +251,20 @@ export default function AnalyticsView({ initialReport }) {
       {error && <p className="sm-message bad" role="alert">{error}</p>}
 
       <section className={`sm-tiles ${loading ? "loading" : ""}`} aria-label="Summary">
-        <Tile icon={CalendarClock} label="Posts" value={number.format(totals.posts)} />
-        <Tile icon={Eye} label="Views" value={compact.format(totals.views)} />
-        <Tile icon={Users} label={audienceLabel} value={compact.format(totals.reach || totals.impressions || totals.views)} />
-        <Tile icon={Heart} label="Engagement" value={compact.format(totals.engagement)} note="likes, comments, shares, saves" />
-        <Tile icon={TrendingUp} label="Engagement rate" value={rateText(totals.engagementRate)} note={`of ${audienceLabel.toLowerCase()}`} />
-        <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} />
+        <Tile icon={CalendarClock} label="Posts" value={number.format(totals.posts)} change={change("posts")} />
+        <Tile icon={Eye} label="Views" value={compact.format(totals.views)} change={change("views")} />
+        <Tile icon={Users} label={audienceLabel} value={compact.format(totals[audienceKey])} change={change(audienceKey)} />
+        <Tile icon={Heart} label="Engagement" value={compact.format(totals.engagement)} note="likes, comments, shares, saves" change={change("engagement")} />
+        <Tile icon={TrendingUp} label="Engagement rate" value={rateText(totals.engagementRate)} note={`of ${audienceKey}`} change={change("engagementRate", { points: true })} />
+        <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} change={change("follows")} />
       </section>
+
+      {report.insights?.length > 0 && (
+        <section className="sm-panel sm-insights" aria-label="What to do next">
+          <header className="sm-panel-head"><div><h2><Lightbulb size={18} />What to do next</h2><p>Worked out from your posts in this period</p></div></header>
+          <ul>{report.insights.map((insight) => <li key={insight.id} className={insight.tone}>{insight.text}</li>)}</ul>
+        </section>
+      )}
 
       {report.hiddenByRange > 0 && (
         <p className="sm-message sm-hidden-note">
