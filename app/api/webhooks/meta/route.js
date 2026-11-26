@@ -3,6 +3,7 @@ import { getSql } from "@whatsapp/lib/db";
 import { recordInbound } from "@whatsapp/lib/wa/messaging";
 import { applyReaction, recordCallEvent, resolveOrCreateContact } from "@whatsapp/lib/data";
 import { resolveTenantsByWabaId } from "@whatsapp/lib/tenant";
+import { describeMetaStatusError, withFailureNote } from "@whatsapp/lib/wa/meta-status";
 
 // Meta WhatsApp Cloud API posts events here. Configure in Meta for Developers >
 // WhatsApp > Configuration > Webhook:
@@ -93,15 +94,26 @@ async function processEntry(sql, business, entry) {
     // so replies/callbacks go out from the same number.
     const phoneNumberId = value.metadata?.phone_number_id || null;
 
-    // Delivery receipts update the outbound row already shown in the CRM.
+    // Delivery receipts update the outbound row already shown in the CRM. A
+    // failed receipt also carries Meta's reason; keep it on the message so the
+    // chat says why, not just "failed".
     for (const status of value.statuses || []) {
       if (!status.id || !status.status) continue;
-      await sql`
+      const newStatus = String(status.status).toLowerCase();
+      const [row] = await sql`
         UPDATE messages
-           SET status = ${String(status.status).toLowerCase()}
+           SET status = ${newStatus}
          WHERE business_id = ${business.id}
            AND (provider = 'meta' OR provider IS NULL)
-           AND provider_id = ${status.id}`;
+           AND provider_id = ${status.id}
+        RETURNING id, body`;
+      if (row && newStatus === "failed") {
+        const reason = describeMetaStatusError(status.errors);
+        console.warn(`Meta delivery failed for message ${row.id}: ${reason}`);
+        await sql`
+          UPDATE messages SET body = ${withFailureNote(row.body, reason)}
+           WHERE id = ${row.id}`;
+      }
     }
 
     // ── Call events (field: "calls") ───────────────────────────────────────

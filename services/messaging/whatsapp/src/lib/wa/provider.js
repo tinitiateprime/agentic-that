@@ -10,8 +10,30 @@
 // BSPs is a one-line env change (WA_PROVIDER) with no caller changes.
 
 // WhatsApp / WATI want the number as digits only, no leading "+".
+// WhatsApp needs the full international number (country code, no "+"). A
+// contact typed as a bare 10-digit local number ("6309123487") would otherwise
+// go out as-is and Meta reads its leading digits as a country code (63 =
+// Philippines), so the message silently fails. Bare local numbers — 10 digits,
+// or 11 with a trunk "0" — get the default country code. Anything written with
+// a "+" or "00" is taken as already international and left alone.
+// WA_DEFAULT_COUNTRY_CODE overrides the default (91); set it empty to disable.
+const DEFAULT_COUNTRY_CODE = String(process.env.WA_DEFAULT_COUNTRY_CODE ?? "91").replace(/[^\d]/g, "");
+
+// Single-argument on purpose: callers pass it straight to Array#map, which
+// would otherwise hand the array index in as a country code.
 export function normalizeWaNumber(phone) {
-  return String(phone || "").replace(/[^\d]/g, "");
+  return normalizeWaNumberFor(phone, DEFAULT_COUNTRY_CODE);
+}
+
+export function normalizeWaNumberFor(phone, countryCode) {
+  const raw = String(phone || "").trim();
+  const digits = raw.replace(/[^\d]/g, "");
+  if (raw.startsWith("+")) return digits;
+  if (raw.startsWith("00")) return digits.slice(2);
+  if (!countryCode) return digits;
+  if (digits.length === 10) return `${countryCode}${digits}`;
+  if (digits.length === 11 && digits.startsWith("0")) return `${countryCode}${digits.slice(1)}`;
+  return digits;
 }
 
 // Normalize WATI_ACCESS_TOKEN regardless of how it was pasted: tolerate

@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getProvider } from "./provider.js";
+import { getProvider, normalizeWaNumber, normalizeWaNumberFor } from "./provider.js";
+
+test("bare local numbers get the default country code; international ones are kept", () => {
+  assert.equal(normalizeWaNumber("6309123487"), "916309123487");
+  assert.equal(normalizeWaNumber("63091 23487"), "916309123487");
+  assert.equal(normalizeWaNumber("06309123487"), "916309123487");
+  assert.equal(normalizeWaNumber("+91 63091 23487"), "916309123487");
+  assert.equal(normalizeWaNumber("916309123487"), "916309123487");
+  assert.equal(normalizeWaNumber("+6309123487"), "6309123487");
+  assert.equal(normalizeWaNumber("0014155550123"), "14155550123");
+  assert.equal(normalizeWaNumber("15551234567"), "15551234567");
+  assert.equal(normalizeWaNumber(""), "");
+  assert.equal(normalizeWaNumberFor("6309123487", ""), "6309123487");
+  assert.equal(normalizeWaNumberFor("6309123487", "44"), "446309123487");
+  // Safe to pass straight to Array#map (index must not become a country code).
+  assert.deepEqual(["6309123487", "6309123488"].map(normalizeWaNumber), ["916309123487", "916309123488"]);
+});
 
 test("mock provider records reaction details without network access", async () => {
   const provider = getProvider({ provider: "mock" });
