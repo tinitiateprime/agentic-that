@@ -2,6 +2,7 @@
 
 import { ArrowDownRight, ArrowUpRight, CalendarClock, ChevronDown, Lightbulb, Download, ExternalLink, Eye, FileUp, Heart, Loader2, Search, Trash2, TrendingUp, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import AutoSyncPanel from "./AutoSyncPanel";
 
 const RANGES = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"], ["all", "All time"]];
 const PLATFORMS = [["all", "All platforms"], ["instagram", "Instagram"], ["facebook", "Facebook"], ["youtube", "YouTube"], ["linkedin", "LinkedIn"], ["x", "X"]];
@@ -227,8 +228,9 @@ export default function AnalyticsView({ initialReport }) {
       <>
         <div className="sm-intro">
           <h2>See how every post performs, in one place</h2>
-          <p>Views, reach, likes, comments, shares, saves and new followers for Instagram, Facebook, YouTube, LinkedIn and X, with your best posts and the best time to post. Start by uploading one export below.</p>
+          <p>Views, reach, likes, comments, shares, saves and new followers for Instagram, Facebook, YouTube, LinkedIn and X, with your best posts and the best time to post. Turn on automatic updates, or upload one export below.</p>
         </div>
+        <AutoSyncPanel autoSync={report.autoSync} onSynced={() => load()} />
         <Uploader onImported={() => load()} compactMode={false} />
       </>
     );
@@ -254,9 +256,11 @@ export default function AnalyticsView({ initialReport }) {
           </select>
         </label>
         {loading && <Loader2 size={16} className="sm-spin" />}
-        <span className="sm-updated">Numbers as of your latest upload{report.library.lastUpdate ? `: ${date(report.library.lastUpdate)}` : ""}</span>
+        <span className="sm-updated">Numbers as of your latest update{report.library.lastUpdate ? `: ${date(report.library.lastUpdate)}` : ""}</span>
       </div>
       {error && <p className="sm-message bad" role="alert">{error}</p>}
+
+      <AutoSyncPanel autoSync={report.autoSync} onSynced={() => load()} />
 
       <section className={`sm-tiles ${loading ? "loading" : ""}`} aria-label="Summary">
         <Tile icon={CalendarClock} label="Posts" value={number.format(totals.posts)} change={change("posts")} />

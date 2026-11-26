@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ANALYTICS_PLATFORMS, METRICS, readAnalyticsExport } from "../social-analytics/parse-export.js";
+import { matchKeys } from "../social-analytics/from-scrape.js";
 import { buildInsights } from "../social-analytics/insights.js";
 import { getPlatformSql } from "./auth-store.js";
 
@@ -48,6 +49,62 @@ export function audienceOf(metrics = {}) {
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 
+// Saves posts for one platform. A post already stored under another key (the
+// same post from an export and from an automatic update) is updated in place.
+async function savePosts(tx, workspaceId, platform, posts, importId) {
+  const existing = await tx`
+    SELECT id, post_key, permalink FROM social_analytics_posts
+     WHERE workspace_id = ${workspaceId} AND platform = ${platform}`;
+  const byKey = new Map();
+  const remember = (keys, id) => { for (const key of keys) if (!byKey.has(key)) byKey.set(key, id); };
+  for (const row of existing) remember(matchKeys(platform, row.post_key, row.permalink), row.id);
+
+  let updated = 0;
+  for (const post of posts) {
+    const keys = matchKeys(platform, post.postKey, post.permalink);
+    const matchId = keys.map((key) => byKey.get(key)).find(Boolean);
+    const values = {
+      account: post.account.slice(0, 200), permalink: post.permalink.slice(0, 1000), text: post.text,
+      type: post.type.slice(0, 100), publishedAt: post.publishedAt, metrics: tx.json(post.metrics),
+    };
+    if (matchId) {
+      await tx`
+        UPDATE social_analytics_posts SET
+          account = COALESCE(NULLIF(${values.account}, ''), account),
+          permalink = COALESCE(NULLIF(${values.permalink}, ''), permalink),
+          post_text = COALESCE(NULLIF(${values.text}, ''), post_text),
+          post_type = COALESCE(NULLIF(${values.type}, ''), post_type),
+          published_at = COALESCE(${values.publishedAt}::timestamptz, published_at),
+          metrics = metrics || ${values.metrics},
+          import_id = ${importId},
+          updated_at = now()
+        WHERE id = ${matchId}`;
+      updated += 1;
+      continue;
+    }
+    const [row] = await tx`
+      INSERT INTO social_analytics_posts
+        (id, workspace_id, platform, post_key, account, permalink, post_text, post_type, published_at, metrics, import_id, updated_at)
+      VALUES
+        (${`post_${crypto.randomUUID()}`}, ${workspaceId}, ${platform}, ${post.postKey.slice(0, 500)},
+         ${values.account}, ${values.permalink}, ${values.text}, ${values.type},
+         ${values.publishedAt}, ${values.metrics}, ${importId}, now())
+      ON CONFLICT (workspace_id, platform, post_key) DO UPDATE SET
+        account = COALESCE(NULLIF(EXCLUDED.account, ''), social_analytics_posts.account),
+        permalink = COALESCE(NULLIF(EXCLUDED.permalink, ''), social_analytics_posts.permalink),
+        post_text = COALESCE(NULLIF(EXCLUDED.post_text, ''), social_analytics_posts.post_text),
+        post_type = COALESCE(NULLIF(EXCLUDED.post_type, ''), social_analytics_posts.post_type),
+        published_at = COALESCE(EXCLUDED.published_at, social_analytics_posts.published_at),
+        metrics = social_analytics_posts.metrics || EXCLUDED.metrics,
+        import_id = EXCLUDED.import_id,
+        updated_at = now()
+      RETURNING id, (xmax <> 0) AS was_update`;
+    if (row?.was_update) updated += 1;
+    remember(keys, row.id);
+  }
+  return { added: posts.length - updated, updated };
+}
+
 /** Saves one uploaded export. Newer numbers replace older ones for the same post. */
 export async function importAnalyticsFile(principal, { fileName, bytes, platform }) {
   if (!bytes?.length) throw new Error("The file is empty.");
@@ -59,28 +116,26 @@ export async function importAnalyticsFile(principal, { fileName, bytes, platform
     await tx`
       INSERT INTO social_analytics_imports (id, workspace_id, platform, file_name, post_count, imported_by)
       VALUES (${importId}, ${principal.workspaceId}, ${parsed.platform}, ${String(fileName).slice(0, 200)}, ${parsed.posts.length}, ${principal.userId})`;
-    let updated = 0;
-    for (const post of parsed.posts) {
-      const [row] = await tx`
-        INSERT INTO social_analytics_posts
-          (id, workspace_id, platform, post_key, account, permalink, post_text, post_type, published_at, metrics, import_id, updated_at)
-        VALUES
-          (${`post_${crypto.randomUUID()}`}, ${principal.workspaceId}, ${parsed.platform}, ${post.postKey.slice(0, 500)},
-           ${post.account.slice(0, 200)}, ${post.permalink.slice(0, 1000)}, ${post.text}, ${post.type.slice(0, 100)},
-           ${post.publishedAt}, ${tx.json(post.metrics)}, ${importId}, now())
-        ON CONFLICT (workspace_id, platform, post_key) DO UPDATE SET
-          account = COALESCE(NULLIF(EXCLUDED.account, ''), social_analytics_posts.account),
-          permalink = COALESCE(NULLIF(EXCLUDED.permalink, ''), social_analytics_posts.permalink),
-          post_text = COALESCE(NULLIF(EXCLUDED.post_text, ''), social_analytics_posts.post_text),
-          post_type = COALESCE(NULLIF(EXCLUDED.post_type, ''), social_analytics_posts.post_type),
-          published_at = COALESCE(EXCLUDED.published_at, social_analytics_posts.published_at),
-          metrics = social_analytics_posts.metrics || EXCLUDED.metrics,
-          import_id = EXCLUDED.import_id,
-          updated_at = now()
-        RETURNING (xmax <> 0) AS was_update`;
-      if (row?.was_update) updated += 1;
-    }
-    return { importId, platform: parsed.platform, posts: parsed.posts.length, added: parsed.posts.length - updated, updated };
+    const { added, updated } = await savePosts(tx, principal.workspaceId, parsed.platform, parsed.posts, importId);
+    return { importId, platform: parsed.platform, posts: parsed.posts.length, added, updated };
+  });
+}
+
+/**
+ * Saves the posts an automatic update collected, once per job (the import id
+ * is derived from the job, so a second call for the same job does nothing).
+ */
+export async function importScrapedPosts(workspaceId, { jobId, platform, posts, label }) {
+  const sql = await getPlatformSql();
+  const importId = `import_sync_${jobId}`;
+  return sql.begin(async (tx) => {
+    const [created] = await tx`
+      INSERT INTO social_analytics_imports (id, workspace_id, platform, file_name, post_count, imported_by)
+      VALUES (${importId}, ${workspaceId}, ${platform}, ${String(label).slice(0, 200)}, ${posts.length}, NULL)
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id`;
+    if (!created) return { skipped: true, added: 0, updated: 0 };
+    return { skipped: false, ...(await savePosts(tx, workspaceId, platform, posts, importId)) };
   });
 }
 
@@ -88,7 +143,8 @@ export async function importAnalyticsFile(principal, { fileName, bytes, platform
 export async function deleteAnalyticsImport(principal, importId) {
   const sql = await getPlatformSql();
   return sql.begin(async (tx) => {
-    const [found] = await tx`SELECT id FROM social_analytics_imports WHERE id = ${String(importId)} AND workspace_id = ${principal.workspaceId}`;
+    // Automatic updates are not uploads and are not listed, so they can't be removed here.
+    const [found] = await tx`SELECT id FROM social_analytics_imports WHERE id = ${String(importId)} AND workspace_id = ${principal.workspaceId} AND left(id, 12) <> 'import_sync_'`;
     if (!found) throw new Error("That upload was not found.");
     const removed = await tx`DELETE FROM social_analytics_posts WHERE import_id = ${found.id} AND workspace_id = ${principal.workspaceId} RETURNING id`;
     await tx`DELETE FROM social_analytics_imports WHERE id = ${found.id}`;
@@ -129,6 +185,7 @@ export async function socialAnalyticsReport(principal, { days, platform } = {}) 
       FROM social_analytics_imports i
       LEFT JOIN platform_users u ON u.id = i.imported_by
      WHERE i.workspace_id = ${principal.workspaceId}
+       AND left(i.id, 12) <> 'import_sync_'
      ORDER BY i.created_at DESC
      LIMIT 30`;
   const [counts] = await sql`

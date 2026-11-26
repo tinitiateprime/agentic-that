@@ -1,6 +1,7 @@
 import { accessErrorResponse, authorizeOpenServiceApi } from "@platform/server/access-control";
 import { importAnalyticsFile, MAX_IMPORT_BYTES, socialAnalyticsReport } from "@platform/server/social-analytics-store";
 import { AnalyticsImportError } from "@platform/social-analytics/parse-export";
+import { autoSyncState } from "@platform/server/social-analytics-sync";
 
 export const runtime = "nodejs";
 
@@ -23,7 +24,8 @@ export async function GET(request) {
     const principal = await companyPrincipal();
     const query = new URL(request.url).searchParams;
     const days = query.get("days") === "all" ? "all" : Number(query.get("days") || 30);
-    return Response.json(await socialAnalyticsReport(principal, { days, platform: query.get("platform") || "all" }));
+    const autoSync = await autoSyncState(principal.workspaceId);
+    return Response.json({ ...(await socialAnalyticsReport(principal, { days, platform: query.get("platform") || "all" })), autoSync });
   } catch (error) {
     return failure(error);
   }

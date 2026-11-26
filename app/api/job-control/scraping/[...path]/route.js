@@ -89,7 +89,8 @@ export async function GET(_request, context) {
     }
     if (resource === "runs" && !jobId) {
       const jobs = await listSupabaseJobs(principal.workspaceId, { type: `scrape.${platform}`, limit: 50 });
-      const completed = jobs.filter((job) => job.status === "success").slice(0, 30);
+      // Social Manager's automatic updates use the same scrapers; they aren't the user's runs.
+      const completed = jobs.filter((job) => job.status === "success" && job.payload?.source !== "social-analytics").slice(0, 30);
       const results = await Promise.all(completed.map((job) => getSupabaseJob(principal.workspaceId, job.id)));
       return Response.json({
         runs: results.map((job) => {
