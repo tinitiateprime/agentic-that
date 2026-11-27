@@ -123,6 +123,7 @@ import { collectYoutubeComments } from "../../../../src/platform/social-inbox/yo
 import { collectLinkedinActivity } from "../../../../src/platform/social-inbox/linkedin-collector.js";
 import { collectXMentions } from "../../../../src/platform/social-inbox/x-collector.js";
 import { collectFacebookReelComments } from "../../../../src/platform/social-inbox/facebook-collector.js";
+import { collectInstagramActivity } from "../../../../src/platform/social-inbox/instagram-collector.js";
 import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
@@ -674,10 +675,10 @@ async function runCentralPublishingJobs(pairing: CentralCompanionPairing, jobs: 
 async function runCentralInboxJob(pairing: CentralCompanionPairing, job: CentralInboxJob) {
   try {
     const kind = `${job.platform}:${job.payload?.kind}`;
-    if (!["youtube:youtube.comments", "linkedin:linkedin.comments", "x:x.comments", "facebook:facebook.comments"].includes(kind)) {
+    if (!["youtube:youtube.comments", "linkedin:linkedin.comments", "x:x.comments", "facebook:facebook.comments", "instagram:instagram.comments"].includes(kind)) {
       throw Object.assign(new Error("This Companion can't collect that inbox yet. Update the Companion."), { code: "inbox_unsupported" });
     }
-    const label = ({ youtube: "YouTube", x: "X", facebook: "Facebook", linkedin: "LinkedIn" } as Record<string, string>)[job.platform] || job.platform;
+    const label = ({ youtube: "YouTube", x: "X", facebook: "Facebook", linkedin: "LinkedIn", instagram: "Instagram" } as Record<string, string>)[job.platform] || job.platform;
     await updateCentralJobStatus(pairing, job.id, "running", `Checking new ${label} comments.`, false, { stage: "collecting" });
     type InboxCollection = { seen: number; items: unknown[] } & Record<string, unknown>;
     const collected = await withAccountPage<InboxCollection>(job.accountId, pairing.workspaceId, async (page) => (job.platform === "youtube"
@@ -686,13 +687,15 @@ async function runCentralInboxJob(pairing: CentralCompanionPairing, job: Central
         ? await collectXMentions(page)
         : job.platform === "facebook"
           ? await collectFacebookReelComments(page)
-          : await collectLinkedinActivity(page, {})));
+          : job.platform === "instagram"
+            ? await collectInstagramActivity(page)
+            : await collectLinkedinActivity(page, {})));
     await updateCentralJobStatus(
       pairing, job.id, "success",
       job.platform === "youtube"
         ? `Read ${collected.seen} unanswered YouTube ${collected.seen === 1 ? "comment" : "comments"}.`
-        : job.platform === "facebook"
-          ? `Read ${collected.seen} Facebook ${collected.seen === 1 ? "comment" : "comments"}.`
+        : job.platform === "facebook" || job.platform === "instagram"
+          ? `Read ${collected.seen} ${label} ${collected.seen === 1 ? "comment" : "comments"}.`
           : `Read ${collected.seen} ${label} ${collected.seen === 1 ? "reply or mention" : "replies and mentions"}.`,
       false,
       { stage: "complete" },

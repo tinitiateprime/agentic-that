@@ -74,7 +74,7 @@
     "aws:storage:check": "node scripts/check-aws-storage.mjs",
     "aws:live:check": "node scripts/check-aws-live.mjs",
     "storage:migrate:netlify": "node scripts/migrate-netlify-storage.mjs",
-    "test:social-manager": "node --test src/platform/social-analytics/parse-export.test.js src/platform/social-analytics/parse-xls.test.js src/platform/social-analytics/insights.test.js src/platform/social-analytics/from-scrape.test.js src/platform/social-inbox/from-scrape.test.js src/platform/social-inbox/youtube-comments.test.js src/platform/social-inbox/collected.test.js src/platform/social-inbox/linkedin-notifications.test.js src/platform/social-inbox/x-notifications.test.js src/platform/social-inbox/facebook-comments.test.js",
+    "test:social-manager": "node --test src/platform/social-analytics/parse-export.test.js src/platform/social-analytics/parse-xls.test.js src/platform/social-analytics/insights.test.js src/platform/social-analytics/from-scrape.test.js src/platform/social-inbox/from-scrape.test.js src/platform/social-inbox/youtube-comments.test.js src/platform/social-inbox/collected.test.js src/platform/social-inbox/linkedin-notifications.test.js src/platform/social-inbox/x-notifications.test.js src/platform/social-inbox/facebook-comments.test.js src/platform/social-inbox/instagram-activity.test.js",
     "test:social-seo": "node --import tsx --test src/platform/social-seo/social-seo.test.js src/platform/social-seo/social-seo.quality.test.js src/platform/social-seo/companion-ai.test.js services/publishing/queue-runner/server/services/chat-ai/chat-ai.test.ts",
     "test:pdf": "node --test src/platform/pdf/pdf-operations.test.js src/platform/pdf/pdf-advanced.test.js",
     "test:pdf:browser": "node scripts/test-pdf-browser.mjs",
