@@ -36,5 +36,8 @@ test("LinkedIn items are accepted only for LinkedIn jobs, with LinkedIn links", 
   assert.equal(clean.permalink, item.permalink);
   assert.equal(clean.authorUrl, "", "a YouTube link can't be a LinkedIn author");
   assert.deepEqual(cleanCollectedItems({ items: [item] }, "youtube"), [], "wrong platform");
-  assert.deepEqual(cleanCollectedItems({ items: [item] }, "x"), [], "platform not supported yet");
+  assert.deepEqual(cleanCollectedItems({ items: [item] }, "facebook"), [], "platform not supported yet");
+  const [reply] = cleanCollectedItems({ items: [{ kind: "reply", externalId: "x:2126226624219865091", authorName: "Kaushik (@seernu293)", body: "thats very useful", permalink: "https://x.com/seernu293/status/2126226624219865091" }] }, "x");
+  assert.equal(reply.platform, "x");
+  assert.equal(reply.permalink, "https://x.com/seernu293/status/2126226624219865091");
 });

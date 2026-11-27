@@ -121,6 +121,7 @@ import {
 } from "./services/publisher.js";
 import { collectYoutubeComments } from "../../../../src/platform/social-inbox/youtube-collector.js";
 import { collectLinkedinActivity } from "../../../../src/platform/social-inbox/linkedin-collector.js";
+import { collectXMentions } from "../../../../src/platform/social-inbox/x-collector.js";
 import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
@@ -672,20 +673,22 @@ async function runCentralPublishingJobs(pairing: CentralCompanionPairing, jobs: 
 async function runCentralInboxJob(pairing: CentralCompanionPairing, job: CentralInboxJob) {
   try {
     const kind = `${job.platform}:${job.payload?.kind}`;
-    if (kind !== "youtube:youtube.comments" && kind !== "linkedin:linkedin.comments") {
+    if (kind !== "youtube:youtube.comments" && kind !== "linkedin:linkedin.comments" && kind !== "x:x.comments") {
       throw Object.assign(new Error("This Companion can't collect that inbox yet. Update the Companion."), { code: "inbox_unsupported" });
     }
-    const label = job.platform === "youtube" ? "YouTube" : "LinkedIn";
+    const label = job.platform === "youtube" ? "YouTube" : job.platform === "x" ? "X" : "LinkedIn";
     await updateCentralJobStatus(pairing, job.id, "running", `Checking new ${label} comments.`, false, { stage: "collecting" });
     type InboxCollection = { seen: number; items: unknown[] } & Record<string, unknown>;
     const collected = await withAccountPage<InboxCollection>(job.accountId, pairing.workspaceId, async (page) => (job.platform === "youtube"
       ? await collectYoutubeComments(page, { unansweredOnly: job.payload.unansweredOnly !== false })
-      : await collectLinkedinActivity(page, {})));
+      : job.platform === "x"
+        ? await collectXMentions(page)
+        : await collectLinkedinActivity(page, {})));
     await updateCentralJobStatus(
       pairing, job.id, "success",
       job.platform === "youtube"
         ? `Read ${collected.seen} unanswered YouTube ${collected.seen === 1 ? "comment" : "comments"}.`
-        : `Read ${collected.seen} LinkedIn ${collected.seen === 1 ? "comment or mention" : "comments and mentions"}.`,
+        : `Read ${collected.seen} ${label} ${collected.seen === 1 ? "reply or mention" : "replies and mentions"}.`,
       false,
       { stage: "complete" },
       { ...collected, collectedAt: new Date().toISOString() },
