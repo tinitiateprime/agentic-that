@@ -1,5 +1,8 @@
 # AgenticThat Companion 2.9.0
 
+This is a QA prerelease. Windows and macOS QA downloads may be unsigned; macOS
+may not be notarized.
+
 ## Social Manager inbox: YouTube comments
 
 - When a company turns on **YouTube comments** for one of its YouTube accounts
