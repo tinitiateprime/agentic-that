@@ -691,7 +691,9 @@ async function runCentralInboxJob(pairing: CentralCompanionPairing, job: Central
       pairing, job.id, "success",
       job.platform === "youtube"
         ? `Read ${collected.seen} unanswered YouTube ${collected.seen === 1 ? "comment" : "comments"}.`
-        : `Read ${collected.seen} ${label} ${collected.seen === 1 ? "reply or mention" : "replies and mentions"}.`,
+        : job.platform === "facebook"
+          ? `Read ${collected.seen} Facebook ${collected.seen === 1 ? "comment" : "comments"}.`
+          : `Read ${collected.seen} ${label} ${collected.seen === 1 ? "reply or mention" : "replies and mentions"}.`,
       false,
       { stage: "complete" },
       { ...collected, collectedAt: new Date().toISOString() },

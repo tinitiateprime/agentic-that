@@ -1,8 +1,9 @@
-// Reads the comments Facebook sends with a reel (the graphql
-// FBUnifiedVideoFeedbackRightRailWithCommentPreloadingQuery response a reel's
-// page loads while signed in) into inbox items. Facebook doesn't always send a
+// Reads the comments Facebook sends with a reel or a photo post (the graphql
+// responses their pages load while signed in: a reel's
+// FBUnifiedVideoFeedbackRightRailWithCommentPreloadingQuery, a photo's
+// CometPhotoRootContentQuery) into inbox items. Facebook doesn't always send a
 // notification for a comment (it often holds back ones from new accounts), so
-// the Companion reads the recent reels themselves.
+// the Companion reads the recent reels and posts themselves.
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -20,12 +21,19 @@ function* commentNodes(node, seen = new Set()) {
   for (const value of Object.values(node)) yield* commentNodes(value, seen);
 }
 
+const PLACES = {
+  reel: { context: "Comment on your reel", link: (id, commentId) => `https://www.facebook.com/reel/${id}/?comment_id=${commentId}` },
+  photo: { context: "Comment on your post", link: (id, commentId) => `https://www.facebook.com/photo.php?fbid=${id}&comment_id=${commentId}` },
+};
+
 /**
- * Inbox items from one reel's comment data.
+ * Inbox items from one reel's or photo post's comment data.
  * @param {object[]} documents the parsed response documents
- * @param {{ reelId: string, ownerId?: string }} options ownerId: the account itself, whose comments are answers
+ * @param {{ reelId?: string, photoId?: string, ownerId?: string }} options ownerId: the account itself, whose comments are answers
  */
-export function facebookItemsFromReel(documents, { reelId, ownerId = "" }) {
+export function facebookItemsFromReel(documents, { reelId = "", photoId = "", ownerId = "" }) {
+  const place = photoId ? PLACES.photo : PLACES.reel;
+  const postId = photoId || reelId;
   const items = [];
   const seen = new Set();
   for (const comment of commentNodes(documents)) {
@@ -43,12 +51,26 @@ export function facebookItemsFromReel(documents, { reelId, ownerId = "" }) {
       authorName: clean(comment.author?.name) || "Facebook user",
       authorUrl: /^\d{5,30}$/.test(authorId) ? `https://www.facebook.com/${authorId}` : "",
       body: body.slice(0, 4000),
-      contextText: "Comment on your reel",
-      permalink: `https://www.facebook.com/reel/${reelId}/?comment_id=${id}`,
+      contextText: place.context,
+      permalink: place.link(postId, id),
       receivedAt: Number.isFinite(Number(comment.created_time)) ? new Date(Number(comment.created_time) * 1000).toISOString() : null,
     });
   }
   return items;
+}
+
+/** The same reader, for a photo post. */
+export const facebookItemsFromPost = (documents, { photoId, ownerId = "" }) => facebookItemsFromReel(documents, { photoId, ownerId });
+
+/** "photo.php?fbid=122137358895319647&set=…" → "122137358895319647", newest first as the page lists them. */
+export function photoIdsFromLinks(hrefs, limit = 6) {
+  const ids = [];
+  for (const href of hrefs || []) {
+    const id = /[?&]fbid=(\d{5,30})/.exec(String(href || ""))?.[1] || /\/photos\/[^/]+\/(\d{5,30})/.exec(String(href || ""))?.[1];
+    if (id && !ids.includes(id)) ids.push(id);
+    if (ids.length >= limit) break;
+  }
+  return ids;
 }
 
 /** "/reel/1160929579819299/?s=…" → "1160929579819299", newest first as the page lists them. */

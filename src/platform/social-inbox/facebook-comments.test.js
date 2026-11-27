@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { facebookDocuments, facebookItemsFromReel, reelIdsFromLinks } from "./facebook-comments.js";
+import { facebookDocuments, facebookItemsFromPost, facebookItemsFromReel, photoIdsFromLinks, reelIdsFromLinks } from "./facebook-comments.js";
 
 // Trimmed to the fields used, in the shape a reel's comment data arrives.
 const comment = (id, { name = "Hello Uhfh", authorId = "61593507754763", text, depth = 0, created = 1795767162 } = {}) => ({
@@ -30,4 +30,15 @@ test("reel comments become inbox items; the account's own replies are skipped", 
 test("reel links, newest first, without repeats", () => {
   assert.deepEqual(reelIdsFromLinks(["/reel/?s=tab", "/reel/1160929579819299/?s=x", "/reel/3016761075337169/?s=x", "/reel/1160929579819299/"], 6), ["1160929579819299", "3016761075337169"]);
   assert.deepEqual(reelIdsFromLinks(["/reel/111111/", "/reel/222222/", "/reel/333333/"], 2), ["111111", "222222"]);
+});
+
+test("photo post comments link to the photo; photo links are read newest first", () => {
+  const [item] = facebookItemsFromPost(facebookDocuments(JSON.stringify({ data: { node: { comments: [comment("1111789158569900", { text: "want to learn AI and cloud, please guide me" })] } } })), { photoId: "122137358895319647", ownerId: "61589589437834" });
+  assert.equal(item.contextText, "Comment on your post");
+  assert.equal(item.permalink, "https://www.facebook.com/photo.php?fbid=122137358895319647&comment_id=1111789158569900");
+  assert.deepEqual(photoIdsFromLinks([
+    "https://www.facebook.com/profile.php?id=61589589437834&sk=photos",
+    "https://www.facebook.com/photo.php?fbid=122138599767319647&set=pb.61589589437834.-2207520000&type=3",
+    "https://www.facebook.com/photo.php?fbid=122137358895319647&set=pb.61589589437834.-2207520000&type=3",
+  ]), ["122138599767319647", "122137358895319647"]);
 });

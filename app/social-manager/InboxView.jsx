@@ -70,7 +70,7 @@ function Sources({ sources, busy, onChange }) {
               </div>
             );
           })}
-          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage; X covers replies and mentions; Facebook reads the comments on your latest reels. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
+          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage; X covers replies and mentions; Facebook reads the comments on your latest 6 reels and 6 photo posts. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
         </div>
       )}
     </section>
