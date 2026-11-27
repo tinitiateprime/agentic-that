@@ -28,7 +28,7 @@ function sourceStatus(source) {
   if (!source.enabled) return { text: "Off" };
   if (!source.connected) return { text: "Connect this account again in the Companion.", tone: "bad" };
   if (!source.companionReady) {
-    return { text: `Needs Companion 2.9.0 or later on the computer with this account${source.companionVersion ? ` (it has ${source.companionVersion})` : ""}. It starts by itself after the update.`, tone: "bad" };
+    return { text: `Needs Companion ${source.requiredVersion || "2.9.0"} or later on the computer with this account${source.companionVersion ? ` (it has ${source.companionVersion})` : ""}. It starts by itself after the update.`, tone: "bad" };
   }
   if (source.status === "running") return { text: "Reading new comments…", busy: true };
   if (source.status === "never" || source.status === "queued") {
@@ -45,17 +45,19 @@ function Sources({ sources, busy, onChange }) {
     <section className="sm-panel sm-inbox-sources" aria-label="Where comments come from">
       <button type="button" className="sm-inbox-sources-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <strong>Where comments come from</strong>
-        <span>{sources.filter((source) => source.enabled).length ? `YouTube: ${sources.filter((source) => source.enabled).map((source) => source.name).join(", ")}` : "Turn on YouTube comments"} · Instagram &amp; Facebook from automatic updates</span>
+        <span>{sources.filter((source) => source.enabled).length ? `On: ${sources.filter((source) => source.enabled).map((source) => `${source.label} ${source.name}`).join(", ")}` : "Turn on YouTube and LinkedIn comments"} · Instagram &amp; Facebook from automatic updates</span>
       </button>
       {open && (
         <div className="sm-inbox-sources-body">
-          {sources.length === 0 && <p className="sm-muted">No YouTube account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
+          {sources.length === 0 && <p className="sm-muted">No YouTube or LinkedIn account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
           {sources.map((source) => {
             const status = sourceStatus(source);
             return (
               <div key={source.accountId} className="sm-inbox-source">
-                <span className="sm-inbox-platform youtube">YouTube</span>
-                <strong>{source.name}</strong>
+                <span className={`sm-inbox-platform ${source.platform}`}>{source.label}</span>
+                <strong title={source.pages?.length ? `Also reads the Pages it manages: ${source.pages.join(", ")}` : undefined}>
+                  {source.name}{source.pages?.length ? <small className="sm-inbox-source-pages"> + {source.pages.length === 1 ? source.pages[0] : `${source.pages.length} Pages`}</small> : null}
+                </strong>
                 <span className={`sm-sync-state ${status.tone || ""}`}>{status.busy && <Loader2 size={13} className="sm-spin" />}{status.text}</span>
                 <span className="sm-inbox-source-actions">
                   {source.enabled && source.companionReady && source.status !== "running" && (
@@ -68,7 +70,7 @@ function Sources({ sources, busy, onChange }) {
               </div>
             );
           })}
-          <p className="sm-muted">The Companion reads comments you haven&apos;t answered yet, read-only, in the account&apos;s own signed-in browser. When you answer on YouTube, the comment is marked Done here by itself. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
+          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
         </div>
       )}
     </section>

@@ -27,3 +27,14 @@ test("Companion versions", () => {
   assert.equal(versionAtLeast("2.9.0-qa.1", "2.9.0"), true);
   assert.equal(versionAtLeast(null, "2.9.0"), false);
 });
+
+test("LinkedIn items are accepted only for LinkedIn jobs, with LinkedIn links", () => {
+  const item = { kind: "mention", externalId: "li:urn:li:activity:7529022106349629440:0123456789abcdef", authorName: "Kranthi Kumar A", body: "New role at Tinitiate", permalink: "https://www.linkedin.com/feed/update/urn:li:activity:7529022106349629440", authorUrl: "https://www.youtube.com/@x" };
+  const [clean] = cleanCollectedItems({ items: [item] }, "linkedin");
+  assert.equal(clean.platform, "linkedin");
+  assert.equal(clean.kind, "mention");
+  assert.equal(clean.permalink, item.permalink);
+  assert.equal(clean.authorUrl, "", "a YouTube link can't be a LinkedIn author");
+  assert.deepEqual(cleanCollectedItems({ items: [item] }, "youtube"), [], "wrong platform");
+  assert.deepEqual(cleanCollectedItems({ items: [item] }, "x"), [], "platform not supported yet");
+});

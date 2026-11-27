@@ -1,20 +1,21 @@
-// Social Manager inbox → YouTube comments collected by the Companion. A
-// company turns it on for one of its connected YouTube accounts; the database
-// queues a read-only check every 20 minutes for the Companion holding that
-// account (supabase/migrations/202611270002_social_inbox_collect.sql), and
-// this module adds what it found to the inbox when the inbox is opened.
+// Social Manager inbox → comments collected by the Companion (YouTube, and
+// LinkedIn profiles and Pages). A company turns it on per connected account;
+// the database queues a read-only check every 20 minutes for the Companion
+// holding that account (migrations 202611270002 and 202611270003), and this
+// module adds what it found to the inbox when the inbox is opened.
 import crypto from "node:crypto";
 import { getPlatformSql } from "./auth-store.js";
-import { cleanCollectedItems, versionAtLeast } from "../social-inbox/collected.js";
+import { cleanCollectedItems, INBOX_VERSIONS, versionAtLeast } from "../social-inbox/collected.js";
 import { addInboxItems } from "./social-inbox-store.js";
 
-export const INBOX_COMPANION_VERSION = "2.9.0";
+export const INBOX_PLATFORMS = Object.keys(INBOX_VERSIONS);
+const LABELS = { youtube: "YouTube", linkedin: "LinkedIn" };
 const ACTIVE = new Set(["queued", "waiting_for_companion", "claimed", "running", "cancel_requested"]);
 const FAILED = new Set(["failed", "uncertain", "cancelled", "reconnect_required"]);
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 
-const sourceKey = (accountId) => `youtube:${accountId}`;
+const sourceKey = (platform, accountId) => `${platform}:${accountId}`;
 
 // Comments answered on YouTube drop out of Studio's "unanswered" list. When
 // the Companion saw the whole list, anything of ours not in it is answered;
@@ -31,7 +32,7 @@ async function closeAnswered(sql, workspaceId, accountId, result, items) {
       note = CASE WHEN note = '' THEN 'Answered on YouTube.' ELSE note END,
       updated_at = now()
     WHERE workspace_id = ${workspaceId}
-      AND source = ${sourceKey(accountId)}
+      AND source = ${sourceKey("youtube", accountId)}
       AND status = 'open'
       AND NOT (external_id = ANY(${seenIds}::text[]))
       AND (${wholeList} OR received_at >= ${oldest}::timestamptz)
@@ -60,10 +61,11 @@ export async function refreshInboxCollections(workspaceId) {
       const running = status === "claimed" || status === "running";
       next = { last_status: running ? "running" : "queued", last_message: running ? "The Companion is reading new comments." : "Waiting for the Companion.", imported: false };
     } else if (status === "success") {
-      const items = cleanCollectedItems(source.job_result);
-      const { added } = await addInboxItems(workspaceId, items, sourceKey(source.account_id));
-      const answered = await closeAnswered(sql, workspaceId, source.account_id, source.job_result, items);
-      const parts = [added ? `${added} new ${added === 1 ? "comment" : "comments"}` : "No new comments", answered ? `${answered} answered on YouTube` : ""].filter(Boolean);
+      const items = cleanCollectedItems(source.job_result, source.platform);
+      const { added } = await addInboxItems(workspaceId, items, sourceKey(source.platform, source.account_id));
+      // Only YouTube says which comments are still unanswered.
+      const answered = source.platform === "youtube" ? await closeAnswered(sql, workspaceId, source.account_id, source.job_result, items) : 0;
+      const parts = [added ? `${added} new ${added === 1 ? "item" : "items"}` : "Nothing new", answered ? `${answered} answered on YouTube` : ""].filter(Boolean);
       next = { last_status: "collected", last_message: `${parts.join(", ")}.`, imported: true, collected: true };
     } else if (FAILED.has(status)) {
       const error = source.job_error || source.result_error || {};
@@ -88,22 +90,28 @@ export async function refreshInboxCollections(workspaceId) {
   }
 }
 
-/** The company's YouTube accounts, which ones are on, and whether their Companion can do it. */
+/** The company's YouTube and LinkedIn accounts, which ones are on, and whether their Companion can do it. */
 export async function inboxSources(workspaceId) {
   const sql = await getPlatformSql();
   const accounts = await sql`
-    SELECT a.id, a.handle, a.display_name, a.enabled, a.credential_configured,
+    SELECT a.id, a.platform, a.handle, a.display_name, a.enabled, a.credential_configured, a.metadata,
            d.version AS device_version, d.last_seen_at AS device_seen_at,
            s.enabled AS on, s.last_status, s.last_message, s.last_collected_at
       FROM public.social_accounts a
       LEFT JOIN public.companion_devices d ON d.id = a.companion_device_id AND d.revoked_at IS NULL
       LEFT JOIN public.social_inbox_sources s ON s.account_id = a.id AND s.workspace_id = a.workspace_id
-     WHERE a.workspace_id = ${workspaceId} AND a.platform = 'youtube' AND a.enabled
-     ORDER BY lower(coalesce(nullif(a.display_name, ''), a.handle))`;
+     WHERE a.workspace_id = ${workspaceId} AND a.platform IN ('youtube', 'linkedin') AND a.enabled
+     ORDER BY a.platform DESC, lower(coalesce(nullif(a.display_name, ''), a.handle))`;
   return accounts.map((account) => ({
     accountId: account.id,
-    platform: "youtube",
+    platform: account.platform,
+    label: LABELS[account.platform],
     name: account.display_name || account.handle,
+    // LinkedIn: the Pages this member manages are read too.
+    pages: account.platform === "linkedin" && Array.isArray(account.metadata?.linkedinManagedPages)
+      ? account.metadata.linkedinManagedPages.map((page) => String(page?.name || "")).filter(Boolean)
+      : [],
+    requiredVersion: INBOX_VERSIONS[account.platform],
     handle: account.handle,
     connected: Boolean(account.credential_configured),
     enabled: Boolean(account.on),
@@ -111,18 +119,18 @@ export async function inboxSources(workspaceId) {
     message: account.last_message || "",
     lastCollectedAt: account.last_collected_at ? new Date(account.last_collected_at).toISOString() : null,
     companionVersion: account.device_version || null,
-    companionReady: versionAtLeast(account.device_version, INBOX_COMPANION_VERSION),
+    companionReady: versionAtLeast(account.device_version, INBOX_VERSIONS[account.platform]),
     companionOnline: Boolean(account.device_seen_at && Date.now() - Date.parse(account.device_seen_at) < 5 * 60 * 1000),
   }));
 }
 
-/** Turns YouTube comments on or off for one account, or asks for a check now. */
+/** Turns comment checks on or off for one YouTube or LinkedIn account, or asks for a check now. */
 export async function updateInboxSource(principal, { accountId, enabled = true, checkNow = false }) {
   const sql = await getPlatformSql();
   const [account] = await sql`
-    SELECT id FROM public.social_accounts
-     WHERE id = ${String(accountId || "")} AND workspace_id = ${principal.workspaceId} AND platform = 'youtube'`;
-  if (!account) throw fail("Choose one of this company's YouTube accounts.");
+    SELECT id, platform FROM public.social_accounts
+     WHERE id = ${String(accountId || "")} AND workspace_id = ${principal.workspaceId} AND platform IN ('youtube', 'linkedin')`;
+  if (!account) throw fail("Choose one of this company's YouTube or LinkedIn accounts.");
   if (checkNow) {
     // The Companion queues the check the next time it asks for work (seconds).
     await sql`UPDATE public.social_inbox_sources SET last_queued_at = NULL, updated_at = now() WHERE workspace_id = ${principal.workspaceId} AND account_id = ${account.id} AND enabled`;
@@ -130,7 +138,7 @@ export async function updateInboxSource(principal, { accountId, enabled = true, 
   }
   await sql`
     INSERT INTO public.social_inbox_sources (id, workspace_id, platform, account_id, enabled, created_by)
-    VALUES (${`inboxsrc_${crypto.randomUUID()}`}, ${principal.workspaceId}, 'youtube', ${account.id}, ${Boolean(enabled)}, ${principal.userId || null})
+    VALUES (${`inboxsrc_${crypto.randomUUID()}`}, ${principal.workspaceId}, ${account.platform}, ${account.id}, ${Boolean(enabled)}, ${principal.userId || null})
     ON CONFLICT (workspace_id, account_id) DO UPDATE SET
       enabled = EXCLUDED.enabled,
       last_queued_at = CASE WHEN EXCLUDED.enabled THEN NULL ELSE social_inbox_sources.last_queued_at END,

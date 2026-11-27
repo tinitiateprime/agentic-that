@@ -235,3 +235,4 @@
 .sm-inbox-source .sm-sync-state { grid-column: auto; }
 .sm-inbox-source-actions { display: inline-flex; align-items: center; gap: 12px; }
 @media (max-width: 760px) { .sm-inbox-source { grid-template-columns: auto 1fr; } .sm-inbox-source .sm-sync-state, .sm-inbox-source-actions { grid-column: 1 / -1; } }
+.sm-inbox-source-pages { color: var(--sm-muted); font-size: 12px; font-weight: 500; }
