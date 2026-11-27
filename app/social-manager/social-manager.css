@@ -182,3 +182,48 @@
   .sm-sync-row { grid-template-columns: 1fr; }
   .sm-sync-state { grid-column: 1; }
 }
+
+/* Inbox */
+.sm-link { padding: 0; border: 0; color: var(--sm-accent); background: none; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.sm-count { margin-left: 6px; padding: 0 6px; border-radius: 999px; color: #fff; background: var(--sm-accent); font-size: 11px; font-style: normal; font-weight: 700; }
+.sm-inbox-grid { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.sm-inbox-list { max-height: 70vh; margin: 0; padding: 6px; overflow-y: auto; list-style: none; border: 1px solid var(--sm-line); border-radius: 16px; background: #fff; }
+.sm-inbox-list button { display: grid; gap: 4px; width: 100%; padding: 11px 12px; border: 0; border-radius: 11px; color: var(--sm-ink); background: transparent; text-align: left; cursor: pointer; }
+.sm-inbox-list button:hover { background: var(--sm-soft); }
+.sm-inbox-list button[aria-current="true"] { background: var(--sm-accent-soft); }
+.sm-inbox-row-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.sm-inbox-row-top strong { overflow: hidden; font-size: 13.5px; text-overflow: ellipsis; white-space: nowrap; }
+.sm-inbox-row-top time { margin-left: auto; color: var(--sm-faint); font-size: 12px; white-space: nowrap; }
+.sm-inbox-snippet { display: -webkit-box; overflow: hidden; color: var(--sm-muted); font-size: 13px; line-height: 1.45; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.sm-inbox-assignee { display: inline-flex; align-items: center; gap: 4px; color: var(--sm-accent); font-size: 11.5px; font-weight: 700; }
+.sm-inbox-platform { flex: none; padding: 1px 7px; border-radius: 999px; color: #fff; background: #6b7280; font-size: 10.5px; font-weight: 800; letter-spacing: .02em; }
+.sm-inbox-platform.instagram { background: #c13584; }
+.sm-inbox-platform.facebook { background: #1877f2; }
+.sm-inbox-platform.youtube { background: #e00000; }
+.sm-inbox-platform.linkedin { background: #0a66c2; }
+.sm-inbox-platform.x { background: #111; }
+.sm-inbox-detail { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--sm-line); border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgba(17, 24, 39, .045); }
+.sm-inbox-detail > header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sm-inbox-detail h3 { margin: 6px 0 2px; font-size: 17px; }
+.sm-inbox-detail h3 a { color: inherit; }
+.sm-inbox-detail small { color: var(--sm-faint); font-size: 12px; }
+.sm-inbox-detail a.sm-primary { text-decoration: none; }
+.sm-inbox-body { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sm-inbox-context { margin: 0; padding: 10px 12px; border-radius: 10px; color: var(--sm-muted); background: var(--sm-soft); font-size: 13px; line-height: 1.5; }
+.sm-inbox-context span { font-weight: 700; }
+.sm-inbox-replies { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid #eef0f4; }
+.sm-inbox-replies-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.sm-inbox-reply-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.sm-inbox-reply-chip { display: inline-flex; align-items: center; gap: 2px; }
+.sm-inbox-reply-chip > button:first-child { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid #d9dce8; border-radius: 999px; color: #424b5e; background: #fff; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+.sm-inbox-reply-chip > button:first-child:hover { border-color: var(--sm-accent); color: var(--sm-accent); }
+.sm-inbox-reply-form { display: grid; gap: 8px; }
+.sm-inbox-reply-form input, .sm-inbox-reply-form textarea, .sm-inbox-note textarea { width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid #d2d7e0; border-radius: 9px; color: var(--sm-ink); font: inherit; font-size: 13px; }
+.sm-inbox-reply-form button { justify-self: start; }
+.sm-inbox-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid #eef0f4; }
+.sm-inbox-done { margin-left: auto; }
+.sm-inbox-note { display: grid; gap: 5px; color: var(--sm-muted); font-size: 12.5px; font-weight: 650; }
+@media (max-width: 860px) {
+  .sm-inbox-grid { grid-template-columns: 1fr; }
+  .sm-inbox-list { max-height: 40vh; }
+}

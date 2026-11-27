@@ -7,7 +7,9 @@
 import crypto from "node:crypto";
 import { checkProfileLink, postsFromScrape } from "../social-analytics/from-scrape.js";
 import { getPlatformSql } from "./auth-store.js";
+import { commentsFromScrape } from "../social-inbox/from-scrape.js";
 import { importScrapedPosts } from "./social-analytics-store.js";
+import { addInboxItems, inboxTableMissing } from "./social-inbox-store.js";
 import { createSupabaseJob, latestSupabaseCompanion } from "./supabase-job-control.js";
 
 export const SYNC_PLATFORMS = ["instagram", "facebook"];
@@ -26,7 +28,8 @@ export function syncPayload(source) {
     collection_mode: "latest",
     max_results: 50,
     recent_days: 365,
-    skip_comments: true,
+    // Comments feed the Inbox (see 202611270001_social_inbox.sql).
+    skip_comments: false,
     timezone_offset_minutes: source.timezone_offset_minutes,
   };
 }
@@ -81,7 +84,18 @@ export async function refreshSyncResults(workspaceId) {
           posts,
           label: `Automatic update · ${LABELS[source.platform]}`,
         });
-        next = { last_status: "synced", last_message: `${posts.length} posts updated${saved.added ? `, ${saved.added} new` : ""}.`, imported: true, synced: true };
+        // The same job's comments go to the Inbox. Never let that stop the analytics.
+        let newComments = 0;
+        if (!saved.skipped) {
+          try {
+            const comments = commentsFromScrape(source.platform, source.job_result || {}, { profileUrl: source.profile_url });
+            newComments = (await addInboxItems(workspaceId, comments, "automatic-update")).added;
+          } catch (error) {
+            if (!inboxTableMissing(error)) console.error("Social Manager inbox comments could not be saved", error);
+          }
+        }
+        const commentNote = newComments ? ` ${newComments} new ${newComments === 1 ? "comment" : "comments"} in the Inbox.` : "";
+        next = { last_status: "synced", last_message: `${posts.length} posts updated${saved.added ? `, ${saved.added} new` : ""}.${commentNote}`, imported: true, synced: true };
       }
     } else if (FAILED.has(status)) {
       next = { last_status: "failed", last_message: failureText({ message: source.job_message }, source.job_error || source.result_error), imported: true };
