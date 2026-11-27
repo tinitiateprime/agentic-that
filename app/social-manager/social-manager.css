@@ -227,3 +227,11 @@
   .sm-inbox-grid { grid-template-columns: 1fr; }
   .sm-inbox-list { max-height: 40vh; }
 }
+.sm-inbox-sources { padding: 0; }
+.sm-inbox-sources-toggle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; width: 100%; padding: 14px 18px; border: 0; color: var(--sm-ink); background: none; text-align: left; cursor: pointer; }
+.sm-inbox-sources-toggle span { color: var(--sm-muted); font-size: 13px; }
+.sm-inbox-sources-body { display: grid; gap: 4px; padding: 0 18px 14px; }
+.sm-inbox-source { display: grid; grid-template-columns: auto minmax(90px, 160px) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid #eef0f4; }
+.sm-inbox-source .sm-sync-state { grid-column: auto; }
+.sm-inbox-source-actions { display: inline-flex; align-items: center; gap: 12px; }
+@media (max-width: 760px) { .sm-inbox-source { grid-template-columns: auto 1fr; } .sm-inbox-source .sm-sync-state, .sm-inbox-source-actions { grid-column: 1 / -1; } }

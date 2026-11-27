@@ -353,6 +353,28 @@ async function launchAccountBrowser(
   }
 }
 
+/**
+ * Lends a read-only job (such as collecting inbox comments) the account's
+ * signed-in browser, the same one publishing uses, and always closes it.
+ * Fails at once if the account is busy, so it never interrupts a post.
+ */
+export async function withAccountPage<T>(
+  accountId: string,
+  workspaceId: string | undefined,
+  work: (page: Page, session: PublishingBrowserSession) => Promise<T>,
+): Promise<T> {
+  const account = await getPublishingAccount(accountId, workspaceId);
+  if (!account) throw new Error("This account isn't on this Companion. Connect it here first.");
+  if (!account.credentialConfigured) throw new Error(`${account.displayName} needs to be connected again in the Companion.`);
+  const session = await launchAccountBrowser(account, "publish");
+  try {
+    await session.update({ state: "opening", detail: "Checking new comments (read-only)" }).catch(() => undefined);
+    return await work(session.page, session);
+  } finally {
+    await session.close().catch(() => undefined);
+  }
+}
+
 async function saveAccountSessionState(
   account: PublishingAccount,
   context: BrowserContext,

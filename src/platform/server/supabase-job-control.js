@@ -9,7 +9,7 @@ const ARTIFACT_BUCKET = "job-artifacts";
 const ARTIFACT_URL_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const SUPABASE_ARTIFACT_PART_THRESHOLD_BYTES = 5 * 1024 * 1024;
 const MAX_INLINE_ARTIFACT_BYTES = 64 * 1024 * 1024;
-const JOB_TYPES = new Set(["publish", "scrape.instagram", "scrape.facebook"]);
+const JOB_TYPES = new Set(["publish", "scrape.instagram", "scrape.facebook", "collect.inbox"]);
 const JOB_PLATFORMS = new Set(["instagram", "facebook", "x", "linkedin", "youtube", "reddit"]);
 // Every app publishes through the Companion (Reddit included, in its external browser).
 const API_ENGINE_PLATFORMS = new Set();

@@ -24,6 +24,57 @@ function ago(value) {
 }
 const when = (value) => (value ? new Date(value).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
 
+function sourceStatus(source) {
+  if (!source.enabled) return { text: "Off" };
+  if (!source.connected) return { text: "Connect this account again in the Companion.", tone: "bad" };
+  if (!source.companionReady) {
+    return { text: `Needs Companion 2.9.0 or later on the computer with this account${source.companionVersion ? ` (it has ${source.companionVersion})` : ""}. It starts by itself after the update.`, tone: "bad" };
+  }
+  if (source.status === "running") return { text: "Reading new comments…", busy: true };
+  if (source.status === "never" || source.status === "queued") {
+    return { text: source.companionOnline ? "Checking within a minute…" : "Waiting for the Companion to come online.", busy: source.companionOnline };
+  }
+  if (source.status === "failed") return { text: source.message, tone: "bad" };
+  if (source.status === "collected") return { text: `Checked ${ago(source.lastCollectedAt)} ago. ${source.message} Checks every 20 minutes.`, tone: "good" };
+  return { text: source.message };
+}
+
+function Sources({ sources, busy, onChange }) {
+  const [open, setOpen] = useState(!sources.some((source) => source.enabled));
+  return (
+    <section className="sm-panel sm-inbox-sources" aria-label="Where comments come from">
+      <button type="button" className="sm-inbox-sources-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <strong>Where comments come from</strong>
+        <span>{sources.filter((source) => source.enabled).length ? `YouTube: ${sources.filter((source) => source.enabled).map((source) => source.name).join(", ")}` : "Turn on YouTube comments"} · Instagram &amp; Facebook from automatic updates</span>
+      </button>
+      {open && (
+        <div className="sm-inbox-sources-body">
+          {sources.length === 0 && <p className="sm-muted">No YouTube account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
+          {sources.map((source) => {
+            const status = sourceStatus(source);
+            return (
+              <div key={source.accountId} className="sm-inbox-source">
+                <span className="sm-inbox-platform youtube">YouTube</span>
+                <strong>{source.name}</strong>
+                <span className={`sm-sync-state ${status.tone || ""}`}>{status.busy && <Loader2 size={13} className="sm-spin" />}{status.text}</span>
+                <span className="sm-inbox-source-actions">
+                  {source.enabled && source.companionReady && source.status !== "running" && (
+                    <button type="button" className="sm-link" disabled={busy} onClick={() => onChange({ accountId: source.accountId, checkNow: true })}>Check now</button>
+                  )}
+                  <button type="button" className={source.enabled ? "sm-secondary" : "sm-primary"} disabled={busy} onClick={() => onChange({ accountId: source.accountId, enabled: !source.enabled })}>
+                    {source.enabled ? "Turn off" : "Turn on"}
+                  </button>
+                </span>
+              </div>
+            );
+          })}
+          <p className="sm-muted">The Companion reads comments you haven&apos;t answered yet, read-only, in the account&apos;s own signed-in browser. When you answer on YouTube, the comment is marked Done here by itself. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SavedReplies({ replies, onCopy, onSave, busy }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
@@ -183,6 +234,7 @@ export default function InboxView() {
 
   return (
     <section className="sm-inbox">
+      {data?.sources && <Sources sources={data.sources} busy={busy} onChange={(change) => post({ type: "source", ...change })} />}
       <div className="sm-controls">
         <div className="sm-range" role="group" aria-label="Inbox lists">
           {VIEWS.map(([id, label]) => (
@@ -205,7 +257,7 @@ export default function InboxView() {
           <Inbox size={26} />
           <h2>{view === "open" ? (data?.items?.length ? "All caught up" : "Nothing here yet") : "Nothing in this list"}</h2>
           {view === "open" && !data?.items?.length && (
-            <p>Comments on your Instagram and Facebook posts arrive here with each automatic update. Turn automatic updates on in the Analytics tab. Messages and YouTube comments are coming next.</p>
+            <p>Turn on YouTube comments above, and automatic updates in the Analytics tab for Instagram and Facebook. New comments land here.</p>
           )}
         </div>
       ) : (

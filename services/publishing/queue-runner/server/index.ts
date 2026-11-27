@@ -117,7 +117,9 @@ import {
   runAutomation,
   startManualAccountSession,
   publishingAttentionNotice,
+  withAccountPage,
 } from "./services/publisher.js";
+import { collectYoutubeComments } from "../../../../src/platform/social-inbox/youtube-collector.js";
 import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
@@ -198,11 +200,22 @@ type CentralPublishingJob = {
   };
 };
 
-type CentralCompanionJob = CentralPublishingJob | {
+type CentralScrapingJob = {
   id: string;
   type: "scrape.instagram" | "scrape.facebook";
   payload: Record<string, unknown>;
 };
+
+// Social Manager inbox: read new comments in an account's signed-in browser.
+type CentralInboxJob = {
+  id: string;
+  type: "collect.inbox";
+  platform: string;
+  accountId: string;
+  payload: { kind?: string; unansweredOnly?: boolean };
+};
+
+type CentralCompanionJob = CentralPublishingJob | CentralScrapingJob | CentralInboxJob;
 
 let centralPollingTimer: NodeJS.Timeout | null = null;
 let centralPollInFlight = false;
@@ -652,9 +665,37 @@ async function runCentralPublishingJobs(pairing: CentralCompanionPairing, jobs: 
   await Promise.all(ready.map((entry) => entry.finish(runError)));
 }
 
+// Reads new comments for the Social Manager inbox. Read-only: opens the
+// account's signed-in browser, reads what the platform sends its own page,
+// closes it. Never clicks, types or sends anything on the account.
+async function runCentralInboxJob(pairing: CentralCompanionPairing, job: CentralInboxJob) {
+  try {
+    if (job.payload?.kind !== "youtube.comments" || job.platform !== "youtube") {
+      throw Object.assign(new Error("This Companion can't collect that inbox yet. Update the Companion."), { code: "inbox_unsupported" });
+    }
+    await updateCentralJobStatus(pairing, job.id, "running", "Checking new YouTube comments.", false, { stage: "collecting" });
+    const collected = await withAccountPage(job.accountId, pairing.workspaceId, (page) => collectYoutubeComments(page, {
+      unansweredOnly: job.payload.unansweredOnly !== false,
+    }));
+    await updateCentralJobStatus(
+      pairing, job.id, "success",
+      `Read ${collected.seen} unanswered YouTube ${collected.seen === 1 ? "comment" : "comments"}.`,
+      false,
+      { stage: "complete" },
+      { ...collected, collectedAt: new Date().toISOString() },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = (error as { code?: string })?.code
+      || (/already busy/i.test(message) ? "account_busy" : /connect|sign-in|log in/i.test(message) ? "youtube_login_required" : "inbox_collect_failed");
+    await updateCentralJobStatus(pairing, job.id, "failed", message.slice(0, 500), false, {}, null, { code, message: message.slice(0, 500) })
+      .catch(() => undefined);
+  }
+}
+
 async function runCentralScrapingJob(
   pairing: CentralCompanionPairing,
-  job: Exclude<CentralCompanionJob, CentralPublishingJob>,
+  job: CentralScrapingJob,
 ) {
   const ownerKey = `supabase:${pairing.workspaceId}`;
   const instagram = job.type === "scrape.instagram";
@@ -752,10 +793,12 @@ async function pollCentralWorkspaceCompanion() {
     });
     // Posts go out side by side; scraping runs one job at a time alongside them.
     const publishing = (jobs || []).filter((job): job is CentralPublishingJob => job.type === "publish");
-    const scraping = (jobs || []).filter((job): job is Exclude<CentralCompanionJob, CentralPublishingJob> => job.type !== "publish");
+    const scraping = (jobs || []).filter((job): job is CentralScrapingJob => job.type === "scrape.instagram" || job.type === "scrape.facebook");
+    const inbox = (jobs || []).filter((job): job is CentralInboxJob => job.type === "collect.inbox");
     await Promise.all([
       runCentralPublishingJobs(pairing, publishing),
       (async () => { for (const job of scraping) await runCentralScrapingJob(pairing, job); })(),
+      (async () => { for (const job of inbox) await runCentralInboxJob(pairing, job); })(),
     ]);
   } catch (error) {
     // A network outage is normal while the server is unavailable. The next
