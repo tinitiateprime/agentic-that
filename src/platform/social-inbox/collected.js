@@ -16,6 +16,7 @@ const RULES = {
   youtube: { id: /^yt:[\w-]{10,100}$/, site: /^https:\/\/(www\.)?youtube\.com\//, fallbackName: "YouTube viewer" },
   linkedin: { id: /^li:urn:li:[\w:(),.-]{5,240}:[0-9a-f]{16}$/, site: /^https:\/\/(www\.)?linkedin\.com\//, fallbackName: "LinkedIn member" },
   x: { id: /^x:\d{5,30}$/, site: /^https:\/\/(x|twitter)\.com\//, fallbackName: "X user" },
+  facebook: { id: /^fb:\d{5,30}$/, site: /^https:\/\/(www\.|m\.)?facebook\.com\//, fallbackName: "Facebook user" },
 };
 const KINDS = new Set(["comment", "reply", "mention", "message"]);
 
@@ -47,4 +48,4 @@ export function cleanCollectedItems(result, platform = "youtube") {
 }
 
 /** The Companion version that can collect each platform's inbox. */
-export const INBOX_VERSIONS = { youtube: "2.9.0", linkedin: "2.10.0", x: "2.11.0" };
+export const INBOX_VERSIONS = { youtube: "2.9.0", linkedin: "2.10.0", x: "2.11.0", facebook: "2.12.0" };

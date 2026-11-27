@@ -122,6 +122,7 @@ import {
 import { collectYoutubeComments } from "../../../../src/platform/social-inbox/youtube-collector.js";
 import { collectLinkedinActivity } from "../../../../src/platform/social-inbox/linkedin-collector.js";
 import { collectXMentions } from "../../../../src/platform/social-inbox/x-collector.js";
+import { collectFacebookReelComments } from "../../../../src/platform/social-inbox/facebook-collector.js";
 import { setCentralWorkspaceSyncHandler } from "./central-sync.js";
 import { publishingDesktopHost } from "./services/desktop-host.js";
 import { deletePublishingMedia, readPublishingMedia, storePublishingMedia } from "./media-storage.js";
@@ -673,17 +674,19 @@ async function runCentralPublishingJobs(pairing: CentralCompanionPairing, jobs: 
 async function runCentralInboxJob(pairing: CentralCompanionPairing, job: CentralInboxJob) {
   try {
     const kind = `${job.platform}:${job.payload?.kind}`;
-    if (kind !== "youtube:youtube.comments" && kind !== "linkedin:linkedin.comments" && kind !== "x:x.comments") {
+    if (!["youtube:youtube.comments", "linkedin:linkedin.comments", "x:x.comments", "facebook:facebook.comments"].includes(kind)) {
       throw Object.assign(new Error("This Companion can't collect that inbox yet. Update the Companion."), { code: "inbox_unsupported" });
     }
-    const label = job.platform === "youtube" ? "YouTube" : job.platform === "x" ? "X" : "LinkedIn";
+    const label = ({ youtube: "YouTube", x: "X", facebook: "Facebook", linkedin: "LinkedIn" } as Record<string, string>)[job.platform] || job.platform;
     await updateCentralJobStatus(pairing, job.id, "running", `Checking new ${label} comments.`, false, { stage: "collecting" });
     type InboxCollection = { seen: number; items: unknown[] } & Record<string, unknown>;
     const collected = await withAccountPage<InboxCollection>(job.accountId, pairing.workspaceId, async (page) => (job.platform === "youtube"
       ? await collectYoutubeComments(page, { unansweredOnly: job.payload.unansweredOnly !== false })
       : job.platform === "x"
         ? await collectXMentions(page)
-        : await collectLinkedinActivity(page, {})));
+        : job.platform === "facebook"
+          ? await collectFacebookReelComments(page)
+          : await collectLinkedinActivity(page, {})));
     await updateCentralJobStatus(
       pairing, job.id, "success",
       job.platform === "youtube"

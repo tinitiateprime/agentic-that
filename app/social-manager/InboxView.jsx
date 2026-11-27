@@ -45,11 +45,11 @@ function Sources({ sources, busy, onChange }) {
     <section className="sm-panel sm-inbox-sources" aria-label="Where comments come from">
       <button type="button" className="sm-inbox-sources-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <strong>Where comments come from</strong>
-        <span>{sources.filter((source) => source.enabled).length ? `On: ${sources.filter((source) => source.enabled).map((source) => `${source.label} ${source.name}`).join(", ")}` : "Turn on YouTube, LinkedIn and X"} · Instagram &amp; Facebook from automatic updates</span>
+        <span>{sources.filter((source) => source.enabled).length ? `On: ${sources.filter((source) => source.enabled).map((source) => `${source.label} ${source.name}`).join(", ")}` : "Turn on YouTube, LinkedIn, X and Facebook"} · Instagram &amp; Facebook from automatic updates</span>
       </button>
       {open && (
         <div className="sm-inbox-sources-body">
-          {sources.length === 0 && <p className="sm-muted">No YouTube, LinkedIn or X account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
+          {sources.length === 0 && <p className="sm-muted">No YouTube, LinkedIn, X or Facebook account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
           {sources.map((source) => {
             const status = sourceStatus(source);
             return (
@@ -70,7 +70,7 @@ function Sources({ sources, busy, onChange }) {
               </div>
             );
           })}
-          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage; X covers replies and mentions. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
+          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage; X covers replies and mentions; Facebook reads the comments on your latest reels. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
         </div>
       )}
     </section>

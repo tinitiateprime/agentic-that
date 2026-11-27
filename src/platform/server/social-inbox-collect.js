@@ -9,7 +9,7 @@ import { cleanCollectedItems, INBOX_VERSIONS, versionAtLeast } from "../social-i
 import { addInboxItems } from "./social-inbox-store.js";
 
 export const INBOX_PLATFORMS = Object.keys(INBOX_VERSIONS);
-const LABELS = { youtube: "YouTube", linkedin: "LinkedIn", x: "X" };
+const LABELS = { youtube: "YouTube", linkedin: "LinkedIn", x: "X", facebook: "Facebook" };
 const ACTIVE = new Set(["queued", "waiting_for_companion", "claimed", "running", "cancel_requested"]);
 const FAILED = new Set(["failed", "uncertain", "cancelled", "reconnect_required"]);
 
@@ -100,7 +100,7 @@ export async function inboxSources(workspaceId) {
       FROM public.social_accounts a
       LEFT JOIN public.companion_devices d ON d.id = a.companion_device_id AND d.revoked_at IS NULL
       LEFT JOIN public.social_inbox_sources s ON s.account_id = a.id AND s.workspace_id = a.workspace_id
-     WHERE a.workspace_id = ${workspaceId} AND a.platform IN ('youtube', 'linkedin', 'x') AND a.enabled
+     WHERE a.workspace_id = ${workspaceId} AND a.platform IN ('youtube', 'linkedin', 'x', 'facebook') AND a.enabled
      ORDER BY a.platform DESC, lower(coalesce(nullif(a.display_name, ''), a.handle))`;
   return accounts.map((account) => ({
     accountId: account.id,
@@ -129,8 +129,8 @@ export async function updateInboxSource(principal, { accountId, enabled = true, 
   const sql = await getPlatformSql();
   const [account] = await sql`
     SELECT id, platform FROM public.social_accounts
-     WHERE id = ${String(accountId || "")} AND workspace_id = ${principal.workspaceId} AND platform IN ('youtube', 'linkedin', 'x')`;
-  if (!account) throw fail("Choose one of this company's YouTube, LinkedIn or X accounts.");
+     WHERE id = ${String(accountId || "")} AND workspace_id = ${principal.workspaceId} AND platform IN ('youtube', 'linkedin', 'x', 'facebook')`;
+  if (!account) throw fail("Choose one of this company's YouTube, LinkedIn, X or Facebook accounts.");
   if (checkNow) {
     // The Companion queues the check the next time it asks for work (seconds).
     await sql`UPDATE public.social_inbox_sources SET last_queued_at = NULL, updated_at = now() WHERE workspace_id = ${principal.workspaceId} AND account_id = ${account.id} AND enabled`;

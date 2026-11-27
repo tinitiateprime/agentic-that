@@ -17,6 +17,14 @@ export async function addInboxItems(workspaceId, items, source) {
   const sql = await getPlatformSql();
   let added = 0;
   for (const item of items) {
+    // The nightly update and a Companion check may both bring the same
+    // comment under different ids: same platform, person and words is one item.
+    const [duplicate] = await sql`
+      SELECT 1 FROM public.social_inbox_items
+       WHERE workspace_id = ${workspaceId} AND platform = ${item.platform}
+         AND lower(author_name) = lower(${item.authorName.slice(0, 200)}) AND body = ${item.body}
+       LIMIT 1`;
+    if (duplicate) continue;
     const rows = await sql`
       INSERT INTO public.social_inbox_items
         (id, workspace_id, platform, kind, external_id, author_name, author_url, body, context_text, permalink, received_at, source)
