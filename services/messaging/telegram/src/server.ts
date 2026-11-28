@@ -44,6 +44,7 @@ import { verifyServiceAccessToken } from "../../../../lib/service-access-token.j
 import { RollingTrialUsageLimiter } from "../../../../lib/trial-usage-limit.ts";
 import { teamTestingFullAccessEnabled } from "../../../../lib/team-testing-access.js";
 import { runWithAuditScope, setAuditUsername } from "../../../../lib/audit-context.js";
+import { logError } from "../../../../lib/error-log.js";
 import { TELEGRAM_MEDIA_CHUNK_BYTES, TelegramMediaStore } from "./media-store.ts";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -1562,6 +1563,15 @@ export async function handleRequestWithErrors(request: IncomingMessage, response
     const linkedElsewhere = error instanceof AccountAlreadyLinkedError || error instanceof WorkspaceRecordConflictError;
     if (!known && !linkedElsewhere && !operational) {
       console.error(`Request failed without logging request data: ${redactedErrorMessage(error)}`);
+      // Application error log (lib/error-log.js); path only, no request data.
+      void logError(error, {
+        source: "telegram",
+        kind: "route",
+        method: request.method,
+        path: request.url,
+        message: redactedErrorMessage(error),
+        cookieHeader: request.headers.cookie,
+      });
     }
     sendJson(request, response, known ? error.status : linkedElsewhere ? 409 : operational ? operational.status : 500, {
       ok: false,
