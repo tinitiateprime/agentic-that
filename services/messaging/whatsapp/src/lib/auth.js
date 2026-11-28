@@ -58,64 +58,99 @@ function publicWorkspaceUser(user) {
     : null;
 }
 
+// users.email is globally unique, so a person's second WhatsApp identity (in
+// another workspace) gets a per-business placeholder address instead.
+async function workspaceUserEmail(db, email, platformUserId, businessId) {
+  const [emailOwner] = email
+    ? await db`SELECT id FROM users WHERE LOWER(email) = ${email} LIMIT 1`
+    : [];
+  return email && !emailOwner ? email : `${platformUserId}.${businessId}@platform.agenticthat.local`;
+}
+
+
+// An AgenticThat user can belong to several workspaces, and each workspace has
+// its own WhatsApp business. The WhatsApp identity is therefore per
+// (platform user, workspace): users is unique on (business_id,
+// platform_user_id), not on platform_user_id alone. Switching workspaces
+// opens that workspace's WhatsApp instead of failing.
 async function ensurePlatformWorkspaceUser(platformUser, legacyUser = null) {
   const sql = await getSql();
   const platformUserId = String(platformUser.id);
+  const workspaceId = platformUser.workspaceId ? String(platformUser.workspaceId) : null;
   const email = String(platformUser.email || "").trim().toLowerCase();
-
-  const [byPlatformId] = await sql`
-    SELECT u.id, u.name, u.email, u.role, u.business_id, b.platform_workspace_id
-      FROM users u
-      JOIN businesses b ON b.id = u.business_id
-     WHERE u.platform_user_id = ${platformUserId} LIMIT 1`;
-  if (byPlatformId) {
-    if (platformUser.workspaceId) {
-      if (byPlatformId.platform_workspace_id && byPlatformId.platform_workspace_id !== platformUser.workspaceId) {
-        throw new Error("This WhatsApp identity is mapped to a different AgenticThat workspace. Ask a global administrator to review the mapping.");
-      }
-      await sql`
-        UPDATE businesses SET platform_workspace_id = COALESCE(platform_workspace_id, ${platformUser.workspaceId})
-         WHERE id = ${byPlatformId.business_id}`;
-    }
-    return publicWorkspaceUser(byPlatformId);
-  }
 
   // All central users in one workspace share the same WhatsApp business. The
   // product-local user is retained only as an audit actor and ownership bridge.
-  if (platformUser.workspaceId) {
+  if (workspaceId) {
     const [workspaceBusiness] = await sql`
-      SELECT id FROM businesses WHERE platform_workspace_id = ${platformUser.workspaceId} LIMIT 1`;
+      SELECT id FROM businesses WHERE platform_workspace_id = ${workspaceId} LIMIT 1`;
     if (workspaceBusiness) {
-      const [existingMember] = await sql`
+      const findMember = () => sql`
         SELECT id, name, email, role, business_id
           FROM users
          WHERE business_id = ${workspaceBusiness.id} AND platform_user_id = ${platformUserId}
          LIMIT 1`;
+      const [existingMember] = await findMember();
       if (existingMember) return publicWorkspaceUser(existingMember);
-      const [emailOwner] = email
-        ? await sql`SELECT id FROM users WHERE LOWER(email) = ${email} LIMIT 1`
-        : [];
-      const workspaceEmail = email && !emailOwner ? email : `${platformUserId}@platform.agenticthat.local`;
-      const [created] = await sql`
-        INSERT INTO users (business_id, name, email, password_hash, role, platform_user_id)
-        VALUES (${workspaceBusiness.id}, ${platformUser.name || "Workspace member"}, ${workspaceEmail},
-                ${hashPassword(crypto.randomBytes(48).toString("base64url"))}, 'member', ${platformUserId})
-        RETURNING id, name, email, role, business_id`;
-      return publicWorkspaceUser(created);
+      try {
+        const [created] = await sql`
+          INSERT INTO users (business_id, name, email, password_hash, role, platform_user_id)
+          VALUES (${workspaceBusiness.id}, ${platformUser.name || "Workspace member"},
+                  ${await workspaceUserEmail(sql, email, platformUserId, workspaceBusiness.id)},
+                  ${hashPassword(crypto.randomBytes(48).toString("base64url"))}, 'member', ${platformUserId})
+          RETURNING id, name, email, role, business_id`;
+        return publicWorkspaceUser(created);
+      } catch (error) {
+        // A concurrent first visit created it; use that row.
+        const [winner] = await findMember();
+        if (winner) return publicWorkspaceUser(winner);
+        throw error;
+      }
     }
+  }
+
+  // No WhatsApp business for this workspace yet. A WhatsApp identity of this
+  // person that isn't tied to any workspace (pre-SaaS) is adopted for it.
+  const [unlinked] = await sql`
+    SELECT u.id, u.name, u.email, u.role, u.business_id
+      FROM users u
+      JOIN businesses b ON b.id = u.business_id
+     WHERE u.platform_user_id = ${platformUserId}
+       AND b.platform_workspace_id IS NULL
+     ORDER BY u.id ASC
+     LIMIT 1`;
+  if (unlinked) {
+    if (workspaceId) {
+      await sql`
+        UPDATE businesses SET platform_workspace_id = COALESCE(platform_workspace_id, ${workspaceId})
+         WHERE id = ${unlinked.business_id}`;
+    }
+    return publicWorkspaceUser(unlinked);
+  }
+
+  // A principal without a workspace keeps whatever identity it already has.
+  if (!workspaceId) {
+    const [anyIdentity] = await sql`
+      SELECT id, name, email, role, business_id
+        FROM users WHERE platform_user_id = ${platformUserId}
+       ORDER BY id ASC LIMIT 1`;
+    if (anyIdentity) return publicWorkspaceUser(anyIdentity);
   }
 
   // An existing WhatsApp-only workspace is linked only when this browser has
   // authenticated to both products. Email alone is not proof of ownership
   // until the main product introduces verified email addresses.
-  if (legacyUser?.id) {
-    const [legacyBusiness] = await sql`
-      SELECT b.platform_workspace_id
-        FROM users u JOIN businesses b ON b.id = u.business_id
-       WHERE u.id = ${legacyUser.id}`;
-    if (legacyBusiness?.platform_workspace_id && legacyBusiness.platform_workspace_id !== platformUser.workspaceId) {
-      throw new Error("This WhatsApp session belongs to a different AgenticThat workspace.");
-    }
+  // A WhatsApp session opened in another workspace is simply not linked here
+  // (it stays with its own workspace).
+  const [legacyBusiness] = legacyUser?.id
+    ? await sql`
+        SELECT b.platform_workspace_id
+          FROM users u JOIN businesses b ON b.id = u.business_id
+         WHERE u.id = ${legacyUser.id}`
+    : [];
+  const legacyLinkable = legacyUser?.id
+    && !(legacyBusiness?.platform_workspace_id && legacyBusiness.platform_workspace_id !== workspaceId);
+  if (legacyLinkable) {
     const [linkedLegacyUser] = await sql.begin(async (tx) => {
       const rows = await tx`
         UPDATE users
@@ -133,39 +168,44 @@ async function ensurePlatformWorkspaceUser(platformUser, legacyUser = null) {
     if (linkedLegacyUser) return publicWorkspaceUser(linkedLegacyUser);
   }
 
+  // This person's identity in this workspace's business (none yet when the
+  // workspace has no business, which is what the creation below fixes).
+  const identityInWorkspace = (db) => workspaceId
+    ? db`
+        SELECT u.id, u.name, u.email, u.role, u.business_id
+          FROM users u JOIN businesses b ON b.id = u.business_id
+         WHERE u.platform_user_id = ${platformUserId}
+           AND b.platform_workspace_id = ${workspaceId}
+         LIMIT 1`
+    : db`
+        SELECT id, name, email, role, business_id
+          FROM users WHERE platform_user_id = ${platformUserId}
+         ORDER BY id ASC LIMIT 1`;
+
   try {
     return await sql.begin(async (tx) => {
-      const [existing] = await tx`
-        SELECT id, name, email, role, business_id
-          FROM users WHERE platform_user_id = ${platformUserId} LIMIT 1`;
+      const [existing] = await identityInWorkspace(tx);
       if (existing) return publicWorkspaceUser(existing);
 
       const [business] = await tx`
         INSERT INTO businesses (name, admin_number, provider, currency, onboarded_at, platform_workspace_id)
         VALUES (${platformUser.businessName || platformUser.name || "My workspace"}, NULL, 'mock', 'INR', NULL,
-                ${platformUser.workspaceId || null})
+                ${workspaceId})
         RETURNING id`;
-      const [emailOwner] = email
-        ? await tx`SELECT id FROM users WHERE LOWER(email) = ${email} LIMIT 1`
-        : [];
-      const workspaceEmail = email && !emailOwner
-        ? email
-        : `${platformUserId}@platform.agenticthat.local`;
       const generatedPassword = crypto.randomBytes(48).toString("base64url");
       const [created] = await tx`
         INSERT INTO users (business_id, name, email, password_hash, role, platform_user_id)
         VALUES (${business.id}, ${platformUser.name || "Workspace owner"},
-                ${workspaceEmail},
+                ${await workspaceUserEmail(tx, email, platformUserId, business.id)},
                 ${hashPassword(generatedPassword)}, 'admin', ${platformUserId})
         RETURNING id, name, email, role, business_id`;
       return publicWorkspaceUser(created);
     });
   } catch (error) {
     // Concurrent serverless requests can race during the first visit. The
-    // unique platform id constraint decides the winner; reuse its row.
-    const [winner] = await sql`
-      SELECT id, name, email, role, business_id
-        FROM users WHERE platform_user_id = ${platformUserId} LIMIT 1`;
+    // unique workspace business / (business, platform user) constraints decide
+    // the winner; reuse its row.
+    const [winner] = await identityInWorkspace(sql);
     if (winner) return publicWorkspaceUser(winner);
     throw error;
   }

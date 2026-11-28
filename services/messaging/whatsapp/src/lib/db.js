@@ -59,7 +59,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v6-inbound-media";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v7-workspace-identities";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -307,8 +307,14 @@ async function migrate(sql) {
     // after both the central and legacy sessions prove the mapping; email is
     // never used as ownership proof.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id TEXT`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_user_id
-       ON users(platform_user_id) WHERE platform_user_id IS NOT NULL`,
+    // One WhatsApp identity per (AgenticThat user, business): a person in
+    // several workspaces has one in each workspace's business. The original
+    // index made it one per person, which failed every WhatsApp request after
+    // they switched workspace ("mapped to a different AgenticThat workspace").
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_business_platform_user
+       ON users(business_id, platform_user_id) WHERE platform_user_id IS NOT NULL`,
+    `DROP INDEX IF EXISTS idx_users_platform_user_id`,
+    `CREATE INDEX IF NOT EXISTS idx_users_platform_user ON users(platform_user_id)`,
     // Every WhatsApp user belongs to exactly one business, and that is the
     // tenant boundary every query filters on — so make the lookup indexed.
     `CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id)`,

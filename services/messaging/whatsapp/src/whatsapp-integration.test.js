@@ -45,7 +45,7 @@ test("schema migration is versioned and creates the reaction cursor columns", as
   const database = await source("services/messaging/whatsapp/src/lib/db.js");
   // The key gates the whole DDL block, so it has to move whenever statements
   // are added or an already-migrated database never sees them.
-  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v6-inbound-media"/);
+  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v7-workspace-identities"/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction TEXT/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ/);
   assert.match(database, /export async function migrateWhatsAppSchema/);
@@ -168,4 +168,19 @@ test("WATI recovery sync remains operator-only", async () => {
   assert.match(route, /getCurrentUser\("operate"\)/);
   assert.match(component, /SYNC_INTERVAL_MS = 60_000/);
   assert.match(component, /running\.current/);
+});
+
+test("a person in several workspaces gets a WhatsApp identity per workspace", async () => {
+  const database = await source("services/messaging/whatsapp/src/lib/db.js");
+  // Unique per (business, platform user), no longer per platform user.
+  assert.match(database, /uq_users_business_platform_user\s+ON users\(business_id, platform_user_id\)/);
+  assert.match(database, /DROP INDEX IF EXISTS idx_users_platform_user_id/);
+
+  const auth = await source("services/messaging/whatsapp/src/lib/auth.js");
+  // Switching workspace must open that workspace's WhatsApp, not fail.
+  assert.doesNotMatch(auth, /mapped to a different AgenticThat workspace/);
+  assert.doesNotMatch(auth, /This WhatsApp session belongs to a different AgenticThat workspace/);
+  assert.match(auth, /WHERE business_id = \$\{workspaceBusiness\.id\} AND platform_user_id = \$\{platformUserId\}/);
+  assert.match(auth, /AND b\.platform_workspace_id = \$\{workspaceId\}/);
+  assert.match(auth, /\$\{platformUserId\}\.\$\{businessId\}@platform\.agenticthat\.local/);
 });
