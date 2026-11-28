@@ -50,7 +50,12 @@ async function readAllResponses(page, address, { timeoutMs, settleMs = 4000 }) {
   } finally {
     page.off("response", listener);
   }
-  return { texts, names: [...names].slice(0, 12), finalUrl: page.url() };
+  // Facebook sometimes builds a post's data into the page itself (no
+  // separate request): read the page's own data blocks too.
+  const embedded = await page.evaluate(() => [...document.querySelectorAll('script[type="application/json"]')]
+    .map((script) => script.textContent || "")
+    .filter((text) => text.length < 3000000 && /"legacy_fbid"|comment/i.test(text))).catch(() => []);
+  return { texts, embedded, names: [...names].slice(0, 12), finalUrl: page.url() };
 }
 
 /**
@@ -90,11 +95,11 @@ export async function collectFacebookReelComments(page, { reels = 6, photos = 6,
     if (stuck() || Date.now() > stopAt) break;
     const read = await readAllResponses(page, `https://www.facebook.com/reel/${reelId}/`, { timeoutMs: perItemMs });
     if (signedOut(read.finalUrl)) throw notSignedIn();
-    if (!read.texts.length) {
+    if (!read.texts.length && !read.embedded.length) {
       report.push({ id: reelId, found: 0, error: "no comment data", loaded: read.names, url: read.finalUrl.slice(0, 120) });
       continue;
     }
-    const found = facebookItemsFromReel(read.texts.flatMap(facebookDocuments), { reelId, ownerId });
+    const found = facebookItemsFromReel([...read.texts, ...read.embedded].flatMap(facebookDocuments), { reelId, ownerId });
     items.push(...found);
     report.push({ id: reelId, found: found.length });
   }
@@ -115,11 +120,14 @@ export async function collectFacebookReelComments(page, { reels = 6, photos = 6,
     if (Date.now() > stopAt || (report.length - reelReports >= 3 && report.slice(-3).every((entry) => entry.error))) break;
     const read = await readAllResponses(page, `https://www.facebook.com/photo.php?fbid=${photoId}`, { timeoutMs: perItemMs });
     if (signedOut(read.finalUrl)) throw notSignedIn();
-    if (!read.texts.length) {
-      report.push({ id: photoId, kind: "photo", found: 0, error: "no comment data", loaded: read.names, url: read.finalUrl.slice(0, 120) });
+    if (!read.texts.length && !read.embedded.length) {
+      // Some photos (a profile picture, for one) open without any comment
+      // data. That's "no comments here", not a broken check; what loaded is
+      // kept so a real change on Facebook can still be seen.
+      report.push({ id: photoId, kind: "photo", found: 0, note: "no comment data", loaded: read.names, url: read.finalUrl.slice(0, 120) });
       continue;
     }
-    const found = facebookItemsFromPost(read.texts.flatMap(facebookDocuments), { photoId, ownerId });
+    const found = facebookItemsFromPost([...read.texts, ...read.embedded].flatMap(facebookDocuments), { photoId, ownerId });
     items.push(...found);
     report.push({ id: photoId, kind: "photo", found: found.length });
   }

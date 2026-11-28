@@ -9,7 +9,10 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 /** Facebook streams several JSON documents, one per line. */
 export function facebookDocuments(text) {
-  return String(text || "").split("\n").map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+  const source = String(text || "");
+  // A page's own data block is one JSON document; responses stream one per line.
+  try { return [JSON.parse(source)]; } catch { /* several documents */ }
+  return source.split("\n").map((line) => line.trim()).filter(Boolean).flatMap((line) => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
 }
