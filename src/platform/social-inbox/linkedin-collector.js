@@ -4,7 +4,34 @@
 // Pages they administer (from their feed), then open each Page's admin
 // Activity, reading the data LinkedIn sends those pages. Read-only: nothing
 // is clicked, typed or sent.
-import { adminPagesFromLinks, linkedinItemsFromNotifications } from "./linkedin-notifications.js";
+import { adminPagesFromLinks, linkedinItemsFromCards, linkedinItemsFromNotifications } from "./linkedin-notifications.js";
+
+// The notification cards as drawn on the page: each card's paragraphs and
+// links. LinkedIn puts its newest notifications only here, not in its data.
+async function cardsOnPage(page) {
+  await page.waitForTimeout(3000);
+  return page.evaluate(() => {
+    const cards = new Map();
+    for (const anchor of document.querySelectorAll('a[href*="/feed/update/"]')) {
+      let card = anchor.parentElement;
+      for (let depth = 0; card && depth < 12; depth += 1, card = card.parentElement) {
+        const texts = [...card.querySelectorAll("p")].map((p) => (p.innerText || "").trim()).filter(Boolean);
+        if (texts.some((text) => /\b(commented on|replied to|mentioned)\b/i.test(text) && text.length < 200)) {
+          if (!cards.has(anchor.href)) cards.set(anchor.href, { texts, links: [...card.querySelectorAll("a[href]")].map((a) => a.href) });
+          break;
+        }
+      }
+    }
+    return [...cards.values()];
+  }).catch(() => []);
+}
+
+// One item per comment: the page and the data can both carry it.
+function mergeItems(first, second) {
+  const seen = new Set(first.map((item) => item.externalId));
+  const words = new Set(first.map((item) => `${item.authorName.toLowerCase()}|${item.body}`));
+  return [...first, ...second.filter((item) => !seen.has(item.externalId) && !words.has(`${item.authorName.toLowerCase()}|${item.body}`))];
+}
 
 export class LinkedinCollectError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -31,13 +58,19 @@ export async function collectLinkedinActivity(page, { pageNames = [], includeOwn
     own.catch(() => undefined);
     await page.goto("https://www.linkedin.com/notifications/", { waitUntil: "domcontentloaded", timeout: timeoutMs });
     if (signedOut(page.url())) throw notSignedIn();
+    const fromPage = linkedinItemsFromCards(await cardsOnPage(page));
+    let fromData = [];
+    let dataError = "";
     try {
-      const found = linkedinItemsFromNotifications(await (await own).json());
-      items.push(...found);
-      report.push({ id: "me", name: "Your profile", found: found.length });
+      fromData = linkedinItemsFromNotifications(await (await own).json());
     } catch {
-      report.push({ id: "me", name: "Your profile", found: 0, error: "LinkedIn didn't load your notifications in time." });
+      dataError = "LinkedIn didn't load your notifications in time.";
     }
+    const found = mergeItems(fromPage, fromData);
+    items.push(...found);
+    report.push(found.length || !dataError
+      ? { id: "me", name: "Your profile", found: found.length, onPage: fromPage.length }
+      : { id: "me", name: "Your profile", found: 0, error: dataError });
   }
 
   // 2. The Pages this member manages, listed in the feed's left column.
@@ -70,14 +103,19 @@ export async function collectLinkedinActivity(page, { pageNames = [], includeOwn
     response.catch(() => undefined);
     await page.goto(`https://www.linkedin.com/company/${target.id}/admin/notifications/all/`, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     if (signedOut(page.url())) throw notSignedIn();
+    const fromPage = linkedinItemsFromCards(await cardsOnPage(page), { pageName: target.name });
+    let fromData = [];
+    let dataError = "";
     try {
-      const body = await (await response).json();
-      const found = linkedinItemsFromNotifications(body, { pageName: target.name });
-      items.push(...found);
-      report.push({ id: target.id, name: target.name, found: found.length });
+      fromData = linkedinItemsFromNotifications(await (await response).json(), { pageName: target.name });
     } catch {
-      report.push({ id: target.id, name: target.name, found: 0, error: "LinkedIn didn't load this Page's activity in time." });
+      dataError = "LinkedIn didn't load this Page's activity in time.";
     }
+    const found = mergeItems(fromPage, fromData);
+    items.push(...found);
+    report.push(found.length || !dataError
+      ? { id: target.id, name: target.name, found: found.length, onPage: fromPage.length }
+      : { id: target.id, name: target.name, found: 0, error: dataError });
   }
   if (!report.length || report.every((entry) => entry.error)) {
     throw new LinkedinCollectError("linkedin_unavailable", "LinkedIn didn't load the notifications in time. It will try again.");

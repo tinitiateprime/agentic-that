@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adminPagesFromLinks, linkedinItemsFromNotifications, linkedinItemsFromPageActivity, linkedinTarget } from "./linkedin-notifications.js";
+import { adminPagesFromLinks, linkedinItemsFromCards, linkedinItemsFromNotifications, linkedinItemsFromPageActivity, linkedinTarget } from "./linkedin-notifications.js";
 
 const CARD = "com.linkedin.voyager.dash.identity.notifications.Card";
 const wrap = (url) => `/p1-route/web-view?url=${encodeURIComponent(url)}`;
@@ -84,4 +84,32 @@ test("a member's own notifications: comments on their posts, not suggestions", (
   assert.equal(items[0].authorName, "Test Tester");
   assert.equal(items[0].contextText, "Strong SQL skills start with understanding the data");
   assert.equal(items[0].permalink, "https://www.linkedin.com/feed/update/urn:li:ugcPost:7528731913767849984");
+});
+
+test("cards drawn on the page: the newest comments, with the post's opening cut off", () => {
+  const now = Date.parse("2026-11-28T05:00:00Z");
+  const items = linkedinItemsFromCards([
+    {
+      texts: [
+        "Ahhaha Jahahsha commented on your post.",
+        "Learning data engineering is very important in todays time 🚀 Engineer Your Future with AI",
+        "🚀 Engineer Your Future with AI! Ready to build a career in Data Engineering, AI, Machine Learning",
+        "1 comment",
+        "17h",
+      ],
+      links: [
+        "https://www.linkedin.com/in/ahhaha-jahahsha-aa0675411/",
+        "https://www.linkedin.com/feed/update/urn:li:ugcPost:7512021065766944768/?commentUrn=urn%3Ali%3Acomment%3A7532042218363092992&dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287532042218363092992%2Curn%3Ali%3AugcPost%3A7512021065766944768%29",
+      ],
+    },
+    { texts: ["Suggested for you: my status is clearly mentioned in my CV.", "anything"], links: ["https://www.linkedin.com/feed/update/urn:li:activity:1/"] },
+    { texts: ["Someone from Greater Hyderabad Area viewed your profile."], links: [] },
+  ], { now });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].authorName, "Ahhaha Jahahsha");
+  assert.equal(items[0].body, "Learning data engineering is very important in todays time");
+  assert.match(items[0].externalId, /^li:urn:li:comment:7532042218363092992:[0-9a-f]{16}$/);
+  assert.equal(items[0].authorUrl, "https://www.linkedin.com/in/ahhaha-jahahsha-aa0675411/");
+  assert.equal(items[0].receivedAt, "2026-11-27T12:00:00.000Z");
+  assert.match(items[0].contextText, /^🚀 Engineer Your Future with AI!/);
 });
