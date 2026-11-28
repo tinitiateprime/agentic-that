@@ -3,6 +3,7 @@
 import { ArrowDownRight, ArrowUpRight, CalendarClock, ChevronDown, Lightbulb, Download, ExternalLink, Eye, FileUp, Heart, Loader2, Search, Trash2, TrendingUp, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import AutoSyncPanel from "./AutoSyncPanel";
+import PlatformLogo from "@platform/PlatformLogo";
 
 const RANGES = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"], ["all", "All time"]];
 const PLATFORMS = [["all", "All platforms"], ["instagram", "Instagram"], ["facebook", "Facebook"], ["youtube", "YouTube"], ["linkedin", "LinkedIn"], ["x", "X"]];
@@ -265,7 +266,8 @@ export default function AnalyticsView({ initialReport }) {
       <section className={`sm-tiles ${loading ? "loading" : ""}`} aria-label="Summary">
         <Tile icon={CalendarClock} label="Posts" value={number.format(totals.posts)} change={change("posts")} />
         <Tile icon={Eye} label="Views" value={compact.format(totals.views)} change={change("views")} unavailable={!has("views")} />
-        <Tile icon={Users} label={audienceLabel} value={compact.format(totals[audienceKey])} change={change(audienceKey)} unavailable={!has("audience")} />
+        {/* Without reach or impressions the audience is views: don't show Views twice. */}
+        {audienceKey !== "views" && <Tile icon={Users} label={audienceLabel} value={compact.format(totals[audienceKey])} change={change(audienceKey)} unavailable={!has("audience")} />}
         <Tile icon={Heart} label="Engagement" value={compact.format(totals.engagement)} note="likes, comments, shares, saves" change={change("engagement")} unavailable={!has("engagement")} />
         <Tile icon={TrendingUp} label="Engagement rate" value={rateText(totals.engagementRate)} note={`of ${audienceKey}`} change={change("engagementRate", { points: true })} unavailable={!has("engagement") || !has("audience")} />
         <Tile icon={UserPlus} label="New followers" value={compact.format(totals.follows)} change={change("follows")} unavailable={!has("follows")} />
@@ -299,7 +301,7 @@ export default function AnalyticsView({ initialReport }) {
                 const shows = (key) => !entry.available || entry.available[key] !== false;
                 const cell = (key, value) => (shows(key) ? number.format(value) : metricCell(null));
                 return (
-                  <tr key={entry.platform}><th scope="row">{entry.label}</th><td className="num">{number.format(entry.posts)}</td><td className="num">{cell("views", entry.views)}</td><td className="num">{cell("audience", entry.reach || entry.impressions)}</td><td className="num">{cell("engagement", entry.engagement)}</td><td className="num">{rateText(entry.engagementRate)}</td><td className="num">{cell("follows", entry.follows)}</td></tr>
+                  <tr key={entry.platform}><th scope="row"><span className="sm-platform-cell"><PlatformLogo platform={entry.platform} label={entry.label} size={18} />{entry.label}</span></th><td className="num">{number.format(entry.posts)}</td><td className="num">{cell("views", entry.views)}</td><td className="num">{cell("audience", entry.reach || entry.impressions)}</td><td className="num">{cell("engagement", entry.engagement)}</td><td className="num">{rateText(entry.engagementRate)}</td><td className="num">{cell("follows", entry.follows)}</td></tr>
                 );
               })}</tbody>
             </table>
@@ -352,7 +354,7 @@ export default function AnalyticsView({ initialReport }) {
                 <tr key={post.id}>
                   <th scope="row">
                     <span className="sm-post">
-                      <strong>{rank >= 0 && rank < 3 && <em className="sm-rank">#{rank + 1}</em>}{post.platformLabel}{post.account ? ` · ${post.account}` : ""}{post.type ? ` · ${post.type}` : ""}</strong>
+                      <strong>{rank >= 0 && rank < 3 && <em className="sm-rank">#{rank + 1}</em>}<PlatformLogo platform={post.platform} label={post.platformLabel} size={15} />{post.platformLabel}{post.account ? ` · ${post.account}` : ""}{post.type ? ` · ${post.type}` : ""}</strong>
                       <span>{post.text || <i>No text in the export</i>}</span>
                       {post.permalink && <a href={post.permalink} target="_blank" rel="noreferrer">Open post <ExternalLink size={12} /></a>}
                     </span>

@@ -2,6 +2,7 @@
 
 import { CheckCircle2, CircleAlert, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import PlatformLogo from "@platform/PlatformLogo";
 
 const PLACEHOLDERS = {
   instagram: "https://www.instagram.com/yourcompany/",
@@ -38,7 +39,7 @@ function SourceRow({ source, companion, busy, onSave }) {
   const saved = source.enabled && source.profileUrl && value.trim() === source.profileUrl;
   return (
     <div className="sm-sync-row">
-      <label htmlFor={`sync-${source.platform}`}>{source.label}</label>
+      <label htmlFor={`sync-${source.platform}`}><PlatformLogo platform={source.platform} label={source.label} size={20} />{source.label}</label>
       <form onSubmit={(event) => { event.preventDefault(); onSave(source.platform, value); }}>
         <input id={`sync-${source.platform}`} value={value} onChange={(event) => setValue(event.target.value)} placeholder={PLACEHOLDERS[source.platform]} inputMode="url" autoComplete="off" spellCheck={false} />
         {!saved && <button type="submit" className="sm-primary" disabled={busy || !value.trim()}>{source.profileUrl ? "Save" : "Turn on"}</button>}

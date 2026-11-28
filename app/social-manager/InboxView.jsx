@@ -1,7 +1,8 @@
 "use client";
 
-import { AlarmClock, Check, ClipboardCopy, ExternalLink, Inbox, Loader2, MessageSquareReply, RotateCcw, Search, Trash2, UserRound } from "lucide-react";
+import { AlarmClock, Check, ClipboardCopy, ExternalLink, Inbox, Loader2, MessageSquareReply, RefreshCw, RotateCcw, Search, Trash2, UserRound } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import PlatformLogo from "@platform/PlatformLogo";
 
 const VIEWS = [
   ["open", "Needs reply"],
@@ -23,56 +24,100 @@ function ago(value) {
   return days < 30 ? `${days}d` : new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 const when = (value) => (value ? new Date(value).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
+const initials = (name) => String(name || "?").replace(/^@/, "").replace(/\(.*\)/, "").trim().split(/\s+/).slice(0, 2).map((word) => word[0] || "").join("").toUpperCase() || "?";
 
 function sourceStatus(source) {
-  if (!source.enabled) return { text: "Off" };
-  if (!source.connected) return { text: "Connect this account again in the Companion.", tone: "bad" };
-  if (!source.companionReady) {
-    return { text: `Needs Companion ${source.requiredVersion || "2.9.0"} or later on the computer with this account${source.companionVersion ? ` (it has ${source.companionVersion})` : ""}. It starts by itself after the update.`, tone: "bad" };
-  }
-  if (source.status === "running") return { text: "Reading new comments…", busy: true };
+  if (!source.enabled) return { text: "Off: comments aren't collected", tone: "off" };
+  if (!source.connected) return { text: "Sign in to this account again in the Companion", tone: "bad" };
+  if (!source.companionReady) return { text: `Update the Companion to ${source.requiredVersion || "the latest version"} on the computer with this account`, tone: "bad" };
+  if (source.status === "running") return { text: "Checking for new comments…", tone: "busy" };
   if (source.status === "never" || source.status === "queued") {
-    return { text: source.companionOnline ? "Checking within a minute…" : "Waiting for the Companion to come online.", busy: source.companionOnline };
+    return source.companionOnline ? { text: "First check within a minute…", tone: "busy" } : { text: "Waiting for the Companion to come online", tone: "wait" };
   }
   if (source.status === "failed") return { text: source.message, tone: "bad" };
-  if (source.status === "collected") return { text: `Checked ${ago(source.lastCollectedAt)} ago. ${source.message} Checks every 20 minutes.`, tone: "good" };
-  return { text: source.message };
+  if (source.status === "collected") return { text: `Checked ${ago(source.lastCollectedAt)} ago · ${source.message}`, tone: "good" };
+  return { text: source.message || "On", tone: "good" };
 }
 
-function Sources({ sources, busy, onChange }) {
-  const [open, setOpen] = useState(!sources.some((source) => source.enabled));
+function Switch({ checked, label, disabled, onChange }) {
   return (
-    <section className="sm-panel sm-inbox-sources" aria-label="Where comments come from">
-      <button type="button" className="sm-inbox-sources-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <strong>Where comments come from</strong>
-        <span>{sources.filter((source) => source.enabled).length ? `On: ${sources.filter((source) => source.enabled).map((source) => `${source.label} ${source.name}`).join(", ")}` : "Turn on your accounts"} · Instagram &amp; Facebook from automatic updates</span>
-      </button>
-      {open && (
-        <div className="sm-inbox-sources-body">
-          {sources.length === 0 && <p className="sm-muted">No account is connected yet. Connect one in the Companion (Publishing) to collect its comments.</p>}
-          {sources.map((source) => {
-            const status = sourceStatus(source);
-            return (
-              <div key={source.accountId} className="sm-inbox-source">
-                <span className={`sm-inbox-platform ${source.platform}`}>{source.label}</span>
-                <strong title={source.pages?.length ? `Also reads the Pages it manages: ${source.pages.join(", ")}` : undefined}>
-                  {source.name}{source.pages?.length ? <small className="sm-inbox-source-pages"> + {source.pages.length === 1 ? source.pages[0] : `${source.pages.length} Pages`}</small> : null}
-                </strong>
-                <span className={`sm-sync-state ${status.tone || ""}`}>{status.busy && <Loader2 size={13} className="sm-spin" />}{status.text}</span>
-                <span className="sm-inbox-source-actions">
-                  {source.enabled && source.companionReady && source.status !== "running" && (
-                    <button type="button" className="sm-link" disabled={busy} onClick={() => onChange({ accountId: source.accountId, checkNow: true })}>Check now</button>
-                  )}
-                  <button type="button" className={source.enabled ? "sm-secondary" : "sm-primary"} disabled={busy} onClick={() => onChange({ accountId: source.accountId, enabled: !source.enabled })}>
-                    {source.enabled ? "Turn off" : "Turn on"}
-                  </button>
-                </span>
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} className="sm-switch" disabled={disabled} onClick={() => onChange(!checked)}>
+      <span />
+    </button>
+  );
+}
+
+// The accounts whose comments come into this inbox, always in view: each
+// with its own switch and a one-line status.
+function Accounts({ sources, busy, onChange }) {
+  const on = sources.filter((source) => source.enabled);
+  return (
+    <section className="sm-accounts" aria-label="Accounts watched for comments">
+      <header className="sm-accounts-head">
+        <div>
+          <h2>Accounts watched for comments</h2>
+          <p>{sources.length
+            ? `${on.length} of ${sources.length} on · new comments come in every 20 minutes`
+            : "No account is connected yet. Connect your accounts in the Companion (Publishing → Accounts)."}</p>
+        </div>
+        {on.length > 0 && (
+          <button type="button" className="sm-secondary" disabled={busy} onClick={() => on.forEach((source) => onChange({ accountId: source.accountId, checkNow: true }))}>
+            <RefreshCw size={15} />Check all now
+          </button>
+        )}
+      </header>
+      {sources.length > 0 && on.length === 0 && (
+        <p className="sm-accounts-prompt">Switch on the accounts whose comments, replies and mentions you want to answer here.</p>
+      )}
+      <div className="sm-accounts-grid">
+        {(on.length ? on : sources).map((source) => {
+          const status = sourceStatus(source);
+          return (
+            <article key={source.accountId} className={`sm-account ${source.enabled ? "on" : ""} ${status.tone}`}>
+              <div className="sm-account-top">
+                <span className="sm-account-logo"><PlatformLogo platform={source.platform} label={source.label} size={26} /></span>
+                <div className="sm-account-name">
+                  <strong title={source.name}>{source.name}</strong>
+                  <small>{source.label}{source.pages?.length ? ` · + ${source.pages.length === 1 ? source.pages[0] : `${source.pages.length} Pages`}` : ""}</small>
+                </div>
+                <Switch checked={source.enabled} disabled={busy} label={`Collect comments from ${source.label} ${source.name}`}
+                  onChange={(enabled) => onChange({ accountId: source.accountId, enabled })} />
               </div>
-            );
-          })}
-          <p className="sm-muted">The Companion reads new comments and mentions read-only, in the account&apos;s own signed-in browser, every 20 minutes. YouTube comments you answer on YouTube are marked Done here by themselves. LinkedIn covers the person&apos;s own posts and the Pages they manage; X covers replies and mentions; Facebook reads the comments on your latest 6 reels and 6 photo posts; Instagram covers comments, replies and mentions. Instagram and Facebook comments arrive with the nightly automatic updates (Analytics tab).</p>
+              <p className="sm-account-status">
+                {status.tone === "busy" ? <Loader2 size={13} className="sm-spin" /> : <i aria-hidden="true" />}
+                <span>{status.text}</span>
+              </p>
+              {source.enabled && source.companionReady && source.status !== "running" && (
+                <button type="button" className="sm-link sm-account-check" disabled={busy} onClick={() => onChange({ accountId: source.accountId, checkNow: true })}>Check now</button>
+              )}
+            </article>
+          );
+        })}
+      </div>
+      {on.length > 0 && on.length < sources.length && (
+        <div className="sm-accounts-off">
+          <span>Not watched</span>
+          {sources.filter((source) => !source.enabled).map((source) => (
+            <span key={source.accountId} className="sm-account-chip">
+              <PlatformLogo platform={source.platform} label={source.label} size={16} />
+              <span title={`${source.label} · ${source.name}`}>{source.name}</span>
+              <Switch checked={false} disabled={busy} label={`Collect comments from ${source.label} ${source.name}`}
+                onChange={() => onChange({ accountId: source.accountId, enabled: true })} />
+            </span>
+          ))}
         </div>
       )}
+      <details className="sm-accounts-more">
+        <summary>What gets collected from each app?</summary>
+        <ul>
+          <li><PlatformLogo platform="youtube" size={14} /> <b>YouTube</b>: comments you haven&apos;t answered; answering on YouTube marks them Done here.</li>
+          <li><PlatformLogo platform="linkedin" size={14} /> <b>LinkedIn</b>: comments and mentions on the person&apos;s posts and on every Page they manage.</li>
+          <li><PlatformLogo platform="x" size={14} /> <b>X</b>: replies, mentions and quotes.</li>
+          <li><PlatformLogo platform="facebook" size={14} /> <b>Facebook</b>: comments on the latest 6 reels and 6 photo posts.</li>
+          <li><PlatformLogo platform="instagram" size={14} /> <b>Instagram</b>: comments, replies and mentions.</li>
+        </ul>
+        <p>The Companion reads these read-only, in each account&apos;s own signed-in browser. It never likes, replies or posts.</p>
+      </details>
     </section>
   );
 }
@@ -121,10 +166,12 @@ function Detail({ item, data, busy, act, saveReply, notice, setNotice }) {
   return (
     <article className="sm-inbox-detail" aria-label="Conversation">
       <header>
-        <div>
-          <span className={`sm-inbox-platform ${item.platform}`}>{item.platformLabel}</span>
-          <h3>{item.authorUrl ? <a href={item.authorUrl} target="_blank" rel="noreferrer">{item.authorName}</a> : item.authorName}</h3>
-          <small>{item.kind === "message" ? "Message" : "Comment"} · {when(item.receivedAt)}</small>
+        <div className="sm-inbox-who">
+          <span className="sm-avatar large">{initials(item.authorName)}<b><PlatformLogo platform={item.platform} size={16} /></b></span>
+          <div>
+            <h3>{item.authorUrl ? <a href={item.authorUrl} target="_blank" rel="noreferrer">{item.authorName}</a> : item.authorName}</h3>
+            <small>{({ message: "Message", mention: "Mention", reply: "Reply" })[item.kind] || "Comment"} on {item.platformLabel} · {when(item.receivedAt)}</small>
+          </div>
         </div>
         {item.permalink && (
           <a className="sm-primary" href={item.permalink} target="_blank" rel="noreferrer"><MessageSquareReply size={15} />Reply on {item.platformLabel}<ExternalLink size={13} /></a>
@@ -168,7 +215,7 @@ function Detail({ item, data, busy, act, saveReply, notice, setNotice }) {
   );
 }
 
-export default function InboxView() {
+export default function InboxView({ onCounts }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -184,10 +231,11 @@ export default function InboxView() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "The inbox could not be loaded.");
       setData(body); setError("");
+      if (body?.counts) onCounts?.(body.counts);
     } catch (loadError) {
       setError(loadError.message);
     }
-  }, []);
+  }, [onCounts]);
   // Loads now and every minute while the tab is open.
   useEffect(() => {
     void load();
@@ -211,6 +259,7 @@ export default function InboxView() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "That didn't save. Try again.");
       setData(result);
+      if (result?.counts) onCounts?.(result.counts);
       return true;
     } catch (postError) {
       setError(postError.message);
@@ -236,7 +285,7 @@ export default function InboxView() {
 
   return (
     <section className="sm-inbox">
-      {data?.sources && <Sources sources={data.sources} busy={busy} onChange={(change) => post({ type: "source", ...change })} />}
+      {data?.sources && <Accounts sources={data.sources} busy={busy} onChange={(change) => post({ type: "source", ...change })} />}
       <div className="sm-controls">
         <div className="sm-range" role="group" aria-label="Inbox lists">
           {VIEWS.map(([id, label]) => (
@@ -259,7 +308,7 @@ export default function InboxView() {
           <Inbox size={26} />
           <h2>{view === "open" ? (data?.items?.length ? "All caught up" : "Nothing here yet") : "Nothing in this list"}</h2>
           {view === "open" && !data?.items?.length && (
-            <p>Turn on YouTube comments above, and automatic updates in the Analytics tab for Instagram and Facebook. New comments land here.</p>
+            <p>Switch on your accounts above. New comments, replies and mentions land here within 20 minutes.</p>
           )}
         </div>
       ) : (
@@ -268,13 +317,15 @@ export default function InboxView() {
             {items.map((item) => (
               <li key={item.id}>
                 <button type="button" aria-current={selected?.id === item.id} onClick={() => { setSelectedId(item.id); setNotice(""); }}>
-                  <span className="sm-inbox-row-top">
-                    <span className={`sm-inbox-platform ${item.platform}`}>{item.platformLabel}</span>
-                    <strong>{item.authorName}</strong>
-                    <time>{ago(item.receivedAt)}</time>
+                  <span className="sm-avatar">{initials(item.authorName)}<b><PlatformLogo platform={item.platform} size={13} /></b></span>
+                  <span className="sm-inbox-row-main">
+                    <span className="sm-inbox-row-top">
+                      <strong>{item.authorName}</strong>
+                      <time>{ago(item.receivedAt)}</time>
+                    </span>
+                    <span className="sm-inbox-snippet">{item.body}</span>
+                    {item.assignedName && <span className="sm-inbox-assignee"><UserRound size={12} />{item.assignedTo === data.userId ? "You" : item.assignedName}</span>}
                   </span>
-                  <span className="sm-inbox-snippet">{item.body}</span>
-                  {item.assignedName && <span className="sm-inbox-assignee"><UserRound size={12} />{item.assignedTo === data.userId ? "You" : item.assignedName}</span>}
                 </button>
               </li>
             ))}

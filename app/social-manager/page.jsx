@@ -22,7 +22,7 @@ export default async function SocialManagerPage() {
   if (!principal.workspaceId) redirect("/apps");
   return (
     <ProductShell user={principal} active="social-manager">
-      <SocialManager workspaceName={principal.businessName || ""} initialReport={await reportWithAutoSync(principal)} />
+      <SocialManager workspaceName={principal.businessName || ""} workspaceId={principal.workspaceId} initialReport={await reportWithAutoSync(principal)} />
     </ProductShell>
   );
 }
