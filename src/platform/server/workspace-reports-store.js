@@ -1,7 +1,7 @@
 import { OPERATIONAL_ROLE_CATALOG } from "../access-catalog.js";
 import { principalHasAccess } from "./access-control.js";
 import { getPlatformSql } from "./auth-store.js";
-import { publishingWorkspaceSnapshot } from "./publishing-central-store.js";
+import { publishedPostUrl, publishingWorkspaceSnapshot } from "./publishing-central-store.js";
 import { attachPostLinks, linkedinPublicPage } from "../workspace-reports/post-links.js";
 
 const RANGE_DAYS = new Set([7, 30, 90]);
@@ -83,6 +83,8 @@ export function summarizePosts({ uploads = [], accounts = [], principal, sinceMs
         at: iso(when) || iso(upload.uploadedAt),
         failureReason: state === "failed" ? String(upload.failureReason || "").slice(0, 240) || null : null,
         linkedinPage: upload.platform === "linkedin" ? linkedinPublicPage(upload.linkedinTarget) : "",
+        // Recorded by the Companion when it published the post (Companion 2.15.0+).
+        postUrl: state === "published" ? publishedPostUrl(upload.platform, upload.postUrl) : "",
       };
     })
     // In the period: created, published or failed in it, or still scheduled ahead.

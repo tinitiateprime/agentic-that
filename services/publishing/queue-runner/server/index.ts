@@ -636,7 +636,9 @@ async function prepareCentralPublishingJob(pairing: CentralCompanionPairing, job
         .find((item) => item.id === upload.id);
       // A post that went out is reported as published even if another post in the same run failed.
       if (localUpload?.status === "posted") {
-        await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, {}, null, null, true).catch(() => undefined);
+        // The post's address on the platform, when it could be read.
+        const progress = localUpload.postUrl ? { postUrl: localUpload.postUrl } : {};
+        await updateCentralJobStatus(pairing, job.id, "published", "Published successfully.", false, progress, null, null, true).catch(() => undefined);
         return;
       }
       if (runError) {

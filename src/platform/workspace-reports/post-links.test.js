@@ -36,3 +36,8 @@ test("helpers", () => {
   assert.equal(linkedinPublicPage(null), "");
   assert.equal(sameText("Hi", "Hi there"), false, "too short to be sure");
 });
+
+test("the address recorded at publishing wins", () => {
+  const [recorded] = attachPostLinks([post({ platform: "x", caption: "A post on X", postUrl: "https://x.com/testingka07/status/2126226624219865091" })]);
+  assert.deepEqual([recorded.link, recorded.linkKind], ["https://x.com/testingka07/status/2126226624219865091", "post"]);
+});

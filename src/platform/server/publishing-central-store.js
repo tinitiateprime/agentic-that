@@ -537,6 +537,21 @@ async function synchronizePublishingControlPlane(workspaceId, uploadIds) {
   return document;
 }
 
+// A published post's address, as the Companion read it, only when it points
+// at the platform the post was published on.
+const POST_URL_SITES = {
+  youtube: /^https:\/\/(youtu\.be|(www\.)?youtube\.com)\//,
+  linkedin: /^https:\/\/(www\.)?linkedin\.com\//,
+  x: /^https:\/\/(x|twitter)\.com\//,
+  reddit: /^https:\/\/(www\.)?reddit\.com\//,
+  instagram: /^https:\/\/(www\.)?instagram\.com\//,
+  facebook: /^https:\/\/(www\.|m\.)?facebook\.com\//,
+};
+export function publishedPostUrl(platform, value) {
+  const url = String(value || "").trim().slice(0, 1000);
+  return POST_URL_SITES[platform]?.test(url) ? url : "";
+}
+
 function applyRemotePublishingJobs(document, workspaceId, remoteJobs) {
   const jobsById = new Map(remoteJobs.map((item) => [item.id, item]));
   let changed = false;
@@ -557,6 +572,8 @@ function applyRemotePublishingJobs(document, workspaceId, remoteJobs) {
         upload.status = "posted";
         upload.postedAt = remote.completedAt;
         upload.failureReason = null;
+        const postUrl = publishedPostUrl(upload.platform, remote.progress?.postUrl);
+        if (postUrl) upload.postUrl = postUrl;
       } else if (["failed", "uncertain", "reconnect_required", "cancelled"].includes(remote.status)) {
         upload.status = "failed";
         upload.failureReason = remote.message || "Companion job did not complete.";

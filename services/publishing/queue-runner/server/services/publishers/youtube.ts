@@ -1298,7 +1298,7 @@ async function postVideoToYouTube(page: Page, upload: PlatformUpload, videoPath:
     await assertYouTubeKeptVideo(page, videoId, mp4DurationSeconds(videoPath) > 15 * 60);
 
     console.log("Step completed: video published.");
-    return { success: true };
+    return { success: true, postUrl: videoId ? `https://youtu.be/${videoId}` : undefined };
   } finally { transfer.dispose(); }
 }
 

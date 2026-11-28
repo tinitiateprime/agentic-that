@@ -40,6 +40,8 @@ export function attachPostLinks(posts, { analyticsPosts = [] } = {}) {
   }
   return posts.map((post) => {
     if (post.state !== "published") return { ...post, link: "", linkKind: "" };
+    // The Companion recorded the post's own address when it published it.
+    if (/^https:\/\//.test(post.postUrl || "")) return { ...post, link: post.postUrl, linkKind: "post" };
     const published = Date.parse(post.publishedAt || "");
     const match = (byPlatform.get(post.platform) || [])
       .filter((candidate) => sameText(post.caption, candidate.text) || (post.title && sameText(post.title, candidate.text)))

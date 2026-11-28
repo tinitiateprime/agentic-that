@@ -2103,6 +2103,18 @@ export async function updateUploadPublishActionState(uploadId: string, state: Pu
   });
 }
 
+/** Remembers where a published post lives on the platform (an https address). */
+export async function updateUploadPostUrl(uploadId: string, postUrl: string) {
+  if (!/^https:\/\//.test(postUrl)) return null;
+  return mutateStore(store => {
+    const index = store.uploads.findIndex(upload => upload.id === uploadId);
+    if (index < 0) return null;
+    const updated: PlatformUpload = { ...store.uploads[index], postUrl: postUrl.slice(0, 1000), updatedAt: nowIso() };
+    store.uploads[index] = updated;
+    return updated;
+  });
+}
+
 export async function deferUploadForSafety(uploadId: string, retryAt: string, reason: string) {
   const retryTimestamp = Date.parse(retryAt);
   if (!Number.isFinite(retryTimestamp) || retryTimestamp <= Date.now()) {

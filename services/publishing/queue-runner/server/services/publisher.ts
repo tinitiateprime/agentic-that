@@ -25,6 +25,7 @@ import {
   updatePlatformAccountCredentialState,
   updateLinkedInManagedPages,
   updateUploadPublishActionState,
+  updateUploadPostUrl,
   updateUploadStatus,
   type AutomationInputMode,
   type AutomationRunTrigger,
@@ -724,6 +725,46 @@ function assertVideoFitsPlatform(upload: PlatformUpload) {
   if (fit.status === "blocked") throw new PlatformRefusedError(`${fit.message} Nothing was published.`);
 }
 
+// Right after posting, LinkedIn shows "Post successful · View post" and X
+// shows "Your post was sent · View": both link to the new post. Read-only,
+// a few seconds at most, and never a reason to fail a post that went out.
+const POST_LINK_PATTERNS: Partial<Record<PlatformUpload["platform"], { selector: string; pattern: RegExp }>> = {
+  linkedin: {
+    selector: '.artdeco-toast-item a[href*="/feed/update/"], [role="alert"] a[href*="/feed/update/"], a[href*="/feed/update/urn:li:"]:has-text("View post")',
+    pattern: /^https:\/\/(www\.)?linkedin\.com\/feed\/update\/urn:li:(activity|share|ugcPost):\d+/i,
+  },
+  x: {
+    selector: '[data-testid="toast"] a[href*="/status/"], [role="alert"] a[href*="/status/"]',
+    pattern: /^https:\/\/(x|twitter)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+/i,
+  },
+};
+
+async function visiblePostLink(page: Page, platform: PlatformUpload["platform"]) {
+  const known = POST_LINK_PATTERNS[platform];
+  if (!known) return "";
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    const hrefs = await page.locator(known.selector).evaluateAll((links) => links.map((link) => (link as HTMLAnchorElement).href)).catch(() => [] as string[]);
+    const hit = hrefs.find((href) => known.pattern.test(href));
+    if (hit) return hit.split("?")[0];
+    await page.waitForTimeout(400);
+  }
+  return "";
+}
+
+async function rememberPostLink(page: Page, upload: PlatformUpload, result: unknown) {
+  try {
+    const fromStep = String((result as { postUrl?: unknown } | undefined)?.postUrl || "");
+    const link = /^https:\/\//.test(fromStep) ? fromStep : await visiblePostLink(page, upload.platform);
+    if (link) {
+      await updateUploadPostUrl(upload.id, link);
+      console.log(`Published post: ${link}`);
+    }
+  } catch (error) {
+    console.warn("The published post's link couldn't be saved:", errorMessage(error));
+  }
+}
+
 async function publishOne(page: Page, upload: PlatformUpload, options: AccountLoginOptions = {}) {
   assertVideoFitsPlatform(upload);
   const login = accountLogin(options);
@@ -895,13 +936,14 @@ async function runAccountQueue(
         try {
           for (let attempt = 1; ; attempt += 1) {
             try {
-              await publishOne(page, upload, {
+              const published = await publishOne(page, upload, {
                 ...options,
                 onFinalActionSubmitted: async () => {
                   finalActionSubmitted = true;
                   await updateUploadPublishActionState(upload.id, "submitted");
                 },
               });
+              await rememberPostLink(page, upload, published);
               break;
             } catch (publishError) {
               if (signal.aborted) throw publishError;
