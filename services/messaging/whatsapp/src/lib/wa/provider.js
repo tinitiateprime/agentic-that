@@ -407,6 +407,55 @@ function metaAuthHeaders(creds) {
   };
 }
 
+// Meta serves media files from its own CDN hosts; the access token is only
+// ever sent to those.
+function isMetaMediaHost(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === "https:" && /(^|\.)(fbsbx\.com|facebook\.com|fbcdn\.net|whatsapp\.net)$/i.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+// Download an inbound media file (document, photo, voice note, ...) by the
+// media id from the webhook. Meta first returns a short-lived URL, which must
+// be fetched with the same token. Resolves to { body, mimeType, size } where
+// body is a web ReadableStream. Throws { status: 404 } once Meta no longer has
+// the file (inbound media is only kept for a limited time).
+export async function metaDownloadMedia({ mediaId, creds = null }) {
+  if (!mediaId) throw Object.assign(new Error("Media id is required"), { status: 400 });
+  const c = withCreds(creds);
+  if (!c.accessToken) throw Object.assign(new Error("The Meta channel is not connected."), { status: 409 });
+
+  const infoRes = await fetch(metaGraphUrl(`/${encodeURIComponent(mediaId)}`, c), {
+    headers: { Authorization: `Bearer ${c.accessToken}` },
+  });
+  const info = await infoRes.json().catch(() => ({}));
+  if (!infoRes.ok || !info.url) {
+    const gone = infoRes.status === 404 || infoRes.status === 400;
+    throw Object.assign(
+      new Error(gone ? "WhatsApp no longer has this file." : metaErrorMessage(info, infoRes.status)),
+      { status: gone ? 404 : 502 }
+    );
+  }
+  if (!isMetaMediaHost(info.url)) {
+    throw Object.assign(new Error("Meta returned an unexpected media location."), { status: 502 });
+  }
+
+  const fileRes = await fetch(info.url, { headers: { Authorization: `Bearer ${c.accessToken}` } });
+  if (!fileRes.ok || !fileRes.body) {
+    throw Object.assign(new Error(`Couldn't download the file from WhatsApp (HTTP ${fileRes.status}).`), {
+      status: fileRes.status === 404 ? 404 : 502,
+    });
+  }
+  return {
+    body: fileRes.body,
+    mimeType: info.mime_type || fileRes.headers.get("content-type") || "application/octet-stream",
+    size: Number(info.file_size || fileRes.headers.get("content-length")) || null,
+  };
+}
+
 export async function metaRequestVerificationCode({ phoneNumberId, codeMethod = "SMS", language = "en", creds = null }) {
   if (!phoneNumberId) throw new Error("Phone Number ID is required");
   const res = await fetch(metaGraphUrl(`/${phoneNumberId}/request_code`, creds), {

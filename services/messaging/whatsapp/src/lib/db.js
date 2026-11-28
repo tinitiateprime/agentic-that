@@ -59,7 +59,7 @@ const timestampAsIso = {
 // Memoize the client + readiness on globalThis so one connection process (and
 // one migration run) is shared across hot reloads and route invocations.
 const globalForDb = globalThis;
-const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v5-shared-waba-calls";
+const WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v6-inbound-media";
 
 // Create (once) the Supabase client. Lazy on purpose: connectionString() is
 // only evaluated on the FIRST query, never at import — so `next build` (and any
@@ -519,6 +519,13 @@ async function migrate(sql) {
     // Meta's call id is unique per workspace rather than globally.
     `ALTER TABLE calls DROP CONSTRAINT IF EXISTS calls_call_id_key`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_calls_business_call ON calls(business_id, call_id)`,
+    // Inbound media (documents, photos, voice notes, videos, stickers). The
+    // webhook only carries Meta's media id; the file is fetched from Meta when
+    // opened (GET /api/messages/:id/media). See lib/wa/media.js.
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_type TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_mime TEXT`,
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_filename TEXT`,
     // Audit columns: once the platform migration that defines them has run,
     // cover any WhatsApp table created after it.
     `DO $$ BEGIN

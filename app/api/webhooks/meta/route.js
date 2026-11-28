@@ -4,6 +4,7 @@ import { recordInbound } from "@whatsapp/lib/wa/messaging";
 import { applyReaction, recordCallEvent, resolveOrCreateContact } from "@whatsapp/lib/data";
 import { resolveTenantsByWabaId } from "@whatsapp/lib/tenant";
 import { describeMetaStatusError, withFailureNote } from "@whatsapp/lib/wa/meta-status";
+import { inboundMediaFromMeta, metaMessageText } from "@whatsapp/lib/wa/media";
 
 // Meta WhatsApp Cloud API posts events here. Configure in Meta for Developers >
 // WhatsApp > Configuration > Webhook:
@@ -167,7 +168,11 @@ async function processEntry(sql, business, entry) {
         msg.button?.text ||
         null;
 
-      const body = buttonText || msg.text?.body || `(unsupported message: ${msg.type})`;
+      // Documents, photos, voice notes, videos and stickers arrive as a Meta
+      // media id; it's stored on the message and the file is fetched from Meta
+      // when someone opens it. Captions/file names become the message text.
+      const media = buttonText ? null : inboundMediaFromMeta(msg);
+      const body = buttonText || msg.text?.body || metaMessageText(msg, media);
 
       await recordInbound({
         business,
@@ -177,6 +182,7 @@ async function processEntry(sql, business, entry) {
         buttonReply: Boolean(buttonText),
         phoneNumberId,
         provider: "meta",
+        media,
       });
     }
   }

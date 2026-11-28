@@ -45,7 +45,7 @@ test("schema migration is versioned and creates the reaction cursor columns", as
   const database = await source("services/messaging/whatsapp/src/lib/db.js");
   // The key gates the whole DDL block, so it has to move whenever statements
   // are added or an already-migrated database never sees them.
-  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v5-shared-waba-calls"/);
+  assert.match(database, /WHATSAPP_SCHEMA_MIGRATION_KEY = "whatsapp-schema-v6-inbound-media"/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction TEXT/);
   assert.match(database, /ADD COLUMN IF NOT EXISTS reaction_at TIMESTAMPTZ/);
   assert.match(database, /export async function migrateWhatsAppSchema/);

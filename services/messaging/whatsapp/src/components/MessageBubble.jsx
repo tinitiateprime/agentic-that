@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatClock } from "@whatsapp/lib/format";
 import { useMounted } from "./useMounted";
+import { isInlineSafeMime, mediaLabel, mediaUrl } from "@whatsapp/lib/wa/media";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -32,9 +33,9 @@ export default function MessageBubble({ m, children, phones, onReact, fallbackPr
   }
 
   return (
-    <div className={`group flex items-center gap-1 ${out ? "self-end" : "self-start"}`}>
+    <div className={`group flex max-w-[80%] items-center gap-1 ${out ? "self-end" : "self-start"}`}>
       <div
-        className={`relative max-w-[80%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm ${
+        className={`relative min-w-0 rounded-lg px-2.5 py-1.5 text-sm shadow-sm ${
           out ? "rounded-tr-none bg-[var(--bubble-out)]" : "rounded-tl-none bg-white"
         } ${isButtonReply ? "ring-2 ring-[var(--brand)]" : ""} ${m.reaction ? "mb-2" : ""}`}
       >
@@ -55,7 +56,8 @@ export default function MessageBubble({ m, children, phones, onReact, fallbackPr
           </span>
         )}
 
-        <p className="whitespace-pre-wrap break-words">{m.body}</p>
+        {m.media_id && m.media_type && <MediaAttachment m={m} />}
+        {(!m.media_id || isCaption(m)) && <p className="whitespace-pre-wrap break-words">{m.body}</p>}
         {children}
 
         <span className="mt-0.5 flex items-center justify-end gap-1 text-[10px] leading-none text-slate-500">
@@ -121,6 +123,95 @@ export default function MessageBubble({ m, children, phones, onReact, fallbackPr
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// The body of a media message is its caption, or a stand-in (file name or
+// "📷 Photo") when there was none. Only show it under the file when it's a
+// real caption.
+function isCaption(m) {
+  const body = String(m.body || "").trim();
+  if (!body) return false;
+  if (m.media_filename && body === m.media_filename) return false;
+  const placeholders = [mediaLabel(m.media_type), mediaLabel(m.media_type, { voice: true })];
+  return !placeholders.includes(body);
+}
+
+function fileKind(m) {
+  const fromName = String(m.media_filename || "").split(".").pop();
+  if (m.media_filename && fromName && fromName.length <= 5) return fromName.toUpperCase();
+  const fromMime = String(m.media_mime || "").split("/")[1] || "";
+  return fromMime.split(/[.+;-]/).pop().toUpperCase().slice(0, 5) || "FILE";
+}
+
+// Documents, photos, voice notes, videos and stickers sent to the business.
+// Files load from /api/messages/:id/media, which fetches them from Meta.
+function MediaAttachment({ m }) {
+  const [broken, setBroken] = useState(false);
+  const imageRef = useRef(null);
+  // A server-rendered image can fail before React attaches onError; catch
+  // that case once mounted.
+  useEffect(() => {
+    const image = imageRef.current;
+    if (image && image.complete && image.naturalWidth === 0) setBroken(true);
+  }, []);
+  const src = mediaUrl(m.id);
+  const downloadHref = mediaUrl(m.id, { download: true });
+  const name = m.media_filename || mediaLabel(m.media_type);
+
+  if (broken) {
+    return (
+      <p className="mb-1 rounded-md bg-slate-100 px-2 py-1.5 text-xs text-slate-500">
+        {mediaLabel(m.media_type)} isn't available any more. WhatsApp only keeps received files for a limited time.
+      </p>
+    );
+  }
+
+  if (m.media_type === "image" || m.media_type === "sticker") {
+    return (
+      <a href={src} target="_blank" rel="noopener noreferrer" className="mb-1 block" title="Open full size">
+        <img
+          ref={imageRef}
+          src={src}
+          alt={isCaption(m) ? m.body : name}
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className={m.media_type === "sticker" ? "h-28 w-28 object-contain" : "max-h-72 max-w-full rounded-md object-contain"}
+        />
+      </a>
+    );
+  }
+
+  if (m.media_type === "audio") {
+    return <audio controls preload="none" src={src} onError={() => setBroken(true)} className="mb-1 h-10 w-64 max-w-full" />;
+  }
+
+  if (m.media_type === "video") {
+    return (
+      <video controls preload="metadata" src={src} onError={() => setBroken(true)} className="mb-1 max-h-72 max-w-full rounded-md" />
+    );
+  }
+
+  const openable = isInlineSafeMime(m.media_mime);
+  return (
+    <div className="mb-1 flex w-60 max-w-full items-center gap-2.5 rounded-md bg-black/5 px-2.5 py-2">
+      <span className="flex h-10 w-8 shrink-0 items-center justify-center rounded bg-white text-[9px] font-bold text-slate-500 ring-1 ring-slate-200">
+        {fileKind(m)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium" title={name}>{name}</span>
+        <span className="flex gap-3 text-xs">
+          {openable && (
+            <a href={src} target="_blank" rel="noopener noreferrer" className="text-[var(--brand-dark)] hover:underline">
+              Open
+            </a>
+          )}
+          <a href={downloadHref} download className="text-[var(--brand-dark)] hover:underline">
+            Download
+          </a>
+        </span>
+      </span>
     </div>
   );
 }

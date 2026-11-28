@@ -321,6 +321,9 @@ export async function recordInbound({
   buttonReply = false,
   phoneNumberId = null,
   provider = null,
+  // { type, id, mimeType, filename } for a document/photo/voice note/video/
+  // sticker (see lib/wa/media.js); the file itself stays with Meta.
+  media = null,
 }) {
   const sql = await getSql();
 
@@ -337,7 +340,7 @@ export async function recordInbound({
     if (existing) return existing;
   }
 
-  let kind = buttonReply ? "button_reply" : "text";
+  let kind = buttonReply ? "button_reply" : media?.type || "text";
   let replyToId = null;
 
   if (buttonReply) {
@@ -350,8 +353,10 @@ export async function recordInbound({
   }
 
   const [inserted] = await sql`
-    INSERT INTO messages (business_id, contact_id, direction, body, kind, status, provider_id, reply_to_id, phone_number_id, provider)
-    VALUES (${business.id}, ${contact.id}, 'in', ${body}, ${kind}, 'delivered', ${providerId}, ${replyToId}, ${phoneNumberId}, ${provider})
+    INSERT INTO messages (business_id, contact_id, direction, body, kind, status, provider_id, reply_to_id, phone_number_id, provider,
+                          media_type, media_id, media_mime, media_filename)
+    VALUES (${business.id}, ${contact.id}, 'in', ${body}, ${kind}, 'delivered', ${providerId}, ${replyToId}, ${phoneNumberId}, ${provider},
+            ${media?.type || null}, ${media?.id || null}, ${media?.mimeType || null}, ${media?.filename || null})
     ON CONFLICT DO NOTHING
     RETURNING *`;
   if (!inserted && providerId) {

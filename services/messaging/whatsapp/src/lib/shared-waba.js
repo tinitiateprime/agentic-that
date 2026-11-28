@@ -158,9 +158,11 @@ export async function backfillSharedWabaHistory(accountId) {
     if (!targetContact) continue;
     const inserted = await sql`
       INSERT INTO messages (business_id, contact_id, direction, body, kind, template_name, buttons,
-                            status, provider_id, phone_number_id, provider, reaction, reaction_at, created_at)
+                            status, provider_id, phone_number_id, provider, reaction, reaction_at, created_at,
+                            media_type, media_id, media_mime, media_filename)
       SELECT ${target.business_id}, ${targetContact.id}, m.direction, m.body, m.kind, m.template_name, m.buttons,
-             m.status, m.provider_id, m.phone_number_id, m.provider, m.reaction, m.reaction_at, m.created_at
+             m.status, m.provider_id, m.phone_number_id, m.provider, m.reaction, m.reaction_at, m.created_at,
+             m.media_type, m.media_id, m.media_mime, m.media_filename
         FROM messages m
        WHERE m.business_id = ${source.business_id}
          AND m.contact_id = ${sourceContact.id}
