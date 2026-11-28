@@ -7,6 +7,7 @@ import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
 import { BrandSymbol } from "./BrandMark";
 import CompanySwitcher from "./CompanySwitcher";
+import { isShellPath } from "./shell-routes";
 
 // Two levels. The slim rail on the left lists everything you can do; sections with
 // sub-pages (Messages, More) open a second panel beside it. Everything else is one click.
@@ -59,7 +60,10 @@ export function billingLabel(user) {
   return "";
 }
 
-export default function ProductShell({ user, active = "apps", companionBridge = true, embedded = false, children }) {
+// onNavigate is set by the frame host (ShellHost): menu links then open their screen in
+// the frame instead of navigating this page. Inside the frame, this menu is hidden
+// (html[data-framed]) and the page tells the host which item to highlight.
+export default function ProductShell({ user, active = "apps", companionBridge = true, embedded = false, onNavigate, children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const initial = String(user?.name || user?.email || "A").charAt(0).toUpperCase();
   const capabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
@@ -103,13 +107,22 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
       if (sidebarRef.current && !sidebarRef.current.contains(event.target)) setPreviewId(null);
     };
     const onKeyDown = (event) => { if (event.key === "Escape") setPreviewId(null); };
+    // A click inside the frame doesn't reach this document; it moves focus out of this window.
+    const onBlur = () => setPreviewId(null);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", onBlur);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", onBlur);
     };
   }, [previewId]);
+
+  useEffect(() => {
+    if (window.self === window.top || !active) return;
+    window.parent.postMessage({ type: "agentic:active", active }, window.location.origin);
+  }, [active]);
 
   async function signOut() {
     await Promise.allSettled([
@@ -123,6 +136,19 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
   }
 
   const close = () => { setMenuOpen(false); setPreviewId(null); };
+
+  // In the frame host, every workspace link in the menu (including the company
+  // switcher's) opens in the frame. Other links, such as the home page, leave it.
+  const openInFrame = (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target?.closest?.("a[href]");
+    if (!anchor || (anchor.target && anchor.target !== "_self")) return;
+    const url = new URL(anchor.href, window.location.href);
+    if (url.origin !== window.location.origin || !isShellPath(url.pathname)) return;
+    event.preventDefault();
+    onNavigate(`${url.pathname}${url.search}${url.hash}`);
+    close();
+  };
 
   function ChildLink({ child, section }) {
     const Icon = child.icon;
@@ -148,7 +174,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
 
       {menuOpen && <button className={styles.sidebarBackdrop} type="button" aria-label="Close navigation" onClick={close} />}
 
-      <aside ref={sidebarRef} className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`}>
+      <aside ref={sidebarRef} className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`} data-frame-host={onNavigate ? "" : undefined} onClickCapture={onNavigate ? openInFrame : undefined}>
         <nav className={styles.rail} aria-label="Main navigation">
           <Link className={styles.brandMark} href="/apps" onClick={close} title="AgenticThat home"><BrandSymbol size={20} /></Link>
 
@@ -217,7 +243,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
         )}
       </aside>
 
-      <div className={styles.productContent}>
+      <div className={`${styles.productContent} ${onNavigate ? styles.hostContent : ""}`}>
         {companionBridge && <CompanionBridgeBanner />}
         {children}
       </div>

@@ -46,7 +46,7 @@ export default function Nav({ businessName }) {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:hidden">
+      <header className="sticky top-[var(--shell-top,0px)] z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:hidden">
         <Link href="/apps" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
           <Home size={17} /><span>WhatsApp</span>
         </Link>
@@ -55,7 +55,7 @@ export default function Nav({ businessName }) {
         </Link>
       </header>
 
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r border-slate-200 bg-white sm:flex">
+      <aside className="fixed bottom-0 left-[var(--shell-left,0px)] top-[var(--shell-top,0px)] z-20 hidden w-56 flex-col border-r border-slate-200 bg-white sm:flex">
         <div className="flex items-center gap-3 px-4 py-5">
           <img src="/whatsapp-logo.svg" alt="" className="h-9 w-9" />
           <span className="min-w-0">

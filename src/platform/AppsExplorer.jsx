@@ -331,6 +331,7 @@ export default function AppsExplorer({ user, access = {} }) {
         <CompanySwitcher user={user} variant="card" />
         <section className={styles.storeHeader}>
           <div className={styles.storeTitle}>
+            <p className={styles.storeKicker}>Your agentic workspace</p>
             <h1>Hello, <span className={styles.heroName}>{firstName || "there"}</span> <span className={styles.wave}>👋</span></h1>
           </div>
           <p className={styles.storeIntro}>What would you like to do today? Pick one below — we will guide you through the rest.</p>

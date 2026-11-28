@@ -4,8 +4,8 @@
   --sm-faint: #7c8796;
   --sm-line: #e1e5ec;
   --sm-soft: #f7f8fb;
-  --sm-accent: #6d5bd0;
-  --sm-accent-soft: #f3f1ff;
+  --sm-accent: #a56f05;
+  --sm-accent-soft: #fffbea;
   --sm-good: #0f7a4f;
   --sm-good-soft: #e6f6ee;
   --sm-bad: #b42318;
@@ -100,7 +100,7 @@
 .sm-post a { display: inline-flex; align-items: center; gap: 4px; width: max-content; color: var(--sm-accent); font-size: 12px; font-weight: 700; text-decoration: none; }
 .sm-rank { padding: 1px 6px; border-radius: 999px; color: #7a5200; background: #fff1c7; font-size: 11px; font-style: normal; font-weight: 800; }
 
-.sm-best { display: grid; gap: 4px; margin: 14px 0; padding: 14px 16px; border: 1px solid #ded9f1; border-radius: 12px; background: var(--sm-accent-soft); }
+.sm-best { display: grid; gap: 4px; margin: 14px 0; padding: 14px 16px; border: 1px solid #F4ECD7; border-radius: 12px; background: var(--sm-accent-soft); }
 .sm-best strong { font-size: 18px; }
 .sm-best span { color: var(--sm-muted); font-size: 13px; }
 .sm-best em { color: var(--sm-accent); font-size: 12px; font-style: normal; font-weight: 650; }
@@ -118,7 +118,7 @@
 .sm-primary:hover:not(:disabled) { background: #5847b8; }
 .sm-primary:disabled { opacity: .5; cursor: progress; }
 .sm-secondary { border: 1px solid #d9dce8; color: #424b5e; background: #fff; }
-.sm-secondary:hover { border-color: #b9b2e7; color: var(--sm-accent); }
+.sm-secondary:hover { border-color: #F4ECD7; color: var(--sm-accent); }
 .sm-more { display: block; margin: 14px auto 0; min-height: 38px; padding: 0 16px; border: 1px solid #d9dce8; border-radius: 9px; color: #424b5e; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
 .sm-icon { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--sm-line); border-radius: 9px; color: var(--sm-muted); background: #fff; cursor: pointer; }
 .sm-icon:hover { border-color: #f0cccc; color: var(--sm-bad); }
@@ -249,10 +249,10 @@
 .sm-accounts-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .sm-accounts-head h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
 .sm-accounts-head p { margin: 4px 0 0; color: var(--sm-muted); font-size: 13px; }
-.sm-accounts-prompt { margin: 14px 0 0; padding: 11px 14px; border: 1px dashed #c9bff3; border-radius: 11px; color: #4c3ab0; background: var(--sm-accent-soft); font-size: 13.5px; font-weight: 600; }
+.sm-accounts-prompt { margin: 14px 0 0; padding: 11px 14px; border: 1px dashed #F7EED4; border-radius: 11px; color: #9A6A06; background: var(--sm-accent-soft); font-size: 13.5px; font-weight: 600; }
 .sm-accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 16px; }
 .sm-account { position: relative; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--sm-line); border-radius: 14px; background: #fbfbfd; transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease; }
-.sm-account.on { border-color: #d5ccf6; background: #fff; box-shadow: 0 6px 18px rgba(109, 91, 208, .08); }
+.sm-account.on { border-color: #F7EED4; background: #fff; box-shadow: 0 6px 18px rgba(17, 24, 39, .08); }
 .sm-account.on.bad { border-color: #f3c7c2; box-shadow: 0 6px 18px rgba(180, 35, 24, .07); }
 .sm-account-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .sm-account-logo { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid var(--sm-line); border-radius: 11px; background: #fff; }
@@ -283,7 +283,7 @@
 .sm-switch:disabled { opacity: .6; cursor: progress; }
 
 /* Avatars with the platform's logo */
-.sm-avatar { position: relative; display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #4c3ab0; background: linear-gradient(135deg, #ede9fe, #e0e7ff); font-size: 13px; font-weight: 800; }
+.sm-avatar { position: relative; display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #9A6A06; background: linear-gradient(135deg, #FDF8EA, #FCF5E3); font-size: 13px; font-weight: 800; }
 .sm-avatar.large { width: 48px; height: 48px; font-size: 16px; }
 .sm-avatar b { position: absolute; right: -3px; bottom: -3px; display: grid; width: 20px; height: 20px; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(17, 24, 39, .18); }
 .sm-avatar.large b { width: 24px; height: 24px; }

@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@whatsapp/lib/auth";
 import { getBusiness } from "@whatsapp/lib/data";
 import Nav from "@whatsapp/components/Nav";
+import ProductShell from "@platform/ProductShell";
+import { getCurrentPrincipal } from "@platform/server/access-control";
 
 export default async function AdminLayout({ children }) {
   const user = await requireUser();
@@ -12,13 +14,19 @@ export default async function AdminLayout({ children }) {
   // Manager, which is where WhatsApp accounts are linked.
   if (business && !business.onboarded_at) redirect("/config-manager?service=messaging&platform=whatsapp");
 
+  const principal = await getCurrentPrincipal();
+
+  // The main AgenticThat menu sits on the left of every screen; the WhatsApp
+  // menu stays beside it.
   return (
-    <div className="min-h-screen">
-      <Nav businessName={business?.name} />
-      {/* sm:pl-60 clears the fixed left sidebar; pb-24 clears the mobile bottom nav.
-          Full width (no max-w cap) — several components (stat cards, the chat
-          view) already scale up via lg: breakpoints for wider screens. */}
-      <main className="min-h-screen px-4 pb-24 pt-4 sm:pb-8 sm:pl-60">{children}</main>
-    </div>
+    <ProductShell user={principal} active="whatsapp" companionBridge={false} embedded>
+      <div className="min-h-screen">
+        <Nav businessName={business?.name} />
+        {/* sm:pl-60 clears the fixed WhatsApp menu; pb-24 clears the mobile bottom nav.
+            Full width (no max-w cap) — several components (stat cards, the chat
+            view) already scale up via lg: breakpoints for wider screens. */}
+        <main className="min-h-screen px-4 pb-24 pt-4 sm:pb-8 sm:pl-60">{children}</main>
+      </div>
+    </ProductShell>
   );
 }

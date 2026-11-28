@@ -23,12 +23,14 @@ export default function TelegramConsoleClient({ serviceToken }) {
     const cleanup = initTelegramConsole({
       serviceToken,
       apiBase: "/api/telegram",
+      theme: "light",
     });
 
     return () => {
       if (typeof cleanup === "function") {
         cleanup();
       }
+      document.body.classList.remove("light-mode", "theme-locked");
     };
   }, [mounted, serviceToken]);
 

@@ -4,7 +4,7 @@ import { getBusiness, respondedContacts, unrespondedContacts } from "@whatsapp/l
 import ResponsesList from "@whatsapp/components/ResponsesList";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Responses — Tinitiate WA" };
+export const metadata = { title: "Responses — WhatsApp · AgenticThat" };
 
 export default async function ResponsesPage({ searchParams }) {
   const user = await requireUser();

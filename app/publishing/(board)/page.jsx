@@ -1,3 +1,4 @@
+import ProductShell from "@platform/ProductShell";
 import PublishQueueRunner from "../../../services/publishing/queue-runner/src/App";
 import { createPublishingIdentityToken } from "@platform/server/auth-store";
 import { requireAccess, requirePrincipalCapability } from "@platform/server/access-control";
@@ -13,5 +14,9 @@ export default async function PublishingPage({ searchParams }) {
   const accessUser = await requireAccess(`publishing.${platform}`, "view", `/publishing?platform=${platform}`);
   const user = await requirePrincipalCapability(accessUser, "publishing.view", `/publishing?platform=${platform}`);
 
-  return <PublishQueueRunner publishingIdentityToken={await createPublishingIdentityToken(user)} />;
+  return (
+    <ProductShell user={user} active="publishing" embedded>
+      <PublishQueueRunner publishingIdentityToken={await createPublishingIdentityToken(user)} />
+    </ProductShell>
+  );
 }

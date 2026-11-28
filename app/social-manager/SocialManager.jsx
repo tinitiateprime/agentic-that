@@ -21,7 +21,7 @@ export default function SocialManager({ workspaceName, workspaceId = "", initial
       <header className="sm-header">
         <CompanyTile id={workspaceId || workspaceName} name={workspaceName || "Your company"} size={52} />
         <div>
-          <p>Social Manager</p>
+          <p>Agentic Social Manager</p>
           <h1>{workspaceName || "Your company"}</h1>
           <span>How your posts perform, and every comment to answer, in one place.</span>
         </div>

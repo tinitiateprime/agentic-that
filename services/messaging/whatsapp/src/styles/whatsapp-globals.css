@@ -1,10 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #f8fafc;
-  --brand: #128c7e;       /* WhatsApp teal */
-  --brand-dark: #075e54;
-  --bubble-out: #d9fdd3;  /* outgoing chat bubble */
+  --bg: #f4f6f8;
+  /* AgenticThat theme: gold accents, ink buttons, as on every other screen. */
+  --brand: #b78208;       /* accents, focus borders, links */
+  --brand-dark: #111827;  /* primary buttons */
+  --bubble-out: #fdf3d0;  /* outgoing chat bubble */
 }
 
 html,
@@ -13,11 +14,10 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
-/* WhatsApp chat wallpaper — beige base with a faint doodle-dot pattern,
-   like the default WA conversation background. */
+/* Chat wallpaper: the workspace background with a faint dot pattern. */
 .wa-wallpaper {
-  background-color: #efeae2;
-  background-image: radial-gradient(rgba(7, 94, 84, 0.07) 1px, transparent 1.4px);
+  background-color: #f4f6f8;
+  background-image: radial-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1.4px);
   background-size: 18px 18px;
 }
 

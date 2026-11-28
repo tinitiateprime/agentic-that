@@ -131,7 +131,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
     try {
       const response = await fetch("/api/phone-front-desk", { cache: "no-store", credentials: "include" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Unable to load AI Phone Front Desk.");
+      if (!response.ok) throw new Error(data.error || "Unable to load Agentic Phone Front Desk.");
       setConfigured(Boolean(data.configured));
       setIntegrationsEnabled(Boolean(data.integrationsEnabled));
       setNotifications(data.notifications || { configured: false });
@@ -139,7 +139,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       setProfile(data.profile);
       setCalls(Array.isArray(data.calls) ? data.calls : []);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load AI Phone Front Desk.");
+      setError(loadError instanceof Error ? loadError.message : "Unable to load Agentic Phone Front Desk.");
     } finally {
       setLoading(false);
     }
@@ -602,7 +602,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
   }), [calls]);
 
   if (loading) return <LoadingScreen />;
-  if (!profile) return <div className="pfd-fatal"><AlertCircle size={25} /><strong>AI Phone Front Desk could not load</strong><p>{error || "Refresh the page and try again."}</p></div>;
+  if (!profile) return <div className="pfd-fatal"><AlertCircle size={25} /><strong>Agentic Phone Front Desk could not load</strong><p>{error || "Refresh the page and try again."}</p></div>;
 
   const callActive = ["preparing", "live", "typed", "ending"].includes(state);
   const currentSummary = latestCall || (state === "completed" ? calls[0] : null);
@@ -612,7 +612,7 @@ export default function PhoneFrontDeskWorkspace({ canOperate, canConfigure }) {
       <header className="pfd-hero">
         <div className="pfd-hero-copy">
           <span className="pfd-eyebrow"><Sparkles size={14} />AI receptionist demo studio</span>
-          <h1>AI Phone Front Desk</h1>
+          <h1>Agentic Phone Front Desk</h1>
           <p>Configure the essentials, start a natural browser call, and watch every enquiry become a clear lead and follow-up summary.</p>
           <div className="pfd-hero-meta">
             <StatusPill state={state} />

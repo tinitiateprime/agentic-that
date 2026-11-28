@@ -55,6 +55,7 @@
     "app/**/*.jsx",
     "app/**/*.ts",
     "app/**/*.tsx",
+    "lib/**/*.ts",
     "services/messaging/telegram/src/**/*.ts",
     "services/messaging/whatsapp/src/**/*.js",
     "services/messaging/whatsapp/src/**/*.jsx",
@@ -70,7 +71,7 @@
     "src/**/*.jsx",
     "src/**/*.ts",
     "src/**/*.tsx",
-    "lib/**/*.ts"
+    ".next-verify/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

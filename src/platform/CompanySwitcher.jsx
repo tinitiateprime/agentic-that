@@ -90,7 +90,8 @@ export default function CompanySwitcher({ user, variant = "rail" }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Couldn't switch company. Try again.");
-      window.location.href = "/apps";
+      // Reload the whole window, including the main menu when this runs inside the workspace frame.
+      window.top.location.href = "/apps";
     } catch (switchError) {
       setError(switchError.message);
       setBusyId("");

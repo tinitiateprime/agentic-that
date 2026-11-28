@@ -168,7 +168,7 @@ export default function WorkspaceReports({ initialReport, currentUserId, workspa
         <div className="report-title">
           <CompanyTile id={workspaceId || report.workspaceName} name={report.workspaceName || "Your company"} size={56} />
           <div>
-            <p>Company reports · last {report.rangeDays} days</p>
+            <p>Agentic company reports · last {report.rangeDays} days</p>
             <h1>{report.workspaceName || "Your company"}</h1>
             <span>What everyone in this company did: the posts, research and group messages, and who did them. Everyone in the company can see this page.</span>
           </div>

@@ -5,8 +5,8 @@
   --report-line: #e1e5ec;
   --report-surface: #ffffff;
   --report-soft: #f7f8fb;
-  --report-accent: #6d5bd0;
-  --report-accent-soft: #f3f1ff;
+  --report-accent: #a56f05;
+  --report-accent-soft: #fffbea;
   --report-good: #0f7a4f;
   --report-good-soft: #e6f6ee;
   --report-bad: #b42318;
@@ -32,7 +32,7 @@
 .report-range button[aria-pressed="true"] { color: #fff; background: var(--report-accent); }
 .report-range button:disabled { cursor: progress; }
 .report-download { min-height: 42px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #d9dce8; border-radius: 10px; color: #424b5e; background: var(--report-surface); font-size: 13px; font-weight: 700; cursor: pointer; }
-.report-download:hover { border-color: #b9b2e7; color: var(--report-accent); background: var(--report-accent-soft); }
+.report-download:hover { border-color: #F4ECD7; color: var(--report-accent); background: var(--report-accent-soft); }
 
 .report-error, .report-note { margin: 0 0 16px; padding: 11px 13px; border-radius: 10px; font-size: 13px; }
 .report-error { border: 1px solid #f0cccc; color: var(--report-bad); background: #fff3f3; }
@@ -93,7 +93,7 @@
 .report-feed p { margin: 0; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
 .report-detail { display: block; margin-top: 3px; color: var(--report-faint); font-size: 12px; }
 .report-dot { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: var(--report-accent); background: var(--report-accent-soft); }
-.report-dot.scraping { color: #2563b8; background: #edf4ff; }
+.report-dot.scraping { color: #9A6A06; background: #FDF9EF; }
 .report-dot.groups { color: #a66b12; background: #fff7e6; }
 .report-dot.team { color: #475569; background: #f1f3f6; }
 .report-outcome { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
@@ -117,7 +117,7 @@
 /* Posts by platform */
 .report-platforms { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .report-platforms button { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid var(--report-line); border-radius: 14px; background: var(--report-surface); color: var(--report-ink); text-align: left; cursor: pointer; box-shadow: 0 6px 18px rgba(17, 24, 39, .04); }
-.report-platforms button:hover { border-color: #c7c2e9; }
+.report-platforms button:hover { border-color: #F4ECD7; }
 .report-platforms button.selected { border-color: var(--report-accent); background: var(--report-accent-soft); }
 .report-platforms strong { font-size: 15px; }
 .report-platform-total { font-size: 22px; font-weight: 720; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -125,12 +125,12 @@
 .report-platform-split em { font-size: 12px; font-style: normal; font-weight: 650; }
 .report-platform-split .completed, .report-detail.completed { color: var(--report-good); }
 .report-platform-split .failed, .report-detail.failed { color: var(--report-bad); }
-.report-platform-split .scheduled { color: #2563b8; }
+.report-platform-split .scheduled { color: #9A6A06; }
 .report-platform-split .in_progress { color: var(--report-wait); }
 
 /* Filters with search */
 .report-search span { display: flex; align-items: center; gap: 7px; height: 38px; min-width: 230px; padding: 0 10px; border: 1px solid #d2d7e0; border-radius: 9px; color: var(--report-faint); background: #fff; }
-.report-search span:focus-within { border-color: var(--report-accent); box-shadow: 0 0 0 3px rgba(109, 91, 208, .12); }
+.report-search span:focus-within { border-color: var(--report-accent); box-shadow: 0 0 0 3px rgba(17, 24, 39, .12); }
 .report-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--report-ink); background: transparent; font-size: 13px; }
 
 /* Post list */
@@ -146,7 +146,7 @@
 .report-post-body small { color: var(--report-muted); font-size: 12px; }
 .report-post-side { display: grid; justify-items: end; gap: 6px; }
 .report-post-side time { color: var(--report-faint); font-size: 12px; white-space: nowrap; }
-.report-outcome.scheduled { color: #2563b8; background: #edf4ff; }
+.report-outcome.scheduled { color: #9A6A06; background: #FDF9EF; }
 
 /* Research table */
 .report-scans { min-width: 860px; }
@@ -169,7 +169,7 @@
 .report-app-results .sending { color: var(--report-wait); background: var(--report-wait-soft); }
 
 .report-more { display: block; margin: 14px auto 0; min-height: 38px; padding: 0 16px; border: 1px solid #d9dce8; border-radius: 9px; color: #424b5e; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
-.report-more:hover { border-color: #b9b2e7; color: var(--report-accent); }
+.report-more:hover { border-color: #F4ECD7; color: var(--report-accent); }
 
 @media (max-width: 1100px) { .report-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
@@ -217,8 +217,8 @@
 .report-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 10px 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 12px; font-weight: 650; line-height: 1.3; white-space: nowrap; }
 .report-chip svg, .report-chip img { flex: 0 0 auto; }
 .report-chip.platform { border-color: var(--report-line); color: #374151; background: #fff; }
-.report-chip.account { border-color: #c9d8f6; color: #1e40af; background: #eef4ff; }
-.report-chip.person { border-color: #ddd4fb; color: #5b3fc4; background: var(--report-accent-soft); }
+.report-chip.account { border-color: #e1e5ec; color: #3f4856; background: #f4f6f8; }
+.report-chip.person { border-color: #f1dc97; color: #9a6a06; background: var(--report-accent-soft); }
 
 .report-post-side { align-content: start; gap: 8px; }
 .report-open { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 7px 12px; border: 1px solid #d9dce8; border-radius: 9px; color: var(--report-ink); background: #fff; font-size: 12.5px; font-weight: 700; text-decoration: none; white-space: nowrap; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }

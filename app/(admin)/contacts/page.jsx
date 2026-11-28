@@ -4,7 +4,7 @@ import { metaListPhoneNumbers, metaTemplatesConfigured, watiConfigured } from "@
 import NotificationCenter from "./NotificationCenter";
 import { credsForBusiness, credsForProvider } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Customer CRM — Tinitiate WA" };
+export const metadata = { title: "Customer CRM — WhatsApp · AgenticThat" };
 
 export default async function ContactsPage() {
   const user = await requireUser();
