@@ -210,8 +210,13 @@ export async function workspaceTeamSnapshot(principal) {
     sql`
       SELECT u.id, u.name, u.email, u.status, membership.status AS membership_status,
              membership.created_at, membership.approved_at,
-             membership.created_by_username, membership.created_datetime,
-             membership.updated_by_username, membership.updated_datetime
+             -- Read through to_jsonb so the page also works on a database
+             -- where 202611250001_audit_columns hasn't been applied yet
+             -- (the fields are then empty instead of failing the query).
+             to_jsonb(membership) ->> 'created_by_username' AS created_by_username,
+             (to_jsonb(membership) ->> 'created_datetime')::timestamptz AS created_datetime,
+             to_jsonb(membership) ->> 'updated_by_username' AS updated_by_username,
+             (to_jsonb(membership) ->> 'updated_datetime')::timestamptz AS updated_datetime
         FROM workspace_memberships membership
         JOIN platform_users u ON u.id = membership.user_id
        WHERE membership.workspace_id = ${principal.workspaceId}
