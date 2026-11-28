@@ -296,6 +296,8 @@ export const platformUploadSchema = z.object({
   title: z.string().optional(),
   platformOptions: platformOptionsSchema.optional(),
   linkedinTarget: linkedinManagedPageSchema.optional(),
+  // Where the published post lives on the platform, when it could be read.
+  postUrl: z.string().optional(),
 
   caption: z.string().min(1, "Caption is required"),
 

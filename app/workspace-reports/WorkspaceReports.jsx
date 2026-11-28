@@ -2,6 +2,7 @@
 
 import { BarChart3, CheckCircle2, Clock3, Download, MessagesSquare, Search, SquarePen, TriangleAlert, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { CompanyTile } from "@platform/CompanySwitcher";
 import { MessagesReport, PostsReport, ScansReport, downloadCsv, messageCsv, postCsv, scanCsv } from "./ServiceReports";
 
 const RANGES = [7, 30, 90];
@@ -122,7 +123,7 @@ function DailyChart({ daily }) {
   );
 }
 
-export default function WorkspaceReports({ initialReport, currentUserId }) {
+export default function WorkspaceReports({ initialReport, currentUserId, workspaceId = "" }) {
   const [report, setReport] = useState(initialReport);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -164,10 +165,13 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
   return (
     <main className="report-shell">
       <header className="report-header">
-        <div>
-          <p>Agentic company reports</p>
-          <h1>{report.workspaceName || "Your company"}</h1>
-          <span>What everyone in this company did over the last {report.rangeDays} days: the posts, research and group messages, and who did them. Everyone in the company can see this page.</span>
+        <div className="report-title">
+          <CompanyTile id={workspaceId || report.workspaceName} name={report.workspaceName || "Your company"} size={56} />
+          <div>
+            <p>Agentic company reports · last {report.rangeDays} days</p>
+            <h1>{report.workspaceName || "Your company"}</h1>
+            <span>What everyone in this company did: the posts, research and group messages, and who did them. Everyone in the company can see this page.</span>
+          </div>
         </div>
         <div className="report-controls">
           <div className="report-range" role="group" aria-label="Time range">

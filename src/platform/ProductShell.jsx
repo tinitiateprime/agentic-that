@@ -176,8 +176,7 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
 
       <aside ref={sidebarRef} className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`} data-frame-host={onNavigate ? "" : undefined} onClickCapture={onNavigate ? openInFrame : undefined}>
         <nav className={styles.rail} aria-label="Main navigation">
-          {/* The company you are working in; click it to switch company (like Slack). */}
-          <CompanySwitcher user={user} variant="rail" />
+          <Link className={styles.brandMark} href="/apps" onClick={close} title="AgenticThat home"><BrandSymbol size={20} /></Link>
 
           <div className={styles.railItems}>
             {railSections.filter((section) => section.id !== "more").map((section) => {
@@ -208,6 +207,8 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
           </div>
 
           <div className={styles.railFooter}>
+            {/* The company you are working in; click it to switch company (like Slack). */}
+            <CompanySwitcher user={user} variant="rail" />
             <button type="button" className={`${styles.railItem} ${activeSection?.id === "more" ? styles.railActive : ""} ${moreOpen && activeSection?.id !== "more" ? styles.railOpen : ""}`} aria-expanded={moreOpen} onClick={() => setPreviewId(moreOpen ? null : "more")}>
               <span className={styles.accountAvatar}>{initial}</span><span>More</span>
             </button>

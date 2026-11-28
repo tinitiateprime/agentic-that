@@ -12,7 +12,7 @@ export default async function WorkspaceReportsPage() {
   if (!principal.workspaceId) redirect("/apps");
   return (
     <ProductShell user={principal} active="reports">
-      <WorkspaceReports initialReport={await workspaceActivityReport(principal, { days: 30 })} currentUserId={principal.userId} />
+      <WorkspaceReports initialReport={await workspaceActivityReport(principal, { days: 30 })} currentUserId={principal.userId} workspaceId={principal.workspaceId} />
     </ProductShell>
   );
 }

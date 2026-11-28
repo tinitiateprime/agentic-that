@@ -413,8 +413,12 @@ export async function postToReddit(page: Page, upload: PlatformUpload, accountLo
     }
     throw error;
   });
-  await assertRedditPostKept(page, redditPostIdFromUrl(posted) || posted);
-  return { success: true };
+  const postId = redditPostIdFromUrl(posted) || posted;
+  await assertRedditPostKept(page, postId);
+  return {
+    success: true,
+    postUrl: /^https:\/\/(www\.)?reddit\.com\//.test(posted) ? posted : /^[a-z0-9]+$/i.test(postId) ? `https://www.reddit.com/comments/${postId}/` : undefined,
+  };
 }
 
 /** A community's AutoModerator note, cut to its first sentences. */

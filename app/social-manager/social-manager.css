@@ -236,3 +236,81 @@
 .sm-inbox-source-actions { display: inline-flex; align-items: center; gap: 12px; }
 @media (max-width: 760px) { .sm-inbox-source { grid-template-columns: auto 1fr; } .sm-inbox-source .sm-sync-state, .sm-inbox-source-actions { grid-column: 1 / -1; } }
 .sm-inbox-source-pages { color: var(--sm-muted); font-size: 12px; font-weight: 500; }
+
+/* ---- Refresh: header, accounts, switches, avatars, logos ---- */
+.sm-header { display: flex; align-items: flex-start; gap: 16px; }
+.sm-header > span:first-child { display: grid; margin: 6px 0 0; line-height: 1; }
+.sm-header > div > span { display: block; margin-top: 10px; color: var(--sm-muted); font-size: 15px; line-height: 1.6; }
+.sm-tabs em.sm-tab-count { margin-left: 2px; padding: 1px 8px; color: #fff; background: #e11d48; font-weight: 800; }
+.sm-tabs button[aria-selected="true"] em.sm-tab-count { background: #e11d48; color: #fff; }
+
+/* Accounts watched for comments */
+.sm-accounts { margin-bottom: 18px; padding: 20px; border: 1px solid var(--sm-line); border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgba(17, 24, 39, .045); }
+.sm-accounts-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.sm-accounts-head h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
+.sm-accounts-head p { margin: 4px 0 0; color: var(--sm-muted); font-size: 13px; }
+.sm-accounts-prompt { margin: 14px 0 0; padding: 11px 14px; border: 1px dashed #F7EED4; border-radius: 11px; color: #9A6A06; background: var(--sm-accent-soft); font-size: 13.5px; font-weight: 600; }
+.sm-accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 16px; }
+.sm-account { position: relative; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--sm-line); border-radius: 14px; background: #fbfbfd; transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease; }
+.sm-account.on { border-color: #F7EED4; background: #fff; box-shadow: 0 6px 18px rgba(17, 24, 39, .08); }
+.sm-account.on.bad { border-color: #f3c7c2; box-shadow: 0 6px 18px rgba(180, 35, 24, .07); }
+.sm-account-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.sm-account-logo { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid var(--sm-line); border-radius: 11px; background: #fff; }
+.sm-account-name { display: grid; min-width: 0; }
+.sm-account-name strong { overflow: hidden; font-size: 14.5px; text-overflow: ellipsis; white-space: nowrap; }
+.sm-account-name small { overflow: hidden; color: var(--sm-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.sm-account-status { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--sm-muted); font-size: 12.5px; line-height: 1.45; }
+.sm-account-status i { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #c3c9d4; }
+.sm-account-status svg { flex: 0 0 auto; margin-top: 2px; color: var(--sm-accent); }
+.sm-account.good .sm-account-status { color: var(--sm-good); }
+.sm-account.good .sm-account-status i { background: var(--sm-good); box-shadow: 0 0 0 3px var(--sm-good-soft); }
+.sm-account.bad .sm-account-status { color: var(--sm-bad); }
+.sm-account.bad .sm-account-status i { background: var(--sm-bad); box-shadow: 0 0 0 3px var(--sm-bad-soft); }
+.sm-account.wait .sm-account-status i { background: #d99a0b; }
+.sm-account-check { justify-self: start; }
+.sm-accounts-more { margin-top: 14px; color: var(--sm-muted); font-size: 13px; }
+.sm-accounts-more summary { width: max-content; color: var(--sm-accent); font-weight: 700; cursor: pointer; }
+.sm-accounts-more ul { display: grid; gap: 6px; margin: 10px 0 6px; padding: 0; list-style: none; }
+.sm-accounts-more li { display: flex; align-items: center; gap: 7px; }
+.sm-accounts-more p { margin: 6px 0 0; }
+
+/* On/off switch */
+.sm-switch { position: relative; width: 44px; height: 26px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: #d4d8e1; cursor: pointer; transition: background 160ms ease; }
+.sm-switch span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(17, 24, 39, .25); transition: transform 160ms ease; }
+.sm-switch[aria-checked="true"] { background: var(--sm-accent); }
+.sm-switch[aria-checked="true"] span { transform: translateX(18px); }
+.sm-switch:focus-visible { outline: 3px solid var(--sm-accent-soft); outline-offset: 2px; }
+.sm-switch:disabled { opacity: .6; cursor: progress; }
+
+/* Avatars with the platform's logo */
+.sm-avatar { position: relative; display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #9A6A06; background: linear-gradient(135deg, #FDF8EA, #FCF5E3); font-size: 13px; font-weight: 800; }
+.sm-avatar.large { width: 48px; height: 48px; font-size: 16px; }
+.sm-avatar b { position: absolute; right: -3px; bottom: -3px; display: grid; width: 20px; height: 20px; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(17, 24, 39, .18); }
+.sm-avatar.large b { width: 24px; height: 24px; }
+.sm-inbox-list button { grid-template-columns: auto minmax(0, 1fr); gap: 11px; align-items: start; }
+.sm-inbox-row-main { display: grid; gap: 3px; min-width: 0; }
+.sm-inbox-list button[aria-current="true"] { box-shadow: inset 3px 0 0 var(--sm-accent); }
+.sm-inbox-who { display: flex; align-items: center; gap: 12px; }
+.sm-inbox-who h3 { margin: 0 0 2px; }
+
+/* Analytics logos */
+.sm-platform-cell { display: inline-flex; align-items: center; gap: 8px; }
+.sm-post strong img { margin-right: 5px; vertical-align: -3px; }
+.sm-sync-row > label { display: inline-flex; align-items: center; gap: 8px; }
+
+@media (max-width: 640px) {
+  .sm-header { gap: 12px; }
+  .sm-accounts-grid { grid-template-columns: 1fr; }
+}
+.sm-accounts-off { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef0f4; }
+.sm-accounts-off > span:first-child { margin-right: 4px; color: var(--sm-faint); font-size: 11px; font-weight: 760; letter-spacing: .05em; text-transform: uppercase; }
+.sm-account-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; padding: 4px 5px 4px 9px; border: 1px solid var(--sm-line); border-radius: 999px; background: #fbfbfd; font-size: 12.5px; font-weight: 650; }
+.sm-account-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-account-chip .sm-switch { width: 34px; height: 20px; }
+.sm-account-chip .sm-switch span { top: 2px; left: 2px; width: 16px; height: 16px; }
+.sm-avatar { font-size: 12px; letter-spacing: -.02em; }
+.sm-avatar b { right: -6px; bottom: -5px; width: 18px; height: 18px; }
+.sm-avatar.large b { right: -6px; bottom: -5px; width: 22px; height: 22px; }
+
+/* Five or six summary tiles fill the row either way. */
+@media (min-width: 1101px) { .sm-tiles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }

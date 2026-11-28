@@ -1,7 +1,8 @@
 import { OPERATIONAL_ROLE_CATALOG } from "../access-catalog.js";
 import { principalHasAccess } from "./access-control.js";
 import { getPlatformSql } from "./auth-store.js";
-import { publishingWorkspaceSnapshot } from "./publishing-central-store.js";
+import { publishedPostUrl, publishingWorkspaceSnapshot } from "./publishing-central-store.js";
+import { attachPostLinks, linkedinPublicPage } from "../workspace-reports/post-links.js";
 
 const RANGE_DAYS = new Set([7, 30, 90]);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -81,6 +82,9 @@ export function summarizePosts({ uploads = [], accounts = [], principal, sinceMs
         publishedAt: iso(upload.postedAt),
         at: iso(when) || iso(upload.uploadedAt),
         failureReason: state === "failed" ? String(upload.failureReason || "").slice(0, 240) || null : null,
+        linkedinPage: upload.platform === "linkedin" ? linkedinPublicPage(upload.linkedinTarget) : "",
+        // Recorded by the Companion when it published the post (Companion 2.15.0+).
+        postUrl: state === "published" ? publishedPostUrl(upload.platform, upload.postUrl) : "",
       };
     })
     // In the period: created, published or failed in it, or still scheduled ahead.
@@ -191,7 +195,22 @@ export async function workspaceActivityReport(principal, { days } = {}) {
 
   // ---- Per-service detail ------------------------------------------------------------------
   const nowMs = until.getTime();
-  const { posts, postPlatforms } = summarizePosts({ uploads: publishing.uploads, accounts: publishing.accounts, principal, sinceMs, nowMs, nameFor });
+  const summary = summarizePosts({ uploads: publishing.uploads, accounts: publishing.accounts, principal, sinceMs, nowMs, nameFor });
+  const { postPlatforms } = summary;
+  // "Open post": the same posts as Social Manager knows them, with real links.
+  let known = { analyticsPosts: [] };
+  try {
+    const analyticsPosts = await sql`
+      SELECT platform, permalink, post_text, published_at FROM social_analytics_posts
+       WHERE workspace_id = ${workspaceId} AND permalink <> '' AND published_at >= ${new Date(sinceMs - 7 * DAY_MS).toISOString()}
+       ORDER BY published_at DESC LIMIT 2000`;
+    known = {
+      analyticsPosts: analyticsPosts.map((row) => ({ platform: row.platform, permalink: row.permalink, text: row.post_text, publishedAt: row.published_at ? new Date(row.published_at).toISOString() : null })),
+    };
+  } catch (error) {
+    console.error("Workspace report could not read post links", error instanceof Error ? error.message : error);
+  }
+  const posts = attachPostLinks(summary.posts, known);
 
   const scans = jobs.slice(0, LIST_LIMIT).map((job) => ({
     id: String(job.id),
