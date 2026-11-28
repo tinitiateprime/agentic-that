@@ -185,3 +185,59 @@
   .report-thumb { width: 56px; height: 56px; }
   .report-post-side { grid-column: 2; justify-items: start; }
 }
+
+/* ---- Refresh: clearer header, platform logos, highlighted who/where, open post ---- */
+.report-title { display: flex; align-items: flex-start; gap: 16px; }
+.report-title > div { min-width: 0; }
+/* The company tile: the header's older span rule must not turn it into text. */
+.report-header .report-title > span:first-child { display: grid; margin-top: 6px; line-height: 1; }
+.report-title > div > span { display: block; margin-top: 10px; color: var(--report-muted); font-size: 15px; line-height: 1.6; }
+
+.report-tabs button { transition: background 140ms ease, color 140ms ease; }
+
+/* Platform cards */
+.report-platform-name { display: inline-flex; align-items: center; gap: 9px; }
+.report-platform-name strong { font-size: 15px; }
+.report-platforms button { gap: 8px; padding: 16px; transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+.report-platforms button:hover { box-shadow: 0 10px 24px rgba(17, 24, 39, .08); transform: translateY(-1px); }
+
+/* Post rows */
+.report-posts > li { grid-template-columns: 76px minmax(0, 1fr) minmax(150px, auto); gap: 16px; padding: 18px 4px; border-radius: 12px; transition: background 140ms ease; }
+.report-posts > li:hover { background: #fafbfd; }
+.report-thumb-wrap { position: relative; display: block; width: 76px; height: 76px; }
+.report-thumb { width: 76px; height: 76px; border-radius: 12px; }
+.report-thumb-platform { position: absolute; right: -6px; bottom: -6px; display: grid; width: 26px; height: 26px; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(17, 24, 39, .15); }
+.report-post-body { gap: 8px; }
+.report-post-title { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.report-post-body p.report-caption { display: block; -webkit-line-clamp: unset; color: #273142; font-size: 14px; line-height: 1.6; }
+.report-post-body p.report-caption.clamped { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.report-caption-toggle { justify-self: start; padding: 0; border: 0; background: none; color: var(--report-accent); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+
+.report-post-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.report-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 10px 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 12px; font-weight: 650; line-height: 1.3; white-space: nowrap; }
+.report-chip svg, .report-chip img { flex: 0 0 auto; }
+.report-chip.platform { border-color: var(--report-line); color: #374151; background: #fff; }
+.report-chip.account { border-color: #c9d8f6; color: #1e40af; background: #eef4ff; }
+.report-chip.person { border-color: #ddd4fb; color: #5b3fc4; background: var(--report-accent-soft); }
+
+.report-post-side { align-content: start; gap: 8px; }
+.report-open { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 7px 12px; border: 1px solid #d9dce8; border-radius: 9px; color: var(--report-ink); background: #fff; font-size: 12.5px; font-weight: 700; text-decoration: none; white-space: nowrap; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }
+.report-open:hover { border-color: var(--report-accent); color: var(--report-accent); background: var(--report-accent-soft); }
+.report-open:focus-visible { outline: 2px solid var(--report-accent); outline-offset: 2px; }
+
+/* Research and group messages */
+.report-platform-cell { display: inline-flex; align-items: center; gap: 7px; }
+.report-messages header { align-items: center; justify-content: flex-start; }
+.report-messages header time { margin-left: auto; color: var(--report-faint); font-size: 12px; }
+.report-app-results li { gap: 6px; padding: 4px 10px 4px 7px; border: 1px solid transparent; }
+.report-app-results li b { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; font-weight: 700; }
+.report-app-results .sent { border-color: #bfe5d0; }
+.report-app-results .failed { border-color: #f3c7c2; }
+.report-app-results .sending { border-color: #f1dfb5; }
+
+@media (max-width: 760px) {
+  .report-title { gap: 12px; }
+  .report-posts > li { grid-template-columns: 60px minmax(0, 1fr); }
+  .report-thumb-wrap, .report-thumb { width: 60px; height: 60px; }
+  .report-post-side { grid-column: 2; justify-items: start; grid-auto-flow: column; align-items: center; }
+}

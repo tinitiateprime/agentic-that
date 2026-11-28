@@ -1,7 +1,8 @@
 "use client";
 
-import { CalendarClock, CheckCircle2, Clock3, FileText, Film, ImageIcon, MessagesSquare, Search, TriangleAlert } from "lucide-react";
+import { AtSign, CalendarClock, CheckCircle2, Clock3, ExternalLink, FileText, Film, ImageIcon, MessagesSquare, Search, TriangleAlert, UserRound } from "lucide-react";
 import { useMemo, useState } from "react";
+import PlatformLogo from "@platform/PlatformLogo";
 
 const PAGE = 30;
 const number = new Intl.NumberFormat();
@@ -93,9 +94,28 @@ function MoreButton({ shown, total, onMore }) {
 
 function PostThumb({ post }) {
   const [broken, setBroken] = useState(false);
-  if (post.preview && !broken) return <img className="report-thumb" src={post.preview} alt="" loading="lazy" onError={() => setBroken(true)} />;
   const Icon = post.format === "video" ? Film : post.format === "image" ? ImageIcon : FileText;
-  return <span className="report-thumb placeholder" aria-hidden="true"><Icon size={20} /></span>;
+  return (
+    <span className="report-thumb-wrap">
+      {post.preview && !broken
+        ? <img className="report-thumb" src={post.preview} alt="" loading="lazy" onError={() => setBroken(true)} />
+        : <span className="report-thumb placeholder" aria-hidden="true"><Icon size={22} /></span>}
+      <span className="report-thumb-platform"><PlatformLogo platform={post.platform} size={16} /></span>
+    </span>
+  );
+}
+
+// A long caption shows three lines, with a toggle for the rest.
+function Caption({ post }) {
+  const [open, setOpen] = useState(false);
+  const text = post.caption || (post.format === "text" ? "No text" : `${post.format === "video" ? "Video" : "Picture"} without a caption`);
+  const long = (post.caption || "").length > 220;
+  return (
+    <>
+      <p className={`report-caption ${post.caption ? "" : "muted"} ${long && !open ? "clamped" : ""}`}>{text}</p>
+      {long && <button type="button" className="report-caption-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? "Show less" : "Show more"}</button>}
+    </>
+  );
 }
 
 export function PostsReport({ posts, platforms, filteredRef }) {
@@ -122,7 +142,7 @@ export function PostsReport({ posts, platforms, filteredRef }) {
           {platforms.map((entry) => (
             <button type="button" key={entry.platform} className={platform === entry.platform ? "selected" : ""} aria-pressed={platform === entry.platform}
               onClick={() => { setPlatform(platform === entry.platform ? "all" : entry.platform); setShown(PAGE); }}>
-              <strong>{entry.label}</strong>
+              <span className="report-platform-name"><PlatformLogo platform={entry.platform} label={entry.label} size={22} /><strong>{entry.label}</strong></span>
               <span className="report-platform-total">{number.format(entry.total)} {entry.total === 1 ? "post" : "posts"}</span>
               <span className="report-platform-split">
                 <em className="completed">{entry.published} published</em>
@@ -157,14 +177,24 @@ export function PostsReport({ posts, platforms, filteredRef }) {
                 <li key={post.id}>
                   <PostThumb post={post} />
                   <div className="report-post-body">
-                    {post.title && <strong>{post.title}</strong>}
-                    <p className={post.caption ? "" : "muted"}>{post.caption || (post.format === "text" ? "No text" : `${post.format === "video" ? "Video" : "Picture"} without a caption`)}</p>
-                    <small>{post.platformLabel}{post.account ? ` · ${post.account}` : ""} · by {post.createdBy}</small>
+                    {post.title && <strong className="report-post-title">{post.title}</strong>}
+                    <Caption post={post} />
+                    <div className="report-post-meta">
+                      <span className={`report-chip platform ${post.platform}`}><PlatformLogo platform={post.platform} size={14} />{post.platformLabel}</span>
+                      {post.account && <span className="report-chip account" title="The account it was posted on"><AtSign size={13} />{post.account}</span>}
+                      <span className="report-chip person" title="Who created it"><UserRound size={13} />by {post.createdBy}</span>
+                    </div>
                     {post.failureReason && <small className="report-detail failed">{post.failureReason}</small>}
                   </div>
                   <div className="report-post-side">
                     <StatePill state={status} />
                     <time dateTime={post.at}>{status.time} {fullDate(post.at)}</time>
+                    {post.link && (
+                      <a className="report-open" href={post.link} target="_blank" rel="noopener noreferrer"
+                        title={post.linkKind === "post" ? `Open this post on ${post.platformLabel}` : `This post's exact link isn't known yet; open ${post.account || "the account"} on ${post.platformLabel}`}>
+                        {post.linkKind === "post" ? "Open post" : `Open on ${post.platformLabel}`}<ExternalLink size={13} />
+                      </a>
+                    )}
                   </div>
                 </li>
               );
@@ -212,8 +242,8 @@ export function ScansReport({ scans, filteredRef }) {
               {filtered.slice(0, shown).map((scan) => (
                 <tr key={scan.id}>
                   <td>{fullDate(scan.at)}</td>
-                  <td>{scan.createdBy}</td>
-                  <td>{scan.platformLabel}</td>
+                  <td><span className="report-chip person"><UserRound size={13} />{scan.createdBy}</span></td>
+                  <td><span className="report-platform-cell"><PlatformLogo platform={scan.platform} label={scan.platformLabel} size={16} />{scan.platformLabel}</span></td>
                   <td>{scan.mode}</td>
                   <td className="report-query" title={scan.query}>{scan.query || "—"}</td>
                   <td className={`num ${scan.results ? "" : "zero"}`}>{scan.results === null ? "—" : number.format(scan.results)}</td>
@@ -254,14 +284,19 @@ export function MessagesReport({ messages, filteredRef }) {
         <ol className="report-messages">
           {filtered.slice(0, shown).map((message) => (
             <li key={message.id}>
-              <header><strong>{message.group}</strong><span>by {message.createdBy} · <time dateTime={message.at}>{fullDate(message.at)}</time></span></header>
+              <header>
+                <strong>{message.group}</strong>
+                <span className="report-chip person"><UserRound size={13} />by {message.createdBy}</span>
+                <time dateTime={message.at}>{fullDate(message.at)}</time>
+              </header>
               <p>{message.text}</p>
               {message.apps.length > 0 && (
                 <ul className="report-app-results">
                   {message.apps.map((app) => (
                     <li key={app.app} className={app.state} title={app.error || undefined}>
-                      {app.state === "sent" ? <CheckCircle2 size={13} /> : app.state === "failed" ? <TriangleAlert size={13} /> : <Clock3 size={13} />}
-                      {app.label}: {app.state === "sent" ? "Sent" : app.state === "failed" ? "Failed" : "Sending"}
+                      <PlatformLogo platform={app.app} label={app.label} size={14} />
+                      {app.label}
+                      <b>{app.state === "sent" ? <CheckCircle2 size={13} /> : app.state === "failed" ? <TriangleAlert size={13} /> : <Clock3 size={13} />}{app.state === "sent" ? "Sent" : app.state === "failed" ? "Failed" : "Sending"}</b>
                     </li>
                   ))}
                 </ul>
