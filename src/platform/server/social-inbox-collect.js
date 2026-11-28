@@ -69,12 +69,28 @@ export async function refreshInboxCollections(workspaceId) {
       next = { last_status: "collected", last_message: `${parts.join(", ")}.`, imported: true, collected: true };
     } else if (FAILED.has(status)) {
       const error = source.job_error || source.result_error || {};
-      const busy = error.code === "account_busy";
-      next = {
-        last_status: busy ? "queued" : "failed",
-        last_message: busy ? "The account was busy publishing; it will check again shortly." : String(error.message || source.job_message || "The check didn't finish. It will try again.").slice(0, 400),
-        imported: true,
-      };
+      const reason = String(error.message || source.job_message || "The check didn't finish.").slice(0, 400);
+      if (error.code === "account_busy") {
+        next = { last_status: "queued", last_message: "The account was busy publishing; it will check again shortly.", imported: true };
+      } else if (/login_required/.test(String(error.code || ""))) {
+        // Only the person can fix a sign-in: say so straight away.
+        next = { last_status: "failed", last_message: reason, imported: true };
+      } else {
+        // A one-off failure (a slow page, a hiccup) usually fixes itself on
+        // the next check, so it isn't shown as an error until it happens
+        // 3 times in a row.
+        const recent = await sql`
+          SELECT status FROM public.jobs
+           WHERE workspace_id = ${workspaceId} AND account_id = ${source.account_id} AND job_type = 'collect.inbox'
+             AND status IN ('success', 'failed', 'uncertain', 'cancelled')
+           ORDER BY created_at DESC LIMIT 3`;
+        const failedInARow = recent.length === 3 && recent.every((job) => job.status !== "success");
+        next = failedInARow
+          ? { last_status: "failed", last_message: `${reason} (3 checks in a row)`, imported: true }
+          : source.last_collected_at
+            ? { last_status: "collected", last_message: "The latest check didn't finish; trying again.", imported: true }
+            : { last_status: "queued", last_message: "The first check didn't finish; trying again.", imported: true };
+      }
     } else {
       continue;
     }

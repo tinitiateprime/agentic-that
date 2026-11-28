@@ -705,8 +705,15 @@ async function runCentralInboxJob(pairing: CentralCompanionPairing, job: Central
     const message = error instanceof Error ? error.message : String(error);
     const code = (error as { code?: string })?.code
       || (/already busy/i.test(message) ? "account_busy" : /connect|sign-in|log in/i.test(message) ? `${job.platform}_login_required` : "inbox_collect_failed");
-    await updateCentralJobStatus(pairing, job.id, "failed", message.slice(0, 500), false, {}, null, { code, message: message.slice(0, 500) })
-      .catch(() => undefined);
+    // What the collector saw (pages, data names), so a failure can be fixed
+    // without access to this computer. Never contains comments or cookies.
+    const details = (error as { details?: unknown })?.details;
+    const detailText = details ? JSON.stringify(details).slice(0, 4000) : "";
+    await updateCentralJobStatus(pairing, job.id, "failed", message.slice(0, 500), false, {}, null, {
+      code,
+      message: message.slice(0, 500),
+      ...(detailText ? { details: JSON.parse(detailText.length < 4000 ? detailText : JSON.stringify({ truncated: detailText })) } : {}),
+    }).catch(() => undefined);
   }
 }
 
