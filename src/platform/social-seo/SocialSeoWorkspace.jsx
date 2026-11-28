@@ -327,7 +327,7 @@ export default function SocialSeoWorkspace({ canGenerate, workspaceName = "", pu
     <div className={styles.page}>
       <header className={styles.top}>
         <div>
-          <span className={styles.eyebrow}><Search size={14} /> Publishing</span>
+          <span className={styles.eyebrow}><Search size={14} /> Agentic publishing</span>
           <h1>Create with AI</h1>
           <p>Upload a post. {aiReady ? `${connectedAis.map((provider) => provider.label).join(", ").replace(/, ([^,]*)$/, " and $1")} write` : "Your ChatGPT, Claude or Gemini write"} ready-to-post captions, hashtags and alt text for Instagram, Facebook, LinkedIn and YouTube.</p>
         </div>

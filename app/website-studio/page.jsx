@@ -9,7 +9,7 @@ import {
 import "./website-studio.css";
 
 export const metadata = {
-  title: "AI Website Studio — AgenticThat",
+  title: "Agentic Website Studio — AgenticThat",
   description: "Generate, validate, deliver and publish complete business websites automatically.",
 };
 

@@ -69,6 +69,15 @@
   text-align: center;
 }
 
+.storeKicker {
+  margin: 0 0 12px;
+  color: #a77105;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .storeTitle h1 {
   margin: 0;
   background: linear-gradient(115deg, #111827 24%, #283242 57%, #a77105 82%, #d39209 100%);

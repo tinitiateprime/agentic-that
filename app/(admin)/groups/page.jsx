@@ -8,7 +8,7 @@ import GroupRules from "./GroupRules";
 import AuditStamp from "@platform/AuditStamp";
 import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
-export const metadata = { title: "Groups — Tinitiate WA" };
+export const metadata = { title: "Groups — WhatsApp · AgenticThat" };
 
 export default async function GroupsPage() {
   const user = await requireUser();

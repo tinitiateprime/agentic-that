@@ -4,8 +4,8 @@
   --sm-faint: #7c8796;
   --sm-line: #e1e5ec;
   --sm-soft: #f7f8fb;
-  --sm-accent: #6d5bd0;
-  --sm-accent-soft: #f3f1ff;
+  --sm-accent: #a56f05;
+  --sm-accent-soft: #fffbea;
   --sm-good: #0f7a4f;
   --sm-good-soft: #e6f6ee;
   --sm-bad: #b42318;
@@ -100,7 +100,7 @@
 .sm-post a { display: inline-flex; align-items: center; gap: 4px; width: max-content; color: var(--sm-accent); font-size: 12px; font-weight: 700; text-decoration: none; }
 .sm-rank { padding: 1px 6px; border-radius: 999px; color: #7a5200; background: #fff1c7; font-size: 11px; font-style: normal; font-weight: 800; }
 
-.sm-best { display: grid; gap: 4px; margin: 14px 0; padding: 14px 16px; border: 1px solid #ded9f1; border-radius: 12px; background: var(--sm-accent-soft); }
+.sm-best { display: grid; gap: 4px; margin: 14px 0; padding: 14px 16px; border: 1px solid #F4ECD7; border-radius: 12px; background: var(--sm-accent-soft); }
 .sm-best strong { font-size: 18px; }
 .sm-best span { color: var(--sm-muted); font-size: 13px; }
 .sm-best em { color: var(--sm-accent); font-size: 12px; font-style: normal; font-weight: 650; }
@@ -118,7 +118,7 @@
 .sm-primary:hover:not(:disabled) { background: #5847b8; }
 .sm-primary:disabled { opacity: .5; cursor: progress; }
 .sm-secondary { border: 1px solid #d9dce8; color: #424b5e; background: #fff; }
-.sm-secondary:hover { border-color: #b9b2e7; color: var(--sm-accent); }
+.sm-secondary:hover { border-color: #F4ECD7; color: var(--sm-accent); }
 .sm-more { display: block; margin: 14px auto 0; min-height: 38px; padding: 0 16px; border: 1px solid #d9dce8; border-radius: 9px; color: #424b5e; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
 .sm-icon { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--sm-line); border-radius: 9px; color: var(--sm-muted); background: #fff; cursor: pointer; }
 .sm-icon:hover { border-color: #f0cccc; color: var(--sm-bad); }

@@ -5,7 +5,7 @@ import ResponsesList from "@whatsapp/components/ResponsesList";
 import GroupUnread from "./GroupUnread";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Inbox — Tinitiate WA" };
+export const metadata = { title: "Inbox — WhatsApp · AgenticThat" };
 
 export default async function InboxPage({ searchParams }) {
   const user = await requireUser();

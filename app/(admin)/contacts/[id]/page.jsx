@@ -10,7 +10,7 @@ import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export async function generateMetadata({ params }) {
   const { id } = await params;
-  return { title: `Chat #${id} — Tinitiate WA` };
+  return { title: `Chat #${id} — WhatsApp · AgenticThat` };
 }
 
 export default async function ContactChatPage({ params }) {

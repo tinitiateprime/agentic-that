@@ -5,7 +5,7 @@ import { credsForBusiness } from "@whatsapp/lib/tenant";
 import MetaTemplatesManager from "@whatsapp/components/MetaTemplatesManager";
 import TemplatesCard from "@whatsapp/components/TemplatesCard";
 
-export const metadata = { title: "Templates — Tinitiate WA" };
+export const metadata = { title: "Templates — WhatsApp · AgenticThat" };
 
 export default async function TemplatesPage() {
   const user = await requireUser();

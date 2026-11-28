@@ -6,7 +6,7 @@ import { getAccountForBusiness, listTenantNumbers } from "@whatsapp/lib/tenant";
 import { hasEncryptionKey } from "@whatsapp/lib/crypto";
 import OnboardingWizard from "./OnboardingWizard";
 
-export const metadata = { title: "Set up your workspace — Tinitiate WA" };
+export const metadata = { title: "Set up your workspace — WhatsApp · AgenticThat" };
 
 export default async function OnboardingPage() {
   const user = await requireUser("configure");

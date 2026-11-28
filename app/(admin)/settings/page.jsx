@@ -6,7 +6,7 @@ import MetaPhoneVerify from "@whatsapp/components/MetaPhoneVerify";
 import CallSettings from "@whatsapp/components/CallSettings";
 import { credsForBusiness, credsForProvider } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Settings — Tinitiate WA" };
+export const metadata = { title: "Settings — WhatsApp · AgenticThat" };
 
 export default async function SettingsPage() {
   const user = await requireUser();

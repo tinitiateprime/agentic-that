@@ -4,7 +4,7 @@ import { metaListPhoneNumbers } from "@whatsapp/lib/wa/provider";
 import MessageCenter from "@whatsapp/components/MessageCenter";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Messages — Tinitiate WA" };
+export const metadata = { title: "Messages — WhatsApp · AgenticThat" };
 
 export default async function MessagesPage() {
   const user = await requireUser();

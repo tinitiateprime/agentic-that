@@ -248,8 +248,8 @@ export default function WebsiteStudioWorkspace({ canGenerate = true }) {
         <div className="waas-admin-hero-copy">
           <span className="waas-admin-icon"><WandSparkles size={24} /></span>
           <div>
-            <p>AI Websites · Autonomous delivery</p>
-            <h1>AI Website Studio</h1>
+            <p>Agentic websites · Autonomous delivery</p>
+            <h1>Agentic Website Studio</h1>
             <span>Five details in. Three polished websites delivered automatically.</span>
           </div>
         </div>

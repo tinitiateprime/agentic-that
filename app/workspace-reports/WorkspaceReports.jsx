@@ -165,7 +165,7 @@ export default function WorkspaceReports({ initialReport, currentUserId }) {
     <main className="report-shell">
       <header className="report-header">
         <div>
-          <p>Company reports</p>
+          <p>Agentic company reports</p>
           <h1>{report.workspaceName || "Your company"}</h1>
           <span>What everyone in this company did over the last {report.rangeDays} days: the posts, research and group messages, and who did them. Everyone in the company can see this page.</span>
         </div>

@@ -340,7 +340,7 @@ export default function OmnichannelComposer({ user, canUseWhatsApp, telegramIden
           <Link href="/apps" className={styles.back}><ArrowLeft size={16} aria-hidden="true" />Back to Home</Link>
           <div className={styles.headerRow}>
             <div>
-              <span className={styles.eyebrow}>Send messages</span>
+              <span className={styles.eyebrow}>Agentic messaging</span>
               <h1>Write one message, send it to everyone</h1>
               <p>Type your message, tick where it should go (WhatsApp, Telegram or both), then press Send.</p>
             </div>

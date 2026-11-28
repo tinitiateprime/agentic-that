@@ -42,6 +42,8 @@ function isInternalNavigation(event) {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
   const anchor = event.target?.closest?.("a[href]");
   if (!anchor || anchor.hasAttribute("download") || anchor.dataset.noLoader !== undefined) return false;
+  // The frame host's menu opens screens inside its frame; that page shows its own loading.
+  if (anchor.closest("[data-frame-host]")) return false;
   const target = anchor.getAttribute("target");
   if (target && target !== "_self") return false;
   let next;
@@ -133,7 +135,7 @@ export default function GlobalLoader() {
   if (showAction) {
     return (
       <div className={styles.badge}>
-        <BrandLoader size="compact" label="Working…" />
+        <BrandLoader size="compact" label="Agents at work…" />
       </div>
     );
   }

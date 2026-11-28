@@ -10,6 +10,7 @@ import { inferTelegramUploadPostType, telegramUploadTypeHint } from "./media-kin
 export function initTelegramConsole(options = {}) {
 let centralServiceToken = String(options.serviceToken || "");
 const apiBase = String(options.apiBase || "").replace(/\/$/, "");
+if (options.theme === "light") document.body.classList.add("light-mode", "theme-locked");
 const keys = {
   selected: "telegramWorkflow:selectedAccount",
   inboxView: "telegramWorkflow:inboxView",
@@ -948,7 +949,8 @@ async function loadInboxMessages(options = {}) {
   }
 }
 function renderSettings() { $("setting-api").value = state.settings.api || ""; $("setting-telegram").value = state.settings.telegram || ""; $("setting-session").value = state.settings.session || "Server session"; $("setting-proxy").value = state.settings.proxy || ""; $("setting-storage").value = state.settings.storage || "Private workspace storage"; $("setting-theme").value = state.settings.theme || "Dark mode"; }
-function applyTheme() { document.body.classList.toggle("light-mode", state.settings.theme === "Light mode"); }
+// Inside AgenticThat (options.theme === "light") the console always uses the workspace theme.
+function applyTheme() { document.body.classList.toggle("light-mode", options.theme === "light" || state.settings.theme === "Light mode"); document.body.classList.toggle("theme-locked", options.theme === "light"); }
 function backupData() { return { version: 2, exportedAt: new Date().toISOString(), profiles: state.profiles, contacts: state.contacts, groups: state.groups, channels: state.channels, posts: state.posts, postHistory: state.postHistory, settings: state.settings }; }
 function render() { renderProfileSelect(); renderDashboard(); renderAccounts(); renderProfileForm(); renderProfileList(); renderApplications(); renderContacts(); renderInbox(); renderGroups(); renderChannels(); renderPostContacts(); renderPostGroups(); renderPostPreview(); renderPosts(); renderPostHistory(); renderSearch(); renderSettings(); }
 function setView(view) { state.activeView = titles[view] ? view : "dashboard"; const [kicker, title] = titles[state.activeView] || titles.dashboard; el.viewKicker.textContent = kicker; el.viewTitle.textContent = title; $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === state.activeView)); $$(".view").forEach((section) => { const active = section.id === `view-${state.activeView}`; section.hidden = !active; section.classList.toggle("active-view", active); }); render(); if (state.activeView === "inbox") void loadInboxMessages({ quiet: true }); }

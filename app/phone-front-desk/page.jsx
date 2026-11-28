@@ -9,7 +9,7 @@ import {
 import "./phone-front-desk.css";
 
 export const metadata = {
-  title: "AI Phone Front Desk — AgenticThat",
+  title: "Agentic Phone Front Desk — AgenticThat",
   description: "Run a natural AI receptionist demo, capture leads and review instant call summaries.",
 };
 

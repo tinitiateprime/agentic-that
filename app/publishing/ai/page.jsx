@@ -1,3 +1,4 @@
+import ProductShell from "@platform/ProductShell";
 import PublishingMenu from "../../../services/publishing/queue-runner/src/PublishingMenu.tsx";
 import SocialSeoWorkspace from "@platform/social-seo/SocialSeoWorkspace";
 import { requireOpenServicePrincipal } from "@platform/server/access-control";
@@ -19,11 +20,13 @@ export default async function PublishingAiPage() {
   const publishingToken = canPost ? await createPublishingIdentityToken(principal).catch(() => "") : "";
 
   return (
+    <ProductShell user={principal} active="publishing" embedded>
     <div className={styles.app}>
       <PublishingMenu active="ai" showWorkboard={canPost} />
       <main className={styles.content}>
         <SocialSeoWorkspace canGenerate workspaceName={principal.businessName || ""} canPost={Boolean(publishingToken)} publishingToken={publishingToken} />
       </main>
     </div>
+    </ProductShell>
   );
 }

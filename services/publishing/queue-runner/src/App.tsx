@@ -1876,7 +1876,7 @@ function Workboard({
 
       <section className='dashboard-overview' aria-labelledby='dashboard-overview-heading'>
         <div className='dashboard-welcome'>
-          <p className='section-kicker'>Operational overview</p>
+          <p className='section-kicker'>Agentic publishing</p>
           <h1 id='dashboard-overview-heading'>Publishing workspace</h1>
           <span>{user.fullName} · {userRoleLabels[user.role]}</span>
           <div className={`dashboard-context ${attentionCount ? 'needs-attention' : 'healthy'}`}>

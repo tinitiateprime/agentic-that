@@ -243,7 +243,7 @@
 .monitor-metric.tone-success > span { color: #14714f; background: #e7f8ef; }
 .monitor-metric.tone-scheduled > span { color: #775e16; background: #fff5d5; }
 .monitor-metric.tone-danger > span { color: #a14840; background: #fff0ee; }
-.monitor-metric.tone-workspace > span { color: #335f83; background: #eaf3fa; }
+.monitor-metric.tone-workspace > span { color: #335f83; background: #FAF6EA; }
 
 .monitor-controls {
   display: grid;
@@ -556,13 +556,13 @@
 
 .monitor-status.compact { padding: 6px 9px; font-size: 10px; }
 .monitor-status.status-published { color: #116748; background: #e6f8ef; }
-.monitor-status.status-active { color: #285f84; background: #e7f3fb; }
+.monitor-status.status-active { color: #9A6A06; background: #FBF6E7; }
 .monitor-status.status-scheduled { color: #7c5c10; background: #fff4d0; }
 .monitor-status.status-attention { color: #963e37; background: #fff0ee; }
 
 .monitor-native-card {
   min-height: 395px;
-  color: #101513;
+  color: #101215;
   background: #fff;
   font-family: Arial, Helvetica, sans-serif;
 }
@@ -582,9 +582,9 @@
   gap: 2px;
 }
 
-.monitor-preview-profile strong { color: #17201d; font-size: 14px; font-weight: 700; }
-.monitor-preview-profile small { color: #737d79; font-size: 11px; }
-.monitor-preview-profile > svg { color: #58645f; }
+.monitor-preview-profile strong { color: #171B20; font-size: 14px; font-weight: 700; }
+.monitor-preview-profile small { color: #73777D; font-size: 11px; }
+.monitor-preview-profile > svg { color: #585D64; }
 
 .monitor-network-avatar {
   width: 44px;
@@ -594,7 +594,7 @@
   flex: 0 0 44px;
   border-radius: 50%;
   color: #fff;
-  background: linear-gradient(145deg, #385e51, #62a88e);
+  background: linear-gradient(145deg, #3B485C, #6A81A0);
   font-size: 14px;
   font-weight: 800;
 }
@@ -606,7 +606,7 @@
 .monitor-network-avatar.avatar-youtube { background: #f00; }
 
 .monitor-native-copy {
-  color: #171c1a;
+  color: #17191C;
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -709,13 +709,13 @@
   justify-content: center;
   gap: 6px;
   padding: 20px;
-  color: #6f7b78;
-  background: linear-gradient(145deg, #f2f4f5, #e8ecee);
+  color: #6F747B;
+  background: linear-gradient(145deg, #F2F3F5, #E8EBEE);
   text-align: center;
 }
 
 .monitor-media-fallback strong { font-size: 13px; }
-.monitor-media-fallback span { color: #84908d; font-size: 11px; overflow-wrap: anywhere; }
+.monitor-media-fallback span { color: #848990; font-size: 11px; overflow-wrap: anywhere; }
 
 .admin-center-shell .monitor-media-fallback button {
   min-height: 30px;
@@ -734,8 +734,8 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
-  border-top: 1px solid #e2e7e5;
-  color: #53605b;
+  border-top: 1px solid #E2E4E7;
+  color: #535860;
 }
 
 .monitor-action-line.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -748,14 +748,14 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 13px;
-  border-top: 1px solid #e5eae8;
-  color: #74817c;
+  border-top: 1px solid #E5E7EA;
+  color: #747981;
 }
 
 .monitor-reaction-line > span { display: flex; align-items: center; }
 .monitor-reaction-line > span svg { padding: 2px; border-radius: 50%; color: #fff; background: #1877f2; }
 .monitor-reaction-line > span svg + svg { margin-left: -2px; background: #e34c61; }
-.monitor-reaction-line i { width: 11px; height: 11px; margin-left: -2px; border-radius: 50%; background: #53a5ec; }
+.monitor-reaction-line i { width: 11px; height: 11px; margin-left: -2px; border-radius: 50%; background: #FAEFD1; }
 .monitor-reaction-line small { font-size: 10px; }
 
 .monitor-instagram-actions {
@@ -786,12 +786,12 @@
 .x-card > .monitor-network-avatar { width: 40px; height: 40px; }
 .monitor-x-body { min-width: 0; }
 .monitor-x-name { min-height: 29px; display: grid; grid-template-columns: auto minmax(0, 1fr) 18px; align-items: start; gap: 5px; }
-.monitor-x-name strong { color: #17201d; font-size: 14px; }
-.monitor-x-name span { color: #69756f; font-size: 11px; }
-.monitor-x-name svg { color: #58645f; }
+.monitor-x-name strong { color: #171B20; font-size: 14px; }
+.monitor-x-name span { color: #696E75; font-size: 11px; }
+.monitor-x-name svg { color: #585D64; }
 .x-card .block-copy { min-height: 48px; padding: 0 0 12px; font-size: 14px; }
-.x-media { height: clamp(260px, 23vw, 380px); border: 1px solid #ced8d4; border-radius: 13px; }
-.monitor-x-actions { min-height: 40px; display: flex; align-items: center; justify-content: space-between; color: #596962; }
+.x-media { height: clamp(260px, 23vw, 380px); border: 1px solid #CED2D8; border-radius: 13px; }
+.monitor-x-actions { min-height: 40px; display: flex; align-items: center; justify-content: space-between; color: #596069; }
 .monitor-x-actions svg { width: 16px; height: 16px; }
 
 .youtube-community-card .block-copy { min-height: 52px; }
@@ -805,8 +805,8 @@
 .monitor-youtube-channel .monitor-network-avatar { width: 36px; height: 36px; font-size: 11px; }
 .monitor-youtube-channel > span { display: grid; gap: 2px; }
 .monitor-youtube-channel strong { font-size: 12px; }
-.monitor-youtube-channel small { color: #707d78; font-size: 10px; }
-.monitor-youtube-description { max-height: 72px; overflow: hidden; margin: 11px 15px 0; padding: 10px; border-radius: 8px; color: #353e3a; background: #f2f4f3; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.monitor-youtube-channel small { color: #70757D; font-size: 10px; }
+.monitor-youtube-description { max-height: 72px; overflow: hidden; margin: 11px 15px 0; padding: 10px; border-radius: 8px; color: #35393E; background: #F2F3F4; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
 
 .monitor-post-meta {
   min-height: 62px;

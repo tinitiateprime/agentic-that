@@ -10,7 +10,7 @@ export default function SocialManager({ workspaceName, initialReport }) {
   return (
     <main className="sm-shell">
       <header className="sm-header">
-        <p>Social Manager</p>
+        <p>Agentic Social Manager</p>
         <h1>{workspaceName || "Your company"}</h1>
         <span>How your posts perform, and every comment to answer, in one place.</span>
       </header>

@@ -15,7 +15,7 @@ import { listSuperAdminUsernames } from "@platform/server/audit-directory";
 
 export async function generateMetadata({ params }) {
   const { id } = await params;
-  return { title: `Group #${id} — Tinitiate WA` };
+  return { title: `Group #${id} — WhatsApp · AgenticThat` };
 }
 
 export default async function GroupDetailPage({ params }) {

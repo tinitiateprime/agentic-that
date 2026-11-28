@@ -24,7 +24,7 @@ import AllContactsCRM from "@whatsapp/components/AllContactsCRM";
 import AutoRefresh from "@whatsapp/components/AutoRefresh";
 import { credsForBusiness } from "@whatsapp/lib/tenant";
 
-export const metadata = { title: "Dashboard — Tinitiate WA" };
+export const metadata = { title: "Dashboard — WhatsApp · AgenticThat" };
 
 const WINDOWS = [
   { key: "0", label: "All", days: 0 },
