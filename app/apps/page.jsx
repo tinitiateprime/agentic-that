@@ -20,6 +20,7 @@ export default async function AppsPage() {
         name: user.name,
         email: user.email,
         businessName: user.businessName,
+        workspaceId: user.workspaceId,
         isGlobalAdmin: user.isGlobalAdmin,
         billingStatus: user.billingStatus,
         trialStartsAt: user.trialStartsAt,

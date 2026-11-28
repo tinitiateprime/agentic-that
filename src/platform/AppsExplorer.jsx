@@ -32,6 +32,7 @@ import { useMemo, useState } from "react";
 import { serviceDetailHref, shownProductCategories as productCategories, shownProductServices as productServices } from "./product-catalog";
 import { useProductStatus } from "./use-product-status";
 import ProductShell, { billingLabel } from "./ProductShell";
+import CompanySwitcher from "./CompanySwitcher";
 import styles from "./app-store.module.css";
 import { accessResourceForService, accessSatisfies } from "./access-catalog";
 
@@ -326,6 +327,8 @@ export default function AppsExplorer({ user, access = {} }) {
   return (
     <ProductShell user={user} active="apps">
       <main className={styles.appStoreMain}>
+        {/* Outside the header: the header clips what overflows it, and this opens a menu. */}
+        <CompanySwitcher user={user} variant="card" />
         <section className={styles.storeHeader}>
           <div className={styles.storeTitle}>
             <h1>Hello, <span className={styles.heroName}>{firstName || "there"}</span> <span className={styles.wave}>👋</span></h1>

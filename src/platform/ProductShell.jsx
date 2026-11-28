@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { CompanionBridgeBanner, CompanionBridgePill } from "./CompanionBridge";
 import styles from "./product-shell.module.css";
 import { BrandSymbol } from "./BrandMark";
-import WorkspaceSwitcher from "./WorkspaceSwitcher";
+import CompanySwitcher from "./CompanySwitcher";
 
 // Two levels. The slim rail on the left lists everything you can do; sections with
 // sub-pages (Messages, More) open a second panel beside it. Everything else is one click.
@@ -150,7 +150,8 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
 
       <aside ref={sidebarRef} className={`${styles.sidebar} ${menuOpen ? styles.sidebarOpen : ""}`}>
         <nav className={styles.rail} aria-label="Main navigation">
-          <Link className={styles.brandMark} href="/apps" onClick={close} title="AgenticThat home"><BrandSymbol size={20} /></Link>
+          {/* The company you are working in; click it to switch company (like Slack). */}
+          <CompanySwitcher user={user} variant="rail" />
 
           <div className={styles.railItems}>
             {railSections.filter((section) => section.id !== "more").map((section) => {
@@ -208,7 +209,6 @@ export default function ProductShell({ user, active = "apps", companionBridge = 
                     {billingLabel(user) && <small>{billingLabel(user)}</small>}
                   </span>
                 </section>
-                <WorkspaceSwitcher />
                 <button className={styles.signOut} type="button" onClick={signOut}><LogOut size={17} /><span>Sign out</span></button>
               </>
             )}
