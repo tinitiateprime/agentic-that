@@ -41,7 +41,7 @@ export function CompanyTile({ id, name, size = 38 }) {
 
 /**
  * The companies this account belongs to, and switching between them.
- * variant "rail": the company tile at the top of the sidebar.
+ * variant "rail": the company tile in the sidebar, just above More.
  * variant "card": the company card on Home.
  */
 export default function CompanySwitcher({ user, variant = "rail" }) {
